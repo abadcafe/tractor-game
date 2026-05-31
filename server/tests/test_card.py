@@ -86,3 +86,21 @@ class TestCardValidation:
         with pytest.raises(ValidationError):
             Card(id="D1-hearts-A", suit=Suit.HEARTS, rank=Rank.ACE,
                  is_joker=True, is_big_joker=False, points=0, deck=1)
+
+
+class TestCardJsonAlias:
+    def test_card_json_camel_case_aliases(self):
+        c = Card(id="D1-hearts-A", suit=Suit.HEARTS, rank=Rank.ACE,
+                 is_joker=False, is_big_joker=False, points=0, deck=1)
+        dumped = c.model_dump(by_alias=True)
+        assert "isJoker" in dumped
+        assert "isBigJoker" in dumped
+        assert "is_joker" not in dumped
+        assert "is_big_joker" not in dumped
+
+    def test_card_json_populate_by_name(self):
+        c = Card(id="D1-hearts-A", suit=Suit.HEARTS, rank=Rank.ACE,
+                 is_joker=False, is_big_joker=False, points=0, deck=1)
+        dumped = c.model_dump(by_alias=False)
+        assert "is_joker" in dumped
+        assert "is_big_joker" in dumped
