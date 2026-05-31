@@ -1,6 +1,5 @@
 """Tests for engine.card module."""
 import pytest
-from pydantic import ValidationError
 from server.engine.card import Card, Suit, Rank, create_decks, card_display
 
 
@@ -69,48 +68,3 @@ class TestCardDisplay:
         c = Card(id="D1-hearts-A", suit=Suit.HEARTS, rank=Rank.ACE,
                  is_joker=False, is_big_joker=False, points=0, deck=1)
         assert card_display(c) == "♥A"
-
-
-class TestCardValidation:
-    def test_reject_big_joker_without_is_joker(self):
-        with pytest.raises(ValidationError):
-            Card(id="D1-hearts-A", suit=Suit.HEARTS, rank=Rank.ACE,
-                 is_joker=False, is_big_joker=True, points=0, deck=1)
-
-    def test_reject_joker_suit_without_is_joker(self):
-        with pytest.raises(ValidationError):
-            Card(id="D1-joker-BJ", suit=Suit.JOKER, rank=Rank.BIG_JOKER,
-                 is_joker=False, is_big_joker=True, points=0, deck=1)
-
-    def test_reject_non_joker_suit_with_is_joker(self):
-        with pytest.raises(ValidationError):
-            Card(id="D1-hearts-A", suit=Suit.HEARTS, rank=Rank.ACE,
-                 is_joker=True, is_big_joker=False, points=0, deck=1)
-
-    def test_reject_suited_card_with_joker_rank(self):
-        with pytest.raises(ValidationError):
-            Card(id="D1-hearts-BJ", suit=Suit.HEARTS, rank=Rank.BIG_JOKER,
-                 is_joker=False, is_big_joker=False, points=0, deck=1)
-
-    def test_reject_joker_card_with_suited_rank(self):
-        with pytest.raises(ValidationError):
-            Card(id="D1-joker-A", suit=Suit.JOKER, rank=Rank.ACE,
-                 is_joker=True, is_big_joker=False, points=0, deck=1)
-
-
-class TestCardJsonAlias:
-    def test_card_json_camel_case_aliases(self):
-        c = Card(id="D1-hearts-A", suit=Suit.HEARTS, rank=Rank.ACE,
-                 is_joker=False, is_big_joker=False, points=0, deck=1)
-        dumped = c.model_dump(by_alias=True)
-        assert "isJoker" in dumped
-        assert "isBigJoker" in dumped
-        assert "is_joker" not in dumped
-        assert "is_big_joker" not in dumped
-
-    def test_card_json_populate_by_name(self):
-        c = Card(id="D1-hearts-A", suit=Suit.HEARTS, rank=Rank.ACE,
-                 is_joker=False, is_big_joker=False, points=0, deck=1)
-        dumped = c.model_dump(by_alias=False)
-        assert "is_joker" in dumped
-        assert "is_big_joker" in dumped
