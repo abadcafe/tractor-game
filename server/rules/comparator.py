@@ -34,13 +34,13 @@ def trump_order(card: Card, trump_suit: Suit, trump_rank: Rank) -> int:
 
     Higher number = stronger card.
 
-    Range allocation:
-      100-109: Big Joker
-      90-99:  Small Joker
-      80-89:  Trump rank + trump suit
-      70-79:  Trump rank + other suits
-      60-69:  Trump suit cards (non-trump-rank)
-      0-59:   Non-trump suit cards
+    Range allocation (non-overlapping bands):
+      100:    Big Joker
+      90:     Small Joker
+      80:     Trump rank + trump suit (主牌)
+      60-63:  Trump rank + other suits (副级牌), suit-offset 0-3
+      47-59:  Trump suit cards (non-trump-rank), 47 + (rank-2)
+      0-12:   Non-trump suit cards, rank-2
     """
     # 1. Big Joker
     if card.is_joker and card.is_big_joker:
@@ -60,10 +60,10 @@ def trump_order(card: Card, trump_suit: Suit, trump_rank: Rank) -> int:
 
     # 5. Trump suit cards (non-trump-rank)
     if card.suit == trump_suit and card.rank != trump_rank:
-        return 60 + RANK_ORDER[card.rank]
+        return 45 + RANK_ORDER[card.rank]
 
     # 6. Non-trump suit cards
-    return RANK_ORDER[card.rank]
+    return RANK_ORDER[card.rank] - 2
 
 
 def non_trump_order(card: Card, trump_rank: Rank) -> int:
