@@ -1,0 +1,14 @@
+{
+  "name": "tractor-game",
+  "version": "1.0.0",
+  "description": "升级 (Shengji / Tractor) card game with LLM-powered AI opponents",
+  "private": true,
+  "scripts": {
+    "build": "tsc && cp src/style.css static/style.css",
+    "watch": "tsc --watch",
+    "clean": "rm -rf static/*"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

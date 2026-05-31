@@ -1,0 +1,13 @@
+/target/
+/logs/
+/*.sublime-*
+/tmp/
+/working/
+**/__pycache__/
+/archived/
+/.claude/worktrees/
+/node_modules/
+/static/
+/server/sessions/
+*.pyc
+.env
