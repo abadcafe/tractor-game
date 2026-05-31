@@ -1,5 +1,4 @@
 """Tests for engine.player_utils module."""
-import pytest
 from server.engine.player_utils import (
     next_player, clockwise_distance, get_team_index, get_partner_index,
 )
