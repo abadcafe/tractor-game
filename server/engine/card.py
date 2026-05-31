@@ -95,7 +95,7 @@ _RANK_DISPLAY: dict[Rank, str] = {
 class Card(BaseModel):
     """A single playing card with unique ID, suit, rank, and point value."""
 
-    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True, frozen=True)
 
     id: str
     suit: Suit

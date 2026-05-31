@@ -124,3 +124,11 @@ class TestCardJsonAlias:
         dumped = c.model_dump(by_alias=False)
         assert "is_joker" in dumped
         assert "is_big_joker" in dumped
+
+
+class TestCardImmutability:
+    def test_card_is_frozen(self):
+        c = Card(id="D1-hearts-A", suit=Suit.HEARTS, rank=Rank.ACE,
+                 is_joker=False, is_big_joker=False, points=0, deck=1)
+        with pytest.raises(ValidationError):
+            c.points = 999
