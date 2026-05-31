@@ -1,5 +1,4 @@
 """Tests for engine.types module."""
-import pytest
 from server.engine.types import Phase, PlayType, PlayAction, BidAction, StirAction
 from server.engine.card import Suit, Rank, Card
 
