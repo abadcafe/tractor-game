@@ -9,7 +9,7 @@ Ported from src/rules/pattern.ts.
 
 from __future__ import annotations
 
-from server.engine.card import Card, Suit, Rank
+from server.engine.card import Card, Suit, Rank, card_display
 from server.engine.card_utils import RANK_ORDER
 from server.engine.types import PlayType, PlayAction
 from server.rules.comparator import (
@@ -109,13 +109,10 @@ def detect_throw_candidates(
 
 def describe_play(action: PlayAction) -> str:
     """Get a human-readable description of a play action."""
-    card_strs = []
-    for c in action.cards:
-        if c.is_joker:
-            card_strs.append("大王" if c.is_big_joker else "小王")
-        else:
-            from server.engine.card import _SUIT_SYMBOLS
-            card_strs.append(f"{_SUIT_SYMBOLS[c.suit]}{c.rank.value}")
+    if not action.cards:
+        return ""
+
+    card_strs = [card_display(c) for c in action.cards]
 
     if action.type == PlayType.SINGLE:
         return f"单张 {card_strs[0]}"
@@ -225,10 +222,10 @@ def _get_trump_order_step(current_order: int) -> int:
     if current_order == 90:
         return 10  # SJ → 主牌
     if current_order == 80:
-        return 1   # 主牌 → 副级牌
+        return 7    # 主牌(80) → highest 副级牌(73, Hearts), diff=7
     if 70 <= current_order < 80:
         if current_order == 70:
-            return 23  # Last 副级牌(70) → top trump suit (45+14=59), diff=11... see below
+            return 11  # Last 副级牌(70) → top trump suit (45+14=59), diff=11
         return 1   # Between 副级牌 suits
     if 45 <= current_order < 60:
         return 1   # Within trump suit ranks

@@ -1,5 +1,4 @@
 """Tests for rules.pattern module."""
-import pytest
 from server.engine.card import Card, Suit, Rank
 from server.engine.types import PlayType, PlayAction
 from server.rules.pattern import (
@@ -63,9 +62,9 @@ class TestDetectTractors:
             _card(Suit.SPADES, Rank.KING, 2),
         ]
         tractors = detect_tractors(hand, Suit.HEARTS, Rank.TWO)
-        assert len(tractors) >= 1
+        assert len(tractors) == 1
         found_4card = [t for t in tractors if len(t.cards) == 4]
-        assert len(found_4card) >= 1
+        assert len(found_4card) == 1
         assert found_4card[0].type == PlayType.TRACTOR
 
     def test_detect_tractors_trump_joker_tractor(self):
@@ -77,7 +76,7 @@ class TestDetectTractors:
             _card(Suit.JOKER, Rank.SMALL_JOKER, 2),
         ]
         tractors = detect_tractors(hand, Suit.HEARTS, Rank.TWO)
-        assert len(tractors) >= 1
+        assert len(tractors) == 1
 
     def test_detect_tractors_non_consecutive_not_tractor(self):
         """AA and QQ (with KK missing) should not form a tractor."""
@@ -101,7 +100,7 @@ class TestDetectThrowCandidates:
             _card(Suit.HEARTS, Rank.QUEEN, 1),
         ]
         candidates = detect_throw_candidates(hand, Suit.SPADES, Suit.HEARTS, Rank.TWO)
-        assert len(candidates) >= 1
+        assert len(candidates) == 1
 
     def test_detect_throw_candidates_trump_suit_empty(self):
         """No throw candidates for the trump suit."""
