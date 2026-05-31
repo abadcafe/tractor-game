@@ -33,7 +33,7 @@ class TestTrumpOrder:
     def test_trump_order_trump_rank_other_suit(self):
         c = _card(Suit.SPADES, Rank.TWO)
         order = trump_order(c, Suit.HEARTS, Rank.TWO)
-        assert 70 <= order <= 79  # Sub-trump rank
+        assert 70 <= order <= 73  # Sub-trump rank (70 + suit-offset 0-3)
 
     def test_trump_order_trump_suit_other(self):
         c = _card(Suit.HEARTS, Rank.ACE)
