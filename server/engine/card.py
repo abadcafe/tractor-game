@@ -44,32 +44,9 @@ class Rank(str, Enum):
 
 
 # ---- Constants ----
-
-_POINTS_MAP: dict[Rank, int] = {
-    Rank.TWO: 0,
-    Rank.THREE: 0,
-    Rank.FOUR: 0,
-    Rank.FIVE: 5,
-    Rank.SIX: 0,
-    Rank.SEVEN: 0,
-    Rank.EIGHT: 0,
-    Rank.NINE: 0,
-    Rank.TEN: 10,
-    Rank.JACK: 0,
-    Rank.QUEEN: 0,
-    Rank.KING: 10,
-    Rank.ACE: 0,
-    Rank.SMALL_JOKER: 0,
-    Rank.BIG_JOKER: 0,
-}
-
-_SUITED_RANKS: list[Rank] = [
-    Rank.TWO, Rank.THREE, Rank.FOUR, Rank.FIVE,
-    Rank.SIX, Rank.SEVEN, Rank.EIGHT, Rank.NINE,
-    Rank.TEN, Rank.JACK, Rank.QUEEN, Rank.KING, Rank.ACE,
-]
-
-_SUITS: list[Suit] = [Suit.HEARTS, Suit.SPADES, Suit.DIAMONDS, Suit.CLUBS]
+# POINTS_MAP, SUITED_RANKS, SUITS are defined in card_utils.py
+# to avoid duplication.  card.py uses lazy imports because
+# card_utils imports Card/Suit/Rank from this module.
 
 _JOKER_RANKS: tuple[Rank, ...] = (Rank.SMALL_JOKER, Rank.BIG_JOKER)
 
@@ -132,6 +109,7 @@ def _card_id(deck: int, suit: Suit, rank: Rank) -> str:
 
 
 def _make_card(suit: Suit, rank: Rank, deck: Literal[1, 2]) -> Card:
+    from server.engine.card_utils import POINTS_MAP  # lazy to avoid circular import
     if suit == Suit.JOKER:
         return Card(
             id=_card_id(deck, suit, rank),
@@ -148,17 +126,18 @@ def _make_card(suit: Suit, rank: Rank, deck: Literal[1, 2]) -> Card:
         rank=rank,
         is_joker=False,
         is_big_joker=False,
-        points=_POINTS_MAP[rank],
+        points=POINTS_MAP[rank],
         deck=deck,
     )
 
 
 def create_decks() -> list[Card]:
     """Create 2 full 54-card decks = 108 cards."""
+    from server.engine.card_utils import SUITED_RANKS, SUITS  # lazy to avoid circular import
     cards: list[Card] = []
     for deck in (1, 2):
-        for suit in _SUITS:
-            for rank in _SUITED_RANKS:
+        for suit in SUITS:
+            for rank in SUITED_RANKS:
                 cards.append(_make_card(suit, rank, deck))
         cards.append(_make_card(Suit.JOKER, Rank.SMALL_JOKER, deck))
         cards.append(_make_card(Suit.JOKER, Rank.BIG_JOKER, deck))
