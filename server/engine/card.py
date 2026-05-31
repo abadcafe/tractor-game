@@ -71,6 +71,8 @@ _SUITED_RANKS: list[Rank] = [
 
 _SUITS: list[Suit] = [Suit.HEARTS, Suit.SPADES, Suit.DIAMONDS, Suit.CLUBS]
 
+_JOKER_RANKS: tuple[Rank, ...] = (Rank.SMALL_JOKER, Rank.BIG_JOKER)
+
 _SUIT_SYMBOLS: dict[Suit, str] = {
     Suit.HEARTS: "♥",
     Suit.SPADES: "♠",
@@ -111,11 +113,14 @@ class Card(BaseModel):
             raise ValueError("suit=JOKER requires is_joker=True")
         if self.is_joker and self.suit != Suit.JOKER:
             raise ValueError("is_joker=True requires suit=JOKER")
-        _JOKER_RANKS = (Rank.SMALL_JOKER, Rank.BIG_JOKER)
         if self.is_joker and self.rank not in _JOKER_RANKS:
             raise ValueError("is_joker=True requires rank to be SMALL_JOKER or BIG_JOKER")
         if not self.is_joker and self.rank in _JOKER_RANKS:
             raise ValueError("Joker ranks (SMALL_JOKER, BIG_JOKER) require is_joker=True")
+        if self.is_big_joker and self.rank != Rank.BIG_JOKER:
+            raise ValueError("is_big_joker=True requires rank to be BIG_JOKER")
+        if self.rank == Rank.BIG_JOKER and not self.is_big_joker:
+            raise ValueError("rank=BIG_JOKER requires is_big_joker=True")
         return self
 
 
