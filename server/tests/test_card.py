@@ -87,6 +87,16 @@ class TestCardValidation:
             Card(id="D1-hearts-A", suit=Suit.HEARTS, rank=Rank.ACE,
                  is_joker=True, is_big_joker=False, points=0, deck=1)
 
+    def test_reject_suited_card_with_joker_rank(self):
+        with pytest.raises(ValidationError):
+            Card(id="D1-hearts-BJ", suit=Suit.HEARTS, rank=Rank.BIG_JOKER,
+                 is_joker=False, is_big_joker=False, points=0, deck=1)
+
+    def test_reject_joker_card_with_suited_rank(self):
+        with pytest.raises(ValidationError):
+            Card(id="D1-joker-A", suit=Suit.JOKER, rank=Rank.ACE,
+                 is_joker=True, is_big_joker=False, points=0, deck=1)
+
 
 class TestCardJsonAlias:
     def test_card_json_camel_case_aliases(self):
