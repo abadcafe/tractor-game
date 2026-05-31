@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict
 from pydantic.alias_generators import to_camel
 
 from server.engine.card import Card, Rank, Suit
-from server.engine.types import Phase, PlayType
+from server.engine.types import BidAction, Phase, PlayType, StirAction
 
 
 # ---- Trick Models ----
@@ -73,6 +73,7 @@ class GameSettings(BaseModel):
 
     api_key: str = ""
     model: str = "gpt-4o"
+    base_url: str = ""
     target_level: Rank = Rank.ACE
     bottom_card_count: int = 8
 
@@ -99,7 +100,7 @@ class GameState(BaseModel):
     bottom_cards: list[Card]
     trick_history: list[CompletedTrick]
     last_completed_trick: CompletedTrick | None = None
-    bidding_history: list[dict]
-    stir_history: list[dict]
+    bidding_history: list[BidAction]
+    stir_history: list[StirAction]
     defender_points: int
     settings: GameSettings
