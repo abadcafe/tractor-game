@@ -10,7 +10,7 @@ Total points in game: 200
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic.alias_generators import to_camel
 
 
@@ -102,6 +102,16 @@ class Card(BaseModel):
     is_big_joker: bool
     points: int
     deck: Literal[1, 2]
+
+    @model_validator(mode="after")
+    def _validate_joker_consistency(self) -> "Card":
+        if self.is_big_joker and not self.is_joker:
+            raise ValueError("is_big_joker can only be True when is_joker is True")
+        if self.suit == Suit.JOKER and not self.is_joker:
+            raise ValueError("suit=JOKER requires is_joker=True")
+        if self.is_joker and self.suit != Suit.JOKER:
+            raise ValueError("is_joker=True requires suit=JOKER")
+        return self
 
 
 # ---- Factory ----

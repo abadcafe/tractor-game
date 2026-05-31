@@ -1,5 +1,6 @@
 """Tests for engine.card module."""
 import pytest
+from pydantic import ValidationError
 from server.engine.card import Card, Suit, Rank, create_decks, card_display
 
 
@@ -68,3 +69,20 @@ class TestCardDisplay:
         c = Card(id="D1-hearts-A", suit=Suit.HEARTS, rank=Rank.ACE,
                  is_joker=False, is_big_joker=False, points=0, deck=1)
         assert card_display(c) == "♥A"
+
+
+class TestCardValidation:
+    def test_reject_big_joker_without_is_joker(self):
+        with pytest.raises(ValidationError):
+            Card(id="D1-hearts-A", suit=Suit.HEARTS, rank=Rank.ACE,
+                 is_joker=False, is_big_joker=True, points=0, deck=1)
+
+    def test_reject_joker_suit_without_is_joker(self):
+        with pytest.raises(ValidationError):
+            Card(id="D1-joker-BJ", suit=Suit.JOKER, rank=Rank.BIG_JOKER,
+                 is_joker=False, is_big_joker=True, points=0, deck=1)
+
+    def test_reject_non_joker_suit_with_is_joker(self):
+        with pytest.raises(ValidationError):
+            Card(id="D1-hearts-A", suit=Suit.HEARTS, rank=Rank.ACE,
+                 is_joker=True, is_big_joker=False, points=0, deck=1)
