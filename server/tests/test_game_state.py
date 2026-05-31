@@ -2,7 +2,7 @@
 import pytest
 from pydantic import ValidationError
 from server.engine.game_state import (
-    TrickSlot, CompletedTrick, PlayerState, TeamState,
+    TrickSlot, CompletedTrickSlot, CompletedTrick, PlayerState, TeamState,
     GameState, GameSettings,
 )
 from server.engine.types import BidAction, Phase, PlayType, StirAction
@@ -33,6 +33,32 @@ class TestCompletedTrick:
         )
         assert trick.lead_player_index == 0
         assert trick.points == 5
+
+    def test_completed_trick_slot_requires_cards(self):
+        """CompletedTrickSlot must have cards (not None)."""
+        c = Card(id="D1-hearts-A", suit=Suit.HEARTS, rank=Rank.ACE,
+                 is_joker=False, is_big_joker=False, points=0, deck=1)
+        slot = CompletedTrickSlot(player_index=0, cards=[c])
+        assert len(slot.cards) == 1
+
+    def test_completed_trick_slot_rejects_none_cards(self):
+        """CompletedTrickSlot rejects cards=None -- cards must be provided."""
+        with pytest.raises(ValidationError):
+            CompletedTrickSlot(player_index=0, cards=None)
+
+    def test_completed_trick_with_slots(self):
+        """CompletedTrick accepts CompletedTrickSlot list."""
+        c = Card(id="D1-hearts-A", suit=Suit.HEARTS, rank=Rank.ACE,
+                 is_joker=False, is_big_joker=False, points=0, deck=1)
+        trick = CompletedTrick(
+            lead_player_index=0,
+            lead_type=PlayType.SINGLE,
+            slots=[CompletedTrickSlot(player_index=0, cards=[c])],
+            winner_index=0,
+            points=5,
+        )
+        assert len(trick.slots) == 1
+        assert trick.slots[0].cards[0].rank == Rank.ACE
 
 
 class TestPlayerState:

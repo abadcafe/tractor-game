@@ -25,6 +25,15 @@ class TrickSlot(BaseModel):
     cards: list[Card] | None = None
 
 
+class CompletedTrickSlot(BaseModel):
+    """One player's slot in a completed trick -- cards always present."""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    player_index: int
+    cards: list[Card]
+
+
 class CompletedTrick(BaseModel):
     """A finished trick with winner and points."""
 
@@ -32,7 +41,7 @@ class CompletedTrick(BaseModel):
 
     lead_player_index: int
     lead_type: PlayType
-    slots: list[TrickSlot]
+    slots: list[CompletedTrickSlot]
     winner_index: int
     points: int
 
