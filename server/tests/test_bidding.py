@@ -66,6 +66,15 @@ class TestIsBiddingOver:
         ]
         assert is_bidding_over(bids, 4) is False
 
+    def test_is_bidding_over_three_passes_no_bid(self):
+        """CR-003: 3 consecutive passes without any bid should not end bidding."""
+        bids = [
+            BidAction(player_index=0, level=None, pass_=True),
+            BidAction(player_index=1, level=None, pass_=True),
+            BidAction(player_index=2, level=None, pass_=True),
+        ]
+        assert is_bidding_over(bids, 4) is False
+
 
 class TestGetWinningBid:
     def test_get_winning_bid(self):
@@ -115,6 +124,11 @@ class TestIsValidStir:
         stir = StirAction(player_index=1, new_trump_suit=Suit.SPADES, level=Rank.TWO)
         assert is_valid_stir(stir, Suit.HEARTS, Rank.THREE, [], 1) is False
 
+    def test_is_valid_stir_none_suit_invalid(self):
+        """CR-001: new_trump_suit must not be None."""
+        stir = StirAction(player_index=1, new_trump_suit=None, level=Rank.FIVE)
+        assert is_valid_stir(stir, Suit.HEARTS, Rank.THREE, [], 1) is False
+
 
 class TestGetValidStirOptions:
     def test_get_valid_stir_options(self):
@@ -125,6 +139,12 @@ class TestGetValidStirOptions:
             assert o.new_trump_suit != Suit.HEARTS
         higher = [o for o in options if o.level != Rank.THREE]
         assert len(higher) > 0
+
+    def test_get_valid_stir_options_consecutive_same_player(self):
+        """SR-001: get_valid_stir_options must respect Bug #5."""
+        prev_stir = StirAction(player_index=0, new_trump_suit=Suit.SPADES, level=Rank.THREE)
+        options = get_valid_stir_options(Suit.HEARTS, Rank.THREE, 0, [prev_stir])
+        assert options == []
 
 
 class TestIsStirringOver:

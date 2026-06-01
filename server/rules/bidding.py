@@ -86,14 +86,15 @@ def is_bidding_over(
         return True
 
     # Three consecutive passes after a bid was made
-    consecutive_passes = 0
-    for bid in reversed(bids):
-        if bid.pass_:
-            consecutive_passes += 1
-            if consecutive_passes >= 3:
-                return True
-        else:
-            break
+    if any_bid:
+        consecutive_passes = 0
+        for bid in reversed(bids):
+            if bid.pass_:
+                consecutive_passes += 1
+                if consecutive_passes >= 3:
+                    return True
+            else:
+                break
 
     return False
 
@@ -137,6 +138,10 @@ def is_valid_stir(
     if stir_level is None:
         return False
 
+    # Must always specify a trump suit
+    if stir.new_trump_suit is None:
+        return False
+
     stir_level_index = LEVELS.index(stir_level)
     bid_level_index = LEVELS.index(current_bid_level)
 
@@ -150,7 +155,8 @@ def is_valid_stir(
             return False
 
     # Bug #5 fix: same player cannot stir consecutively
-    if stirring_history and stirring_history[-1].player_index == player_index:
+    # Use stir.player_index as the authoritative source
+    if stirring_history and stirring_history[-1].player_index == stir.player_index:
         return False
 
     return True
@@ -163,6 +169,10 @@ def get_valid_stir_options(
     stirring_history: list[StirAction],
 ) -> list[StirAction]:
     """Get valid stir options for a player."""
+    # Bug #5: same player cannot stir consecutively
+    if stirring_history and stirring_history[-1].player_index == player_index:
+        return []
+
     options: list[StirAction] = []
 
     non_joker_suits = [Suit.HEARTS, Suit.SPADES, Suit.DIAMONDS, Suit.CLUBS]
