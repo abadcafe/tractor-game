@@ -123,7 +123,6 @@ def is_valid_stir(
     current_trump_suit: Suit,
     current_bid_level: Rank,
     stirring_history: list[StirAction],
-    player_index: int,
 ) -> bool:
     """Check if a stir action is valid.
 
@@ -132,7 +131,6 @@ def is_valid_stir(
         current_trump_suit: The current trump suit.
         current_bid_level: The current bid level.
         stirring_history: All previous stir actions in this round.
-        player_index: The player attempting to stir.
     """
     stir_level = stir.level
     if stir_level is None:

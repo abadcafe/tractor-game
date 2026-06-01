@@ -98,36 +98,36 @@ class TestGetWinningBid:
 class TestIsValidStir:
     def test_is_valid_stir_same_level_different_suit(self):
         stir = StirAction(player_index=1, new_trump_suit=Suit.SPADES, level=Rank.THREE)
-        assert is_valid_stir(stir, Suit.HEARTS, Rank.THREE, [], 1) is True
+        assert is_valid_stir(stir, Suit.HEARTS, Rank.THREE, []) is True
 
     def test_is_valid_stir_same_level_same_suit_invalid(self):
         stir = StirAction(player_index=1, new_trump_suit=Suit.HEARTS, level=Rank.THREE)
-        assert is_valid_stir(stir, Suit.HEARTS, Rank.THREE, [], 1) is False
+        assert is_valid_stir(stir, Suit.HEARTS, Rank.THREE, []) is False
 
     def test_is_valid_stir_higher_level(self):
         stir = StirAction(player_index=1, new_trump_suit=Suit.SPADES, level=Rank.FIVE)
-        assert is_valid_stir(stir, Suit.HEARTS, Rank.THREE, [], 1) is True
+        assert is_valid_stir(stir, Suit.HEARTS, Rank.THREE, []) is True
 
     def test_is_valid_stir_consecutive_same_player_invalid(self):
         """Bug #5 fix: same person cannot stir consecutively."""
         prev_stir = StirAction(player_index=1, new_trump_suit=Suit.SPADES, level=Rank.THREE)
         stir = StirAction(player_index=1, new_trump_suit=Suit.DIAMONDS, level=Rank.FIVE)
-        assert is_valid_stir(stir, Suit.SPADES, Rank.THREE, [prev_stir], 1) is False
+        assert is_valid_stir(stir, Suit.SPADES, Rank.THREE, [prev_stir]) is False
 
     def test_is_valid_stir_different_player_after_consecutive(self):
         """Different player CAN stir after someone else stirred."""
         prev_stir = StirAction(player_index=0, new_trump_suit=Suit.SPADES, level=Rank.THREE)
         stir = StirAction(player_index=1, new_trump_suit=Suit.DIAMONDS, level=Rank.FIVE)
-        assert is_valid_stir(stir, Suit.SPADES, Rank.THREE, [prev_stir], 1) is True
+        assert is_valid_stir(stir, Suit.SPADES, Rank.THREE, [prev_stir]) is True
 
     def test_is_valid_stir_lower_level_invalid(self):
         stir = StirAction(player_index=1, new_trump_suit=Suit.SPADES, level=Rank.TWO)
-        assert is_valid_stir(stir, Suit.HEARTS, Rank.THREE, [], 1) is False
+        assert is_valid_stir(stir, Suit.HEARTS, Rank.THREE, []) is False
 
     def test_is_valid_stir_none_suit_invalid(self):
         """CR-001: new_trump_suit must not be None."""
         stir = StirAction(player_index=1, new_trump_suit=None, level=Rank.FIVE)
-        assert is_valid_stir(stir, Suit.HEARTS, Rank.THREE, [], 1) is False
+        assert is_valid_stir(stir, Suit.HEARTS, Rank.THREE, []) is False
 
 
 class TestGetValidStirOptions:
