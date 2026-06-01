@@ -163,7 +163,7 @@ function handleStir(): void {
     try {
       const r = trumpSuit === null
         ? await apiCall('/stir', { playerIndex: HUMAN_PLAYER_INDEX, pass: true })
-        : await apiCall('/stir', { playerIndex: HUMAN_PLAYER_INDEX, pass: false, newTrumpSuit: trumpSuit });
+        : await apiCall('/stir', { playerIndex: HUMAN_PLAYER_INDEX, pass: false, newTrumpSuit: trumpSuit, level: currentState.trumpRank });
       handleResponse(r);
     } catch (err) {
       Scoreboard.log('炒地皮失败');
