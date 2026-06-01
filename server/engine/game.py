@@ -53,6 +53,11 @@ class Game:
 
     # ---- Game Flow ----
 
+    def start_new_game(self) -> None:
+        """Reset to a fresh game state (DEALING phase)."""
+        self.state = create_initial_state()
+        self._stir_passes = set()
+
     def start_round(self) -> None:
         """Deal cards and begin bidding."""
         self.state = deal_cards(self.state)
@@ -188,6 +193,8 @@ class Game:
             return False
 
         self.state = discard_cards(self.state, player_index, cards)
+        if player_index == HUMAN_PLAYER_INDEX:
+            self._ai_auto_play()
         return True
 
     # ---- Playing ----
@@ -293,6 +300,10 @@ class Game:
         """Check if it's the human player's turn."""
         return self.state.current_player_index == HUMAN_PLAYER_INDEX
 
+    def get_legal_plays(self, player_index: int) -> list[PlayAction]:
+        """Get all legal plays for a player (public API)."""
+        return self._get_legal_plays(player_index)
+
     # ---- Private Helpers ----
 
     def _ai_auto_play(self) -> None:
@@ -313,9 +324,9 @@ class Game:
                 if is_bidding_over(self.state.bidding_history, PLAYER_COUNT):
                     winner = get_winning_bid(self.state.bidding_history)
                     if winner is not None and winner.level is not None:
-                        self.state = self.state.model_copy(
-                            update={"current_player_index": winner.player_index}
-                        )
+                        # AI won the bid — choose trump suit automatically
+                        trump_suit = self._ai_choose_trump_suit(winner.player_index)
+                        self.set_trump(winner.player_index, trump_suit)
                     break
                 valid_levels = self.get_valid_bids()
                 if not valid_levels:
@@ -419,6 +430,21 @@ class Game:
             return PlayAction(type=PlayType.PAIR, cards=cards)
         # Default to SINGLE for any other combination
         return PlayAction(type=PlayType.SINGLE, cards=cards)
+
+    def _ai_choose_trump_suit(self, player_index: int) -> Suit:
+        """Choose a trump suit for an AI player based on their hand.
+
+        Picks the non-joker suit with the most cards. Defaults to HEARTS
+        if the hand is empty or only has jokers.
+        """
+        hand = self.state.players[player_index].hand
+        suit_counts: dict[Suit, int] = {}
+        for c in hand:
+            if c.suit != Suit.JOKER:
+                suit_counts[c.suit] = suit_counts.get(c.suit, 0) + 1
+        if not suit_counts:
+            return Suit.HEARTS
+        return max(suit_counts, key=lambda s: suit_counts[s])
 
     def _calculate_round_score(self) -> ScoreResult:
         """Calculate the score for the current round."""
