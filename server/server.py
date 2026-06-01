@@ -16,6 +16,8 @@ from pathlib import Path
 # Ensure server/ is on the Python path
 sys.path.insert(0, str(Path(__file__).parent))
 
+logger = logging.getLogger(__name__)
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -395,10 +397,6 @@ async def index():
         return FileResponse(str(index_path))
     return {"message": "Tractor Game Server is running."}
 
-
-# ---- Logger ----
-
-logger = logging.getLogger(__name__)
 
 # ---- Startup ----
 

@@ -7,9 +7,8 @@ managing server-side game settings.
 from __future__ import annotations
 
 import logging
-import time
 
-from server.engine.game_state import GameSettings, Rank
+from server.engine.game_state import GameSettings
 from server.storage.game_store import GameStore
 
 logger = logging.getLogger(__name__)
