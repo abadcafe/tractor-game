@@ -53,10 +53,9 @@ class TestChoosePlay:
 
 
 class TestChooseBid:
-    def test_choose_bid_always_bids_or_passes(self):
-        """AI must return a valid bid level or pass."""
+    def test_choose_bid_returns_rank_or_none(self):
+        """AI must return a valid bid level or None (pass)."""
         result = choose_bid(valid_levels=[Rank.THREE, Rank.FOUR, Rank.FIVE], current_level=Rank.TWO, seed=42)
-        assert result is not None
         # Either a Rank (bid) or None (pass)
         assert result is None or isinstance(result, Rank)
 
@@ -66,6 +65,17 @@ class TestChooseBid:
             result = choose_bid(valid_levels=[Rank.THREE, Rank.FOUR], current_level=Rank.TWO, seed=None)
             if result is not None:
                 assert result in (Rank.THREE, Rank.FOUR)
+
+    def test_choose_bid_empty_levels_raises(self):
+        """AI raises ValueError when no valid bid levels available."""
+        with pytest.raises(ValueError, match="No valid bid levels"):
+            choose_bid(valid_levels=[], current_level=Rank.TWO, seed=42)
+
+    def test_choose_bid_pass_with_seed(self):
+        """AI can pass (return None) with a deterministic seed."""
+        # Seed 1 produces random() = 0.134... < 0.4, so pass
+        result = choose_bid(valid_levels=[Rank.THREE, Rank.FOUR], current_level=Rank.TWO, seed=1)
+        assert result is None
 
 
 class TestChooseStir:
@@ -83,7 +93,19 @@ class TestChooseStir:
             new_suit, level = result
             assert isinstance(new_suit, Suit)
             assert isinstance(level, Rank)
-            assert new_suit != Suit.HEARTS or level != Rank.THREE  # Must change something
+            assert new_suit != Suit.HEARTS  # Must change trump suit
+            assert level in [Rank.THREE, Rank.FIVE]  # Must be a valid level
+
+    def test_choose_stir_empty_levels_raises(self):
+        """AI raises ValueError when no valid stir levels available."""
+        with pytest.raises(ValueError, match="No valid stir levels"):
+            choose_stir(
+                current_trump=Suit.HEARTS,
+                valid_levels=[],
+                player_index=1,
+                stir_history=[],
+                seed=42,
+            )
 
 
 class TestChooseDiscard:
@@ -110,3 +132,26 @@ class TestChooseDiscard:
     def test_choose_discard_bottom_card_count(self):
         """Verify BOTTOM_CARD_COUNT == 8."""
         assert BOTTOM_CARD_COUNT == 8
+
+    def test_choose_discard_count_exceeds_hand_raises(self):
+        """AI raises ValueError when count exceeds hand size."""
+        hand = [_card(Suit.SPADES, Rank.ACE)]
+        with pytest.raises(ValueError, match="exceeds hand size"):
+            choose_discard(hand, count=5, seed=42)
+
+    def test_choose_discard_negative_count_raises(self):
+        """AI raises ValueError when count is negative."""
+        hand = [_card(Suit.SPADES, Rank.ACE)]
+        with pytest.raises(ValueError, match="non-negative"):
+            choose_discard(hand, count=-1, seed=42)
+
+    def test_choose_discard_zero_count(self):
+        """AI returns empty list when count is 0."""
+        hand = [_card(Suit.SPADES, Rank.ACE), _card(Suit.HEARTS, Rank.KING)]
+        discard = choose_discard(hand, count=0, seed=42)
+        assert discard == []
+
+    def test_choose_discard_empty_hand_zero_count(self):
+        """AI returns empty list for empty hand with count 0."""
+        discard = choose_discard([], count=0, seed=42)
+        assert discard == []

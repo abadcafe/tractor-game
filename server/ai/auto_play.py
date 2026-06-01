@@ -48,6 +48,8 @@ def choose_bid(
     Returns:
         A Rank if bidding, None if passing.
     """
+    if not valid_levels:
+        raise ValueError("No valid bid levels available")
     rng = random.Random(seed)
     if rng.random() < 0.4:
         return None  # pass
@@ -75,7 +77,12 @@ def choose_stir(
 
     Returns:
         A (Suit, Rank) tuple if stirring, None if passing.
+
+    Raises:
+        ValueError: If valid_levels is empty.
     """
+    if not valid_levels:
+        raise ValueError("No valid stir levels available")
     rng = random.Random(seed)
     if rng.random() < 0.5:
         return None  # pass
@@ -103,5 +110,9 @@ def choose_discard(
     Returns:
         A list of Card objects selected for discard.
     """
+    if count < 0:
+        raise ValueError(f"Discard count must be non-negative, got {count}")
+    if count > len(hand):
+        raise ValueError(f"Discard count {count} exceeds hand size {len(hand)}")
     rng = random.Random(seed)
     return rng.sample(hand, count)
