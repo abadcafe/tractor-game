@@ -6,6 +6,8 @@ from server.engine.scoring import (
     TARGET_LEVEL, SCORE_TABLE, DEFAULT_SETTINGS,
 )
 
+import pytest
+
 
 def _card(suit: Suit, rank: Rank, deck: int = 1) -> Card:
     return Card(
@@ -167,7 +169,29 @@ class TestCalculateScore:
             declarer_team_level=Rank.TWO,
             defender_team_level=Rank.TWO,
         )
+        # (5+5+10+10)*8 = 240
         assert result.bottom_card_bonus == 240
+        # 10 + 240 = 250
+        assert result.total_defender_points == 250
+
+    def test_calculate_score_ambush_throw_x2(self):
+        """CR-006: THROW play type ambush multiplier -> x2."""
+        bottom = [
+            _card(Suit.SPADES, Rank.FIVE),
+            _card(Suit.SPADES, Rank.TEN),
+        ]
+        result = calculate_score(
+            defender_points=10,
+            bottom_cards=bottom,
+            last_trick_winner_team=1,
+            last_trick_play_type=PlayType.THROW,
+            declarer_team_index=0,
+            declarer_team_level=Rank.TWO,
+            defender_team_level=Rank.TWO,
+        )
+        # (5+10)*2 = 30
+        assert result.bottom_card_bonus == 30
+        assert result.total_defender_points == 40
 
     def test_calculate_score_no_ambush_declarer_wins_last(self):
         """No ambush bonus when declarer wins the last trick."""
@@ -253,6 +277,41 @@ class TestCalculateScore:
         assert result.team0_new_level == Rank.THREE
         # defender (team1) advances from THREE to FIVE
         assert result.team1_new_level == Rank.FIVE
+
+
+    # CR-005: Boundary value tests for scoring tier thresholds
+    @pytest.mark.parametrize(
+        "points,expected_change,expected_switch",
+        [
+            (0, 3, False),      # exact 0 -> big light
+            (1, 2, False),      # just above 0 -> small light
+            (39, 2, False),     # upper bound of small light
+            (40, 1, False),     # lower bound of declarer +1
+            (79, 1, False),     # upper bound of declarer +1
+            (80, 0, True),      # lower bound of switch
+            (119, 0, True),     # upper bound of switch
+            (120, -1, True),    # lower bound of defender +1
+            (159, -1, True),    # upper bound of defender +1
+            (160, -2, True),    # lower bound of defender +2
+            (199, -2, True),    # upper bound of defender +2
+            (200, -3, True),    # exact 200 -> defender +3
+        ],
+    )
+    def test_calculate_score_boundary_values(
+        self, points, expected_change, expected_switch
+    ):
+        """CR-005: Verify exact boundary values for each scoring tier."""
+        result = calculate_score(
+            defender_points=points,
+            bottom_cards=[],
+            last_trick_winner_team=0,
+            last_trick_play_type=PlayType.SINGLE,
+            declarer_team_index=0,
+            declarer_team_level=Rank.TWO,
+            defender_team_level=Rank.TWO,
+        )
+        assert result.declarer_level_change == expected_change
+        assert result.switch_declarer is expected_switch
 
 
 class TestIsGameOver:
