@@ -177,11 +177,19 @@ class Game:
             return False
 
         # Record stir manually (sequential turn order)
+        # Update is_declarer: only the stirrer becomes declarer
+        new_players = [
+            p.model_copy(update={"is_declarer": p.index == player_index})
+            for p in self.state.players
+        ]
+        team_index = get_team_index(player_index)
         self.state = self.state.model_copy(update={
             "trump_suit": stir.new_trump_suit,
             "trump_rank": stir.level or self.state.trump_rank,
             "stir_history": [*self.state.stir_history, stir],
             "current_player_index": _next_player_sequential(player_index),
+            "players": new_players,
+            "declarer_team_index": team_index,
         })
         self._stir_passes = set()
         return True
