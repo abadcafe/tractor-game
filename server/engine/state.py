@@ -126,7 +126,16 @@ def deal_cards(state: GameState) -> GameState:
 
 
 def record_bid(state: GameState, bid: BidAction) -> GameState:
-    """Record a bid action and advance to the next player."""
+    """Record a bid action and advance to the next player.
+
+    Raises:
+        ValueError: if bid.player_index does not match current_player_index.
+    """
+    if bid.player_index != state.current_player_index:
+        raise ValueError(
+            f"bid.player_index={bid.player_index} does not match "
+            f"current_player_index={state.current_player_index}"
+        )
     return state.model_copy(update={
         "bidding_history": [*state.bidding_history, bid],
         "current_player_index": next_player(bid.player_index),
@@ -162,7 +171,16 @@ def set_declarer(
 
 
 def record_stir(state: GameState, stir: StirAction) -> GameState:
-    """Record a stir (trump suit change) action."""
+    """Record a stir (trump suit change) action.
+
+    Raises:
+        ValueError: if stir.player_index does not match current_player_index.
+    """
+    if stir.player_index != state.current_player_index:
+        raise ValueError(
+            f"stir.player_index={stir.player_index} does not match "
+            f"current_player_index={state.current_player_index}"
+        )
     team_index = get_team_index(stir.player_index)
 
     new_players = [
@@ -192,7 +210,7 @@ def pickup_bottom_cards(state: GameState) -> GameState:
         (p for p in state.players if p.is_declarer), None
     )
     if declarer is None:
-        return state
+        raise ValueError("no declarer set; call set_declarer first")
 
     new_players = [
         p.model_copy(update={
@@ -257,6 +275,15 @@ def play_cards(
         raise ValueError(
             f"player_index={player_index} does not match "
             f"current_player_index={state.current_player_index}"
+        )
+
+    # Verify played cards exist in player's hand
+    hand_ids = {c.id for c in state.players[player_index].hand}
+    played_ids = {c.id for c in action.cards}
+    missing = played_ids - hand_ids
+    if missing:
+        raise ValueError(
+            f"cards {missing} not in player {player_index}'s hand"
         )
 
     # Place cards in trick slot

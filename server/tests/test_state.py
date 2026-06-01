@@ -45,6 +45,15 @@ class TestRecordBid:
         assert len(state.bidding_history) == 1
         assert state.bidding_history[0].level == Rank.THREE
 
+    def test_record_bid_wrong_player_raises(self):
+        """CR-013: record_bid must reject wrong player_index."""
+        state = create_initial_state()
+        state = deal_cards(state)
+        wrong_idx = (state.current_player_index + 1) % 4
+        bid = BidAction(player_index=wrong_idx, level=Rank.THREE, pass_=False)
+        with pytest.raises(ValueError, match="does not match"):
+            record_bid(state, bid)
+
 
 class TestSetDeclarer:
     def test_set_declarer_specific_player(self):
@@ -78,6 +87,17 @@ class TestRecordStir:
         assert state.players[2].is_declarer is False
         assert state.players[3].is_declarer is False
 
+    def test_record_stir_wrong_player_raises(self):
+        """CR-014: record_stir must reject wrong player_index."""
+        state = create_initial_state()
+        state = deal_cards(state)
+        state = set_declarer(state, player_index=3, trump_suit=Suit.HEARTS, trump_rank=Rank.TWO)
+        # current_player_index is next_player(3) = 0 after set_declarer
+        wrong_idx = 2  # not the current player
+        stir = StirAction(player_index=wrong_idx, new_trump_suit=Suit.SPADES, level=Rank.THREE)
+        with pytest.raises(ValueError, match="does not match"):
+            record_stir(state, stir)
+
 
 class TestPickupBottomCards:
     def test_pickup_bottom_cards_specific_player(self):
@@ -89,6 +109,13 @@ class TestPickupBottomCards:
         assert state.phase == Phase.EXCHANGE
         assert len(state.players[3].hand) == 33
         assert len(state.players[0].hand) == 25
+
+    def test_pickup_bottom_cards_no_declarer_raises(self):
+        """CR-016: pickup_bottom_cards must raise when no declarer is set."""
+        state = create_initial_state()
+        state = deal_cards(state)
+        with pytest.raises(ValueError, match="no declarer set"):
+            pickup_bottom_cards(state)
 
 
 class TestDiscardCards:
@@ -130,6 +157,15 @@ class TestPlayCards:
         action = PlayAction(type=PlayType.SINGLE, cards=[card])
         with pytest.raises(ValueError, match="does not match"):
             play_cards(state, wrong_idx, action)
+
+    def test_play_cards_card_not_in_hand_raises(self):
+        """CR-015: play_cards must reject cards not in player's hand."""
+        state = _setup_playing_state()
+        fake_card = Card(id="fake999", suit=Suit.DIAMONDS, rank=Rank.ACE,
+                         is_joker=False, is_big_joker=False, points=10, deck=1)
+        action = PlayAction(type=PlayType.SINGLE, cards=[fake_card])
+        with pytest.raises(ValueError, match="not in player"):
+            play_cards(state, state.current_player_index, action)
 
 
 class TestResolveTrick:
@@ -322,18 +358,3 @@ def _setup_scoring_state() -> GameState:
     return state
 
 
-def _play_four_cards(state: GameState, lead_card: Card) -> GameState:
-    player_idx = state.current_player_index
-    action = PlayAction(type=PlayType.SINGLE, cards=[lead_card])
-    state = play_cards(state, player_idx, action)
-    for _ in range(3):
-        if state.phase == Phase.SCORING:
-            break
-        player_idx = state.current_player_index
-        hand = state.players[player_idx].hand
-        if not hand:
-            break
-        card = hand[0]
-        action = PlayAction(type=PlayType.SINGLE, cards=[card])
-        state = play_cards(state, player_idx, action)
-    return state
