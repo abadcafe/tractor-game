@@ -27,25 +27,45 @@ class TestGameBidFlow:
         game.submit_bid(1, None, pass_=True)
         game.submit_bid(2, None, pass_=True)
         game.submit_bid(3, None, pass_=True)
-        assert game.get_awaiting_action() == "set_trump"
+        # After human (player 3) passes, _ai_auto_play runs and the AI
+        # bid winner (player 0) automatically sets trump.  The game
+        # advances past BIDDING to STIRRING or beyond.
+        assert game.state.trump_suit is not None
+        assert game.state.phase != Phase.BIDDING
 
     def test_game_all_pass_redeal(self):
         game = Game()
         game.start_round()
         for i in range(4):
             game.submit_bid(i, None, pass_=True)
+        # When all pass, a redeal occurs. _ai_auto_play then handles AI
+        # bids in the new round, stopping when it's the human's turn.
         assert game.state.phase in (Phase.BIDDING, Phase.DEALING)
 
     def test_game_set_trump(self):
+        from server.engine.types import BidAction
         game = Game()
         game.start_round()
-        game.submit_bid(0, Rank.THREE, pass_=False)
-        for i in range(1, 4):
-            game.submit_bid(i, None, pass_=True)
-        ok = game.set_trump(0, Suit.HEARTS)
+        # Simulate a completed bidding round where human (player 3) won.
+        # Manually set the state so that bidding is over and the human is
+        # the winner, without triggering _ai_auto_play via submit_bid.
+        game.state = game.state.model_copy(update={
+            "bidding_history": [
+                BidAction(player_index=3, level=Rank.THREE, pass_=False),
+                BidAction(player_index=0, pass_=True),
+                BidAction(player_index=1, pass_=True),
+                BidAction(player_index=2, pass_=True),
+            ],
+            "current_player_index": 3,
+        })
+        assert game.get_awaiting_action() == "set_trump"
+        ok = game.set_trump(3, Suit.HEARTS)
         assert ok is True
-        assert game.state.trump_suit == Suit.HEARTS
-        assert game.state.phase == Phase.STIRRING
+        # After set_trump, _ai_auto_play runs for stirring. An AI player
+        # may stir and change the trump suit.  Verify trump was set
+        # (not None) and the game advanced past BIDDING.
+        assert game.state.trump_suit is not None
+        assert game.state.phase in (Phase.STIRRING, Phase.EXCHANGE, Phase.PLAYING)
 
 
 class TestGameStirFlow:
@@ -55,7 +75,9 @@ class TestGameStirFlow:
         game.submit_bid(0, Rank.THREE, pass_=False)
         for i in range(1, 4):
             game.submit_bid(i, None, pass_=True)
-        game.set_trump(0, Suit.HEARTS)
+        # _ai_auto_play may have already set trump after human passed
+        if game.state.phase == Phase.BIDDING:
+            game.set_trump(0, Suit.HEARTS)
         for i in range(4):
             game.submit_stir(i, None)
         assert game.state.phase == Phase.EXCHANGE
@@ -68,7 +90,9 @@ class TestGameDiscard:
         game.submit_bid(0, Rank.THREE, pass_=False)
         for i in range(1, 4):
             game.submit_bid(i, None, pass_=True)
-        game.set_trump(0, Suit.HEARTS)
+        # _ai_auto_play may have already set trump after human passed
+        if game.state.phase == Phase.BIDDING:
+            game.set_trump(0, Suit.HEARTS)
         for i in range(4):
             game.submit_stir(i, None)
         declarer_idx = None
@@ -410,7 +434,9 @@ def _setup_game_in_playing() -> Game:
     game.submit_bid(0, Rank.THREE, pass_=False)
     for i in range(1, 4):
         game.submit_bid(i, None, pass_=True)
-    game.set_trump(0, Suit.HEARTS)
+    # _ai_auto_play may have already set trump after human (player 3) passed
+    if game.state.phase == Phase.BIDDING:
+        game.set_trump(0, Suit.HEARTS)
     for i in range(4):
         game.submit_stir(i, None)
     declarer_idx = None

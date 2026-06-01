@@ -107,8 +107,11 @@ class Game:
             else:
                 # No one bid — redeal
                 self.start_round()
-        elif player_index == HUMAN_PLAYER_INDEX:
-            # Only auto-play AI after a human action
+
+        # Always auto-play AI after a human action (covers bidding-over
+        # cases where AI won the bid or a redeal happened, as well as
+        # the normal bidding-in-progress case)
+        if player_index == HUMAN_PLAYER_INDEX:
             self._ai_auto_play()
 
         return True

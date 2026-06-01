@@ -104,13 +104,14 @@ class TestE2EDealAndBid:
         # Bidding panel should appear
         bidding = page.locator("#bidding-panel")
         expect(bidding).to_be_visible()
-        # Pass on bidding
-        bidding.locator(".pass-btn").click()
+        # Pass on bidding -- may need multiple passes if all players pass
+        # (redeal triggers a new bidding round)
+        _navigate_past_bidding(page)
         # Wait for AI bidding to resolve -- wait for trump text to change from
         # "主牌: 未定" (renderer default when trumpSuit is null) to a specific
         # suit symbol (CR-011, CR-013). "主牌: --" is only the HTML template
         # default; the renderer immediately replaces it with "主牌: 未定".
-        expect(page.locator("#trump-info")).not_to_have_text("主牌: 未定", timeout=10000)
+        expect(page.locator("#trump-info")).not_to_have_text("主牌: 未定", timeout=15000)
 
 
 class TestE2EStirring:
