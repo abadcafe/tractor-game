@@ -243,6 +243,85 @@ class TestGameAIAutoPlay:
         # Fixed: continue → STIRRING handler → progresses
         assert game.state.phase != Phase.STIRRING or game.is_human_turn()
 
+    def test_game_get_legal_plays_uses_lead_player_index(self):
+        """CR-011: get_legal_plays must use lead_player_index to find lead cards.
+
+        When the lead player has a higher index than a following player who
+        has already played, the old code iterated trick slots in list order
+        (by player_index: 0, 1, 2, 3) and picked the first non-None slot
+        as the lead. This is wrong when e.g. player 3 leads SPADES and
+        player 1 follows with HEARTS -- slot 1 (player 1's HEARTS) is
+        checked before slot 3 (player 3's SPADES), causing the wrong
+        lead suit to be used for follow-suit validation.
+        """
+        from server.engine.card import Card
+        from server.engine.game_state import TrickSlot
+
+        game = _setup_game_in_playing()
+
+        trump_suit = game.state.trump_suit or Suit.HEARTS
+        trump_rank = game.state.trump_rank
+
+        # Player 3 leads SPADES ACE (not trump)
+        lead_card = Card(
+            id="test-lead", suit=Suit.SPADES, rank=Rank.ACE,
+            is_joker=False, is_big_joker=False, points=0, deck=1,
+        )
+        # Player 1 plays HEARTS ACE (off-suit, different from lead)
+        other_card = Card(
+            id="test-other", suit=Suit.HEARTS, rank=Rank.ACE,
+            is_joker=False, is_big_joker=False, points=0, deck=1,
+        )
+        # Player 0 has both SPADES and HEARTS available
+        spades_card = Card(
+            id="test-spades", suit=Suit.SPADES, rank=Rank.KING,
+            is_joker=False, is_big_joker=False, points=0, deck=1,
+        )
+        hearts_card = Card(
+            id="test-hearts", suit=Suit.HEARTS, rank=Rank.KING,
+            is_joker=False, is_big_joker=False, points=0, deck=1,
+        )
+
+        # Trick: player 3 led SPADES, player 1 played HEARTS (different suit)
+        game.state = game.state.model_copy(update={
+            "phase": Phase.PLAYING,
+            "trump_suit": trump_suit,
+            "trump_rank": trump_rank,
+            "lead_player_index": 3,
+            "lead_play_type": PlayType.SINGLE,
+            "current_player_index": 0,
+            "current_trick": [
+                TrickSlot(player_index=0, cards=None),        # player 0: hasn't played
+                TrickSlot(player_index=1, cards=[other_card]), # player 1: played HEARTS
+                TrickSlot(player_index=2, cards=None),        # player 2: hasn't played
+                TrickSlot(player_index=3, cards=[lead_card]),  # player 3: led SPADES
+            ],
+            "players": [
+                game.state.players[0].model_copy(
+                    update={"hand": [spades_card, hearts_card]}
+                ),
+                game.state.players[1],
+                game.state.players[2],
+                game.state.players[3],
+            ],
+        })
+
+        legal = game.get_legal_plays(0)
+        legal_ids = {c.id for play in legal for c in play.cards}
+
+        # Player 0 must follow SPADES (the actual lead suit from player 3).
+        # With the fix: slot 3 (player 3's SPADES) is used as lead_action,
+        #   so player 0 must follow SPADES. spades_card is legal, hearts is not.
+        # With the bug: slot 1 (player 1's HEARTS) would be used as lead_action,
+        #   so player 0 would follow HEARTS. hearts_card would be legal instead.
+        assert "test-spades" in legal_ids, (
+            "SPADES (the lead suit from player 3) must be a legal follow"
+        )
+        assert "test-hearts" not in legal_ids, (
+            "HEARTS should NOT be legal -- must follow SPADES (lead_player_index=3). "
+            "Bug: code picked player 1's HEARTS as lead instead."
+        )
+
 
 # ---- Helpers ----
 

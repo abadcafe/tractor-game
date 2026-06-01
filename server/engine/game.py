@@ -410,7 +410,7 @@ class Game:
         lead_action: PlayAction | None = None
         if not is_leading:
             for slot in trick:
-                if slot.cards is not None:
+                if slot.player_index == self.state.lead_player_index and slot.cards is not None:
                     lead_action = PlayAction(
                         type=self.state.lead_play_type or PlayType.SINGLE,
                         cards=slot.cards,
