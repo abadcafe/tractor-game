@@ -38,7 +38,9 @@ def get_legal_plays(
         trump_rank: The trump rank (= current level).
         is_leading: True if this player is leading the trick.
         lead_action: The lead play action (None if leading).
-        remaining_cards: All cards not yet played (for throw validation).
+        remaining_cards: Cards not yet played by OTHER players (excluding the
+            current player's hand). Used for throw validation to check whether
+            any opponent holds a higher card of the same suit.
 
     Returns:
         List of all legal PlayAction options.

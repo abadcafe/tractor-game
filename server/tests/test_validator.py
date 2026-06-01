@@ -140,21 +140,26 @@ class TestRoutingEdgeCases:
 class TestThrowValidation:
     """Test _is_throw_valid with non-empty remaining_cards (CR-003)."""
 
+    def test_throw_accepted_when_hand_cards_all_equal_highest_remaining(self):
+        """Throw accepted when all thrown cards equal the highest remaining card."""
+        # Player hand: A-spades (single card, but throw needs 2+ so use two Aces)
+        hand = [_card(Suit.SPADES, Rank.ACE, 1), _card(Suit.SPADES, Rank.ACE, 2)]
+        # Opponent also holds A-spades -- but there's no A-spades left (both used)
+        # remaining has K-spades which is lower
+        remaining = [_card(Suit.SPADES, Rank.KING, 1)]
+        plays = get_leading_plays(hand, Suit.HEARTS, Rank.TWO, remaining)
+        throws = [p for p in plays if p.type == PlayType.THROW]
+        assert len(throws) >= 1, "throw should be accepted when all thrown cards >= highest remaining"
+
     def test_throw_rejected_when_opponent_has_higher_card(self):
         """Throw rejected when an opponent holds a higher card of the same suit."""
-        # Player hand: A-spades, K-spades (want to throw both)
-        hand = [_card(Suit.SPADES, Rank.ACE, 1), _card(Suit.SPADES, Rank.KING, 1)]
-        # Opponent still holds A-spades from deck 2
+        # Player hand: K-spades, Q-spades (want to throw both)
+        hand = [_card(Suit.SPADES, Rank.KING, 1), _card(Suit.SPADES, Rank.QUEEN, 1)]
+        # Opponent holds A-spades -- K < A so throw is invalid
         remaining = [_card(Suit.SPADES, Rank.ACE, 2)]
         plays = get_leading_plays(hand, Suit.HEARTS, Rank.TWO, remaining)
         throws = [p for p in plays if p.type == PlayType.THROW]
-        # The throw [A, K] should be valid because A >= A (highest remaining)
-        # But let's test a case where it's not: hand has K, Q and opponent has A
-        hand2 = [_card(Suit.SPADES, Rank.KING, 1), _card(Suit.SPADES, Rank.QUEEN, 1)]
-        remaining2 = [_card(Suit.SPADES, Rank.ACE, 2)]
-        plays2 = get_leading_plays(hand2, Suit.HEARTS, Rank.TWO, remaining2)
-        throws2 = [p for p in plays2 if p.type == PlayType.THROW]
-        assert len(throws2) == 0, "throw should be rejected when opponent has higher card"
+        assert len(throws) == 0, "throw should be rejected when opponent has higher card"
 
     def test_throw_accepted_when_all_remaining_are_lower(self):
         """Throw accepted when all remaining same-suit cards are lower."""
