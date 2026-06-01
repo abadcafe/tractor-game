@@ -214,7 +214,9 @@ def _has_tractor_in_effective_suit(
     trump_suit: Suit, trump_rank: Rank,
 ) -> bool:
     pairs = _find_consecutive_pairs(hand, eff_suit, trump_suit, trump_rank)
-    return _find_consecutive_run(pairs, pair_count, eff_suit) is not None
+    return _find_consecutive_run(
+        pairs, pair_count, eff_suit, trump_suit, trump_rank,
+    ) is not None
 
 
 def _find_tractors_in_effective_suit(
@@ -228,8 +230,9 @@ def _find_tractors_in_effective_suit(
     for i in range(len(pairs) - pair_count + 1):
         is_consecutive = True
         for j in range(i + 1, i + pair_count):
-            step = _get_trump_step(pairs[j - 1][0], eff_suit)
-            if pairs[j][0] != pairs[j - 1][0] - step:
+            if not _is_consecutive_rank_level(
+                pairs[j - 1], pairs[j], eff_suit, trump_suit, trump_rank,
+            ):
                 is_consecutive = False
                 break
         if is_consecutive:
@@ -256,14 +259,17 @@ def _find_consecutive_pairs(
 def _find_consecutive_run(
     pairs: list[tuple[int, list[Card]]], length: int,
     eff_suit: Suit | str = Suit.HEARTS,
+    trump_suit: Suit = Suit.HEARTS,
+    trump_rank: Rank = Rank.TWO,
 ) -> list[tuple[int, list[Card]]] | None:
     if len(pairs) < length:
         return None
     for i in range(len(pairs) - length + 1):
         ok = True
         for j in range(i + 1, i + length):
-            step = _get_trump_step(pairs[j - 1][0], eff_suit)
-            if pairs[j][0] != pairs[j - 1][0] - step:
+            if not _is_consecutive_rank_level(
+                pairs[j - 1], pairs[j], eff_suit, trump_suit, trump_rank,
+            ):
                 ok = False
                 break
         if ok:
@@ -284,13 +290,55 @@ def _group_by_effective_order(
     return result
 
 
-def _get_trump_step(order: int, eff_suit: Suit | str) -> int:
-    """Get the step size to the next lower trump order level."""
+def _is_consecutive_rank_level(
+    pair_a: tuple[int, list[Card]],
+    pair_b: tuple[int, list[Card]],
+    eff_suit: Suit | str,
+    trump_suit: Suit,
+    trump_rank: Rank,
+) -> bool:
+    """Check if pair_a (higher) and pair_b (lower) are at consecutive rank levels."""
+    card_a = pair_a[1][0]
+    card_b = pair_b[1][0]
+
     if eff_suit == "trump":
-        if order >= 70:
-            return 10  # BJ(100) -> SJ(90) -> trump-rank(80,70-73) all step=10
-        return 1
-    return 1
+        level_a = _trump_rank_level(card_a, trump_rank)
+        level_b = _trump_rank_level(card_b, trump_rank)
+        return level_a - level_b == 1
+    # Natural suit: adjacent ranks (RANK_ORDER difference = 1)
+    return pair_a[0] - pair_b[0] == 1
+
+
+# Precompute: non-joker rank set for _trump_rank_level
+_NON_JOKER_RANKS: frozenset[Rank] = frozenset(
+    r for r in Rank if r not in (Rank.BIG_JOKER, Rank.SMALL_JOKER)
+)
+
+
+def _trump_rank_level(card: Card, trump_rank: Rank) -> int:
+    """Assign a sequential level in the trump hierarchy for tractor detection.
+
+    Hierarchy (highest to lowest):
+      BJ -> SJ -> trump_rank (all suits) -> highest non-trump-rank -> ... -> lowest
+
+    Levels are computed so that each adjacent pair differs by exactly 1.
+    """
+    from server.engine.card_utils import RANK_ORDER
+
+    if card.is_joker and card.is_big_joker:
+        # BJ is 3 levels above the highest non-trump-rank
+        max_non_trump = max(RANK_ORDER[r] for r in _NON_JOKER_RANKS if r != trump_rank)
+        return max_non_trump + 3
+    if card.is_joker:
+        # SJ is 2 levels above the highest non-trump-rank
+        max_non_trump = max(RANK_ORDER[r] for r in _NON_JOKER_RANKS if r != trump_rank)
+        return max_non_trump + 2
+    if card.rank == trump_rank:
+        # trump_rank is 1 level above the highest non-trump-rank
+        max_non_trump = max(RANK_ORDER[r] for r in _NON_JOKER_RANKS if r != trump_rank)
+        return max_non_trump + 1
+    # Non-trump-rank cards use their natural RANK_ORDER
+    return RANK_ORDER[card.rank]
 
 
 def _generate_any_two(hand: list[Card]) -> list[PlayAction]:

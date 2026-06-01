@@ -153,19 +153,19 @@ class TestCanFollowTractorTrump:
         assert can_follow(hand, lead, Suit.HEARTS, Rank.TWO) is True
 
     def test_can_follow_trump_tractor_no_consecutive_trump_pairs(self):
-        """Non-consecutive trump pairs cannot form a tractor."""
-        # Lead: BJ pair + SJ pair (orders 100, 90, step=10)
+        """Same-rank different-suit trump pairs cannot form a tractor (CR-007)."""
+        # Lead: BJ pair + SJ pair
         lead = PlayAction(type=PlayType.TRACTOR, cards=[
             _card(Suit.JOKER, Rank.BIG_JOKER, d) for d in (1, 2)
         ] + [
             _card(Suit.JOKER, Rank.SMALL_JOKER, d) for d in (1, 2)
         ])
-        # Hand: SJ pair + trump-rank+other-suit pair (orders 90, 70)
-        # Gap from 90 to 70 = 20, not a valid step (should be 10)
+        # Hand: TWO-HEARTS pair + TWO-CLUBS pair (same rank, different suits)
+        # Both are trump rank cards but at the SAME rank level -- not a tractor
         hand = [
-            _card(Suit.JOKER, Rank.SMALL_JOKER, d) for d in (1, 2)
+            _card(Suit.HEARTS, Rank.TWO, d) for d in (1, 2)
         ] + [
-            _card(Suit.SPADES, Rank.TWO, d) for d in (1, 2)
+            _card(Suit.CLUBS, Rank.TWO, d) for d in (1, 2)
         ]
         assert can_follow(hand, lead, Suit.HEARTS, Rank.TWO) is False
 
