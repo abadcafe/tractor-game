@@ -10,7 +10,7 @@ Ported from src/rules/pattern.ts.
 from __future__ import annotations
 
 from server.engine.card import Card, Suit, Rank, card_display
-from server.engine.card_utils import RANK_ORDER
+from server.engine.card_utils import RANK_ORDER, SUITED_RANKS
 from server.engine.types import PlayType, PlayAction
 from server.rules.comparator import (
     effective_suit,
@@ -171,7 +171,8 @@ def _find_tractors_in_group(
     while i < len(pair_entries):
         j = i + 1
         while j < len(pair_entries) and _is_consecutive(
-            pair_entries[j - 1]["order"], pair_entries[j]["order"], is_trump
+            pair_entries[j - 1]["order"], pair_entries[j]["order"], is_trump,
+            trump_suit, trump_rank,
         ):
             j += 1
 
@@ -192,7 +193,16 @@ def _find_tractors_in_group(
     return tractors
 
 
-def _is_consecutive(order_a: int, order_b: int, is_trump: bool) -> bool:
+_SUIT_OFFSETS: dict[Suit, int] = {
+    Suit.HEARTS: 3, Suit.SPADES: 2,
+    Suit.DIAMONDS: 1, Suit.CLUBS: 0,
+}
+
+
+def _is_consecutive(
+    order_a: int, order_b: int, is_trump: bool,
+    trump_suit: Suit, trump_rank: Rank,
+) -> bool:
     """Check if two order values are consecutive.
 
     Non-trump: natural ranks, consecutive if diff is 1.
@@ -202,31 +212,48 @@ def _is_consecutive(order_a: int, order_b: int, is_trump: bool) -> bool:
         return order_a - order_b == 1
 
     # Trump: check if they're adjacent in trump ordering
-    step = _get_trump_order_step(order_a)
+    step = _get_trump_order_step(order_a, trump_suit, trump_rank)
     return order_a - order_b == step
 
 
-def _get_trump_order_step(current_order: int) -> int:
+def _get_trump_order_step(
+    current_order: int, trump_suit: Suit, trump_rank: Rank,
+) -> int:
     """Get the step size to the next lower trump order level.
 
-    Trump order groups:
+    Trump order groups (highest to lowest):
       100:    Big Joker
        90:    Small Joker
        80:    Trump rank + trump suit (主牌)
-      70-73:  Trump rank + other suits (副级牌), 70 + suit-offset 0-3
-      47-59:  Trump suit cards (non-trump-rank), 45 + RANK_ORDER
-       0-12:  Non-trump suit cards, RANK_ORDER - 2
+      70+off: Trump rank + other suits (副级牌), off = suit offset 0-3
+      45+RO:  Trump suit cards (non-trump-rank), RO = RANK_ORDER
+       RO-2:  Non-trump suit cards
     """
     if current_order == 100:
         return 10  # BJ → SJ
     if current_order == 90:
         return 10  # SJ → 主牌
     if current_order == 80:
-        return 7    # 主牌(80) → highest 副级牌(73, Hearts), diff=7
+        # 主牌 → highest 副级牌 (depends on which suit is trump)
+        highest_offset = max(v for k, v in _SUIT_OFFSETS.items() if k != trump_suit)
+        return 80 - (70 + highest_offset)
     if 70 <= current_order < 80:
-        if current_order == 70:
-            return 11  # Last 副级牌(70) → top trump suit (45+14=59), diff=11
-        return 1   # Between 副级牌 suits
+        # 副级牌 range: find the next lower existing 副级牌 or trump suit card
+        existing_offsets = sorted(
+            (v for k, v in _SUIT_OFFSETS.items() if k != trump_suit), reverse=True,
+        )
+        current_offset = current_order - 70
+        for i, off in enumerate(existing_offsets):
+            if off == current_offset:
+                if i < len(existing_offsets) - 1:
+                    # Step to next lower existing 副级牌
+                    return off - existing_offsets[i + 1]
+                # Lowest 副级牌 → highest trump suit card
+                max_rank_order = max(
+                    (RANK_ORDER[r] for r in SUITED_RANKS if r != trump_rank),
+                )
+                return current_order - (45 + max_rank_order)
+        return 0  # Unreachable if current_order is a valid 副级牌
     if 45 <= current_order < 60:
         return 1   # Within trump suit ranks
     return 0       # Non-trump (not used in is_consecutive for trump)

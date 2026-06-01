@@ -90,6 +90,26 @@ class TestDetectTractors:
         four_card = [t for t in tractors if len(t.cards) == 4]
         assert len(four_card) == 0
 
+    def test_detect_tractors_main_and_sub_level_pair(self):
+        """主牌 pair + 副级牌 pair should form a trump tractor."""
+        hand = [
+            _card(Suit.HEARTS, Rank.TWO, 1), _card(Suit.HEARTS, Rank.TWO, 2),
+            _card(Suit.SPADES, Rank.TWO, 1), _card(Suit.SPADES, Rank.TWO, 2),
+        ]
+        tractors = detect_tractors(hand, Suit.HEARTS, Rank.TWO)
+        found_4card = [t for t in tractors if len(t.cards) == 4]
+        assert len(found_4card) == 1
+
+    def test_detect_tractors_sub_level_and_trump_suit_pair(self):
+        """副级牌 pair + trump suit highest-rank pair should form a trump tractor."""
+        hand = [
+            _card(Suit.CLUBS, Rank.ACE, 1), _card(Suit.CLUBS, Rank.ACE, 2),
+            _card(Suit.HEARTS, Rank.KING, 1), _card(Suit.HEARTS, Rank.KING, 2),
+        ]
+        tractors = detect_tractors(hand, Suit.HEARTS, Rank.ACE)
+        found_4card = [t for t in tractors if len(t.cards) == 4]
+        assert len(found_4card) == 1
+
 
 class TestDetectThrowCandidates:
     def test_detect_throw_candidates_non_trump_suit(self):
