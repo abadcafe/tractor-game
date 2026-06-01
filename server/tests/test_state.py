@@ -1,4 +1,5 @@
 """Tests for engine.state module."""
+import pytest
 from server.engine.card import Card, Suit, Rank
 from server.engine.types import Phase, PlayType, PlayAction, BidAction, StirAction
 from server.engine.game_state import GameState
@@ -121,15 +122,73 @@ class TestPlayCards:
         state = play_cards(state, state.current_player_index, action)
         assert state.current_player_index != state.lead_player_index
 
+    def test_play_cards_wrong_player_raises(self):
+        """CR-011: play_cards must reject wrong player_index."""
+        state = _setup_playing_state()
+        wrong_idx = (state.current_player_index + 1) % 4
+        card = state.players[wrong_idx].hand[0]
+        action = PlayAction(type=PlayType.SINGLE, cards=[card])
+        with pytest.raises(ValueError, match="does not match"):
+            play_cards(state, wrong_idx, action)
+
 
 class TestResolveTrick:
     def test_resolve_trick_uses_compare_plays(self):
-        """Bug #1 fix: must use comparePlays() to determine winner."""
+        """Bug #1 fix: must use compare_plays() to determine winner.
+
+        Set up deterministic hands: lead plays a low non-trump card (THREE of DIAMONDS),
+        follower plays a higher card of the same suit (ACE of DIAMONDS).
+        The follower should win, proving compare_plays is actually called.
+        Without compare_plays, the lead player would always win (original bug).
+        """
         state = _setup_playing_state()
-        lead_card = state.players[state.current_player_index].hand[0]
-        state = _play_four_cards(state, lead_card)
+        # trump_suit=HEARTS, trump_rank=TWO
+        # Lead card: low non-trump (DIAMONDS THREE, RANK_ORDER=3)
+        low_card = Card(id="low1", suit=Suit.DIAMONDS, rank=Rank.THREE,
+                        is_joker=False, is_big_joker=False, points=0, deck=1)
+        # Follower card: high same-suit non-trump (DIAMONDS ACE, RANK_ORDER=14)
+        high_card = Card(id="high1", suit=Suit.DIAMONDS, rank=Rank.ACE,
+                         is_joker=False, is_big_joker=False, points=10, deck=1)
+        other1 = Card(id="o1", suit=Suit.CLUBS, rank=Rank.FOUR,
+                      is_joker=False, is_big_joker=False, points=0, deck=1)
+        other2 = Card(id="o2", suit=Suit.SPADES, rank=Rank.FIVE,
+                      is_joker=False, is_big_joker=False, points=5, deck=1)
+
+        # Turn order after player 3 leads: 3 -> 1 -> 0 -> 2
+        # Player 3 (lead): low card
+        # Player 1 (first follower): high card (should win)
+        # Player 0, 2: other cards
+        new_players = list(state.players)
+        new_players[3] = new_players[3].model_copy(update={
+            "hand": [low_card] + [c for c in new_players[3].hand[1:]],
+        })
+        new_players[1] = new_players[1].model_copy(update={
+            "hand": [high_card] + [c for c in new_players[1].hand[1:]],
+        })
+        new_players[0] = new_players[0].model_copy(update={
+            "hand": [other1] + [c for c in new_players[0].hand[1:]],
+        })
+        new_players[2] = new_players[2].model_copy(update={
+            "hand": [other2] + [c for c in new_players[2].hand[1:]],
+        })
+        state = state.model_copy(update={"players": new_players})
+
+        # Play all 4 cards in turn order
+        p3_card = state.players[3].hand[0]
+        state = play_cards(state, 3, PlayAction(type=PlayType.SINGLE, cards=[p3_card]))
+
+        p1_card = state.players[1].hand[0]  # high card, same suit
+        state = play_cards(state, 1, PlayAction(type=PlayType.SINGLE, cards=[p1_card]))
+
+        p0_card = state.players[0].hand[0]  # different suit
+        state = play_cards(state, 0, PlayAction(type=PlayType.SINGLE, cards=[p0_card]))
+
+        p2_card = state.players[2].hand[0]  # different suit
+        state = play_cards(state, 2, PlayAction(type=PlayType.SINGLE, cards=[p2_card]))
+
         assert state.last_completed_trick is not None
-        assert 0 <= state.last_completed_trick.winner_index <= 3
+        # Player 1 played the highest card of the lead suit -> should win
+        assert state.last_completed_trick.winner_index == 1
 
     def test_resolve_trick_trump_wins(self):
         """Trump play should beat non-trump play.

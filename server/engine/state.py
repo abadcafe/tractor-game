@@ -249,7 +249,16 @@ def play_cards(
 
     After playing, if all 4 players have played, resolve the trick.
     Otherwise, advance to the next player.
+
+    Raises:
+        ValueError: if player_index does not match current_player_index.
     """
+    if player_index != state.current_player_index:
+        raise ValueError(
+            f"player_index={player_index} does not match "
+            f"current_player_index={state.current_player_index}"
+        )
+
     # Place cards in trick slot
     new_trick = [
         slot.model_copy(update={"cards": action.cards})
