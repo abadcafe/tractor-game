@@ -35,8 +35,10 @@ class GameStore:
         self._store[game_id] = state.model_copy(deep=True)
 
     def delete(self, game_id: str) -> None:
-        """Remove a game state by ID."""
-        self._store.pop(game_id, None)
+        """Remove a game state by ID. Raises KeyError if not found."""
+        if game_id not in self._store:
+            raise KeyError(game_id)
+        del self._store[game_id]
 
     def list_games(self) -> list[str]:
         """Return all stored game IDs."""

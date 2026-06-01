@@ -110,3 +110,8 @@ class TestGameStore:
         store.update(game_id, updated)
         updated.phase = Phase.PLAYING
         assert store.get(game_id).phase == Phase.BIDDING
+
+    def test_game_store_delete_nonexistent(self):
+        store = GameStore()
+        with pytest.raises(KeyError):
+            store.delete("nonexistent")
