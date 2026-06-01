@@ -129,6 +129,28 @@ class TestDiscardCards:
         assert len(state.players[3].hand) == 25
         assert state.phase == Phase.PLAYING
 
+    def test_discard_cards_wrong_player_raises(self):
+        """CR-017: discard_cards must reject wrong player_index."""
+        state = create_initial_state()
+        state = deal_cards(state)
+        state = set_declarer(state, player_index=3, trump_suit=Suit.HEARTS, trump_rank=Rank.TWO)
+        state = pickup_bottom_cards(state)
+        wrong_idx = (state.current_player_index + 1) % 4
+        discard = state.players[wrong_idx].hand[:BOTTOM_CARD_COUNT]
+        with pytest.raises(ValueError, match="does not match"):
+            discard_cards(state, player_index=wrong_idx, cards=discard)
+
+    def test_discard_cards_card_not_in_hand_raises(self):
+        """CR-018: discard_cards must reject cards not in player's hand."""
+        state = create_initial_state()
+        state = deal_cards(state)
+        state = set_declarer(state, player_index=3, trump_suit=Suit.HEARTS, trump_rank=Rank.TWO)
+        state = pickup_bottom_cards(state)
+        fake_card = Card(id="fake999", suit=Suit.DIAMONDS, rank=Rank.ACE,
+                         is_joker=False, is_big_joker=False, points=10, deck=1)
+        with pytest.raises(ValueError, match="not in player"):
+            discard_cards(state, player_index=3, cards=[fake_card])
+
 
 class TestPlayCards:
     def test_play_cards_lead(self):

@@ -234,7 +234,20 @@ def discard_cards(
     cards: list[Card],
 ) -> GameState:
     """Declarer discards cards; transition to PLAYING phase."""
+    if player_index != state.current_player_index:
+        raise ValueError(
+            f"player_index={player_index} does not match "
+            f"current_player_index={state.current_player_index}"
+        )
+
+    # CR-018: verify cards exist in player's hand
+    hand_ids = {c.id for c in state.players[player_index].hand}
     discard_ids = {c.id for c in cards}
+    missing = discard_ids - hand_ids
+    if missing:
+        raise ValueError(
+            f"cards {missing} not in player {player_index}'s hand"
+        )
 
     new_players = [
         p.model_copy(update={
@@ -301,7 +314,6 @@ def play_cards(
     lead_player_index = player_index if is_lead else state.lead_player_index
 
     # Remove played cards from hand
-    played_ids = {c.id for c in action.cards}
     new_players = [
         p.model_copy(update={
             "hand": [c for c in p.hand if c.id not in played_ids],
