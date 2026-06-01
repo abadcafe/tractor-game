@@ -240,6 +240,8 @@ async def deal(game_id: str):
     """Deal cards and transition to BIDDING phase."""
     game = _get_game_or_404(game_id)
     game.start_round()
+    # Auto-play AI turns so the game reaches the human player's turn
+    game._ai_auto_play()
     store.update(game_id, game.state)
     return _game_response(game_id, game)
 
