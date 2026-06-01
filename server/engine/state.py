@@ -416,7 +416,7 @@ def advance_round(
     new_players = [
         p.model_copy(update={
             "hand": [],
-            "is_declarer": p.team_index == new_declarer_team,
+            "is_declarer": False,
         })
         for p in state.players
     ]

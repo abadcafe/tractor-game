@@ -71,6 +71,11 @@ class TestRecordStir:
         state = record_stir(state, stir)
         assert state.trump_suit == Suit.SPADES
         assert len(state.stir_history) == 1
+        # CR-008: verify is_declarer set on specific stirring player, not whole team
+        assert state.players[1].is_declarer is True
+        assert state.players[0].is_declarer is False
+        assert state.players[2].is_declarer is False
+        assert state.players[3].is_declarer is False
 
 
 class TestPickupBottomCards:
@@ -220,6 +225,10 @@ class TestAdvanceRound:
         assert state.teams[0].current_level == Rank.FIVE
         assert state.teams[1].current_level == Rank.TWO
         assert state.phase == Phase.DEALING
+        # SR-001: after advance_round, no player should be declarer
+        # (specific declarer not yet determined for new round)
+        for p in state.players:
+            assert p.is_declarer is False
 
 
 class TestClearTrick:
@@ -255,7 +264,6 @@ def _setup_scoring_state() -> GameState:
 
 
 def _play_four_cards(state: GameState, lead_card: Card) -> GameState:
-    from server.engine.player_utils import next_player
     player_idx = state.current_player_index
     action = PlayAction(type=PlayType.SINGLE, cards=[lead_card])
     state = play_cards(state, player_idx, action)
