@@ -1,5 +1,4 @@
 """Tests for rules.validator module."""
-import pytest
 from server.engine.card import Card, Suit, Rank
 from server.engine.types import PlayType, PlayAction
 from server.rules.validator import (
@@ -31,7 +30,7 @@ class TestGetLeadingPlays:
         ] + [_card(Suit.HEARTS, Rank.KING)]
         plays = get_leading_plays(hand, Suit.HEARTS, Rank.TWO, [])
         pairs = [p for p in plays if p.type == PlayType.PAIR]
-        assert len(pairs) >= 1
+        assert len(pairs) == 1
 
     def test_get_leading_plays_includes_tractors(self):
         hand = [
@@ -41,7 +40,7 @@ class TestGetLeadingPlays:
         ]
         plays = get_leading_plays(hand, Suit.HEARTS, Rank.TWO, [])
         tractors = [p for p in plays if p.type == PlayType.TRACTOR]
-        assert len(tractors) >= 1
+        assert len(tractors) == 1
 
 
 class TestGetLegalPlays:
@@ -51,7 +50,8 @@ class TestGetLegalPlays:
             hand, [], Suit.HEARTS, Rank.TWO,
             is_leading=True, lead_action=None,
         )
-        assert len(plays) >= 2
+        # 2 singles only (no pairs, no tractors, no valid throws)
+        assert len(plays) == 2
 
     def test_get_legal_plays_following(self):
         lead = PlayAction(type=PlayType.SINGLE, cards=[_card(Suit.SPADES, Rank.ACE)])
@@ -91,7 +91,12 @@ class TestFilterByType:
             _card(Suit.SPADES, Rank.ACE, d) for d in (1, 2)
         ] + [_card(Suit.HEARTS, Rank.KING)]
         plays = get_leading_plays(hand, Suit.HEARTS, Rank.TWO, [])
+        # Verify non-SINGLE types exist in the full list
+        non_singles = [p for p in plays if p.type != PlayType.SINGLE]
+        assert len(non_singles) > 0, "plays should contain pairs"
+        # Filter to singles only
         singles = filter_by_type(plays, PlayType.SINGLE)
+        assert len(singles) < len(plays)
         for s in singles:
             assert s.type == PlayType.SINGLE
 
@@ -105,3 +110,65 @@ class TestDescribeLegalPlays:
         for desc in descriptions:
             assert isinstance(desc, str)
             assert len(desc) > 0
+
+
+class TestRoutingEdgeCases:
+    """Edge cases for get_legal_plays routing logic (CR-005)."""
+
+    def test_following_with_all_empty_slots_treats_as_leading(self):
+        """When is_leading=False but all trick slots are empty, treat as leading."""
+        hand = [_card(Suit.SPADES, Rank.ACE), _card(Suit.HEARTS, Rank.KING)]
+        plays = get_legal_plays(
+            hand, [{"player_index": 0, "cards": None}],
+            Suit.HEARTS, Rank.TWO,
+            is_leading=False, lead_action=None,
+        )
+        # Should return leading plays (2 singles) even though is_leading=False
+        assert len(plays) == 2
+
+    def test_following_with_no_lead_action_returns_empty(self):
+        """When is_leading=False, trick has cards, but lead_action=None, return []."""
+        hand = [_card(Suit.SPADES, Rank.ACE), _card(Suit.HEARTS, Rank.KING)]
+        plays = get_legal_plays(
+            hand, [{"player_index": 0, "cards": [_card(Suit.SPADES, Rank.ACE)]}],
+            Suit.HEARTS, Rank.TWO,
+            is_leading=False, lead_action=None,
+        )
+        assert len(plays) == 0
+
+
+class TestThrowValidation:
+    """Test _is_throw_valid with non-empty remaining_cards (CR-003)."""
+
+    def test_throw_rejected_when_opponent_has_higher_card(self):
+        """Throw rejected when an opponent holds a higher card of the same suit."""
+        # Player hand: A-spades, K-spades (want to throw both)
+        hand = [_card(Suit.SPADES, Rank.ACE, 1), _card(Suit.SPADES, Rank.KING, 1)]
+        # Opponent still holds A-spades from deck 2
+        remaining = [_card(Suit.SPADES, Rank.ACE, 2)]
+        plays = get_leading_plays(hand, Suit.HEARTS, Rank.TWO, remaining)
+        throws = [p for p in plays if p.type == PlayType.THROW]
+        # The throw [A, K] should be valid because A >= A (highest remaining)
+        # But let's test a case where it's not: hand has K, Q and opponent has A
+        hand2 = [_card(Suit.SPADES, Rank.KING, 1), _card(Suit.SPADES, Rank.QUEEN, 1)]
+        remaining2 = [_card(Suit.SPADES, Rank.ACE, 2)]
+        plays2 = get_leading_plays(hand2, Suit.HEARTS, Rank.TWO, remaining2)
+        throws2 = [p for p in plays2 if p.type == PlayType.THROW]
+        assert len(throws2) == 0, "throw should be rejected when opponent has higher card"
+
+    def test_throw_accepted_when_all_remaining_are_lower(self):
+        """Throw accepted when all remaining same-suit cards are lower."""
+        # Player hand: A-spades, K-spades
+        hand = [_card(Suit.SPADES, Rank.ACE, 1), _card(Suit.SPADES, Rank.KING, 1)]
+        # Opponent only has Q-spades
+        remaining = [_card(Suit.SPADES, Rank.QUEEN, 2)]
+        plays = get_leading_plays(hand, Suit.HEARTS, Rank.TWO, remaining)
+        throws = [p for p in plays if p.type == PlayType.THROW]
+        assert len(throws) >= 1, "throw should be accepted when all remaining are lower"
+
+    def test_throw_with_empty_remaining_always_accepted(self):
+        """Throw with empty remaining_cards is always accepted."""
+        hand = [_card(Suit.SPADES, Rank.KING, 1), _card(Suit.SPADES, Rank.QUEEN, 1)]
+        plays = get_leading_plays(hand, Suit.HEARTS, Rank.TWO, [])
+        throws = [p for p in plays if p.type == PlayType.THROW]
+        assert len(throws) >= 1

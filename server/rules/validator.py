@@ -70,6 +70,11 @@ def get_leading_plays(
     """Get all legal plays when leading a trick.
 
     Includes singles, pairs, tractors, and valid throws.
+
+    Args:
+        remaining_cards: Cards not yet played by OTHER players (excluding the
+            current player's hand). Used for throw validation to check whether
+            any opponent holds a higher card of the same suit.
     """
     plays: list[PlayAction] = []
 
