@@ -110,6 +110,20 @@ class TestDetectTractors:
         found_4card = [t for t in tractors if len(t.cards) == 4]
         assert len(found_4card) == 1
 
+    def test_detect_tractors_mid_trump_rank_non_trump_consecutive(self):
+        """Non-trump consecutive pairs with mid-range trump rank (gap at trump rank).
+
+        With trump_rank=FIVE, non-trump SPADES ranks are 2,3,4,6,7,...
+        Pairs of 6 and 4 should be consecutive (5 is excluded as trump).
+        """
+        hand = [
+            _card(Suit.SPADES, Rank.SIX, 1), _card(Suit.SPADES, Rank.SIX, 2),
+            _card(Suit.SPADES, Rank.FOUR, 1), _card(Suit.SPADES, Rank.FOUR, 2),
+        ]
+        tractors = detect_tractors(hand, Suit.HEARTS, Rank.FIVE)
+        found_4card = [t for t in tractors if len(t.cards) == 4]
+        assert len(found_4card) == 1
+
 
 class TestDetectThrowCandidates:
     def test_detect_throw_candidates_non_trump_suit(self):

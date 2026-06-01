@@ -205,11 +205,19 @@ def _is_consecutive(
 ) -> bool:
     """Check if two order values are consecutive.
 
-    Non-trump: natural ranks, consecutive if diff is 1.
+    Non-trump: natural ranks, consecutive if diff is 1, or diff is 2 when
+    the intermediate rank is the trump rank (which is excluded from non-trump suits).
     Trump: check adjacency in trump order groups.
     """
     if not is_trump:
-        return order_a - order_b == 1
+        diff = order_a - order_b
+        if diff == 1:
+            return True
+        # When trump_rank is mid-range, it creates a gap in non-trump rank ordering.
+        # e.g. with trump_rank=FIVE, ranks 4 and 6 are consecutive (5 is excluded).
+        if diff == 2 and RANK_ORDER[trump_rank] == order_b + 1:
+            return True
+        return False
 
     # Trump: check if they're adjacent in trump ordering
     step = _get_trump_order_step(order_a, trump_suit, trump_rank)
