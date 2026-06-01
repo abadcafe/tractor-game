@@ -106,10 +106,9 @@ class TestE2EDealAndBid:
         expect(bidding).to_be_visible()
         # Pass on bidding
         bidding.locator(".pass-btn").click()
-        # Wait for AI bidding to resolve -- condition-based (CR-008)
-        page.locator("#trump-info").wait_for(state="visible", timeout=10000)
-        trump_text = page.locator("#trump-info").text_content()
-        assert trump_text != "主牌: --", "Trump info should update after bidding resolves"
+        # Wait for AI bidding to resolve -- wait for trump text to change from
+        # the default "主牌: --" instead of just waiting for visibility (CR-011)
+        expect(page.locator("#trump-info")).not_to_have_text("主牌: --", timeout=10000)
 
 
 class TestE2EStirring:
@@ -183,9 +182,6 @@ class TestE2ETrumpAndWinner:
         _navigate_past_bidding(page)
         # After bidding resolves, trump info should be set (CR-002)
         trump_info = page.locator("#trump-info")
-        trump_info.wait_for(state="visible", timeout=10000)
-        trump_text = trump_info.text_content()
-        assert trump_text is not None, "Trump info should have content"
         # If human won the bid, trump might still be "--" until they select a suit.
         # In that case, the bidding panel with suit buttons should be visible.
         bidding = page.locator("#bidding-panel")
@@ -194,11 +190,8 @@ class TestE2ETrumpAndWinner:
             if suit_btn.is_visible():
                 suit_btn.click()
                 page.wait_for_timeout(1000)
-                trump_text = trump_info.text_content()
-        # After bidding (and possibly trump selection), trump must be set to a
-        # specific suit -- the default "主牌: --" is only shown before any bid.
-        assert trump_text != "主牌: --", \
-            f"Trump should be set after bidding resolves, got: {trump_text}"
+        # Wait for trump text to change from default using condition-based wait (CR-011)
+        expect(trump_info).not_to_have_text("主牌: --", timeout=10000)
 
 
 class TestE2EScoringAndLevelUp:
