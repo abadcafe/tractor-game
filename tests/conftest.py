@@ -2,15 +2,20 @@
 import pytest
 import subprocess
 import time
-import requests
+from pathlib import Path
+from urllib.request import urlopen, Request
+from urllib.error import URLError
+
+
+PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 
 
 def _is_server_running(url: str) -> bool:
     """Check if the game server is already running."""
     try:
-        resp = requests.get(f"{url}/api/health", timeout=2)
-        return resp.status_code == 200
-    except requests.ConnectionError:
+        resp = urlopen(Request(f"{url}/api/health"), timeout=2)
+        return resp.status == 200
+    except (URLError, OSError):
         return False
 
 
@@ -26,15 +31,15 @@ def live_server():
 
     proc = subprocess.Popen(
         ["python", "-m", "uvicorn", "server.server:app", "--host", "127.0.0.1", "--port", "8787"],
-        cwd="/home/lfw/works/tractor-game",
+        cwd=PROJECT_ROOT,
     )
     # Wait for server to be ready
     for _ in range(30):
         try:
-            resp = requests.get(f"{base_url}/api/health", timeout=1)
-            if resp.status_code == 200:
+            resp = urlopen(Request(f"{base_url}/api/health"), timeout=1)
+            if resp.status == 200:
                 break
-        except requests.ConnectionError:
+        except (URLError, OSError):
             pass
         time.sleep(0.5)
     yield base_url

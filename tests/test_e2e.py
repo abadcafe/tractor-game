@@ -11,9 +11,13 @@ Adjusted selectors to match actual UI:
 - Pass bidding: #bidding-panel .pass-btn
 - Pass stirring: #stirring-panel .pass-btn
 - Next round: #btn-next-round
-"""
-import json
 
+IMPORTANT: These E2E tests depend on the server-side _ai_auto_play() method
+(game.py:363) which automatically advances AI turns after each human action.
+Without this, the game would stall waiting for AI input and the tests would
+time out. The _ai_auto_play() is called in submit_bid(), set_trump(),
+submit_discard(), submit_play(), and the deal() API endpoint.
+"""
 import pytest
 from playwright.sync_api import Page, expect
 
@@ -39,8 +43,11 @@ class TestE2EDealAndBid:
         bidding.locator(".pass-btn").click()
         # Wait for AI bidding to resolve
         page.wait_for_timeout(5000)
-        # Eventually game progresses: trump info should update or bidding ends
+        # Eventually game progresses: trump info should update from default "--"
+        # Note: _ai_auto_play() in the deal endpoint advances AI turns automatically
         page.locator("#trump-info").wait_for(state="visible", timeout=10000)
+        trump_text = page.locator("#trump-info").text_content()
+        assert trump_text != "主牌: --", "Trump info should update after bidding resolves"
 
 
 class TestE2EStirring:
@@ -284,17 +291,17 @@ class TestE2EFullGame:
 
         # Filter out known non-critical errors:
         # - favicon 404s
-        # - API 400 errors from expected game state transitions (e.g., stale stir/bid)
-        # - "Invalid stir" / "Invalid bid" from clicking UI after phase advanced
+        # - API errors from expected game state transitions (e.g., stale stir/bid)
+        #   These happen when the UI clicks a button after the phase already advanced
         critical_errors = [
             e for e in js_errors
             if "favicon" not in e.lower()
-            and "404" not in e
+            and "status of 400" not in e
+            and "status of 404" not in e
             and "Invalid stir" not in e
             and "Invalid bid" not in e
             and "Invalid play" not in e
             and "Invalid set-trump" not in e
-            and "400" not in e
         ]
         assert len(critical_errors) == 0, f"JS errors found: {critical_errors}"
         # Game should still be running without crashes
