@@ -35,6 +35,7 @@ from server.engine.card import Rank, Suit
 from server.engine.constants import PLAYER_COUNT
 from server.engine.game import Game
 from server.engine.types import Phase, StirAction
+from server.resilience import cleanup_expired_sessions, get_settings, update_settings
 from server.storage.game_store import GameStore
 
 app = FastAPI(title="Tractor Game Server")
@@ -147,6 +148,19 @@ async def update_config(data: dict):
     if "model" in data:
         DEFAULT_MODEL = data["model"]
     return {"status": "ok"}
+
+
+@app.get("/api/settings")
+async def read_settings():
+    """Return current server-side game settings."""
+    return get_settings()
+
+
+@app.put("/api/settings")
+async def write_settings(data: dict):
+    """Update server-side game settings."""
+    update_settings(**data)
+    return get_settings()
 
 
 # ---- Game API helpers ----
@@ -357,6 +371,22 @@ async def index():
     if index_path.exists():
         return FileResponse(str(index_path))
     return {"message": "Tractor Game Server is running."}
+
+
+# ---- Session cleanup ----
+
+import asyncio
+
+@app.on_event("startup")
+async def start_session_cleanup():
+    """Periodically clean up expired game sessions."""
+    async def _cleanup_loop():
+        while True:
+            await asyncio.sleep(300)  # every 5 minutes
+            removed = cleanup_expired_sessions(store, max_age_seconds=3600)
+            if removed > 0:
+                print(f"Cleaned up {removed} expired session(s)")
+    asyncio.create_task(_cleanup_loop())
 
 
 # ---- Startup ----

@@ -12,6 +12,25 @@ import { Renderer } from './ui/renderer';
 import { SettingsView, type SettingsData } from './ui/settings';
 import { Scoreboard } from './ui/scoreboard';
 
+// ---- Global error handler ----
+
+(window as any).__jsErrors = [];
+window.addEventListener('error', (event) => {
+  (window as any).__jsErrors.push({
+    message: event.message,
+    filename: event.filename,
+    lineno: event.lineno,
+    colno: event.colno,
+    timestamp: new Date().toISOString(),
+  });
+});
+window.addEventListener('unhandledrejection', (event) => {
+  (window as any).__jsErrors.push({
+    message: String(event.reason),
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // ---- Constants ----
 
 const HUMAN_PLAYER_INDEX = 3;
@@ -69,18 +88,45 @@ interface GameStateResponse {
   winningTeam?: number | null;
 }
 
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 1000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function apiCall(action: string, body?: Record<string, unknown>): Promise<GameStateResponse> {
   if (!gameId) throw new Error('No active game');
   const url = `/api/game/${gameId}${action}`;
   const opts: RequestInit = body
     ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
     : { method: 'POST' };
-  const resp = await fetch(url, opts);
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
-    throw new Error(err.detail ?? 'API error');
+
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const resp = await fetch(url, opts);
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+        throw new Error(err.detail ?? 'API error');
+      }
+      return resp.json();
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      // Only retry on network errors (TypeError from fetch failure)
+      if (err instanceof TypeError && attempt < MAX_RETRIES) {
+        Scoreboard.log(`网络错误，正在重试 (${attempt + 1}/${MAX_RETRIES})...`);
+        await sleep(RETRY_DELAY_MS);
+        continue;
+      }
+      if (err instanceof TypeError && attempt >= MAX_RETRIES) {
+        Scoreboard.log('Connection lost. Please refresh the page.');
+      }
+      throw lastError;
+    }
   }
-  return resp.json();
+  // Should not reach here, but just in case
+  throw lastError ?? new Error('Unknown error');
 }
 
 async function apiCallRaw(path: string, body: unknown): Promise<void> {
