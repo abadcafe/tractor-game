@@ -290,6 +290,9 @@ def play_cards(
             f"current_player_index={state.current_player_index}"
         )
 
+    if not action.cards:
+        raise ValueError("action.cards must not be empty")
+
     # Verify played cards exist in player's hand
     hand_ids = {c.id for c in state.players[player_index].hand}
     played_ids = {c.id for c in action.cards}

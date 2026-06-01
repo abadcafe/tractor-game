@@ -189,6 +189,13 @@ class TestPlayCards:
         with pytest.raises(ValueError, match="not in player"):
             play_cards(state, state.current_player_index, action)
 
+    def test_play_cards_empty_cards_raises(self):
+        """CR-020: play_cards must reject empty action.cards."""
+        state = _setup_playing_state()
+        action = PlayAction(type=PlayType.SINGLE, cards=[])
+        with pytest.raises(ValueError, match="must not be empty"):
+            play_cards(state, state.current_player_index, action)
+
 
 class TestResolveTrick:
     def test_resolve_trick_uses_compare_plays(self):
