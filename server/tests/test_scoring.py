@@ -1,5 +1,4 @@
 """Tests for engine.scoring module."""
-import pytest
 from server.engine.card import Card, Suit, Rank
 from server.engine.types import PlayType
 from server.engine.scoring import (
@@ -201,6 +200,59 @@ class TestCalculateScore:
         )
         assert result.team0_new_level == Rank.EIGHT
         assert result.team1_new_level == Rank.THREE
+
+    def test_calculate_score_declarer_index_1(self):
+        """When team 1 is declarer, team 1 advances on win."""
+        result = calculate_score(
+            defender_points=0,
+            bottom_cards=[],
+            last_trick_winner_team=1,
+            last_trick_play_type=PlayType.SINGLE,
+            declarer_team_index=1,
+            declarer_team_level=Rank.FIVE,
+            defender_team_level=Rank.THREE,
+        )
+        # team 1 is declarer, wins with 0 points -> +3
+        assert result.declarer_level_change == 3
+        assert result.team0_new_level == Rank.THREE
+        assert result.team1_new_level == Rank.EIGHT
+
+    def test_calculate_score_defender_advances_on_win(self):
+        """When defender wins, defender advances by abs(declarer_change)."""
+        result = calculate_score(
+            defender_points=130,
+            bottom_cards=[],
+            last_trick_winner_team=1,
+            last_trick_play_type=PlayType.SINGLE,
+            declarer_team_index=0,
+            declarer_team_level=Rank.FIVE,
+            defender_team_level=Rank.THREE,
+        )
+        # 130 points -> defender +1, switch declarer
+        assert result.declarer_level_change == -1
+        assert result.switch_declarer is True
+        # declarer (team0) drops from FIVE to FOUR
+        assert result.team0_new_level == Rank.FOUR
+        # defender (team1) advances from THREE to FOUR
+        assert result.team1_new_level == Rank.FOUR
+
+    def test_calculate_score_defender_advances_plus2(self):
+        """When defender wins big, defender advances by abs(declarer_change)."""
+        result = calculate_score(
+            defender_points=180,
+            bottom_cards=[],
+            last_trick_winner_team=1,
+            last_trick_play_type=PlayType.SINGLE,
+            declarer_team_index=0,
+            declarer_team_level=Rank.FIVE,
+            defender_team_level=Rank.THREE,
+        )
+        # 180 points -> defender +2
+        assert result.declarer_level_change == -2
+        # declarer (team0) drops from FIVE to THREE
+        assert result.team0_new_level == Rank.THREE
+        # defender (team1) advances from THREE to FIVE
+        assert result.team1_new_level == Rank.FIVE
 
 
 class TestIsGameOver:

@@ -32,11 +32,12 @@ class ScoreThreshold:
 
 SCORE_TABLE: list[ScoreThreshold] = [
     ScoreThreshold(max_points=0,   declarer_change=3,  switch_declarer=False),
-    ScoreThreshold(max_points=40,  declarer_change=2,  switch_declarer=False),
-    ScoreThreshold(max_points=80,  declarer_change=1,  switch_declarer=False),
-    ScoreThreshold(max_points=120, declarer_change=0,  switch_declarer=True),
-    ScoreThreshold(max_points=160, declarer_change=-1, switch_declarer=True),
-    ScoreThreshold(max_points=200, declarer_change=-2, switch_declarer=True),
+    ScoreThreshold(max_points=39,  declarer_change=2,  switch_declarer=False),
+    ScoreThreshold(max_points=79,  declarer_change=1,  switch_declarer=False),
+    ScoreThreshold(max_points=119, declarer_change=0,  switch_declarer=True),
+    ScoreThreshold(max_points=159, declarer_change=-1, switch_declarer=True),
+    ScoreThreshold(max_points=199, declarer_change=-2, switch_declarer=True),
+    ScoreThreshold(max_points=200, declarer_change=-3, switch_declarer=True),
 ]
 
 DEFAULT_SETTINGS: dict = {
@@ -150,11 +151,14 @@ def calculate_score(
     declarer_change, switch_declarer = _determine_level_change(total_points)
 
     # Calculate new levels independently for each team
+    # When defender wins (declarer_change < 0), defender advances by abs(change)
+    defender_change = -declarer_change if declarer_change < 0 else 0
+
     if declarer_team_index == 0:
         team0_new_level = _advance_level(declarer_team_level, declarer_change)
-        team1_new_level = defender_team_level
+        team1_new_level = _advance_level(defender_team_level, defender_change)
     else:
-        team0_new_level = declarer_team_level
+        team0_new_level = _advance_level(defender_team_level, defender_change)
         team1_new_level = _advance_level(declarer_team_level, declarer_change)
 
     return ScoreResult(
