@@ -14,7 +14,7 @@ def game_id(client):
     """Create a game and return its ID."""
     resp = client.post("/api/game")
     assert resp.status_code == 200
-    return resp.json()["game_id"]
+    return resp.json()["gameId"]
 
 
 class TestApiCreateGame:
@@ -22,7 +22,7 @@ class TestApiCreateGame:
         resp = client.post("/api/game")
         assert resp.status_code == 200
         data = resp.json()
-        assert "game_id" in data
+        assert "gameId" in data
         assert "state" in data
         assert data["state"]["phase"] == "dealing"
 
@@ -32,7 +32,7 @@ class TestApiGetGame:
         resp = client.get(f"/api/game/{game_id}")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["game_id"] == game_id
+        assert data["gameId"] == game_id
 
     def test_api_game_not_found(self, client):
         resp = client.get("/api/game/nonexistent")
@@ -136,26 +136,26 @@ class TestApiPlay:
 class TestApiClearTrick:
     def test_api_clear_trick(self, client, game_id):
         _setup_to_playing(client, game_id)
-        data = client.get(f"/api/game/{game_id}").json()
         for _ in range(4):
             data = client.get(f"/api/game/{game_id}").json()
             player_idx = data["state"]["currentPlayerIndex"]
             hand = data["state"]["players"][player_idx]["hand"]
             if not hand:
                 break
-            client.post(f"/api/game/{game_id}/play", json={
+            play_resp = client.post(f"/api/game/{game_id}/play", json={
                 "player_index": player_idx,
                 "card_ids": [hand[0]["id"]],
             })
+            assert play_resp.status_code == 200
         resp = client.post(f"/api/game/{game_id}/clear-trick")
         assert resp.status_code == 200
 
 
 class TestApiNextRound:
-    def test_api_next_round(self, client, game_id):
+    def test_api_next_round_rejects_playing_phase(self, client, game_id):
         _setup_to_playing(client, game_id)
         resp = client.post(f"/api/game/{game_id}/next-round")
-        assert resp.status_code in (200, 400)
+        assert resp.status_code == 400
 
 
 # ---- Helpers ----

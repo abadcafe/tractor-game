@@ -50,6 +50,13 @@ class Game:
     def __init__(self) -> None:
         self.state: GameState = create_initial_state()
 
+    @classmethod
+    def from_state(cls, state: GameState) -> Game:
+        """Create a Game instance from an existing GameState, avoiding throwaway allocation."""
+        game = cls.__new__(cls)
+        game.state = state
+        return game
+
     # ---- Game Flow ----
 
     def start_new_game(self) -> None:
@@ -150,6 +157,8 @@ class Game:
             return False
 
         if stir is None:
+            if player_index in self.state.stir_passes:
+                return False
             new_passes = [*self.state.stir_passes, player_index]
 
             if player_index == self.state.current_player_index:

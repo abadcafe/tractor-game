@@ -26,6 +26,7 @@ from server.api_types import (
     BidRequest,
     DiscardRequest,
     GameStateResponse,
+    LegalPlayAction,
     PlayRequest,
     SetTrumpRequest,
     StirRequest,
@@ -152,14 +153,14 @@ async def update_config(data: dict):
 from fastapi import HTTPException
 
 
-def _game_response(game_id: str, game: Game) -> dict:
-    """Build the game state response dict for the client."""
+def _game_response(game_id: str, game: Game) -> GameStateResponse:
+    """Build the game state response for the client."""
     # Compute legal actions when in playing phase
     legal_actions = None
     if game.state.phase == Phase.PLAYING:
         legal_plays = game.get_legal_plays(game.state.current_player_index)
         legal_actions = [
-            {"type": play.type.value, "cards": [c.id for c in play.cards]}
+            LegalPlayAction(type=play.type.value, cards=[c.id for c in play.cards])
             for play in legal_plays
         ]
 
@@ -169,13 +170,13 @@ def _game_response(game_id: str, game: Game) -> dict:
         bids = game.get_valid_bids()
         valid_bid_levels = [b.value for b in bids]
 
-    return {
-        "game_id": game_id,
-        "state": game.state.model_dump(by_alias=True),
-        "awaitingAction": game.get_awaiting_action(),
-        "legalActions": legal_actions,
-        "validBidLevels": valid_bid_levels,
-    }
+    return GameStateResponse(
+        game_id=game_id,
+        state=game.state,
+        awaiting_action=game.get_awaiting_action(),
+        legal_actions=legal_actions,
+        valid_bid_levels=valid_bid_levels,
+    )
 
 
 def _get_game_or_404(game_id: str) -> Game:
@@ -183,9 +184,7 @@ def _get_game_or_404(game_id: str) -> Game:
     state = store.get(game_id)
     if state is None:
         raise HTTPException(status_code=404, detail="Game not found")
-    game = Game()
-    game.state = state
-    return game
+    return Game.from_state(state)
 
 
 # ---- Game API endpoints ----
@@ -220,7 +219,7 @@ async def bid(game_id: str, req: BidRequest):
     """Submit a bid for the current player."""
     game = _get_game_or_404(game_id)
     level = Rank(req.level) if req.level else None
-    success = game.submit_bid(game.state.current_player_index, level, pass_=req.pass_)
+    success = game.submit_bid(req.player_index, level, pass_=req.pass_)
     if not success:
         raise HTTPException(status_code=400, detail="Invalid bid")
     store.update(game_id, game.state)
@@ -264,7 +263,10 @@ async def discard(game_id: str, req: DiscardRequest):
     game = _get_game_or_404(game_id)
     player = game.state.players[req.player_index]
     hand_by_id = {c.id: c for c in player.hand}
-    cards = [hand_by_id[cid] for cid in req.card_ids if cid in hand_by_id]
+    invalid_ids = [cid for cid in req.card_ids if cid not in hand_by_id]
+    if invalid_ids:
+        raise HTTPException(status_code=400, detail=f"Card IDs not in hand: {invalid_ids}")
+    cards = [hand_by_id[cid] for cid in req.card_ids]
     success = game.submit_discard(req.player_index, cards)
     if not success:
         raise HTTPException(status_code=400, detail="Invalid discard")
@@ -278,7 +280,10 @@ async def play(game_id: str, req: PlayRequest):
     game = _get_game_or_404(game_id)
     player = game.state.players[req.player_index]
     hand_by_id = {c.id: c for c in player.hand}
-    cards = [hand_by_id[cid] for cid in req.card_ids if cid in hand_by_id]
+    invalid_ids = [cid for cid in req.card_ids if cid not in hand_by_id]
+    if invalid_ids:
+        raise HTTPException(status_code=400, detail=f"Card IDs not in hand: {invalid_ids}")
+    cards = [hand_by_id[cid] for cid in req.card_ids]
     success = game.submit_play(req.player_index, cards)
     if not success:
         raise HTTPException(status_code=400, detail="Invalid play")
