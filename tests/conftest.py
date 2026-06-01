@@ -21,11 +21,16 @@ def _is_server_running(url: str) -> bool:
 
 @pytest.fixture(scope="session")
 def live_server():
-    """Start the FastAPI server for E2E tests, or reuse an existing one."""
+    """Start the FastAPI server for E2E tests, or reuse an existing one.
+
+    Reuse logic is necessary because a previous test session may have left
+    a server running on the same port. Without reuse, subprocess.Popen
+    would fail with EADDRINUSE. Each E2E test creates its own game via the
+    API, so stale server state does not affect test isolation.
+    """
     base_url = "http://127.0.0.1:8787"
 
     if _is_server_running(base_url):
-        # Server already running — reuse it without starting/stopping
         yield base_url
         return
 
@@ -33,10 +38,10 @@ def live_server():
         ["python", "-m", "uvicorn", "server.server:app", "--host", "127.0.0.1", "--port", "8787"],
         cwd=PROJECT_ROOT,
     )
-    # Wait for server to be ready
+    # Wait for server to be ready (check /docs endpoint per spec)
     for _ in range(30):
         try:
-            resp = urlopen(Request(f"{base_url}/api/health"), timeout=1)
+            resp = urlopen(Request(f"{base_url}/docs"), timeout=1)
             if resp.status == 200:
                 break
         except (URLError, OSError):
