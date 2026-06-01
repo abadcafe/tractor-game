@@ -1,17 +1,13 @@
 """Tests for engine.state module."""
-import pytest
 from server.engine.card import Card, Suit, Rank
 from server.engine.types import Phase, PlayType, PlayAction, BidAction, StirAction
-from server.engine.game_state import (
-    TrickSlot, CompletedTrick, PlayerState, TeamState,
-    GameState, GameSettings,
-)
+from server.engine.game_state import GameState
 from server.engine.state import (
     create_initial_state, deal_cards, record_bid, set_declarer,
     record_stir, pickup_bottom_cards, discard_cards, play_cards,
-    resolve_trick, advance_round, clear_trick,
+    advance_round, clear_trick,
 )
-from server.engine.constants import BOTTOM_CARD_COUNT, PLAYER_COUNT
+from server.engine.constants import BOTTOM_CARD_COUNT
 
 
 class TestCreateInitialState:
@@ -131,14 +127,66 @@ class TestResolveTrick:
         assert 0 <= state.last_completed_trick.winner_index <= 3
 
     def test_resolve_trick_trump_wins(self):
-        """Trump play should beat non-trump play."""
+        """Trump play should beat non-trump play.
+
+        Uses deterministic hands to ensure only one player has a trump card.
+        trump_suit=HEARTS, trump_rank=TWO.
+        """
         state = _setup_playing_state()
-        for p_idx in range(4):
-            trump_cards = [c for c in state.players[p_idx].hand
-                          if c.suit == state.trump_suit or c.is_joker or c.rank == state.trump_rank]
-            if trump_cards:
-                break
-        assert state.phase in (Phase.PLAYING, Phase.SCORING)
+        lead_idx = state.lead_player_index  # player 3
+
+        # Build deterministic hands: player 3 leads a non-trump card,
+        # player 1 (next after 3) has one trump card, rest are non-trump.
+        # trump_suit=HEARTS, trump_rank=TWO
+        # Trump = joker or suit=HEARTS or rank=TWO
+        non_trump = Card(id="nt1", suit=Suit.DIAMONDS, rank=Rank.ACE,
+                         is_joker=False, is_big_joker=False, points=10, deck=1)
+        non_trump2 = Card(id="nt2", suit=Suit.CLUBS, rank=Rank.THREE,
+                          is_joker=False, is_big_joker=False, points=0, deck=1)
+        non_trump3 = Card(id="nt3", suit=Suit.SPADES, rank=Rank.FOUR,
+                          is_joker=False, is_big_joker=False, points=0, deck=1)
+        non_trump4 = Card(id="nt4", suit=Suit.DIAMONDS, rank=Rank.FIVE,
+                          is_joker=False, is_big_joker=False, points=5, deck=1)
+        # Trump card: hearts + non-trump-rank
+        trump = Card(id="tr1", suit=Suit.HEARTS, rank=Rank.THREE,
+                     is_joker=False, is_big_joker=False, points=0, deck=1)
+
+        # Map players by turn order: lead=3 -> 1 -> 0 -> 2
+        # Player 3 (lead): all non-trump
+        # Player 1: one trump + rest non-trump
+        # Player 0: all non-trump
+        # Player 2: all non-trump
+        new_players = list(state.players)
+        new_players[3] = new_players[3].model_copy(update={
+            "hand": [non_trump] + [c for c in new_players[3].hand[1:]],
+        })
+        new_players[1] = new_players[1].model_copy(update={
+            "hand": [trump, non_trump2] + [c for c in new_players[1].hand[2:]],
+        })
+        new_players[0] = new_players[0].model_copy(update={
+            "hand": [non_trump3] + [c for c in new_players[0].hand[1:]],
+        })
+        new_players[2] = new_players[2].model_copy(update={
+            "hand": [non_trump4] + [c for c in new_players[2].hand[1:]],
+        })
+        state = state.model_copy(update={"players": new_players})
+
+        # Play all 4 cards in turn order
+        p3_card = state.players[3].hand[0]
+        state = play_cards(state, 3, PlayAction(type=PlayType.SINGLE, cards=[p3_card]))
+
+        p1_card = state.players[1].hand[0]  # trump card
+        state = play_cards(state, 1, PlayAction(type=PlayType.SINGLE, cards=[p1_card]))
+
+        p0_card = state.players[0].hand[0]  # non-trump
+        state = play_cards(state, 0, PlayAction(type=PlayType.SINGLE, cards=[p0_card]))
+
+        p2_card = state.players[2].hand[0]  # non-trump
+        state = play_cards(state, 2, PlayAction(type=PlayType.SINGLE, cards=[p2_card]))
+
+        assert state.last_completed_trick is not None
+        # Player 1 played trump, should win
+        assert state.last_completed_trick.winner_index == 1
 
     def test_resolve_trick_last_trick_scoring(self):
         """After all cards are played, phase should be SCORING."""
@@ -156,7 +204,7 @@ class TestResolveTrick:
                 card = hand[0]
                 action = PlayAction(type=PlayType.SINGLE, cards=[card])
                 state = play_cards(state, player_idx, action)
-        assert state.phase in (Phase.PLAYING, Phase.SCORING)
+        assert state.phase == Phase.SCORING
 
 
 class TestAdvanceRound:

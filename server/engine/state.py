@@ -15,12 +15,8 @@ import random
 
 from server.engine.card import Card, Rank, Suit, create_decks
 from server.engine.constants import (
-    BOTTOM_CARD_COUNT,
-    CARDS_PER_PLAYER,
     PLAYER_COUNT,
     START_LEVEL,
-    TEAM_0,
-    TEAM_1,
 )
 from server.engine.game_state import (
     CompletedTrick,
@@ -171,7 +167,7 @@ def record_stir(state: GameState, stir: StirAction) -> GameState:
 
     new_players = [
         p.model_copy(update={
-            "is_declarer": p.team_index == team_index,
+            "is_declarer": p.index == stir.player_index,
         })
         for p in state.players
     ]
@@ -368,6 +364,7 @@ def resolve_trick(state: GameState) -> GameState:
 
     # Check if all cards are played (round over)
     all_cards_played = all(len(p.hand) == 0 for p in state.players)
+    empty_trick = [TrickSlot(player_index=i) for i in range(PLAYER_COUNT)]
 
     if all_cards_played:
         return state.model_copy(update={
@@ -376,6 +373,7 @@ def resolve_trick(state: GameState) -> GameState:
             "teams": new_teams,
             "defender_points": new_defender_points,
             "phase": Phase.SCORING,
+            "current_trick": empty_trick,
         })
 
     # Start next trick
@@ -387,6 +385,7 @@ def resolve_trick(state: GameState) -> GameState:
         "current_player_index": winner_index,
         "lead_player_index": winner_index,
         "lead_play_type": None,
+        "current_trick": empty_trick,
     })
 
 
