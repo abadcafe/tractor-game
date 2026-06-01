@@ -317,6 +317,8 @@ class Game:
             return "play"
         if phase == Phase.SCORING:
             return "next_round"
+        if phase == Phase.GAME_OVER:
+            return "game_over"
         return None
 
     def is_human_turn(self) -> bool:
@@ -326,6 +328,10 @@ class Game:
     def get_legal_plays(self, player_index: int) -> list[PlayAction]:
         """Get all legal plays for a player (public API)."""
         return self._get_legal_plays(player_index)
+
+    def get_round_score(self) -> ScoreResult:
+        """Calculate the score for the current round (public API)."""
+        return self._calculate_round_score()
 
     # ---- Private Helpers ----
 

@@ -28,9 +28,9 @@ const renderer = new Renderer();
 
 SettingsView.init((data: SettingsData) => {
   apiCallRaw('/api/config', {
-    apiKey: data.apiKey,
+    api_key: data.apiKey,
     model: data.model,
-    baseUrl: data.baseUrl,
+    base_url: data.baseUrl,
   });
 });
 

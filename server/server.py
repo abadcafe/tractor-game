@@ -169,12 +169,43 @@ def _game_response(game_id: str, game: Game) -> GameStateResponse:
         bids = game.get_valid_bids()
         valid_bid_levels = [b.value for b in bids]
 
+    # Compute scoring message/details when in scoring phase
+    scoring_message = None
+    scoring_details = None
+    if game.state.phase == Phase.SCORING:
+        result = game.get_round_score()
+        declarer_team = game.state.declarer_team_index
+        defender_team = 1 - declarer_team
+        pts = result.total_defender_points
+        change = result.declarer_level_change
+
+        if change > 0:
+            outcome = f"庄家升 {change} 级"
+        elif change < 0:
+            outcome = f"闲家升 {-change} 级"
+        else:
+            outcome = "换庄"
+
+        scoring_message = f"防守方得分: {pts} — {outcome}"
+
+        team0_cur = game.state.teams[0].current_level.value
+        team1_cur = game.state.teams[1].current_level.value
+        team0_new = result.team0_new_level.value
+        team1_new = result.team1_new_level.value
+        scoring_details = (
+            f"队0 (庄家{'*' if declarer_team == 0 else ''}) {team0_cur} → {team0_new}  "
+            f"队1 (庄家{'*' if declarer_team == 1 else ''}) {team1_cur} → {team1_new}  "
+            f"扣底加成: {result.bottom_card_bonus}"
+        )
+
     return GameStateResponse(
         game_id=game_id,
         state=game.state,
         awaiting_action=game.get_awaiting_action(),
         legal_actions=legal_actions,
         valid_bid_levels=valid_bid_levels,
+        scoring_message=scoring_message,
+        scoring_details=scoring_details,
     )
 
 

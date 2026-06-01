@@ -32,6 +32,8 @@ class GameStateResponse(BaseModel):
     awaiting_action: str | None = None
     legal_actions: list[LegalPlayAction] | None = None
     valid_bid_levels: list[str] | None = None
+    scoring_message: str | None = None
+    scoring_details: str | None = None
 
 
 class CreateGameRequest(BaseModel):
