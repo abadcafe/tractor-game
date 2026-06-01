@@ -12,7 +12,7 @@ from pathlib import Path
 # Ensure server/ is on the Python path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 import uvicorn
@@ -32,6 +32,7 @@ from server.api_types import (
     StirRequest,
 )
 from server.engine.card import Rank, Suit
+from server.engine.constants import PLAYER_COUNT
 from server.engine.game import Game
 from server.engine.types import Phase, StirAction
 from server.storage.game_store import GameStore
@@ -150,8 +151,6 @@ async def update_config(data: dict):
 
 # ---- Game API helpers ----
 
-from fastapi import HTTPException
-
 
 def _game_response(game_id: str, game: Game) -> GameStateResponse:
     """Build the game state response for the client."""
@@ -261,6 +260,8 @@ async def stir(game_id: str, req: StirRequest):
 async def discard(game_id: str, req: DiscardRequest):
     """Discard bottom cards after picking them up."""
     game = _get_game_or_404(game_id)
+    if not 0 <= req.player_index < PLAYER_COUNT:
+        raise HTTPException(status_code=400, detail=f"player_index out of range: {req.player_index}")
     player = game.state.players[req.player_index]
     hand_by_id = {c.id: c for c in player.hand}
     invalid_ids = [cid for cid in req.card_ids if cid not in hand_by_id]
@@ -278,6 +279,8 @@ async def discard(game_id: str, req: DiscardRequest):
 async def play(game_id: str, req: PlayRequest):
     """Play cards from a player's hand."""
     game = _get_game_or_404(game_id)
+    if not 0 <= req.player_index < PLAYER_COUNT:
+        raise HTTPException(status_code=400, detail=f"player_index out of range: {req.player_index}")
     player = game.state.players[req.player_index]
     hand_by_id = {c.id: c for c in player.hand}
     invalid_ids = [cid for cid in req.card_ids if cid not in hand_by_id]
@@ -295,6 +298,8 @@ async def play(game_id: str, req: PlayRequest):
 async def clear_trick(game_id: str):
     """Clear the current trick for the next trick."""
     game = _get_game_or_404(game_id)
+    if game.state.phase != Phase.PLAYING:
+        raise HTTPException(status_code=400, detail="Not in playing phase")
     game.clear_trick()
     store.update(game_id, game.state)
     return _game_response(game_id, game)
