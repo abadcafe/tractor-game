@@ -1,5 +1,4 @@
 """Tests for rules.follow_rules module."""
-import pytest
 from server.engine.card import Card, Suit, Rank
 from server.engine.types import PlayType, PlayAction
 from server.rules.follow_rules import get_lead_suit, can_follow, get_legal_follows
@@ -103,11 +102,8 @@ class TestGetLegalFollowsTrumpLead:
         lead = PlayAction(type=PlayType.SINGLE, cards=[_card(Suit.HEARTS, Rank.ACE)])
         hand = [_card(Suit.HEARTS, Rank.KING), _card(Suit.SPADES, Rank.QUEEN)]
         follows = get_legal_follows(hand, lead, Suit.HEARTS, Rank.TWO)
-        has_trump = any(
-            effective_suit(f.cards[0], Suit.HEARTS, Rank.TWO) == "trump"
-            for f in follows
-        )
-        assert has_trump
+        for f in follows:
+            assert effective_suit(f.cards[0], Suit.HEARTS, Rank.TWO) == "trump"
 
 
 class TestGetLegalFollowsThrow:
@@ -134,3 +130,64 @@ class TestGetLegalFollowsThrow:
         assert len(follows) >= 1
         for f in follows:
             assert len(f.cards) == 2
+
+
+class TestCanFollowTractorTrump:
+    """CR-005: Trump tractor scenarios where trump_order step != 1."""
+
+    def test_can_follow_trump_tractor_has_consecutive_trump_pairs(self):
+        """SJ pair + trump-rank pair can follow BJ pair + SJ pair (step=10)."""
+        # Trump: hearts, rank TWO
+        # Lead: BJ pair + SJ pair (orders 100, 90, step=10)
+        lead = PlayAction(type=PlayType.TRACTOR, cards=[
+            _card(Suit.JOKER, Rank.BIG_JOKER, d) for d in (1, 2)
+        ] + [
+            _card(Suit.JOKER, Rank.SMALL_JOKER, d) for d in (1, 2)
+        ])
+        # Hand: SJ pair + trump-rank+trump-suit pair (orders 90, 80, step=10)
+        hand = [
+            _card(Suit.JOKER, Rank.SMALL_JOKER, d) for d in (1, 2)
+        ] + [
+            _card(Suit.HEARTS, Rank.TWO, d) for d in (1, 2)
+        ]
+        assert can_follow(hand, lead, Suit.HEARTS, Rank.TWO) is True
+
+    def test_can_follow_trump_tractor_no_consecutive_trump_pairs(self):
+        """Non-consecutive trump pairs cannot form a tractor."""
+        # Lead: BJ pair + SJ pair (orders 100, 90, step=10)
+        lead = PlayAction(type=PlayType.TRACTOR, cards=[
+            _card(Suit.JOKER, Rank.BIG_JOKER, d) for d in (1, 2)
+        ] + [
+            _card(Suit.JOKER, Rank.SMALL_JOKER, d) for d in (1, 2)
+        ])
+        # Hand: SJ pair + trump-rank+other-suit pair (orders 90, 70)
+        # Gap from 90 to 70 = 20, not a valid step (should be 10)
+        hand = [
+            _card(Suit.JOKER, Rank.SMALL_JOKER, d) for d in (1, 2)
+        ] + [
+            _card(Suit.SPADES, Rank.TWO, d) for d in (1, 2)
+        ]
+        assert can_follow(hand, lead, Suit.HEARTS, Rank.TWO) is False
+
+    def test_get_legal_follows_trump_tractor_returns_valid(self):
+        """can_follow and get_legal_follows must agree on trump tractors."""
+        # Lead: BJ pair + SJ pair (orders 100, 90, step=10)
+        lead = PlayAction(type=PlayType.TRACTOR, cards=[
+            _card(Suit.JOKER, Rank.BIG_JOKER, d) for d in (1, 2)
+        ] + [
+            _card(Suit.JOKER, Rank.SMALL_JOKER, d) for d in (1, 2)
+        ])
+        # Hand: SJ pair + trump-rank+trump-suit pair (orders 90, 80, step=10)
+        hand = [
+            _card(Suit.JOKER, Rank.SMALL_JOKER, d) for d in (1, 2)
+        ] + [
+            _card(Suit.HEARTS, Rank.TWO, d) for d in (1, 2)
+        ]
+        can = can_follow(hand, lead, Suit.HEARTS, Rank.TWO)
+        follows = get_legal_follows(hand, lead, Suit.HEARTS, Rank.TWO)
+        # Both must agree: either both say can follow, or both say can't
+        if can:
+            assert len(follows) >= 1
+            for f in follows:
+                assert f.type == PlayType.TRACTOR
+                assert len(f.cards) == 4

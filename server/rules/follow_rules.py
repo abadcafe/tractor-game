@@ -11,9 +11,6 @@ Ported from src/rules/follow-rules.ts.
 
 from __future__ import annotations
 
-from collections import Counter
-from itertools import combinations
-
 from server.engine.card import Card, Suit, Rank
 from server.engine.card_utils import RANK_ORDER
 from server.engine.types import PlayType, PlayAction
@@ -218,7 +215,7 @@ def _has_tractor_in_effective_suit(
     trump_suit: Suit, trump_rank: Rank,
 ) -> bool:
     pairs = _find_consecutive_pairs(hand, eff_suit, trump_suit, trump_rank)
-    return _find_consecutive_run(pairs, pair_count) is not None
+    return _find_consecutive_run(pairs, pair_count, eff_suit) is not None
 
 
 def _find_tractors_in_effective_suit(
@@ -259,13 +256,15 @@ def _find_consecutive_pairs(
 
 def _find_consecutive_run(
     pairs: list[tuple[int, list[Card]]], length: int,
+    eff_suit: Suit | str = Suit.HEARTS,
 ) -> list[tuple[int, list[Card]]] | None:
     if len(pairs) < length:
         return None
     for i in range(len(pairs) - length + 1):
         ok = True
         for j in range(i + 1, i + length):
-            if pairs[j][0] != pairs[j - 1][0] - 1:
+            step = _get_trump_step(pairs[j - 1][0], eff_suit)
+            if pairs[j][0] != pairs[j - 1][0] - step:
                 ok = False
                 break
         if ok:
