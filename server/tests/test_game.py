@@ -217,6 +217,32 @@ class TestGameAIAutoPlay:
                 action = game.get_awaiting_action()
                 assert action is not None
 
+    def test_game_ai_auto_play_ace_bid_no_fall_through(self):
+        """CR-010: When AI wins bid at ACE during auto-play, loop must continue.
+
+        Setup: player 0 bids THREE, player 1 bids ACE, players 2 and 3 pass.
+        Bidding is NOT over (only 2 consecutive passes after ACE).
+        Human's pass triggers _ai_auto_play. During auto-play, AI 0 passes
+        (no valid levels above ACE), making 3 consecutive passes → bidding ends.
+        Winner is AI 1 (ACE). set_trump transitions to STIRRING with cp=2 (AI).
+
+        Without CR-010 fix: code falls through to get_valid_bids() which
+        returns [] for ACE, causing break. Game stuck at STIRRING with AI cp.
+        With fix: continue after set_trump, loop enters STIRRING handler.
+        """
+        game = Game()
+        game.start_round()
+        game.submit_bid(0, Rank.THREE, pass_=False)
+        game.submit_bid(1, Rank.ACE, pass_=False)
+        game.submit_bid(2, None, pass_=True)
+        # Human passes — bidding not over (2 consecutive), auto-play triggers
+        game.submit_bid(3, None, pass_=True)
+        # Auto-play: AI 0 passes → 3 consecutive → AI 1 wins at ACE
+        # set_trump(1,...) → STIRRING cp=2
+        # CR-010: fall-through → break → stuck at STIRRING cp=2 (AI)
+        # Fixed: continue → STIRRING handler → progresses
+        assert game.state.phase != Phase.STIRRING or game.is_human_turn()
+
 
 # ---- Helpers ----
 

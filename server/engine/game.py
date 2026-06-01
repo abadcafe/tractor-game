@@ -336,19 +336,21 @@ class Game:
                     winner = get_winning_bid(self.state.bidding_history)
                     if winner is not None and winner.level is not None:
                         # SR-005: AI won the bid — choose trump suit automatically
-                        # Do NOT break; continue loop to handle STIRRING phase
+                        # CR-010: continue loop to handle STIRRING phase
                         trump_suit = self._ai_choose_trump_suit(winner.player_index)
                         self.set_trump(winner.player_index, trump_suit)
+                        continue
                     else:
                         break
                 valid_levels = self.get_valid_bids()
                 if not valid_levels:
-                    break
-                chosen = choose_bid(valid_levels, self.state.current_level)
-                if chosen is None:
                     self.submit_bid(cp, None, pass_=True)
                 else:
-                    self.submit_bid(cp, chosen, pass_=False)
+                    chosen = choose_bid(valid_levels, self.state.current_level)
+                    if chosen is None:
+                        self.submit_bid(cp, None, pass_=True)
+                    else:
+                        self.submit_bid(cp, chosen, pass_=False)
 
             elif phase == Phase.STIRRING:
                 if self.state.trump_suit is None:
