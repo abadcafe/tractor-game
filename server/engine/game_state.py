@@ -111,5 +111,6 @@ class GameState(BaseModel):
     last_completed_trick: CompletedTrick | None = None
     bidding_history: list[BidAction]
     stir_history: list[StirAction]
+    stir_passes: list[int] = []
     defender_points: int
     settings: GameSettings

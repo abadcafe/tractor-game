@@ -13,6 +13,15 @@ from pydantic.alias_generators import to_camel
 from server.engine.game_state import GameState
 
 
+class LegalPlayAction(BaseModel):
+    """A legal play option consisting of a play type and card IDs."""
+
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    type: str
+    cards: list[str]
+
+
 class GameStateResponse(BaseModel):
     """Full game state response returned to the client."""
 
@@ -21,7 +30,7 @@ class GameStateResponse(BaseModel):
     game_id: str
     state: GameState
     awaiting_action: str | None = None
-    legal_actions: list[str] | None = None
+    legal_actions: list[LegalPlayAction] | None = None
     valid_bid_levels: list[str] | None = None
 
 

@@ -49,19 +49,17 @@ class Game:
 
     def __init__(self) -> None:
         self.state: GameState = create_initial_state()
-        self._stir_passes: set[int] = set()
 
     # ---- Game Flow ----
 
     def start_new_game(self) -> None:
         """Reset to a fresh game state (DEALING phase)."""
         self.state = create_initial_state()
-        self._stir_passes = set()
 
     def start_round(self) -> None:
         """Deal cards and begin bidding."""
         self.state = deal_cards(self.state)
-        self._stir_passes = set()
+        self.state = self.state.model_copy(update={"stir_passes": []})
 
     # ---- Bidding ----
 
@@ -152,14 +150,19 @@ class Game:
             return False
 
         if stir is None:
-            self._stir_passes.add(player_index)
+            new_passes = [*self.state.stir_passes, player_index]
 
             if player_index == self.state.current_player_index:
                 self.state = self.state.model_copy(update={
                     "current_player_index": _next_player_sequential(player_index),
+                    "stir_passes": new_passes,
+                })
+            else:
+                self.state = self.state.model_copy(update={
+                    "stir_passes": new_passes,
                 })
 
-            if len(self._stir_passes) >= PLAYER_COUNT:
+            if len(new_passes) >= PLAYER_COUNT:
                 self.state = pickup_bottom_cards(self.state)
 
             return True
@@ -190,8 +193,8 @@ class Game:
             "current_player_index": _next_player_sequential(player_index),
             "players": new_players,
             "declarer_team_index": team_index,
+            "stir_passes": [],
         })
-        self._stir_passes = set()
         return True
 
     # ---- Exchange (扣底) ----

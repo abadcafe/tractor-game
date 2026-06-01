@@ -22,7 +22,24 @@ from ai.session_manager import session_manager
 from ai.graph import run_ai_decision
 from ai.prompts import build_role_description
 
+from server.api_types import (
+    BidRequest,
+    DiscardRequest,
+    GameStateResponse,
+    PlayRequest,
+    SetTrumpRequest,
+    StirRequest,
+)
+from server.engine.card import Rank, Suit
+from server.engine.game import Game
+from server.engine.types import Phase, StirAction
+from server.storage.game_store import GameStore
+
 app = FastAPI(title="Tractor Game Server")
+
+# ---- Game Store ----
+
+store = GameStore()
 
 # ---- Configuration ----
 
@@ -128,6 +145,165 @@ async def update_config(data: dict):
     if "model" in data:
         DEFAULT_MODEL = data["model"]
     return {"status": "ok"}
+
+
+# ---- Game API helpers ----
+
+from fastapi import HTTPException
+
+
+def _game_response(game_id: str, game: Game) -> dict:
+    """Build the game state response dict for the client."""
+    # Compute legal actions when in playing phase
+    legal_actions = None
+    if game.state.phase == Phase.PLAYING:
+        legal_plays = game.get_legal_plays(game.state.current_player_index)
+        legal_actions = [
+            {"type": play.type.value, "cards": [c.id for c in play.cards]}
+            for play in legal_plays
+        ]
+
+    # Compute valid bid levels when in bidding phase
+    valid_bid_levels = None
+    if game.state.phase == Phase.BIDDING:
+        bids = game.get_valid_bids()
+        valid_bid_levels = [b.value for b in bids]
+
+    return {
+        "game_id": game_id,
+        "state": game.state.model_dump(by_alias=True),
+        "awaitingAction": game.get_awaiting_action(),
+        "legalActions": legal_actions,
+        "validBidLevels": valid_bid_levels,
+    }
+
+
+def _get_game_or_404(game_id: str) -> Game:
+    """Retrieve a game by ID or raise 404."""
+    state = store.get(game_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="Game not found")
+    game = Game()
+    game.state = state
+    return game
+
+
+# ---- Game API endpoints ----
+
+@app.post("/api/game")
+async def create_game():
+    """Create a new game in DEALING phase."""
+    game = Game()
+    game.start_new_game()
+    game_id = store.create(game.state)
+    return _game_response(game_id, game)
+
+
+@app.get("/api/game/{game_id}")
+async def get_game(game_id: str):
+    """Get the current game state."""
+    game = _get_game_or_404(game_id)
+    return _game_response(game_id, game)
+
+
+@app.post("/api/game/{game_id}/deal")
+async def deal(game_id: str):
+    """Deal cards and transition to BIDDING phase."""
+    game = _get_game_or_404(game_id)
+    game.start_round()
+    store.update(game_id, game.state)
+    return _game_response(game_id, game)
+
+
+@app.post("/api/game/{game_id}/bid")
+async def bid(game_id: str, req: BidRequest):
+    """Submit a bid for the current player."""
+    game = _get_game_or_404(game_id)
+    level = Rank(req.level) if req.level else None
+    success = game.submit_bid(game.state.current_player_index, level, pass_=req.pass_)
+    if not success:
+        raise HTTPException(status_code=400, detail="Invalid bid")
+    store.update(game_id, game.state)
+    return _game_response(game_id, game)
+
+
+@app.post("/api/game/{game_id}/set-trump")
+async def set_trump(game_id: str, req: SetTrumpRequest):
+    """Set the trump suit after winning the bid."""
+    game = _get_game_or_404(game_id)
+    trump_suit = Suit(req.trump_suit)
+    success = game.set_trump(req.player_index, trump_suit)
+    if not success:
+        raise HTTPException(status_code=400, detail="Invalid set-trump")
+    store.update(game_id, game.state)
+    return _game_response(game_id, game)
+
+
+@app.post("/api/game/{game_id}/stir")
+async def stir(game_id: str, req: StirRequest):
+    """Submit a stir action or pass."""
+    game = _get_game_or_404(game_id)
+    if req.pass_:
+        success = game.submit_stir(req.player_index, None)
+    else:
+        stir_action = StirAction(
+            player_index=req.player_index,
+            new_trump_suit=Suit(req.new_trump_suit) if req.new_trump_suit else None,
+            level=Rank(req.level) if req.level else None,
+        )
+        success = game.submit_stir(req.player_index, stir_action)
+    if not success:
+        raise HTTPException(status_code=400, detail="Invalid stir")
+    store.update(game_id, game.state)
+    return _game_response(game_id, game)
+
+
+@app.post("/api/game/{game_id}/discard")
+async def discard(game_id: str, req: DiscardRequest):
+    """Discard bottom cards after picking them up."""
+    game = _get_game_or_404(game_id)
+    player = game.state.players[req.player_index]
+    hand_by_id = {c.id: c for c in player.hand}
+    cards = [hand_by_id[cid] for cid in req.card_ids if cid in hand_by_id]
+    success = game.submit_discard(req.player_index, cards)
+    if not success:
+        raise HTTPException(status_code=400, detail="Invalid discard")
+    store.update(game_id, game.state)
+    return _game_response(game_id, game)
+
+
+@app.post("/api/game/{game_id}/play")
+async def play(game_id: str, req: PlayRequest):
+    """Play cards from a player's hand."""
+    game = _get_game_or_404(game_id)
+    player = game.state.players[req.player_index]
+    hand_by_id = {c.id: c for c in player.hand}
+    cards = [hand_by_id[cid] for cid in req.card_ids if cid in hand_by_id]
+    success = game.submit_play(req.player_index, cards)
+    if not success:
+        raise HTTPException(status_code=400, detail="Invalid play")
+    store.update(game_id, game.state)
+    return _game_response(game_id, game)
+
+
+@app.post("/api/game/{game_id}/clear-trick")
+async def clear_trick(game_id: str):
+    """Clear the current trick for the next trick."""
+    game = _get_game_or_404(game_id)
+    game.clear_trick()
+    store.update(game_id, game.state)
+    return _game_response(game_id, game)
+
+
+@app.post("/api/game/{game_id}/next-round")
+async def next_round(game_id: str):
+    """Calculate scores and advance to the next round."""
+    game = _get_game_or_404(game_id)
+    if game.state.phase != Phase.SCORING:
+        raise HTTPException(status_code=400, detail="Not in scoring phase")
+    game.next_round()
+    store.update(game_id, game.state)
+    return _game_response(game_id, game)
 
 
 # ---- Serve index.html for root ----
