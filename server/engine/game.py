@@ -126,6 +126,9 @@ class Game:
         self.state = self.state.model_copy(
             update={"current_player_index": _next_player_sequential(player_index)}
         )
+        # SR-006: trigger AI auto-play after human sets trump
+        if player_index == HUMAN_PLAYER_INDEX:
+            self._ai_auto_play()
         return True
 
     def get_valid_bids(self) -> list[Rank]:
@@ -324,10 +327,12 @@ class Game:
                 if is_bidding_over(self.state.bidding_history, PLAYER_COUNT):
                     winner = get_winning_bid(self.state.bidding_history)
                     if winner is not None and winner.level is not None:
-                        # AI won the bid — choose trump suit automatically
+                        # SR-005: AI won the bid — choose trump suit automatically
+                        # Do NOT break; continue loop to handle STIRRING phase
                         trump_suit = self._ai_choose_trump_suit(winner.player_index)
                         self.set_trump(winner.player_index, trump_suit)
-                    break
+                    else:
+                        break
                 valid_levels = self.get_valid_bids()
                 if not valid_levels:
                     break
