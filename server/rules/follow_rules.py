@@ -12,7 +12,6 @@ Ported from src/rules/follow-rules.ts.
 from __future__ import annotations
 
 from server.engine.card import Card, Suit, Rank
-from server.engine.card_utils import RANK_ORDER
 from server.engine.types import PlayType, PlayAction
 from server.rules.comparator import effective_suit, trump_order
 
@@ -288,10 +287,8 @@ def _group_by_effective_order(
 def _get_trump_step(order: int, eff_suit: Suit | str) -> int:
     """Get the step size to the next lower trump order level."""
     if eff_suit == "trump":
-        if order == 100:
-            return 10  # BJ -> SJ
-        if order == 90:
-            return 10  # SJ -> trump rank+trump suit
+        if order >= 70:
+            return 10  # BJ(100) -> SJ(90) -> trump-rank(80,70-73) all step=10
         return 1
     return 1
 
