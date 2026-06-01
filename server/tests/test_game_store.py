@@ -1,7 +1,7 @@
 """Tests for storage.game_store module."""
 import pytest
 from server.engine.game_state import GameState, GameSettings, Phase, PlayerState, TeamState, TrickSlot
-from server.engine.card import Suit, Rank
+from server.engine.card import Rank
 from server.storage.game_store import GameStore
 
 
@@ -83,3 +83,30 @@ class TestGameStore:
         store = GameStore()
         with pytest.raises(KeyError):
             store.update("nonexistent", _make_state())
+
+    def test_game_store_get_returns_copy(self):
+        """Retrieved state is a deep copy; mutating it does not affect the store."""
+        store = GameStore()
+        state = _make_state()
+        game_id = store.create(state)
+        retrieved = store.get(game_id)
+        retrieved.phase = Phase.PLAYING
+        assert store.get(game_id).phase == Phase.DEALING
+
+    def test_game_store_create_stores_copy(self):
+        """Stored state is a deep copy; mutating the original does not affect the store."""
+        store = GameStore()
+        state = _make_state()
+        game_id = store.create(state)
+        state.phase = Phase.PLAYING
+        assert store.get(game_id).phase == Phase.DEALING
+
+    def test_game_store_update_stores_copy(self):
+        """Updated state is a deep copy; mutating the original does not affect the store."""
+        store = GameStore()
+        state = _make_state()
+        game_id = store.create(state)
+        updated = _make_state(phase=Phase.BIDDING)
+        store.update(game_id, updated)
+        updated.phase = Phase.PLAYING
+        assert store.get(game_id).phase == Phase.BIDDING
