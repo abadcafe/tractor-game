@@ -95,27 +95,16 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function apiCall(action: string, body?: Record<string, unknown>): Promise<GameStateResponse> {
-  if (!gameId) throw new Error('No active game');
-  const url = `/api/game/${gameId}${action}`;
-  const opts: RequestInit = body
-    ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
-    : { method: 'POST' };
-
+async function fetchWithRetry(url: string, opts: RequestInit, retryLabel: string): Promise<Response> {
   let lastError: Error | null = null;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       const resp = await fetch(url, opts);
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({ detail: resp.statusText }));
-        throw new Error(err.detail ?? 'API error');
-      }
-      return resp.json();
+      return resp;
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
-      // Only retry on network errors (TypeError from fetch failure)
       if (err instanceof TypeError && attempt < MAX_RETRIES) {
-        Scoreboard.log(`网络错误，正在重试 (${attempt + 1}/${MAX_RETRIES})...`);
+        Scoreboard.log(`${retryLabel}网络错误，正在重试 (${attempt + 1}/${MAX_RETRIES})...`);
         await sleep(RETRY_DELAY_MS);
         continue;
       }
@@ -125,8 +114,22 @@ async function apiCall(action: string, body?: Record<string, unknown>): Promise<
       throw lastError;
     }
   }
-  // Should not reach here, but just in case
   throw lastError ?? new Error('Unknown error');
+}
+
+async function apiCall(action: string, body?: Record<string, unknown>): Promise<GameStateResponse> {
+  if (!gameId) throw new Error('No active game');
+  const url = `/api/game/${gameId}${action}`;
+  const opts: RequestInit = body
+    ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+    : { method: 'POST' };
+
+  const resp = await fetchWithRetry(url, opts, '操作');
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(err.detail ?? 'API error');
+  }
+  return resp.json();
 }
 
 async function apiCallRaw(path: string, body: unknown): Promise<void> {
@@ -136,28 +139,13 @@ async function apiCallRaw(path: string, body: unknown): Promise<void> {
     body: JSON.stringify(body),
   };
 
-  let lastError: Error | null = null;
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const resp = await fetch(path, opts);
-      if (!resp.ok) {
-        console.error(`Config API error: ${resp.status} ${resp.statusText}`);
-        return;
-      }
-      return;
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      if (err instanceof TypeError && attempt < MAX_RETRIES) {
-        Scoreboard.log(`配置更新网络错误，正在重试 (${attempt + 1}/${MAX_RETRIES})...`);
-        await sleep(RETRY_DELAY_MS);
-        continue;
-      }
-      if (err instanceof TypeError && attempt >= MAX_RETRIES) {
-        Scoreboard.log('Connection lost. Please refresh the page.');
-      }
-      console.error('Config API call failed:', lastError);
-      return;
+  try {
+    const resp = await fetchWithRetry(path, opts, '配置更新');
+    if (!resp.ok) {
+      console.error(`Config API error: ${resp.status} ${resp.statusText}`);
     }
+  } catch (err) {
+    console.error('Config API call failed:', err);
   }
 }
 
@@ -277,7 +265,7 @@ function handleGameOver(resp: GameStateResponse): void {
 
 async function createGameAndDeal(): Promise<void> {
   try {
-    const createResp = await fetch('/api/game', { method: 'POST' });
+    const createResp = await fetchWithRetry('/api/game', { method: 'POST' }, '创建游戏');
     if (!createResp.ok) throw new Error('Failed to create game');
     const created: GameStateResponse = await createResp.json();
     gameId = created.gameId;

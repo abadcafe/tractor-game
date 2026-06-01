@@ -9,6 +9,8 @@ import asyncio
 import logging
 import os
 import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 # Ensure server/ is on the Python path
@@ -41,7 +43,25 @@ from server.engine.types import Phase, StirAction
 from server.resilience import cleanup_expired_sessions, get_settings, update_settings
 from server.storage.game_store import GameStore
 
-app = FastAPI(title="Tractor Game Server")
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Startup/shutdown lifecycle: run periodic session cleanup."""
+    async def _cleanup_loop() -> None:
+        while True:
+            await asyncio.sleep(300)  # every 5 minutes
+            try:
+                removed = cleanup_expired_sessions(store, max_age_seconds=3600)
+                if removed > 0:
+                    logger.info("Cleaned up %d expired session(s)", removed)
+            except Exception:
+                logger.exception("Session cleanup failed, will retry in 5 minutes")
+
+    task = asyncio.create_task(_cleanup_loop())
+    yield
+    task.cancel()
+
+
+app = FastAPI(title="Tractor Game Server", lifespan=lifespan)
 
 # ---- Game Store ----
 
@@ -376,24 +396,9 @@ async def index():
     return {"message": "Tractor Game Server is running."}
 
 
-# ---- Session cleanup ----
+# ---- Logger ----
 
 logger = logging.getLogger(__name__)
-
-@app.on_event("startup")
-async def start_session_cleanup():
-    """Periodically clean up expired game sessions."""
-    async def _cleanup_loop():
-        while True:
-            await asyncio.sleep(300)  # every 5 minutes
-            try:
-                removed = cleanup_expired_sessions(store, max_age_seconds=3600)
-                if removed > 0:
-                    logger.info("Cleaned up %d expired session(s)", removed)
-            except Exception:
-                logger.exception("Session cleanup failed, will retry in 5 minutes")
-    asyncio.create_task(_cleanup_loop())
-
 
 # ---- Startup ----
 

@@ -74,10 +74,12 @@ class TestServerSettings:
         settings = get_settings()
         assert settings.model == "gpt-4o-mini"
 
-    def test_update_settings_persists(self):
+    def test_update_settings_persists_across_multiple_updates(self):
         update_settings(model="gpt-4o-mini")
+        update_settings(target_level=Rank.TWO)
         settings = get_settings()
         assert settings.model == "gpt-4o-mini"
+        assert settings.target_level == Rank.TWO
 
     def test_update_settings_rejects_unknown_fields(self):
         with pytest.raises(ValueError, match="Unknown settings fields"):
