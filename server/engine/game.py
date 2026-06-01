@@ -270,8 +270,18 @@ class Game:
         if is_game_over(result.team0_new_level) or is_game_over(
             result.team1_new_level
         ):
+            # Update team levels before setting GAME_OVER so the state
+            # reflects the final levels (used by the client to show winner).
+            new_teams = [
+                self.state.teams[0].model_copy(update={
+                    "current_level": result.team0_new_level,
+                }),
+                self.state.teams[1].model_copy(update={
+                    "current_level": result.team1_new_level,
+                }),
+            ]
             self.state = self.state.model_copy(
-                update={"phase": Phase.GAME_OVER}
+                update={"phase": Phase.GAME_OVER, "teams": new_teams}
             )
             return
 
@@ -332,6 +342,21 @@ class Game:
     def get_round_score(self) -> ScoreResult:
         """Calculate the score for the current round (public API)."""
         return self._calculate_round_score()
+
+    def get_winning_team(self) -> int | None:
+        """Return the winning team index (0 or 1) if game is over, else None.
+
+        The winning team is the one whose level reached the target.
+        """
+        if self.state.phase != Phase.GAME_OVER:
+            return None
+        t0 = self.state.teams[0].current_level
+        t1 = self.state.teams[1].current_level
+        if is_game_over(t0):
+            return 0
+        if is_game_over(t1):
+            return 1
+        return None
 
     # ---- Private Helpers ----
 

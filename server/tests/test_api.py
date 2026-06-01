@@ -158,6 +158,16 @@ class TestApiNextRound:
         assert resp.status_code == 400
 
 
+class TestApiWinningTeam:
+    def test_api_winning_team_field_in_response(self, client, game_id):
+        """CR-008: verify winningTeam field is present in API responses."""
+        resp = client.post(f"/api/game/{game_id}/deal")
+        data = resp.json()
+        # When not game over, winningTeam should be null
+        assert "winningTeam" in data
+        assert data["winningTeam"] is None
+
+
 # ---- Helpers ----
 
 def _setup_to_stirring(client, game_id):

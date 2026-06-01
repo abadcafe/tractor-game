@@ -323,6 +323,85 @@ class TestGameAIAutoPlay:
         )
 
 
+class TestGameWinningTeam:
+    """CR-008: verify get_winning_team and team-level update on game over."""
+
+    def test_get_winning_team_returns_none_when_not_game_over(self):
+        game = Game()
+        game.start_round()
+        assert game.get_winning_team() is None
+
+    def test_game_over_updates_team_levels_and_sets_winner(self):
+        """When next_round detects game over, team levels must be updated."""
+        from server.engine.scoring import ScoreResult
+        from unittest.mock import patch
+
+        game = Game()
+        game.start_round()
+        game.submit_bid(0, Rank.THREE, pass_=False)
+        for i in range(1, 4):
+            game.submit_bid(i, None, pass_=True)
+        game.set_trump(0, Suit.HEARTS)
+        for i in range(4):
+            game.submit_stir(i, None)
+
+        # Force phase to SCORING
+        game.state = game.state.model_copy(update={"phase": Phase.SCORING})
+
+        # Mock _calculate_round_score to return a game-over result
+        # Team 0 at ACE (game over), team 1 stays at 2
+        fake_result = ScoreResult(
+            declarer_level_change=3,
+            switch_declarer=False,
+            bottom_card_bonus=0,
+            total_defender_points=0,
+            team0_new_level=Rank.ACE,
+            team1_new_level=Rank.TWO,
+        )
+        with patch.object(game, '_calculate_round_score', return_value=fake_result):
+            game.next_round()
+
+        assert game.state.phase == Phase.GAME_OVER
+        # Team levels must be updated to new levels
+        assert game.state.teams[0].current_level == Rank.ACE
+        assert game.state.teams[1].current_level == Rank.TWO
+        # Winning team must be team 0
+        assert game.get_winning_team() == 0
+
+    def test_game_over_defender_wins(self):
+        """When defender team reaches ACE, they should be the winner."""
+        from server.engine.scoring import ScoreResult
+        from unittest.mock import patch
+
+        game = Game()
+        game.start_round()
+        game.submit_bid(0, Rank.THREE, pass_=False)
+        for i in range(1, 4):
+            game.submit_bid(i, None, pass_=True)
+        game.set_trump(0, Suit.HEARTS)
+        for i in range(4):
+            game.submit_stir(i, None)
+
+        game.state = game.state.model_copy(update={"phase": Phase.SCORING})
+
+        # Team 1 (defender) reaches ACE
+        fake_result = ScoreResult(
+            declarer_level_change=-3,
+            switch_declarer=True,
+            bottom_card_bonus=0,
+            total_defender_points=200,
+            team0_new_level=Rank.THREE,
+            team1_new_level=Rank.ACE,
+        )
+        with patch.object(game, '_calculate_round_score', return_value=fake_result):
+            game.next_round()
+
+        assert game.state.phase == Phase.GAME_OVER
+        assert game.state.teams[0].current_level == Rank.THREE
+        assert game.state.teams[1].current_level == Rank.ACE
+        assert game.get_winning_team() == 1
+
+
 # ---- Helpers ----
 
 def _setup_game_in_playing() -> Game:

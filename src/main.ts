@@ -66,6 +66,7 @@ interface GameStateResponse {
   validBidLevels?: string[] | null;
   scoringMessage?: string | null;
   scoringDetails?: string | null;
+  winningTeam?: number | null;
 }
 
 async function apiCall(action: string, body?: Record<string, unknown>): Promise<GameStateResponse> {
@@ -125,7 +126,7 @@ function handleResponse(resp: GameStateResponse): void {
       handleNextRound(resp);
       break;
     case 'game_over':
-      handleGameOver();
+      handleGameOver(resp);
       break;
   }
 }
@@ -200,8 +201,8 @@ function handleNextRound(resp: GameStateResponse): void {
   });
 }
 
-function handleGameOver(): void {
-  const winningTeam = currentState.teams[0].currentLevel > currentState.teams[1].currentLevel ? 0 : 1;
+function handleGameOver(resp: GameStateResponse): void {
+  const winningTeam = resp.winningTeam ?? 0;
   renderer.showGameOver(winningTeam);
 }
 

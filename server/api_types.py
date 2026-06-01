@@ -34,6 +34,7 @@ class GameStateResponse(BaseModel):
     valid_bid_levels: list[str] | None = None
     scoring_message: str | None = None
     scoring_details: str | None = None
+    winning_team: int | None = None
 
 
 class CreateGameRequest(BaseModel):

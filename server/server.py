@@ -175,7 +175,6 @@ def _game_response(game_id: str, game: Game) -> GameStateResponse:
     if game.state.phase == Phase.SCORING:
         result = game.get_round_score()
         declarer_team = game.state.declarer_team_index
-        defender_team = 1 - declarer_team
         pts = result.total_defender_points
         change = result.declarer_level_change
 
@@ -206,6 +205,7 @@ def _game_response(game_id: str, game: Game) -> GameStateResponse:
         valid_bid_levels=valid_bid_levels,
         scoring_message=scoring_message,
         scoring_details=scoring_details,
+        winning_team=game.get_winning_team(),
     )
 
 
