@@ -5,6 +5,8 @@ Serves the static frontend and provides API endpoints for AI player decisions.
 Uses LangGraph for multi-step AI reasoning with session management.
 """
 
+import asyncio
+import logging
 import os
 import sys
 from pathlib import Path
@@ -34,6 +36,7 @@ from server.api_types import (
 from server.engine.card import Rank, Suit
 from server.engine.constants import PLAYER_COUNT
 from server.engine.game import Game
+from server.engine.game_state import GameSettings
 from server.engine.types import Phase, StirAction
 from server.resilience import cleanup_expired_sessions, get_settings, update_settings
 from server.storage.game_store import GameStore
@@ -157,9 +160,9 @@ async def read_settings():
 
 
 @app.put("/api/settings")
-async def write_settings(data: dict):
+async def write_settings(data: GameSettings):
     """Update server-side game settings."""
-    update_settings(**data)
+    update_settings(**data.model_dump(exclude_unset=True))
     return get_settings()
 
 
@@ -375,7 +378,7 @@ async def index():
 
 # ---- Session cleanup ----
 
-import asyncio
+logger = logging.getLogger(__name__)
 
 @app.on_event("startup")
 async def start_session_cleanup():
@@ -383,9 +386,12 @@ async def start_session_cleanup():
     async def _cleanup_loop():
         while True:
             await asyncio.sleep(300)  # every 5 minutes
-            removed = cleanup_expired_sessions(store, max_age_seconds=3600)
-            if removed > 0:
-                print(f"Cleaned up {removed} expired session(s)")
+            try:
+                removed = cleanup_expired_sessions(store, max_age_seconds=3600)
+                if removed > 0:
+                    logger.info("Cleaned up %d expired session(s)", removed)
+            except Exception:
+                logger.exception("Session cleanup failed, will retry in 5 minutes")
     asyncio.create_task(_cleanup_loop())
 
 

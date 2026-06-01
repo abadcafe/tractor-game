@@ -130,13 +130,34 @@ async function apiCall(action: string, body?: Record<string, unknown>): Promise<
 }
 
 async function apiCallRaw(path: string, body: unknown): Promise<void> {
-  const resp = await fetch(path, {
+  const opts: RequestInit = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  });
-  if (!resp.ok) {
-    console.error(`Config API error: ${resp.status} ${resp.statusText}`);
+  };
+
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const resp = await fetch(path, opts);
+      if (!resp.ok) {
+        console.error(`Config API error: ${resp.status} ${resp.statusText}`);
+        return;
+      }
+      return;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (err instanceof TypeError && attempt < MAX_RETRIES) {
+        Scoreboard.log(`配置更新网络错误，正在重试 (${attempt + 1}/${MAX_RETRIES})...`);
+        await sleep(RETRY_DELAY_MS);
+        continue;
+      }
+      if (err instanceof TypeError && attempt >= MAX_RETRIES) {
+        Scoreboard.log('Connection lost. Please refresh the page.');
+      }
+      console.error('Config API call failed:', lastError);
+      return;
+    }
   }
 }
 

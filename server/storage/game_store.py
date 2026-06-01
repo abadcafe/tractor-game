@@ -51,3 +51,11 @@ class GameStore:
     def list_games(self) -> list[str]:
         """Return all stored game IDs."""
         return list(self._store.keys())
+
+    def get_expired_ids(self, max_age_seconds: int) -> list[str]:
+        """Return game IDs whose last access is older than max_age_seconds."""
+        now = time.time()
+        return [
+            gid for gid, ts in self._last_accessed.items()
+            if now - ts > max_age_seconds
+        ]

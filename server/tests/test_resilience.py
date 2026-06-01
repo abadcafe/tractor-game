@@ -4,7 +4,16 @@ import time
 from server.engine.game_state import GameState, GameSettings, Phase, PlayerState, TeamState, TrickSlot
 from server.engine.card import Rank
 from server.storage.game_store import GameStore
+from server import resilience
 from server.resilience import cleanup_expired_sessions, get_settings, update_settings
+
+
+@pytest.fixture(autouse=True)
+def _reset_settings():
+    """Reset the module-level settings singleton after each test."""
+    original = resilience._settings.model_copy(deep=True)
+    yield
+    resilience._settings = original
 
 
 def _make_state(phase: Phase = Phase.DEALING) -> GameState:
@@ -69,5 +78,7 @@ class TestServerSettings:
         update_settings(model="gpt-4o-mini")
         settings = get_settings()
         assert settings.model == "gpt-4o-mini"
-        # Reset
-        update_settings(model="gpt-4o")
+
+    def test_update_settings_rejects_unknown_fields(self):
+        with pytest.raises(ValueError, match="Unknown settings fields"):
+            update_settings(modle="gpt-4o-mini")
