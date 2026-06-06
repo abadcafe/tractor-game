@@ -155,6 +155,10 @@ def reveal(state: DealBidState, event: BidEvent) -> DealBidState:
         if card.id not in hand_ids:
             return state
 
+    # Precondition 4a: cards must be distinct physical cards (no duplicate IDs)
+    if len(set(c.id for c in event.cards)) != len(event.cards):
+        return state
+
     # Precondition 2 & 3: validate card types
     if event.kind == "trump_rank":
         # Each card must be trump_rank and same suit

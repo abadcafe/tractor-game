@@ -341,6 +341,27 @@ class TestReveal:
         state = reveal(state, bid)
         assert len(state.bid_events) == old_events
 
+    def test_reveal_duplicate_card_ids_rejected(self) -> None:
+        """Bid submitting the same card ID twice (duplicate physical card) is rejected."""
+        deck, _ = _make_deterministic_deck()
+        state = create_deal_bid(DealBidInput(
+            deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
+        ))
+        # Deal 5 cards so player 0 has ♠TWO
+        for _ in range(5):
+            state = deal_next_card(state)
+        spade_twos = [c for c in state.players_hand[0] if c.rank == Rank.TWO and c.suit == Suit.SPADES]
+        assert len(spade_twos) >= 1, "Player 0 should have at least one ♠TWO"
+        # Submit the same card twice (duplicate ID) as a pair bid
+        bid = BidEvent(
+            player=0, cards=[spade_twos[0], spade_twos[0]], kind="trump_rank",
+            suit=Suit.SPADES, joker_type=None, count=2,
+        )
+        old_events = len(state.bid_events)
+        state = reveal(state, bid)
+        # Duplicate card IDs should be rejected
+        assert len(state.bid_events) == old_events
+
     def test_reveal_non_trump_rank_rejected(self) -> None:
         """Revealing non-trump-rank cards is rejected."""
         deck, _ = _make_deterministic_deck()
