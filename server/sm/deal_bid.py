@@ -132,6 +132,10 @@ def reveal(state: DealBidState, event: BidEvent) -> DealBidState:
     Returns the updated state; if the bid is invalid, returns the
     original state unchanged.
     """
+    # Precondition 0: player index must be valid
+    if event.player < 0 or event.player >= 4:
+        return state
+
     # Precondition 1: must be in DEALING phase
     if state.phase != "DEALING":
         return state

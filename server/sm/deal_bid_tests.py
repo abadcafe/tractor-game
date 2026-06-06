@@ -147,18 +147,27 @@ class TestDealNextCard:
             assert len(state.players_hand[i]) == 1
 
     def test_deal_next_card_all_dealt_with_bid(self) -> None:
-        """After 100 cards dealt with a bid, phase = COMPLETE."""
-        deck, _ = _make_deck_with_specific_cards()
+        """After 100 cards dealt with a bid placed mid-deal, phase = COMPLETE."""
+        deck, _ = _make_deterministic_deck()
         state = create_deal_bid(DealBidInput(
             deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
         ))
-        # Deal all 100 cards
-        for _ in range(100):
+        # Deal 5 cards so player 0 has ♠TWO (positions 0 and 4)
+        for _ in range(5):
+            state = deal_next_card(state)
+        # Place a bid mid-deal
+        spade_twos = [c for c in state.players_hand[0] if c.rank == Rank.TWO and c.suit == Suit.SPADES]
+        assert len(spade_twos) >= 1
+        event = BidEvent(
+            player=0, cards=[spade_twos[0]], kind="trump_rank",
+            suit=Suit.SPADES, joker_type=None, count=1,
+        )
+        state = reveal(state, event)
+        # Deal remaining 95 cards
+        for _ in range(95):
             if state.phase == "DEALING":
                 state = deal_next_card(state)
-        # We need at least one bid for COMPLETE; without bids it's NO_BID
-        # First check no-bid case
-        assert state.phase in ("COMPLETE", "NO_BID")
+        assert state.phase == "COMPLETE"
 
     def test_deal_next_card_all_dealt_no_bid(self) -> None:
         """After 100 cards dealt with no bids, phase = NO_BID."""
@@ -502,8 +511,8 @@ class TestReveal:
 
 
 class TestDealBidFullFlow:
-    def test_deal_bid_full_flow_with_bids(self) -> None:
-        """Complete flow: deal all cards, someone bids, result has winner."""
+    def test_deal_bid_full_flow_no_bid(self) -> None:
+        """Complete flow: deal all cards with no bids, result is NO_BID."""
         deck, _ = _make_deck_with_specific_cards()
         state = create_deal_bid(DealBidInput(
             deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
