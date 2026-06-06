@@ -66,8 +66,6 @@ class StirAction(BaseModel):
 
     @model_validator(mode="after")
     def _validate_suit_kind_consistency(self) -> "StirAction":
-        if self.kind == "stir" and self.new_suit is None:
-            raise ValueError("new_suit must be set when kind='stir'")
         if self.kind == "pass" and self.new_suit is not None:
             raise ValueError("new_suit must be None when kind='pass'")
         return self

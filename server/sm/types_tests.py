@@ -178,10 +178,11 @@ class TestStirAction:
         with pytest.raises(ValidationError):
             StirAction(player=0, kind="invalid", new_suit=None)
 
-    def test_stir_action_stir_requires_suit(self) -> None:
-        """StirAction.kind='stir' requires new_suit to be set."""
-        with pytest.raises(ValidationError):
-            StirAction(player=0, kind="stir", new_suit=None)
+    def test_stir_action_stir_with_no_trump(self) -> None:
+        """StirAction.kind='stir' allows new_suit=None for joker pair (no trump)."""
+        action = StirAction(player=0, kind="stir", new_suit=None)
+        assert action.kind == "stir"
+        assert action.new_suit is None
 
     def test_stir_action_pass_rejects_suit(self) -> None:
         """StirAction.kind='pass' requires new_suit=None."""
