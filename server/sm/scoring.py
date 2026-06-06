@@ -91,13 +91,22 @@ def _throw_multiplier(cards: list[Card]) -> int:
     Per spec: check for tractors (consecutive pairs in same effective suit),
     then pairs (same rank in same effective suit), then all singles.
     Tractor -> 2^(tractor_card_count), pair -> x4, all singles -> x2.
+
+    Jokers are excluded from pair/tractor analysis and always count as singles,
+    since they have no suit rank ordering.
     """
     if not cards:
         return 2
 
+    # Filter out jokers -- they cannot form pairs/tractors
+    suited_cards = [c for c in cards if not c.is_joker]
+
+    if len(suited_cards) < 2:
+        return 2
+
     # Group cards by suit (ignoring deck difference)
     suit_groups: dict[str, list[Card]] = {}
-    for card in cards:
+    for card in suited_cards:
         suit_groups.setdefault(card.suit.value, []).append(card)
 
     best_multiplier = 2  # default: all singles
@@ -122,10 +131,11 @@ def _throw_multiplier(cards: list[Card]) -> int:
                 # tractor with tractor_len pairs = 2*tractor_len cards
                 tractor_cards = tractor_len * 2
                 best_multiplier = max(best_multiplier, 2 ** tractor_cards)
-            elif len(pair_ranks) >= 1:
+            else:
                 # Has pairs but no consecutive pairs -> pair multiplier
                 best_multiplier = max(best_multiplier, 4)
         elif len(pair_ranks) == 1:
+            # Has one pair but not enough for tractor -> pair multiplier
             best_multiplier = max(best_multiplier, 4)
 
     return best_multiplier

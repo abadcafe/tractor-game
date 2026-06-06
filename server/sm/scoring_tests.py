@@ -66,9 +66,16 @@ def _completed_trick(
     else:
         cards = [_card(Suit.SPADES, Rank.THREE)] * card_count
 
-    slot = CompletedTrickSlot(player=winner, cards=cards)
+    # Place cards in the lead player's slot so _find_lead_cards finds them
+    # directly, not via the fallback path.
+    lead_player = 0
+    lead_slot = CompletedTrickSlot(player=lead_player, cards=cards)
+    slots: list[CompletedTrickSlot] = [lead_slot]
+    if winner != lead_player:
+        winner_slot = CompletedTrickSlot(player=winner, cards=[])
+        slots.append(winner_slot)
     return CompletedTrick(
-        lead_player=0, lead_type=lead_type, slots=[slot],
+        lead_player=lead_player, lead_type=lead_type, slots=slots,
         winner=winner, points=0,
     )
 
@@ -414,3 +421,83 @@ class TestBoundaryValues:
         )
         assert result.declarer_level_change == expected_change
         assert result.switch_declarer == expected_switch
+
+
+class TestDeclarerTeam1:
+    def test_declarer_team1_big_light(self) -> None:
+        """Declarer team=1, defender 0 points -> declarer +3."""
+        result = calculate_score(
+            defender_points=0,
+            bottom_cards=[],
+            last_trick=_completed_trick(PlayType.SINGLE, 1, winner=1),
+            declarer_team=1,
+            declarer_player=1,
+            team0_level=Rank.TWO,
+            team1_level=Rank.TWO,
+        )
+        assert result.declarer_level_change == 3
+        assert result.switch_declarer is False
+        assert result.next_declarer_team == 1
+        assert result.next_declarer_player == 2  # partner of player 1
+        assert result.team1_new_level == Rank.FIVE  # TWO + 3 = FIVE
+        assert result.team0_new_level == Rank.TWO   # unchanged
+
+    def test_declarer_team1_switch(self) -> None:
+        """Declarer team=1, defender 100 points -> switch to team 0."""
+        result = calculate_score(
+            defender_points=100,
+            bottom_cards=[],
+            last_trick=_completed_trick(PlayType.SINGLE, 1, winner=0),
+            declarer_team=1,
+            declarer_player=1,
+            team0_level=Rank.TWO,
+            team1_level=Rank.TWO,
+        )
+        assert result.declarer_level_change == 0
+        assert result.switch_declarer is True
+        assert result.next_declarer_team == 0
+        assert result.next_declarer_player == 3  # CCW next of 1 is 3
+        assert result.team1_new_level == Rank.TWO  # declarer team unchanged
+        assert result.team0_new_level == Rank.TWO  # defender gets 0 advance
+
+
+class TestOver200:
+    def test_defender_over_200_from_bonus(self) -> None:
+        """When ambush bonus pushes total over 200, still gets -3 and switch."""
+        # 6-card tractor ambush: 2^6=64, bottom_base=50 -> bonus=3200
+        # total = 50 + 3200 = 3250, well over 200
+        bottom = [
+            _card(Suit.SPADES, Rank.FIVE, 1), _card(Suit.SPADES, Rank.FIVE, 2),
+            _card(Suit.SPADES, Rank.TEN, 1), _card(Suit.SPADES, Rank.TEN, 2),
+            _card(Suit.SPADES, Rank.KING, 1), _card(Suit.SPADES, Rank.KING, 2),
+        ]
+        result = calculate_score(
+            defender_points=50,
+            bottom_cards=bottom,
+            last_trick=_completed_trick(PlayType.TRACTOR, 6, winner=1),
+            declarer_team=0,
+            declarer_player=0,
+            team0_level=Rank.TWO,
+            team1_level=Rank.TWO,
+        )
+        # total = 50 + 3200 = 3250 -> fallback: -3, switch
+        assert result.declarer_level_change == -3
+        assert result.switch_declarer is True
+        assert result.total_defender_points == 3250
+        assert result.team0_new_level == Rank.TWO  # TWO - 3 clamped at TWO
+        assert result.team1_new_level == Rank.FIVE  # TWO + 3 = FIVE
+
+    def test_defender_points_exactly_200(self) -> None:
+        """Defender points exactly 200 -> -3, switch."""
+        result = calculate_score(
+            defender_points=200,
+            bottom_cards=[],
+            last_trick=_completed_trick(PlayType.SINGLE, 1, winner=1),
+            declarer_team=0,
+            declarer_player=0,
+            team0_level=Rank.TWO,
+            team1_level=Rank.TWO,
+        )
+        assert result.declarer_level_change == -3
+        assert result.switch_declarer is True
+        assert result.total_defender_points == 200
