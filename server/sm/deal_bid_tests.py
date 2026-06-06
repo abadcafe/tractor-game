@@ -1,5 +1,4 @@
 """Tests for sm.deal_bid module."""
-import pytest
 from server.sm.card_model import Card, Suit, Rank, create_decks
 from server.sm.types import BidEvent
 from server.sm.deal_bid import (
@@ -82,6 +81,28 @@ def _make_deterministic_deck() -> tuple[list[Card], list[Card]]:
     bottom = bottom_pool[:8]
 
     return deck[:100], bottom
+
+
+def _make_joker_pair_deck() -> list[Card]:
+    """Create a 100-card deck with both big jokers at positions 0 and 4.
+
+    This ensures both big jokers land in player 0's hand after dealing
+    5 cards (CCW order: 0->1->3->2->0).
+    """
+    all_cards = create_decks()
+    big_jokers = [c for c in all_cards if c.rank == Rank.BIG_JOKER]
+    remaining = [c for c in all_cards if c.rank not in (Rank.BIG_JOKER, Rank.SMALL_JOKER)]
+    import random
+    random.seed(77)
+    random.shuffle(remaining)
+    # Place both big jokers at positions 0 and 4 (both go to player 0)
+    custom_deck: list[Card] = [big_jokers[0], remaining[0], remaining[1], remaining[2],
+                                big_jokers[1]]
+    # Remove used cards from remaining
+    used_ids = {c.id for c in custom_deck}
+    rest = [c for c in remaining if c.id not in used_ids]
+    custom_deck.extend(rest[:95])
+    return custom_deck[:100]
 
 
 class TestCreateDealBid:
@@ -406,28 +427,9 @@ class TestReveal:
 
     def test_reveal_joker_pair_accepted(self) -> None:
         """Pair of big jokers is valid for reveal and accepted."""
-        deck, _ = _make_deterministic_deck()
+        custom_deck = _make_joker_pair_deck()
         state = create_deal_bid(DealBidInput(
-            deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
-        ))
-        # Deal 10 cards so player 0 has big joker at pos 8 and player 1 at pos 9
-        # We need both big jokers in the same hand; use a custom deck for this
-        all_cards = create_decks()
-        big_jokers = [c for c in all_cards if c.rank == Rank.BIG_JOKER]
-        remaining = [c for c in all_cards if c.rank not in (Rank.BIG_JOKER, Rank.SMALL_JOKER)]
-        import random
-        random.seed(77)
-        random.shuffle(remaining)
-        # Place both big jokers at positions 0 and 4 (both go to player 0)
-        custom_deck: list[Card] = [big_jokers[0], remaining[0], remaining[1], remaining[2],
-                                    big_jokers[1]]
-        # Remove used cards from remaining
-        used_ids = {c.id for c in custom_deck}
-        rest = [c for c in remaining if c.id not in used_ids]
-        custom_deck.extend(rest[:95])
-        bottom = rest[95:103]
-        state = create_deal_bid(DealBidInput(
-            deck=custom_deck[:100], declarer_team=None, trump_rank=Rank.TWO, start_player=0,
+            deck=custom_deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
         ))
         for _ in range(5):
             state = deal_next_card(state)
@@ -449,21 +451,9 @@ class TestReveal:
 
     def test_reveal_joker_pair_sets_no_trump(self) -> None:
         """Joker pair reveal sets trump_suit=None (无主) when deal completes."""
-        # Build custom deck with both big jokers going to player 0
-        all_cards = create_decks()
-        big_jokers = [c for c in all_cards if c.rank == Rank.BIG_JOKER]
-        remaining = [c for c in all_cards if c.rank not in (Rank.BIG_JOKER, Rank.SMALL_JOKER)]
-        import random
-        random.seed(77)
-        random.shuffle(remaining)
-        custom_deck: list[Card] = [big_jokers[0], remaining[0], remaining[1], remaining[2],
-                                    big_jokers[1]]
-        used_ids = {c.id for c in custom_deck}
-        rest = [c for c in remaining if c.id not in used_ids]
-        custom_deck.extend(rest[:95])
-        bottom = rest[95:103]
+        custom_deck = _make_joker_pair_deck()
         state = create_deal_bid(DealBidInput(
-            deck=custom_deck[:100], declarer_team=None, trump_rank=Rank.TWO, start_player=0,
+            deck=custom_deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
         ))
         # Deal 5 cards so player 0 has both big jokers
         for _ in range(5):
