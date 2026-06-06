@@ -161,6 +161,8 @@ def reveal(state: DealBidState, event: BidEvent) -> DealBidState:
                 return state
         if event.count not in (1, 2):
             return state
+        if len(event.cards) != event.count:
+            return state
     elif event.kind == "joker":
         # Must be a pair of jokers (same type), single joker rejected
         if event.count != 2:

@@ -294,6 +294,44 @@ class TestReveal:
         state = reveal(state, bid)
         assert len(state.bid_events) == old_events
 
+    def test_reveal_count_cards_mismatch_rejected(self) -> None:
+        """Bid with count=2 but only 1 card is rejected."""
+        deck, _ = _make_deterministic_deck()
+        state = create_deal_bid(DealBidInput(
+            deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
+        ))
+        for _ in range(5):
+            state = deal_next_card(state)
+        spade_twos = [c for c in state.players_hand[0] if c.rank == Rank.TWO and c.suit == Suit.SPADES]
+        assert len(spade_twos) >= 1, "Player 0 should have at least one ♠TWO"
+        # Submit 1 card but claim count=2 -- should be rejected
+        bid = BidEvent(
+            player=0, cards=[spade_twos[0]], kind="trump_rank",
+            suit=Suit.SPADES, joker_type=None, count=2,
+        )
+        old_events = len(state.bid_events)
+        state = reveal(state, bid)
+        assert len(state.bid_events) == old_events
+
+    def test_reveal_count_one_with_two_cards_rejected(self) -> None:
+        """Bid with count=1 but 2 cards is rejected."""
+        deck, _ = _make_deterministic_deck()
+        state = create_deal_bid(DealBidInput(
+            deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
+        ))
+        for _ in range(5):
+            state = deal_next_card(state)
+        spade_twos = [c for c in state.players_hand[0] if c.rank == Rank.TWO and c.suit == Suit.SPADES]
+        assert len(spade_twos) >= 2, "Player 0 should have a ♠ pair"
+        # Submit 2 cards but claim count=1 -- should be rejected
+        bid = BidEvent(
+            player=0, cards=[spade_twos[0], spade_twos[1]], kind="trump_rank",
+            suit=Suit.SPADES, joker_type=None, count=1,
+        )
+        old_events = len(state.bid_events)
+        state = reveal(state, bid)
+        assert len(state.bid_events) == old_events
+
     def test_reveal_non_trump_rank_rejected(self) -> None:
         """Revealing non-trump-rank cards is rejected."""
         deck, _ = _make_deterministic_deck()
