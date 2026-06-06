@@ -18,3 +18,8 @@
 - Status: Resolved
 - Description: `test_reveal_joker_pair_accepted` (line 415-428) and `test_reveal_joker_pair_sets_no_trump` (line 453-464) contain nearly identical custom deck construction code (same seed 77, same big joker placement at positions 0 and 4, same remaining pool setup). This duplicated setup (~15 lines each) could be extracted into a shared helper like `_make_joker_pair_deck()` to improve maintainability and reduce the risk of the two setups diverging silently in the future.
 - Decision Reason: Extracted shared helper `_make_joker_pair_deck()` and replaced both duplicated blocks.
+
+### CQ-008: Pyright type errors in test file for optional member access
+- Status: Resolved
+- Description: `server/sm/deal_bid_tests.py` has 3 pyright `reportOptionalMemberAccess` errors at lines 254, 255, and 285. These access `state.bid_winner.player` and `state.bid_winner.suit` without first narrowing `bid_winner` (typed `BidEvent | None`) with an `assert state.bid_winner is not None`. While the assertions are logically correct at runtime (the value is known to not be None at that point), pyright cannot infer this. The fix is to add `assert state.bid_winner is not None` before each access, or use an intermediate variable with the narrowing assertion.
+- Decision Reason: Added assert state.bid_winner is not None before optional member access at lines 254, 255, and 285.

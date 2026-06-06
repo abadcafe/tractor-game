@@ -251,6 +251,7 @@ class TestReveal:
             suit=Suit.SPADES, joker_type=None, count=1,
         )
         state = reveal(state, high_bid)
+        assert state.bid_winner is not None
         assert state.bid_winner.player == 0
         assert state.bid_winner.suit == Suit.SPADES
 
@@ -282,6 +283,7 @@ class TestReveal:
         state = reveal(state, bid2)
         # ♠(103) > ♥(102), so bid2 should be rejected -- winner unchanged
         assert state.bid_winner == old_winner
+        assert state.bid_winner is not None
         assert state.bid_winner.player == 0
 
     def test_reveal_wrong_phase_rejected(self) -> None:
