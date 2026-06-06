@@ -7,6 +7,7 @@ level progression, and scoring thresholds.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import MappingProxyType
 
 from server.sm.card_model import Rank
 
@@ -18,23 +19,33 @@ HUMAN_PLAYER_INDEX: int = 3
 # ---- Team Mapping ----
 
 # Team 0: North(0) + South(3)
-TEAM_0: list[int] = [0, 3]
+TEAM_0: tuple[int, ...] = (0, 3)
 # Team 1: West(1) + East(2)
-TEAM_1: list[int] = [1, 2]
+TEAM_1: tuple[int, ...] = (1, 2)
 
 # ---- Counterclockwise Rotation ----
 
 # Per spec: 0→1→3→2→0 (counterclockwise)
-CCW_NEXT: dict[int, int] = {0: 1, 1: 3, 3: 2, 2: 0}
+CCW_NEXT: MappingProxyType[int, int] = MappingProxyType({0: 1, 1: 3, 3: 2, 2: 0})
+
+
+def _validate_player(player: int) -> None:
+    """Raise ValueError if player is not in [0, PLAYER_COUNT)."""
+    if not isinstance(player, int) or player < 0 or player >= PLAYER_COUNT:
+        raise ValueError(
+            f"Invalid player index {player!r}; must be an int in [0, {PLAYER_COUNT})"
+        )
 
 
 def next_player_ccw(current: int) -> int:
     """Return the next player in counterclockwise order."""
+    _validate_player(current)
     return CCW_NEXT[current]
 
 
 def get_team_index(player: int) -> int:
     """Return 0 or 1 indicating which team the player belongs to."""
+    _validate_player(player)
     if player in TEAM_0:
         return 0
     return 1
@@ -42,6 +53,7 @@ def get_team_index(player: int) -> int:
 
 def get_partner_index(player: int) -> int:
     """Return the partner (对家) of the given player."""
+    _validate_player(player)
     team = TEAM_0 if player in TEAM_0 else TEAM_1
     return team[1] if team[0] == player else team[0]
 
@@ -54,11 +66,11 @@ TOTAL_POINTS: int = 200  # 2 decks × (4 suits × (5+10+10))
 
 # ---- Level Progression ----
 
-LEVELS: list[Rank] = [
+LEVELS: tuple[Rank, ...] = (
     Rank.TWO, Rank.THREE, Rank.FOUR, Rank.FIVE,
     Rank.SIX, Rank.SEVEN, Rank.EIGHT, Rank.NINE,
     Rank.TEN, Rank.JACK, Rank.QUEEN, Rank.KING, Rank.ACE,
-]
+)
 
 
 def advance_level(level: Rank, change: int) -> Rank:
@@ -97,7 +109,7 @@ class ScoreThreshold:
 # 120~159      -1           是
 # 160~199      -2           是
 # 200          -3           是
-SCORE_THRESHOLDS: list[ScoreThreshold] = [
+SCORE_THRESHOLDS: tuple[ScoreThreshold, ...] = (
     ScoreThreshold(max_points=0,   declarer_change=3,  switch_declarer=False),
     ScoreThreshold(max_points=39,  declarer_change=2,  switch_declarer=False),
     ScoreThreshold(max_points=79,  declarer_change=1,  switch_declarer=False),
@@ -105,4 +117,4 @@ SCORE_THRESHOLDS: list[ScoreThreshold] = [
     ScoreThreshold(max_points=159, declarer_change=-1, switch_declarer=True),
     ScoreThreshold(max_points=199, declarer_change=-2, switch_declarer=True),
     ScoreThreshold(max_points=200, declarer_change=-3, switch_declarer=True),
-]
+)

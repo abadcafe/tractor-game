@@ -1,5 +1,6 @@
 """Tests for sm.constants module."""
-import pytest
+from types import MappingProxyType
+
 from server.sm.card_model import Rank
 from server.sm.constants import (
     PLAYER_COUNT, BOTTOM_CARD_COUNT, TOTAL_CARDS,
@@ -30,11 +31,11 @@ class TestPlayerPositioning:
 
     def test_team0_members(self) -> None:
         """Team 0: North(0) + South(3)."""
-        assert TEAM_0 == [0, 3]
+        assert TEAM_0 == (0, 3)
 
     def test_team1_members(self) -> None:
         """Team 1: West(1) + East(2)."""
-        assert TEAM_1 == [1, 2]
+        assert TEAM_1 == (1, 2)
 
 
 class TestTeamUtils:
@@ -99,3 +100,46 @@ class TestScoringConstants:
 
     def test_human_player_index(self) -> None:
         assert HUMAN_PLAYER_INDEX == 3
+
+
+class TestImmutability:
+    def test_team0_is_tuple(self) -> None:
+        assert isinstance(TEAM_0, tuple)
+
+    def test_team1_is_tuple(self) -> None:
+        assert isinstance(TEAM_1, tuple)
+
+    def test_levels_is_tuple(self) -> None:
+        assert isinstance(LEVELS, tuple)
+
+    def test_ccw_next_is_frozen(self) -> None:
+        assert isinstance(CCW_NEXT, MappingProxyType)
+
+    def test_score_thresholds_is_tuple(self) -> None:
+        assert isinstance(SCORE_THRESHOLDS, tuple)
+
+    def test_score_threshold_is_frozen_dataclass(self) -> None:
+        from dataclasses import FrozenInstanceError
+        st = SCORE_THRESHOLDS[0]
+        try:
+            st.max_points = 999  # type: ignore[misc]
+            raise AssertionError("Should have raised FrozenInstanceError")
+        except FrozenInstanceError:
+            pass
+
+
+class TestInputValidation:
+    def test_next_player_ccw_invalid(self) -> None:
+        import pytest
+        with pytest.raises(ValueError, match="Invalid player index"):
+            next_player_ccw(99)
+
+    def test_get_team_index_invalid(self) -> None:
+        import pytest
+        with pytest.raises(ValueError, match="Invalid player index"):
+            get_team_index(-1)
+
+    def test_get_partner_index_invalid(self) -> None:
+        import pytest
+        with pytest.raises(ValueError, match="Invalid player index"):
+            get_partner_index(4)
