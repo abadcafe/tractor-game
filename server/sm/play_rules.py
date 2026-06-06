@@ -5,7 +5,7 @@ and the legal play enumeration for leading and following.
 """
 
 from server.sm.card_model import Card, Suit, Rank, _SUITED_RANKS
-from server.sm.comparator import effective_suit, is_trump_card, trump_order
+from server.sm.comparator import effective_suit
 from server.sm.types import PlayAction, PlayType
 
 
@@ -46,13 +46,15 @@ def _trump_rank_order(rank: Rank) -> int:
 
 
 def _rank_order_for_suit(
-    rank: Rank, suit: Suit, trump_suit: Suit | None, trump_rank: Rank
+    rank: Rank, suit: Suit | str, trump_suit: Suit | None, trump_rank: Rank
 ) -> int:
     """Return the rank ordering for a card's rank within its effective suit group.
 
-    For trump cards, use trump rank ordering.
+    For trump cards (effective suit "trump" or actual trump suit), use trump rank ordering.
     For non-trump cards, use non-trump ordering (skipping trump_rank).
     """
+    if suit == "trump":
+        return _trump_rank_order(rank)
     if suit == Suit.JOKER:
         return _trump_rank_order(rank)
     if trump_suit is not None and suit == trump_suit:
@@ -90,7 +92,7 @@ def _find_consecutive_pairs(
     # Find all pairs (exactly 2 cards of same rank)
     pair_ranks = sorted(
         [r for r, cs in rank_cards.items() if len(cs) >= 2],
-        key=lambda r: _rank_order_for_suit(r, suit if isinstance(suit, Suit) else Suit.HEARTS, trump_suit, trump_rank),
+        key=lambda r: _rank_order_for_suit(r, suit, trump_suit, trump_rank),
     )
 
     if len(pair_ranks) < 1:
@@ -192,6 +194,10 @@ def detect_throws(
     all remaining cards of that suit.
     THROW does not apply to trump cards.
     """
+    # Conservative: if we don't know what's remaining, we can't verify highest
+    if known_remaining_cards is None:
+        return []
+
     # Group hand cards by suit (non-trump only)
     suit_groups: dict[Suit, list[Card]] = {}
     for c in hand:
@@ -204,15 +210,14 @@ def detect_throws(
     if not suit_groups:
         return []
 
-    # Build remaining cards by suit (if provided)
+    # Build remaining cards by suit
     remaining_by_suit: dict[Suit, set[Rank]] = {}
-    if known_remaining_cards is not None:
-        for c in known_remaining_cards:
-            eff = effective_suit(c, trump_suit, trump_rank)
-            if eff == "trump":
-                continue
-            if isinstance(eff, Suit):
-                remaining_by_suit.setdefault(eff, set()).add(c.rank)
+    for c in known_remaining_cards:
+        eff = effective_suit(c, trump_suit, trump_rank)
+        if eff == "trump":
+            continue
+        if isinstance(eff, Suit):
+            remaining_by_suit.setdefault(eff, set()).add(c.rank)
 
     result: list[PlayAction] = []
     for suit, cards in suit_groups.items():
@@ -318,7 +323,7 @@ def infer_play_type(
                     pair_ranks,
                     key=lambda r: _rank_order_for_suit(
                         r,
-                        eff_suit_val if isinstance(eff_suit_val, Suit) else Suit.HEARTS,
+                        eff_suit_val,
                         trump_suit,
                         trump_rank,
                     ),
@@ -327,13 +332,13 @@ def infer_play_type(
                 for i in range(1, len(pair_ranks_sorted)):
                     o_prev = _rank_order_for_suit(
                         pair_ranks_sorted[i - 1],
-                        eff_suit_val if isinstance(eff_suit_val, Suit) else Suit.HEARTS,
+                        eff_suit_val,
                         trump_suit,
                         trump_rank,
                     )
                     o_curr = _rank_order_for_suit(
                         pair_ranks_sorted[i],
-                        eff_suit_val if isinstance(eff_suit_val, Suit) else Suit.HEARTS,
+                        eff_suit_val,
                         trump_suit,
                         trump_rank,
                     )
@@ -403,11 +408,10 @@ def _follow_pair(
         return matching_pairs
 
     # No matching pair: play any 2 cards
-    result: list[PlayAction] = []
-    for i in range(len(hand)):
-        for j in range(i + 1, len(hand)):
-            result.append(PlayAction(type=PlayType.PAIR, cards=[hand[i], hand[j]]))
-    return result
+    # Return only the first hand as a representative option to avoid O(n^2) explosion
+    if len(hand) >= 2:
+        return [PlayAction(type=PlayType.PAIR, cards=hand[:2])]
+    return []
 
 
 def _follow_tractor(
@@ -514,13 +518,12 @@ def _follow_throw(
     ]
 
     if len(suit_cards) >= throw_len:
-        # Play exactly throw_len cards of the suit (highest ones)
-        sorted_suit = sorted(
-            suit_cards,
-            key=lambda c: _non_trump_rank_order(c.rank, trump_rank),
-            reverse=True,
-        )
-        return [PlayAction(type=PlayType.THROW, cards=sorted_suit[:throw_len])]
+        # Play exactly throw_len cards of the suit: player chooses which ones
+        from itertools import combinations
+        result: list[PlayAction] = []
+        for combo in combinations(suit_cards, throw_len):
+            result.append(PlayAction(type=PlayType.THROW, cards=list(combo)))
+        return result
 
     if suit_cards:
         # Play all suit cards + fill from other cards
