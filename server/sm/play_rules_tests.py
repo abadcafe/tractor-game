@@ -1,5 +1,4 @@
 """Tests for sm.play_rules module."""
-import pytest
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.types import PlayType, PlayAction
 from server.sm.play_rules import (

@@ -4,8 +4,6 @@ Implements the Shengji/Tractor play rules for singles, pairs, tractors, throws,
 and the legal play enumeration for leading and following.
 """
 
-from itertools import combinations
-
 from server.sm.card_model import Card, Suit, Rank, _SUITED_RANKS
 from server.sm.comparator import effective_suit, is_trump_card, trump_order
 from server.sm.types import PlayAction, PlayType
@@ -79,7 +77,6 @@ def _find_consecutive_pairs(
     """Find all consecutive pair runs in a group of cards of the same effective suit.
 
     Returns PlayAction of type TRACTOR for each run of 2+ consecutive pairs.
-    Also returns individual pairs as separate PlayActions.
     """
     result: list[PlayAction] = []
     if not cards:
@@ -452,19 +449,11 @@ def _follow_tractor(
 
     pairs_in_suit: list[PlayAction] = []
     singles_in_suit: list[Card] = []
-    used_ranks: set[tuple] = set()
     for key, cards in rank_groups.items():
         if len(cards) >= 2:
             pairs_in_suit.append(PlayAction(type=PlayType.PAIR, cards=cards[:2]))
-            used_ranks.add(key)
         else:
             singles_in_suit.extend(cards)
-
-    # Also collect unused singles from matching suit
-    for c in suit_cards:
-        key = (c.suit, c.rank)
-        if key not in used_ranks:
-            singles_in_suit.append(c)
 
     # If we have pairs, play all pairs + fill
     if pairs_in_suit:
@@ -484,9 +473,14 @@ def _follow_tractor(
             combo_cards: list[Card] = []
             for a in pairs_in_suit:
                 combo_cards.extend(a.cards)
-            combo_cards.extend(singles_in_suit[:fill_needed])
-            if len(combo_cards) == tractor_len:
-                result.append(PlayAction(type=PlayType.TRACTOR, cards=combo_cards))
+            # Fill from same-suit singles first, then from any remaining hand cards
+            used_ids = {c.id for c in combo_cards}
+            fill_cards = [c for c in singles_in_suit if c.id not in used_ids]
+            remaining = [c for c in hand if c.id not in used_ids and c not in fill_cards]
+            extra_fill = remaining[: max(0, fill_needed - len(fill_cards))]
+            fill_cards.extend(extra_fill)
+            combo_cards.extend(fill_cards[:fill_needed])
+            result.append(PlayAction(type=PlayType.TRACTOR, cards=combo_cards))
         return result
 
     # No pairs at all: play any tractor_len cards
