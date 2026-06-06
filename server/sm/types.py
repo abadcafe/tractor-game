@@ -5,6 +5,7 @@ player representation, and completed trick data.
 """
 
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -40,9 +41,9 @@ class BidEvent(BaseModel):
 
     player: int
     cards: list[Card]
-    kind: str  # "trump_rank" | "joker"
+    kind: Literal["trump_rank", "joker"]
     suit: Suit | None
-    joker_type: str | None  # "big" | "small" | None
+    joker_type: Literal["big", "small"] | None
     count: int
 
 
@@ -52,7 +53,7 @@ class StirAction(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     player: int
-    kind: str  # "stir" | "pass"
+    kind: Literal["stir", "pass"]
     new_suit: Suit | None
 
 
@@ -63,7 +64,7 @@ class Player(BaseModel):
     """Represents a player in the game with index, team, and hand."""
 
     index: int
-    team: int
+    team: Literal[0, 1]
     hand: list[Card]
     is_declarer: bool = False
 

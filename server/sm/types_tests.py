@@ -1,5 +1,6 @@
 """Tests for sm.types module."""
 import pytest
+from pydantic import ValidationError
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.types import (
     PlayType, PlayAction, BidEvent, StirAction, Player,
@@ -52,6 +53,13 @@ class TestPlayAction:
         assert action.type == PlayType.TRACTOR
         assert len(action.cards) == 4
 
+    def test_play_action_frozen(self) -> None:
+        """PlayAction is immutable (frozen=True)."""
+        card = _card(Suit.HEARTS, Rank.ACE)
+        action = PlayAction(type=PlayType.SINGLE, cards=[card])
+        with pytest.raises(ValidationError):
+            action.type = PlayType.PAIR
+
 
 class TestBidEvent:
     def test_bid_event_creation_trump_rank(self) -> None:
@@ -98,6 +106,34 @@ class TestBidEvent:
         )
         assert event.suit is None
 
+    def test_bid_event_frozen(self) -> None:
+        """BidEvent is immutable (frozen=True)."""
+        cards = [_card(Suit.HEARTS, Rank.TWO)]
+        event = BidEvent(
+            player=0, cards=cards, kind="trump_rank",
+            suit=Suit.HEARTS, joker_type=None, count=1,
+        )
+        with pytest.raises(ValidationError):
+            event.player = 1
+
+    def test_bid_event_kind_literal(self) -> None:
+        """BidEvent.kind must be 'trump_rank' or 'joker'."""
+        cards = [_card(Suit.HEARTS, Rank.TWO)]
+        with pytest.raises(ValidationError):
+            BidEvent(
+                player=0, cards=cards, kind="invalid",
+                suit=Suit.HEARTS, joker_type=None, count=1,
+            )
+
+    def test_bid_event_joker_type_literal(self) -> None:
+        """BidEvent.joker_type must be 'big', 'small', or None."""
+        cards = [_card(Suit.JOKER, Rank.BIG_JOKER, 1), _card(Suit.JOKER, Rank.BIG_JOKER, 2)]
+        with pytest.raises(ValidationError):
+            BidEvent(
+                player=0, cards=cards, kind="joker",
+                suit=None, joker_type="invalid", count=2,
+            )
+
 
 class TestStirAction:
     def test_stir_action_creation(self) -> None:
@@ -113,6 +149,17 @@ class TestStirAction:
         assert action.kind == "pass"
         assert action.new_suit is None
 
+    def test_stir_action_frozen(self) -> None:
+        """StirAction is immutable (frozen=True)."""
+        action = StirAction(player=1, kind="stir", new_suit=Suit.SPADES)
+        with pytest.raises(ValidationError):
+            action.player = 2
+
+    def test_stir_action_kind_literal(self) -> None:
+        """StirAction.kind must be 'stir' or 'pass'."""
+        with pytest.raises(ValidationError):
+            StirAction(player=0, kind="invalid", new_suit=None)
+
 
 class TestPlayer:
     def test_player_creation(self) -> None:
@@ -127,6 +174,18 @@ class TestPlayer:
         """is_declarer defaults to False."""
         player = Player(index=1, team=1, hand=[])
         assert player.is_declarer is False
+
+    def test_player_team_literal(self) -> None:
+        """Player.team must be 0 or 1."""
+        with pytest.raises(ValidationError):
+            Player(index=0, team=2, hand=[])
+
+    def test_player_hand_mutable(self) -> None:
+        """Player.hand is mutable (Player is NOT frozen)."""
+        player = Player(index=0, team=0, hand=[])
+        card = _card(Suit.HEARTS, Rank.ACE)
+        player.hand.append(card)
+        assert len(player.hand) == 1
 
 
 class TestCompletedTrick:
@@ -151,3 +210,19 @@ class TestCompletedTrick:
         slot = CompletedTrickSlot(player=3, cards=[_card(Suit.SPADES, Rank.FIVE)])
         assert slot.player == 3
         assert len(slot.cards) == 1
+
+    def test_completed_trick_frozen(self) -> None:
+        """CompletedTrick is immutable (frozen=True)."""
+        slot = CompletedTrickSlot(player=0, cards=[_card(Suit.HEARTS, Rank.ACE)])
+        trick = CompletedTrick(
+            lead_player=0, lead_type=PlayType.SINGLE,
+            slots=[slot], winner=0, points=10,
+        )
+        with pytest.raises(ValidationError):
+            trick.winner = 1
+
+    def test_completed_trick_slot_frozen(self) -> None:
+        """CompletedTrickSlot is immutable (frozen=True)."""
+        slot = CompletedTrickSlot(player=0, cards=[_card(Suit.HEARTS, Rank.ACE)])
+        with pytest.raises(ValidationError):
+            slot.player = 1
