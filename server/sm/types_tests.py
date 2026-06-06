@@ -134,6 +134,24 @@ class TestBidEvent:
                 suit=None, joker_type="invalid", count=2,
             )
 
+    def test_bid_event_trump_rank_requires_suit(self) -> None:
+        """BidEvent.kind='trump_rank' requires suit to be set."""
+        cards = [_card(Suit.HEARTS, Rank.TWO)]
+        with pytest.raises(ValidationError):
+            BidEvent(
+                player=0, cards=cards, kind="trump_rank",
+                suit=None, joker_type=None, count=1,
+            )
+
+    def test_bid_event_joker_rejects_suit(self) -> None:
+        """BidEvent.kind='joker' requires suit=None."""
+        cards = [_card(Suit.JOKER, Rank.BIG_JOKER, 1), _card(Suit.JOKER, Rank.BIG_JOKER, 2)]
+        with pytest.raises(ValidationError):
+            BidEvent(
+                player=0, cards=cards, kind="joker",
+                suit=Suit.HEARTS, joker_type="big", count=2,
+            )
+
 
 class TestStirAction:
     def test_stir_action_creation(self) -> None:
@@ -159,6 +177,16 @@ class TestStirAction:
         """StirAction.kind must be 'stir' or 'pass'."""
         with pytest.raises(ValidationError):
             StirAction(player=0, kind="invalid", new_suit=None)
+
+    def test_stir_action_stir_requires_suit(self) -> None:
+        """StirAction.kind='stir' requires new_suit to be set."""
+        with pytest.raises(ValidationError):
+            StirAction(player=0, kind="stir", new_suit=None)
+
+    def test_stir_action_pass_rejects_suit(self) -> None:
+        """StirAction.kind='pass' requires new_suit=None."""
+        with pytest.raises(ValidationError):
+            StirAction(player=0, kind="pass", new_suit=Suit.HEARTS)
 
 
 class TestPlayer:

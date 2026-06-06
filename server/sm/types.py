@@ -7,7 +7,7 @@ player representation, and completed trick data.
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from server.sm.card_model import Card, Suit
 
@@ -46,6 +46,14 @@ class BidEvent(BaseModel):
     joker_type: Literal["big", "small"] | None
     count: int
 
+    @model_validator(mode="after")
+    def _validate_suit_kind_consistency(self) -> "BidEvent":
+        if self.kind == "trump_rank" and self.suit is None:
+            raise ValueError("suit must be set when kind='trump_rank'")
+        if self.kind == "joker" and self.suit is not None:
+            raise ValueError("suit must be None when kind='joker'")
+        return self
+
 
 class StirAction(BaseModel):
     """Records a player's stir (change suit) or pass during the stir phase."""
@@ -55,6 +63,14 @@ class StirAction(BaseModel):
     player: int
     kind: Literal["stir", "pass"]
     new_suit: Suit | None
+
+    @model_validator(mode="after")
+    def _validate_suit_kind_consistency(self) -> "StirAction":
+        if self.kind == "stir" and self.new_suit is None:
+            raise ValueError("new_suit must be set when kind='stir'")
+        if self.kind == "pass" and self.new_suit is not None:
+            raise ValueError("new_suit must be None when kind='pass'")
+        return self
 
 
 # ---- Player Model ----
