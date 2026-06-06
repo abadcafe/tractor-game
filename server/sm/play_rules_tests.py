@@ -92,9 +92,9 @@ class TestDetectTractors:
             _card(Suit.SPADES, Rank.TWO, 1), _card(Suit.SPADES, Rank.TWO, 2),
         ]
         # With trump_suit=HEARTS, trump_rank=TWO: all are trump cards
-        tractors = detect_tractors(hand, Suit.HEARTS, Rank.TWO)
         # Two pairs of trump rank cards may or may not form a tractor depending on
         # the trump ordering; at minimum we should detect the pairs
+        detect_tractors(hand, Suit.HEARTS, Rank.TWO)
         pairs = detect_pairs(hand)
         assert len(pairs) >= 2
 

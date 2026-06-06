@@ -446,7 +446,7 @@ def _follow_tractor(
             return matching_tractors
 
     # Find pairs in matching suit
-    rank_groups: dict[Suit | tuple, list[Card]] = {}
+    rank_groups: dict[tuple[Suit, Rank], list[Card]] = {}
     for c in suit_cards:
         key = (c.suit, c.rank)
         rank_groups.setdefault(key, []).append(c)
