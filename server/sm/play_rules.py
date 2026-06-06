@@ -4,6 +4,8 @@ Implements the Shengji/Tractor play rules for singles, pairs, tractors, throws,
 and the legal play enumeration for leading and following.
 """
 
+from itertools import combinations
+
 from server.sm.card_model import Card, Suit, Rank, _SUITED_RANKS
 from server.sm.comparator import effective_suit
 from server.sm.types import PlayAction, PlayType
@@ -461,18 +463,15 @@ def _follow_tractor(
 
     # If we have pairs, play all pairs + fill
     if pairs_in_suit:
-        result: list[PlayAction] = []
         pair_count = len(pairs_in_suit) * 2
         fill_needed = tractor_len - pair_count
         if fill_needed < 0:
             # Too many pairs; just play the first needed pairs
-            fill_needed = 0
-            # Return first enough pairs
             pairs_needed = tractor_len // 2
             combo_cards: list[Card] = []
             for a in pairs_in_suit[:pairs_needed]:
                 combo_cards.extend(a.cards)
-            result.append(PlayAction(type=PlayType.TRACTOR, cards=combo_cards))
+            return [PlayAction(type=PlayType.TRACTOR, cards=combo_cards)]
         else:
             combo_cards: list[Card] = []
             for a in pairs_in_suit:
@@ -483,9 +482,11 @@ def _follow_tractor(
             remaining = [c for c in hand if c.id not in used_ids and c not in fill_cards]
             extra_fill = remaining[: max(0, fill_needed - len(fill_cards))]
             fill_cards.extend(extra_fill)
+            # Must have exactly tractor_len cards; return empty if insufficient
+            if len(fill_cards) < fill_needed:
+                return []
             combo_cards.extend(fill_cards[:fill_needed])
-            result.append(PlayAction(type=PlayType.TRACTOR, cards=combo_cards))
-        return result
+            return [PlayAction(type=PlayType.TRACTOR, cards=combo_cards)]
 
     # No pairs at all: play any tractor_len cards
     if len(hand) >= tractor_len:
@@ -519,7 +520,6 @@ def _follow_throw(
 
     if len(suit_cards) >= throw_len:
         # Play exactly throw_len cards of the suit: player chooses which ones
-        from itertools import combinations
         result: list[PlayAction] = []
         for combo in combinations(suit_cards, throw_len):
             result.append(PlayAction(type=PlayType.THROW, cards=list(combo)))
@@ -528,7 +528,11 @@ def _follow_throw(
     if suit_cards:
         # Play all suit cards + fill from other cards
         other_cards = [c for c in hand if c not in suit_cards]
-        fill = other_cards[: throw_len - len(suit_cards)]
+        fill_needed = throw_len - len(suit_cards)
+        if len(other_cards) < fill_needed:
+            # Insufficient cards to fill; cannot play this throw
+            return []
+        fill = other_cards[:fill_needed]
         return [PlayAction(type=PlayType.THROW, cards=suit_cards + fill)]
 
     # No cards of suit: play any throw_len cards
