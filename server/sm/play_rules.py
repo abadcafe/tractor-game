@@ -146,21 +146,26 @@ def detect_singles(hand: list[Card]) -> list[PlayAction]:
     return [PlayAction(type=PlayType.SINGLE, cards=[c]) for c in hand]
 
 
-def detect_pairs(hand: list[Card]) -> list[PlayAction]:
-    """Group by suit+rank; groups of 2+ become pairs (take first 2)."""
-    rank_groups: dict[tuple[Suit, Rank], list[Card]] = {}
+def detect_pairs(
+    hand: list[Card],
+    trump_suit: Suit | None = None,
+    trump_rank: Rank = Rank.TWO,
+) -> list[PlayAction]:
+    """Group by effective suit+rank; groups of 2+ become pairs (pairs of 2).
+
+    For trump cards, effective suit is 'trump' regardless of actual suit,
+    so cross-suit same-rank trump cards form pairs per spec line 696.
+    """
+    rank_groups: dict[tuple[Suit | str, Rank], list[Card]] = {}
     for c in hand:
-        if c.suit == Suit.JOKER:
-            # Jokers pair by rank only
-            key = (Suit.JOKER, c.rank)
-        else:
-            key = (c.suit, c.rank)
+        eff = effective_suit(c, trump_suit, trump_rank)
+        key = (eff, c.rank)
         rank_groups.setdefault(key, []).append(c)
 
     result: list[PlayAction] = []
     for cards in rank_groups.values():
-        if len(cards) >= 2:
-            result.append(PlayAction(type=PlayType.PAIR, cards=cards[:2]))
+        for i in range(0, len(cards) - 1, 2):
+            result.append(PlayAction(type=PlayType.PAIR, cards=[cards[i], cards[i + 1]]))
     return result
 
 
@@ -260,7 +265,7 @@ def get_legal_plays(
     if is_leading:
         result: list[PlayAction] = []
         result.extend(detect_singles(hand))
-        result.extend(detect_pairs(hand))
+        result.extend(detect_pairs(hand, trump_suit, trump_rank))
         result.extend(detect_tractors(hand, trump_suit, trump_rank))
         result.extend(detect_throws(hand, trump_suit, trump_rank))
         return result
@@ -304,8 +309,10 @@ def infer_play_type(
 
     if n == 2:
         c1, c2 = cards
-        # Same suit and same rank
-        if c1.suit == c2.suit and c1.rank == c2.rank:
+        # Same effective suit and same rank
+        eff1 = effective_suit(c1, trump_suit, trump_rank)
+        eff2 = effective_suit(c2, trump_suit, trump_rank)
+        if eff1 == eff2 and c1.rank == c2.rank:
             return PlayType.PAIR
         return PlayType.SINGLE
 
@@ -396,9 +403,10 @@ def _follow_pair(
         if effective_suit(c, trump_suit, trump_rank) == lead_eff
     ]
 
-    rank_groups: dict[tuple[Suit, Rank], list[Card]] = {}
+    rank_groups: dict[tuple[Suit | str, Rank], list[Card]] = {}
     for c in suit_cards:
-        key = (c.suit, c.rank)
+        eff = effective_suit(c, trump_suit, trump_rank)
+        key = (eff, c.rank)
         rank_groups.setdefault(key, []).append(c)
 
     matching_pairs: list[PlayAction] = []
@@ -448,9 +456,10 @@ def _follow_tractor(
             return matching_tractors
 
     # Find pairs in matching suit
-    rank_groups: dict[tuple[Suit, Rank], list[Card]] = {}
+    rank_groups: dict[tuple[Suit | str, Rank], list[Card]] = {}
     for c in suit_cards:
-        key = (c.suit, c.rank)
+        eff = effective_suit(c, trump_suit, trump_rank)
+        key = (eff, c.rank)
         rank_groups.setdefault(key, []).append(c)
 
     pairs_in_suit: list[PlayAction] = []
