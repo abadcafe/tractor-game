@@ -64,6 +64,7 @@ Deno.test("test_handleMessage_deal_bid_shows_bidding", () => {
 });
 
 Deno.test("test_handleMessage_stirring_human", () => {
+  lastRenderedSnapshot = null;
   lastInteractionMode = null;
   const stateManager = new StateManager();
   const loop = new GameLoop(stateManager, mockRender, mockContainer);
@@ -78,6 +79,7 @@ Deno.test("test_handleMessage_stirring_human", () => {
 });
 
 Deno.test("test_handleMessage_stirring_not_human", () => {
+  lastRenderedSnapshot = null;
   lastInteractionMode = null;
   const stateManager = new StateManager();
   const loop = new GameLoop(stateManager, mockRender, mockContainer);
@@ -92,6 +94,7 @@ Deno.test("test_handleMessage_stirring_not_human", () => {
 });
 
 Deno.test("test_handleMessage_exchange_human", () => {
+  lastRenderedSnapshot = null;
   lastInteractionMode = null;
   const stateManager = new StateManager();
   const loop = new GameLoop(stateManager, mockRender, mockContainer);
@@ -106,6 +109,7 @@ Deno.test("test_handleMessage_exchange_human", () => {
 });
 
 Deno.test("test_handleMessage_playing_human", () => {
+  lastRenderedSnapshot = null;
   lastInteractionMode = null;
   const stateManager = new StateManager();
   const loop = new GameLoop(stateManager, mockRender, mockContainer);
@@ -119,6 +123,7 @@ Deno.test("test_handleMessage_playing_human", () => {
 });
 
 Deno.test("test_handleMessage_playing_not_human", () => {
+  lastRenderedSnapshot = null;
   lastInteractionMode = null;
   const stateManager = new StateManager();
   const loop = new GameLoop(stateManager, mockRender, mockContainer);
@@ -132,6 +137,7 @@ Deno.test("test_handleMessage_playing_not_human", () => {
 });
 
 Deno.test("test_handleMessage_complete_human", () => {
+  lastRenderedSnapshot = null;
   lastInteractionMode = null;
   const stateManager = new StateManager();
   const loop = new GameLoop(stateManager, mockRender, mockContainer);
@@ -146,6 +152,7 @@ Deno.test("test_handleMessage_complete_human", () => {
 });
 
 Deno.test("test_handleMessage_game_over", () => {
+  lastRenderedSnapshot = null;
   lastInteractionMode = null;
   const stateManager = new StateManager();
   const loop = new GameLoop(stateManager, mockRender, mockContainer);
@@ -175,4 +182,29 @@ Deno.test("test_handleMessage_updates_state_manager", () => {
   const msg: ServerMessage = { type: "state", awaiting: "play", state: snap };
   loop.handleMessage(msg);
   assertEquals(stateManager.get()!.phase, "PLAYING");
+});
+
+Deno.test("test_handleMessage_error_stores_error_message", () => {
+  lastRenderedSnapshot = null;
+  lastInteractionMode = null;
+  const stateManager = new StateManager();
+  const loop = new GameLoop(stateManager, mockRender, mockContainer);
+  assertEquals(loop.getLastError(), null);
+  const msg: ServerMessage = { type: "error", message: "something went wrong" };
+  loop.handleMessage(msg);
+  assertEquals(loop.getLastError(), "something went wrong");
+});
+
+Deno.test("test_handleMessage_unknown_awaiting_returns_null", () => {
+  lastRenderedSnapshot = null;
+  lastInteractionMode = null;
+  const stateManager = new StateManager();
+  const loop = new GameLoop(stateManager, mockRender, mockContainer);
+  const msg = makeStateMsg({
+    phase: "PLAYING",
+    awaiting_action: "unknown_action",
+    current_player: 3,
+  }, "unknown_action");
+  loop.handleMessage(msg);
+  assertEquals(lastInteractionMode, null);
 });
