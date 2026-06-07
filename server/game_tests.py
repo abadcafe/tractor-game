@@ -8,7 +8,7 @@ No tests access private fields like _game_state, _round_state, or _dealing_task.
 
 import asyncio
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -402,14 +402,11 @@ async def test_set_on_game_over_callback_fires_on_game_over():
             with patch.object(rm, "get_round_result", return_value=mock_result):
                 with patch.object(gm, "start_game", return_value=game_over_state):
                     with patch.object(rm, "create_round", return_value=complete_round):
-                        try:
-                            await game.act(player_index=0, action=NextRoundAction())
-                        except (ValueError, AttributeError, TypeError):
-                            pass
+                        await game.act(player_index=0, action=NextRoundAction())
 
-    # If the game transitioned to GAME_OVER, the callback must have been called
-    if game.is_over():
-        callback.assert_called_once_with(game)
+    # The game must have transitioned to GAME_OVER; callback must have been called
+    assert game.is_over()
+    callback.assert_called_once_with(game)
 
 
 # ---- get_player() ----

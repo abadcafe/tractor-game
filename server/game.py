@@ -219,6 +219,10 @@ class Game:
             self._round_state = round_sm.play(self._round_state, action.cards)
             if self._round_state.phase == "PLAYING":
                 await self._push_state_to_player(self._round_state.trick_state.cur)
+            elif self._round_state.phase == "COMPLETE":
+                # Round finished after 25 tricks; notify the declarer
+                target = self._round_state.declarer_player if self._round_state.declarer_player is not None else 0
+                await self._push_state_to_player(target)
 
         elif phase == "COMPLETE" and isinstance(action, NextRoundAction):
             round_result = round_sm.get_round_result(self._round_state)
@@ -246,7 +250,10 @@ class Game:
         """Build a StateSnapshot for the given player.
 
         Raises RuntimeError if called before run().
+        Raises ValueError if for_player is out of range.
         """
+        if for_player < 0 or for_player >= 4:
+            raise ValueError(f"Player index {for_player} out of range (0-3)")
         if self._round_state is None:
             raise RuntimeError("Game not started")
 
@@ -414,7 +421,10 @@ class Game:
         """Resolve card ID strings to Card objects from the player's hand.
 
         Raises ValueError if any card_id is not found in the player's hand.
+        Raises ValueError if player_index is out of range.
         """
+        if player_index < 0 or player_index >= 4:
+            raise ValueError(f"Player index {player_index} out of range (0-3)")
         if self._round_state is None:
             raise RuntimeError("Game not started")
 
@@ -435,21 +445,24 @@ class Game:
         Sleeps 0.75s between deals. Pushes state to all players after each deal.
         When dealing completes, transitions to STIRRING automatically via sm.
         """
-        while not self._cancelled:
-            if self._round_state is None:
-                break
-            if self._round_state.phase != "DEAL_BID":
-                break
-            if self._round_state.deal_bid_state is None:
-                break
+        try:
+            while not self._cancelled:
+                if self._round_state is None:
+                    break
+                if self._round_state.phase != "DEAL_BID":
+                    break
+                if self._round_state.deal_bid_state is None:
+                    break
 
-            self._round_state = round_sm.deal_next_card(self._round_state)
-            await self._push_state_to_all()
+                self._round_state = round_sm.deal_next_card(self._round_state)
+                await self._push_state_to_all()
 
-            if self._round_state.phase != "DEAL_BID":
-                break
+                if self._round_state.phase != "DEAL_BID":
+                    break
 
-            await asyncio.sleep(0.75)
+                await asyncio.sleep(0.75)
+        except Exception:
+            logger.exception("Dealing loop failed with unexpected exception")
 
     def _convert_bid_action(self, player_index: int, action: BidAction) -> BidEvent:
         """Convert a player BidAction to an sm BidEvent."""
