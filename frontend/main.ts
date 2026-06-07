@@ -1,14 +1,13 @@
 import { StateManager } from "./core/state.ts";
-import type { ServerMessage, ClientAction, InteractionMode, ActionCallbacks } from "./core/types.ts";
+import type { ServerMessage, InteractionMode, ActionCallbacks } from "./core/types.ts";
 import { createGame } from "./net/rest-client.ts";
 import { WsClient } from "./net/ws-client.ts";
 import { GameLoop } from "./engine/game-loop.ts";
 import { render } from "./ui/renderer.ts";
 import { validatePlay, validateDiscard, validateBidCards } from "./engine/input-validator.ts";
 import { showErrorToast } from "./ui/error-toast.ts";
-import { HUMAN_PLAYER_INDEX } from "./config.ts";
 
-async function main() {
+function main() {
   const containerEl = document.querySelector("#app");
   if (!containerEl) {
     console.error("#app element not found");

@@ -140,9 +140,10 @@ Deno.test("test_onMessage_receives_state", async () => {
   await client.connect("test-id", `ws://localhost:${port}`);
   await waitFor(() => received !== null);
 
-  assertEquals(received!.type, "state");
-  if (received!.type === "state") {
-    assertEquals(received!.state.phase, "DEAL_BID");
+  const receivedMsg = received!;
+  assertEquals(receivedMsg.type, "state");
+  if (receivedMsg.type === "state") {
+    assertEquals(receivedMsg.state.phase, "DEAL_BID");
   }
 
   await server.shutdown();

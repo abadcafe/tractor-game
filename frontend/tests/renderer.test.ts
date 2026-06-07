@@ -254,6 +254,7 @@ Deno.test("test_render_game_over_receives_callback", () => {
     onCardClick: () => {},
     onAction: () => {},
     onBid: () => {},
+    onStir: () => {},
     onPass: () => {},
     onNewGame: () => { newGameCalled = true; },
   };

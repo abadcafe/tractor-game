@@ -6,6 +6,8 @@
     "strict": true,
     "outDir": "../static",
     "rootDir": ".",
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
   "include": ["**/*.ts"],

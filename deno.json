@@ -1,7 +1,7 @@
 {
   "tasks": {
     "check": "deno check frontend/*.ts frontend/**/*.ts",
-    "build": "rm -rf static && mkdir -p static && deno bundle -o static/main.js frontend/main.ts && cp frontend/index.html static/ && cp frontend/style.css static/",
+    "build": "rm -rf static && mkdir -p static && tsc --project frontend/tsconfig.json && cp frontend/index.html static/ && cp frontend/style.css static/",
     "test": "deno test frontend/tests/"
   },
   "compilerOptions": {
