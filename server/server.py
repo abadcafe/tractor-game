@@ -116,14 +116,9 @@ async def websocket_game(websocket: WebSocket, game_id: str):
 
     if game.is_over():
         human_player.set_ws(websocket)
-        await websocket.accept()
         try:
-            snap = game.snapshot(_HUMAN_PLAYER_INDEX)
-            await websocket.send_json({
-                "type": "state",
-                "awaiting": snap.awaiting_action,
-                "state": snap.to_dict(),
-            })
+            await websocket.accept()
+            await human_player.on_state(game)
         except Exception:
             pass
         finally:
@@ -137,12 +132,7 @@ async def websocket_game(websocket: WebSocket, game_id: str):
     human_player.set_ws(websocket)
     try:
         await websocket.accept()
-        snap = game.snapshot(_HUMAN_PLAYER_INDEX)
-        await websocket.send_json({
-            "type": "state",
-            "awaiting": snap.awaiting_action,
-            "state": snap.to_dict(),
-        })
+        await human_player.on_state(game)
     except Exception:
         human_player.set_ws(None)
         return
