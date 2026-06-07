@@ -2,7 +2,7 @@
 from server.sm.card_model import Rank
 from server.sm.scoring import RoundResult
 from server.sm.game_sm import (
-    GameState, GameOverResult, create_game, start_game, process_round_result,
+    GameState, create_game, start_game, process_round_result,
 )
 
 
@@ -219,6 +219,38 @@ class TestInvalidTransitions:
         )
         try:
             process_round_result(state, result)
+            raise AssertionError("Expected ValueError for invalid phase transition")
+        except ValueError:
+            pass
+
+    def test_process_round_result_when_game_over(self) -> None:
+        """Cannot process round result when game is over."""
+        state = create_game()
+        state = start_game(state)
+        result = RoundResult(
+            team0_new_level=Rank.ACE,
+            team1_new_level=Rank.TWO,
+            next_declarer_team=0,
+            next_declarer_player=0,
+            total_defender_points=0,
+            declarer_level_change=3,
+            switch_declarer=False,
+            bottom_card_bonus=0,
+        )
+        state = process_round_result(state, result)
+        assert state.phase == "GAME_OVER"
+        result2 = RoundResult(
+            team0_new_level=Rank.ACE,
+            team1_new_level=Rank.TWO,
+            next_declarer_team=0,
+            next_declarer_player=0,
+            total_defender_points=0,
+            declarer_level_change=3,
+            switch_declarer=False,
+            bottom_card_bonus=0,
+        )
+        try:
+            process_round_result(state, result2)
             raise AssertionError("Expected ValueError for invalid phase transition")
         except ValueError:
             pass
