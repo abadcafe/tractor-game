@@ -27,14 +27,9 @@ export function renderGameTable(snapshot: StateSnapshot): HTMLElement {
     area.appendChild(label);
 
     // Card count placeholder (AI players show card backs / count)
-    const countText = i === 3
-      ? `${snapshot.player_hand.length} 张`
-      : snapshot.player_hand.length > 0
-        ? ""
-        : "0 张";
     if (i !== 3) {
       // AI players: just show count placeholder
-      area.appendChild(el("span", { class: "card-count" }, `${i === 3 ? snapshot.player_hand.length : 0} 张`));
+      area.appendChild(el("span", { class: "card-count" }, `0 张`));
     } else {
       // Human player: show hand count
       area.appendChild(el("span", { class: "card-count" }, `${snapshot.player_hand.length} 张`));
