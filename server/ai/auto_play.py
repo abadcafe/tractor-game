@@ -8,8 +8,8 @@ supports future LLM-based AI integration by keeping all functions pure
 import random
 from typing import Optional
 
-from server.engine.card import Card, Rank, Suit
-from server.engine.types import PlayAction
+from server.sm.card_model import Card, Rank, Suit
+from server.sm.types import PlayAction
 
 
 def choose_play(legal_plays: list[PlayAction], seed: Optional[int] = None) -> PlayAction:
