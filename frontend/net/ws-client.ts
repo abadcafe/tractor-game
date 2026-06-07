@@ -49,6 +49,8 @@ export class WsClient {
   send(action: ClientAction): void {
     if (this._ws && this._ws.readyState === WebSocket.OPEN) {
       this._ws.send(JSON.stringify(action));
+    } else {
+      console.warn("[WsClient] send() called but socket not open, action discarded:", action);
     }
   }
 
@@ -76,6 +78,7 @@ export class WsClient {
       ws.addEventListener("open", () => {
         if (!settled) {
           settled = true;
+          this._reconnectAttempts = 0;
           resolve();
         }
       });
@@ -85,7 +88,7 @@ export class WsClient {
           const msg: ServerMessage = JSON.parse(event.data as string);
           this._messageHandler?.(msg);
         } catch {
-          // Ignore malformed messages
+          console.warn("[WsClient] Malformed message ignored:", event.data);
         }
       });
 
@@ -118,7 +121,10 @@ export class WsClient {
 
     this._reconnectTimer = setTimeout(() => {
       this._reconnectTimer = null;
-      this._doConnect(this._reconnectGameId, this._wsHost);
+      this._doConnect(this._reconnectGameId, this._wsHost).catch(() => {
+        // Reconnection failure is already handled by the close event
+        // listener in _doConnect, which triggers the next reconnect attempt.
+      });
     }, delay);
   }
 }

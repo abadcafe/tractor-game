@@ -278,8 +278,8 @@ Deno.test("test_reconnect_respects_max_retries", async () => {
 
   await client.connect("test-id", `ws://localhost:${port}`);
 
-  // Wait long enough for all 3 retries (1s + 2s + 4s = 7s)
-  await new Promise((r) => setTimeout(r, 9000));
+  // Wait for all 3 retries: 1s + 2s + 4s = 7s, use 10s timeout to be safe
+  await waitFor(() => connectionCount >= 4, 10000);
 
   // Should have 1 initial + 3 retries = 4 connections max
   assertEquals(connectionCount, 4);
