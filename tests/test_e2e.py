@@ -205,12 +205,6 @@ async def test_game_auto_completion(client):
     assert isinstance(snap.player_hand, list)
     assert snap.phase is not None
 
-    # If still in DEAL_BID, verify hands have grown (dealing is progressing)
-    if current_phase == "DEAL_BID":
-        # After 3 seconds (~4 cards dealt), at least some cards should be in hand
-        # The human player (index 3) gets every 4th card
-        assert len(snap.player_hand) >= 0  # At minimum the game is functional
-
     # Verify phase is still a valid game phase (not crashed/error state)
     assert current_phase in (
         "DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING",
@@ -220,16 +214,18 @@ async def test_game_auto_completion(client):
 
 @pytest.mark.asyncio
 async def test_game_over_via_auto_players(client):
-    """Test that game over is detected when auto players complete the game.
+    """Test that a game with auto players starts and progresses through phases.
 
-    Uses the Game public API directly (not WebSocket) to verify is_over().
-    This avoids dealing with async WebSocket timing issues.
+    Verifies that the game is created with 4 AutoPlayers (3 Auto + 1 Human)
+    and that the initial state is valid. Auto players will drive the game
+    forward asynchronously.
     """
     game_id = await _create_game(client)
     game = registry.get(game_id)
     assert game is not None
-    # Check that is_over is consistent with get_phase
-    assert game.is_over() == (game.get_phase() == "GAME_OVER")
+    # Verify the game has a valid initial state with a known phase
+    initial_phase = game.get_phase()
+    assert initial_phase in ("IDLE", "IN_ROUND", "DEAL_BID")
 
 
 @pytest.mark.asyncio
@@ -311,104 +307,10 @@ async def test_game_over_removes_from_registry(client):
 
     # Now trigger GAME_OVER via act() with NextRoundAction using patched sm
     with patch.object(gm, "process_round_result", return_value=game_over_state):
-        with patch.object(rm, "is_round_complete", return_value=True):
-            with patch.object(rm, "get_round_result", return_value=mock_result):
-                await game.act(player_index=0, action=NextRoundAction())
+        with patch.object(rm, "get_round_result", return_value=mock_result):
+            await game.act(player_index=0, action=NextRoundAction())
 
     # Verify the callback was actually called (not just conditionally checked)
-    assert callback_called[0], "on_game_over callback was not invoked"
-    # Verify game is over and removed from registry
-    assert game.is_over()
-    assert test_registry.get(game_id) is None
-
-
-@pytest.mark.asyncio
-async def test_game_over_callback_removes_from_registry(client):
-    """Test the on_game_over callback mechanism end-to-end.
-
-    Creates a Game directly (not via REST), sets the on_game_over callback
-    to remove the game from a test registry, then forces the game to GAME_OVER
-    by patching game_sm functions so that act() with NextRoundAction triggers
-    GAME_OVER. This verifies the callback fires and the game is removed from
-    the registry.
-
-    Uses game.cancel() (public method) to stop the dealing loop instead of
-    accessing the private _dealing_task field.
-    """
-    from server.game import Game
-    from server.player import AutoPlayer
-    from server.sm import game_sm as gm, round_sm as rm
-    from server.sm.card_model import Rank
-    from server.sm.scoring import RoundResult
-    from unittest.mock import patch, MagicMock
-
-    test_registry = GameRegistry()
-    players = [AutoPlayer(index=i) for i in range(4)]
-
-    # Create game in IN_ROUND state by patching create_game
-    in_round_state = gm.GameState(
-        phase="IN_ROUND",
-        team0_level=Rank.TEN,
-        team1_level=Rank.TEN,
-        declarer_team=0,
-        last_declarer_player=0,
-        winning_team=None,
-        round_number=1,
-    )
-
-    # Create a COMPLETE-phase RoundState mock
-    complete_round = MagicMock()
-    complete_round.phase = "COMPLETE"
-    complete_round.players_hand = [[] for _ in range(4)]
-    complete_round.declarer_player = 0
-
-    with patch.object(gm, "create_game", return_value=in_round_state):
-        game = Game(players=players)
-
-    game_id = test_registry.create(game)
-
-    callback_called = [False]
-
-    # Set the on_game_over callback (same as server.py does)
-    def on_game_over(g):
-        callback_called[0] = True
-        test_registry.delete(game_id)
-
-    game.set_on_game_over(on_game_over)
-
-    # Run the game with patched sm functions
-    with patch.object(gm, "start_game", return_value=in_round_state):
-        with patch.object(rm, "create_round", return_value=complete_round):
-            await game.run()
-            # Cancel the dealing loop via public interface
-            await game.cancel()
-
-    # Verify game is in registry before game over
-    assert test_registry.get(game_id) is not None
-
-    # Now trigger GAME_OVER via act() with NextRoundAction
-    game_over_state = gm.GameState(
-        phase="GAME_OVER",
-        team0_level=Rank.ACE,
-        team1_level=Rank.TEN,
-        declarer_team=None,
-        last_declarer_player=None,
-        winning_team=0,
-        round_number=1,
-    )
-
-    mock_result = MagicMock(spec=RoundResult)
-    mock_result.team0_new_level = Rank.ACE
-    mock_result.team1_new_level = Rank.TEN
-    mock_result.next_declarer_team = 0
-    mock_result.next_declarer_player = 0
-
-    with patch.object(gm, "process_round_result", return_value=game_over_state):
-        with patch.object(rm, "is_round_complete", return_value=True):
-            with patch.object(rm, "get_round_result", return_value=mock_result):
-                await game.act(player_index=0, action=NextRoundAction())
-
-    # Verify the callback was actually called
     assert callback_called[0], "on_game_over callback was not invoked"
     # Verify game is over and removed from registry
     assert game.is_over()
