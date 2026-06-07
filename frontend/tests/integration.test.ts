@@ -7,13 +7,17 @@ import { render } from "../ui/renderer.ts";
 import type { StateSnapshot, ServerMessage, InteractionMode, ClientAction, ActionCallbacks } from "../core/types.ts";
 import { HUMAN_PLAYER_INDEX } from "../config.ts";
 
-// Set up DOM
-const doc = new DOMParser().parseFromString(
-  `<html><body><div id="app"></div></body></html>`,
-  "text/html",
-);
-// @ts-ignore test setup
-globalThis.document = doc;
+// deno-dom's Element is not structurally compatible with the DOM Element type
+// expected by render() and GameLoop. Use this helper to create a properly-typed container.
+function freshContainer(): Element {
+  const doc = new DOMParser().parseFromString(
+    `<html><body><div id="app"></div></body></html>`,
+    "text/html",
+  );
+  // @ts-ignore test setup
+  globalThis.document = doc;
+  return doc!.querySelector("#app")! as unknown as Element;
+}
 
 function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
   return {
@@ -76,7 +80,7 @@ function trackingRender(
 Deno.test("test_integration_ws_to_render", () => {
   // Reset shared state
   resetTrackingState();
-  const container = doc!.querySelector("#app")!;
+  const container = freshContainer();
   const stateManager = new StateManager();
   const gameLoop = new GameLoop(stateManager, trackingRender, container);
 
@@ -104,7 +108,7 @@ Deno.test("test_integration_ws_to_render", () => {
 });
 
 Deno.test("test_integration_play_action", () => {
-  const container = doc!.querySelector("#app")!;
+  const container = freshContainer();
   const snap = makeSnapshot();
 
   // Step 1: Render with play mode and callbacks
@@ -135,7 +139,7 @@ Deno.test("test_integration_play_action", () => {
   // Step 2: User selects a card by clicking the legal card (hearts-5)
   // Note: cards are sorted by suit then rank, so we find the specific card by text content
   const allCards = container.querySelectorAll(".hand-view .card");
-  const card = Array.from(allCards).find((c) => c.textContent?.includes("♥5")) as HTMLElement;
+  const card = Array.from(allCards).find((c) => c.textContent?.includes("♥5")) as unknown as HTMLElement;
   assertNotEquals(card, undefined);
   card.dispatchEvent(new Event("click", { bubbles: true })); // triggers onCardClick -> adds to selectedCardIds
 
@@ -147,12 +151,13 @@ Deno.test("test_integration_play_action", () => {
 
   // Step 4: Verify the action was constructed correctly
   assertNotEquals(sentAction, null);
-  assertEquals(sentAction!.type, "play");
-  assertEquals(sentAction!.cards, ["D1-hearts-5"]);
+  const action = sentAction as unknown as { type: "play"; cards: string[] };
+  assertEquals(action.type, "play");
+  assertEquals(action.cards, ["D1-hearts-5"]);
 });
 
 Deno.test("test_integration_bid_action", () => {
-  const container = doc!.querySelector("#app")!;
+  const container = freshContainer();
   const snap = makeSnapshot({
     phase: "DEAL_BID",
     awaiting_action: null,
@@ -193,7 +198,7 @@ Deno.test("test_integration_bid_action", () => {
 });
 
 Deno.test("test_integration_stir_action", () => {
-  const container = doc!.querySelector("#app")!;
+  const container = freshContainer();
   const snap = makeSnapshot({
     phase: "STIRRING",
     awaiting_action: "stir",
@@ -239,7 +244,7 @@ Deno.test("test_integration_stir_action", () => {
 Deno.test("test_integration_error_message", () => {
   // Reset shared state
   resetTrackingState();
-  const container = doc!.querySelector("#app")!;
+  const container = freshContainer();
   const stateManager = new StateManager();
   const gameLoop = new GameLoop(stateManager, trackingRender, container);
 
@@ -269,7 +274,7 @@ Deno.test("test_integration_error_message", () => {
 Deno.test("test_integration_stir_not_human_ignored", () => {
   // Reset shared state
   resetTrackingState();
-  const container = doc!.querySelector("#app")!;
+  const container = freshContainer();
   const stateManager = new StateManager();
   const gameLoop = new GameLoop(stateManager, trackingRender, container);
 
@@ -300,7 +305,7 @@ Deno.test("test_integration_stir_not_human_ignored", () => {
 });
 
 Deno.test("test_integration_card_selection_persists_across_renders", () => {
-  const container = doc!.querySelector("#app")!;
+  const container = freshContainer();
   const snap = makeSnapshot();
   const selectedCardIds = new Set<string>();
 
@@ -339,7 +344,7 @@ Deno.test("test_integration_card_selection_persists_across_renders", () => {
 });
 
 Deno.test("test_integration_callback_triggers_send", () => {
-  const container = doc!.querySelector("#app")!;
+  const container = freshContainer();
   const snap = makeSnapshot({
     phase: "COMPLETE",
     awaiting_action: "next_round",
