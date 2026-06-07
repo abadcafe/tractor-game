@@ -1,21 +1,13 @@
 """Tests for sm.round_sm module."""
 import random
 import pytest
-from server.sm.card_model import Card, Suit, Rank, create_decks
-from server.sm.types import BidEvent, PlayAction, PlayType
+from server.sm.card_model import Card, Suit, Rank
+from server.sm.types import BidEvent, PlayAction
 from server.sm.round_sm import (
     RoundState, RoundInput, create_round,
     deal_next_card, reveal, pass_stir, stir, discard, play,
     is_round_complete, get_round_result,
 )
-
-
-def _shuffled_deck(seed: int = 42) -> list[Card]:
-    """Create a shuffled 108-card deck."""
-    deck = create_decks()
-    random.seed(seed)
-    random.shuffle(deck)
-    return deck
 
 
 def _play_first_legal(state: RoundState) -> RoundState:
@@ -182,16 +174,18 @@ class TestDealBidPhase:
 
     def test_deal_bid_to_stirring_with_winner(self) -> None:
         """After deal-bid completes with a winner, round enters STIRRING."""
+        random.seed(42)
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
             last_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_with_reveal(state)
-        if state.deal_bid_state is not None and state.deal_bid_state.bid_winner is not None:
-            assert state.phase == "STIRRING"
-            assert state.declarer_player is not None
-            assert state.trump_suit is not None
+        assert state.deal_bid_state is not None
+        assert state.deal_bid_state.bid_winner is not None
+        assert state.phase == "STIRRING"
+        assert state.declarer_player is not None
+        assert state.trump_suit is not None
 
     def test_deal_bid_to_stirring_no_bid(self) -> None:
         """After deal-bid with no bids, round enters STIRRING with empty trump."""
@@ -268,7 +262,7 @@ class TestStirringPhase:
             Card(id="D2-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
                  is_joker=False, is_big_joker=False, points=0, deck=2),
         ]
-        with pytest.raises(ValueError, match="hand|not in"):
+        with pytest.raises(ValueError, match="not in hand"):
             stir(state, cards=fake_cards)
 
     def test_stirring_to_exchange(self) -> None:
@@ -429,6 +423,7 @@ class TestScoringPhase:
 class TestRoundDeclarer:
     def test_round_first_round_declarer_from_bid(self) -> None:
         """First round: declarer_team is None until deal-bid completes."""
+        random.seed(42)
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
             last_declarer_player=None,
@@ -436,9 +431,9 @@ class TestRoundDeclarer:
         ))
         assert state.declarer_team is None
         state = _complete_deal_bid_with_reveal(state)
-        if state.deal_bid_state is not None and state.deal_bid_state.bid_winner is not None:
-            # declarer_team should now be determined
-            assert state.declarer_player is not None
+        assert state.deal_bid_state is not None
+        assert state.deal_bid_state.bid_winner is not None
+        assert state.declarer_player is not None
 
     def test_round_subsequent_round_declarer_fixed(self) -> None:
         """Subsequent round: declarer_team is pre-determined."""
@@ -448,6 +443,34 @@ class TestRoundDeclarer:
             team0_level=Rank.TWO, team1_level=Rank.THREE,
         ))
         assert state.declarer_team == 1
+
+    def test_round_subsequent_round_bid_winner_on_team(self) -> None:
+        """Subsequent round: bid winner on declarer_team sets declarer_player."""
+        random.seed(3)
+        state = create_round(RoundInput(
+            declarer_team=0, trump_rank=Rank.TWO,
+            last_declarer_player=0,
+            team0_level=Rank.TWO, team1_level=Rank.TWO,
+        ))
+        # Deal some cards
+        for _ in range(20):
+            state = deal_next_card(state)
+        # Find trump rank card in team 0 player's hand (players 0, 3)
+        for p in [0, 3]:
+            trump_cards = [c for c in state.deal_bid_state.players_hand[p]
+                           if c.rank == Rank.TWO and not c.is_joker]
+            if trump_cards:
+                event = BidEvent(
+                    player=p, cards=[trump_cards[0]], kind="trump_rank",
+                    suit=trump_cards[0].suit, joker_type=None, count=1,
+                )
+                state = reveal(state, event)
+                break
+        state = _deal_all_cards(state)
+        assert state.phase == "STIRRING"
+        assert state.deal_bid_state.bid_winner is not None
+        assert state.declarer_team == 0  # unchanged
+        assert state.declarer_player is not None
 
     def test_round_empty_trump_no_bid(self) -> None:
         """No bid = empty trump, declarer_player from start_player."""

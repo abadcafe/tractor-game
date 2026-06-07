@@ -9,6 +9,8 @@ to the sub-state machines while managing phase transitions.
 
 from __future__ import annotations
 
+import random
+
 from pydantic import BaseModel, ConfigDict
 
 from server.sm.card_model import Card, Rank, Suit, create_decks
@@ -73,7 +75,6 @@ class RoundState(BaseModel):
 def create_round(input: RoundInput) -> RoundState:
     """Create a new round with shuffled deck, split into 8 bottom + 100 deal deck."""
     decks = create_decks()
-    import random
     random.shuffle(decks)
 
     bottom_cards = decks[:BOTTOM_CARD_COUNT]
@@ -171,7 +172,10 @@ def pass_stir(state: RoundState) -> RoundState:
     new_state = state.model_copy(update={"stirring_state": new_ss})
 
     if new_ss.phase == "COMPLETE":
-        new_state.trump_suit = new_ss.trump_suit
+        new_state = state.model_copy(update={
+            "stirring_state": new_ss,
+            "trump_suit": new_ss.trump_suit,
+        })
         return _transition_to_exchange(new_state)
 
     return new_state
@@ -268,10 +272,15 @@ def play(state: RoundState, cards: list[Card]) -> RoundState:
 
     if new_trick.phase == "RESOLVED" and new_trick.result is not None:
         # Record the completed trick
-        new_state.trick_history = list(state.trick_history) + [
+        completed_tricks = list(state.trick_history) + [
             new_trick.result.completed_trick
         ]
-        new_state.defender_points = new_trick.result.updated_defender_points
+        new_state = state.model_copy(update={
+            "trick_state": new_trick,
+            "players_hand": new_hands,
+            "trick_history": completed_tricks,
+            "defender_points": new_trick.result.updated_defender_points,
+        })
 
         trick_count = len(new_state.trick_history)
         if trick_count >= 25:
@@ -316,7 +325,7 @@ def _transition_to_stirring(state: RoundState, deal_bid: db.DealBidState) -> Rou
             # Validate winner is on declarer team
             if winner_team != declarer_team:
                 # Invalid: ignore and treat as no bid
-                declarer_player = state.start_player if declarer_team is None else state.last_declarer_player
+                declarer_player = state.last_declarer_player
                 trump_suit = None
             else:
                 declarer_player = winner
@@ -324,8 +333,7 @@ def _transition_to_stirring(state: RoundState, deal_bid: db.DealBidState) -> Rou
         if trump_suit is None:
             trump_suit = deal_bid.bid_winner.suit if declarer_player == winner else None
 
-        if declarer_team is not None:
-            defender_team = 1 - declarer_team
+        defender_team = 1 - declarer_team
 
     elif deal_bid.phase == "NO_BID":
         # Case C: No bid (空主)
