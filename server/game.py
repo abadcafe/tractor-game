@@ -177,7 +177,12 @@ class Game:
         self._cancelled: bool = False
 
     async def run(self) -> None:
-        """Start the game: transition to IN_ROUND, create round, start dealing loop."""
+        """Start the game: transition to IN_ROUND, create round, start dealing loop.
+
+        Raises RuntimeError if called more than once.
+        """
+        if self._round_state is not None:
+            raise RuntimeError("Game already started; run() can only be called once")
         self._game_state = game_sm.start_game(self._game_state)
         self._round_state = round_sm.create_round(round_sm.RoundInput(
             declarer_team=self._game_state.declarer_team,
@@ -205,11 +210,19 @@ class Game:
 
         elif phase == "STIRRING" and isinstance(action, SkipStirAction):
             self._round_state = round_sm.pass_stir(self._round_state)
-            await self._push_state_to_player(self._round_state.stirring_state.current_player)
+            if self._round_state.phase == "EXCHANGE" and self._round_state.exchange_state is not None:
+                # Transitioned to EXCHANGE: push to declarer player
+                await self._push_state_to_player(self._round_state.exchange_state.declarer_player)
+            elif self._round_state.stirring_state is not None:
+                await self._push_state_to_player(self._round_state.stirring_state.current_player)
 
         elif phase == "STIRRING" and isinstance(action, StirAction):
             self._round_state = round_sm.stir(self._round_state, action.cards)
-            await self._push_state_to_player(self._round_state.stirring_state.current_player)
+            if self._round_state.phase == "EXCHANGE" and self._round_state.exchange_state is not None:
+                # Transitioned to EXCHANGE: push to declarer player
+                await self._push_state_to_player(self._round_state.exchange_state.declarer_player)
+            elif self._round_state.stirring_state is not None:
+                await self._push_state_to_player(self._round_state.stirring_state.current_player)
 
         elif phase == "EXCHANGE" and isinstance(action, DiscardAction):
             self._round_state = round_sm.discard(self._round_state, action.cards)
