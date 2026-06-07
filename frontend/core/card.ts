@@ -9,6 +9,13 @@ const SUIT_SYMBOLS: Record<string, string> = {
   joker: "🃏",
 };
 
+/** Map of point card rank to point value. */
+const POINT_VALUES: Record<string, number> = {
+  "5": 5,
+  "10": 10,
+  K: 10,
+};
+
 /** Returns the Unicode symbol for a given suit name. */
 export function suitSymbol(suit: string): string {
   return SUIT_SYMBOLS[suit] ?? suit;
@@ -17,7 +24,8 @@ export function suitSymbol(suit: string): string {
 /** Returns a display string for a card (symbol + rank, or joker label). */
 export function cardDisplay(c: Card): string {
   if (c.suit === "joker") {
-    return c.rank === "SJ" ? "🃏小王" : "🃏大王";
+    if (c.rank === "SJ") return "🃏小王";
+    if (c.rank === "BJ") return "🃏大王";
   }
   return suitSymbol(c.suit) + c.rank;
 }
@@ -39,13 +47,10 @@ export function isTrumpRank(c: Card, rank: string): boolean {
 
 /** Returns true if the card is a point card (5, 10, or K). */
 export function isPointCard(c: Card): boolean {
-  return c.rank === "5" || c.rank === "10" || c.rank === "K";
+  return c.rank in POINT_VALUES;
 }
 
 /** Returns the point value of a card: 5->5, 10->10, K->10, others->0. */
 export function cardPoints(c: Card): number {
-  if (c.rank === "5") return 5;
-  if (c.rank === "10") return 10;
-  if (c.rank === "K") return 10;
-  return 0;
+  return POINT_VALUES[c.rank] ?? 0;
 }
