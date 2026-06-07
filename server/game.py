@@ -103,7 +103,7 @@ class StateSnapshot:
         if trick is None:
             return None
         result = dict(trick)
-        if "lead_type" in result and result["lead_type"] is not None:
+        if "lead_type" in result and result["lead_type"] is not None and hasattr(result["lead_type"], "value"):
             result["lead_type"] = result["lead_type"].value
         if "slots" in result:
             result["slots"] = [

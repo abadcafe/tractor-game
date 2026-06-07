@@ -550,3 +550,15 @@ async def test_resolve_cards_raises_on_unknown_id():
     await game.run()
     with pytest.raises(ValueError):
         game.resolve_cards(player_index=0, card_ids=["NONEXISTENT-CARD-ID"])
+
+
+def test_resolve_cards_raises_before_run():
+    """resolve_cards() must raise RuntimeError when called before run().
+
+    Before run(), _round_state is None, so resolve_cards() cannot look up
+    cards in any player's hand. It raises an explicit error rather than
+    silently returning an empty list or crashing with AttributeError.
+    """
+    game = _create_game_with_auto_players()
+    with pytest.raises(RuntimeError, match="Game not started"):
+        game.resolve_cards(player_index=0, card_ids=["SOME-CARD-ID"])
