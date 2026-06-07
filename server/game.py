@@ -93,7 +93,7 @@ class StateSnapshot:
             "team0_level": self.team0_level.value,
             "team1_level": self.team1_level.value,
             "bid_events": [_serialize_bid_event(e) for e in self.bid_events],
-            "bid_winner": self._serialize_bid_event(self.bid_winner) if self.bid_winner is not None else None,
+            "bid_winner": _serialize_bid_event(self.bid_winner) if self.bid_winner is not None else None,
             "stirring_state": self.stirring_state,
             "exchange_state": self.exchange_state,
         }
@@ -143,9 +143,12 @@ def _serialize_completed_trick(trick) -> dict:
                 for slot in result["slots"]
             ]
         return result
+    lead_type = trick.lead_type
+    if hasattr(lead_type, "value"):
+        lead_type = lead_type.value
     return {
         "lead_player": trick.lead_player,
-        "lead_type": trick.lead_type.value,
+        "lead_type": lead_type,
         "slots": [
             {
                 "player": slot.player,
