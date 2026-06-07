@@ -1,0 +1,68 @@
+/* === Reset & Base === */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: "Microsoft YaHei", sans-serif; background: #1a5c2e; color: #fff; height: 100vh; overflow: hidden; }
+#app { width: 100%; height: 100vh; display: flex; flex-direction: column; }
+
+/* === Game Table === */
+.game-table { flex: 1; display: grid; grid-template-areas: "north north north" "west trick east" "south south south"; grid-template-columns: 200px 1fr 200px; grid-template-rows: 120px 1fr 180px; gap: 8px; padding: 8px; }
+.player-area { border: 2px solid rgba(255,255,255,0.2); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.player-area.current { border-color: #ffd700; box-shadow: 0 0 10px rgba(255,215,0,0.5); }
+.player-area .player-label { font-size: 14px; margin-bottom: 4px; }
+.player-area .card-count { font-size: 24px; font-weight: bold; }
+.player-area .declarer-marker { background: #e74c3c; color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin-top: 4px; }
+.player-area[data-position="north"] { grid-area: north; }
+.player-area[data-position="west"] { grid-area: west; }
+.player-area[data-position="east"] { grid-area: east; }
+.player-area[data-position="south"] { grid-area: south; }
+
+/* === Hand View === */
+.hand-view { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; padding: 8px; }
+.card { background: #fff; color: #333; border-radius: 6px; padding: 4px 8px; cursor: pointer; user-select: none; font-size: 16px; min-width: 40px; text-align: center; border: 2px solid transparent; transition: transform 0.1s, border-color 0.1s; }
+.card:hover { transform: translateY(-4px); }
+.card.selected { border-color: #ffd700; transform: translateY(-12px); background: #fffbe6; }
+.card.legal { border-color: #2ecc71; }
+.card.disabled { opacity: 0.5; cursor: default; }
+.hand-actions { display: flex; gap: 8px; justify-content: center; margin-top: 8px; }
+
+/* === Trick View === */
+.trick-view { grid-area: trick; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
+.trick-card { background: #fff; color: #333; border-radius: 6px; padding: 4px 12px; font-size: 18px; min-width: 50px; text-align: center; }
+.trick-slot { display: flex; gap: 4px; align-items: center; }
+.trick-slot .player-label { font-size: 12px; min-width: 40px; text-align: right; }
+
+/* === Scoreboard === */
+.scoreboard { position: fixed; top: 8px; right: 8px; background: rgba(0,0,0,0.7); border-radius: 8px; padding: 12px; min-width: 150px; font-size: 14px; }
+.scoreboard h3 { margin-bottom: 8px; font-size: 16px; }
+.scoreboard .team-score { display: flex; justify-content: space-between; margin: 4px 0; }
+
+/* === Bidding Dialog === */
+.bidding-dialog { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.9); border-radius: 12px; padding: 24px; z-index: 100; min-width: 300px; text-align: center; }
+.bidding-dialog h2 { margin-bottom: 16px; }
+.bidding-dialog .bid-events { margin: 12px 0; font-size: 14px; max-height: 120px; overflow-y: auto; }
+.bidding-dialog .bid-event { padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.1); }
+.bidding-dialog .bid-actions { display: flex; gap: 12px; justify-content: center; }
+
+/* === Buttons === */
+button { padding: 8px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; transition: background 0.2s; }
+.btn-primary { background: #27ae60; color: #fff; }
+.btn-primary:hover { background: #219a52; }
+.btn-secondary { background: #7f8c8d; color: #fff; }
+.btn-secondary:hover { background: #6c7a7b; }
+.btn-danger { background: #e74c3c; color: #fff; }
+.btn-danger:hover { background: #c0392b; }
+
+/* === Scoring Overlay === */
+.scoring-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 200; }
+.scoring-overlay .scoring-content { background: #2c3e50; border-radius: 12px; padding: 32px; min-width: 400px; text-align: center; }
+.scoring-overlay h2 { margin-bottom: 16px; }
+.scoring-overlay .score-detail { margin: 8px 0; font-size: 18px; }
+
+/* === Game Over Overlay === */
+.game-over-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 300; }
+.game-over-overlay .game-over-content { background: #2c3e50; border-radius: 16px; padding: 48px; min-width: 400px; text-align: center; }
+.game-over-overlay h1 { margin-bottom: 24px; font-size: 36px; }
+.game-over-overlay .winner-text { font-size: 24px; margin-bottom: 32px; }
+
+/* === Error Toast === */
+.error-toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #e74c3c; color: #fff; padding: 12px 24px; border-radius: 8px; z-index: 999; animation: fadeInOut 3s ease-in-out; }
+@keyframes fadeInOut { 0% { opacity: 0; } 10% { opacity: 1; } 90% { opacity: 1; } 100% { opacity: 0; } }

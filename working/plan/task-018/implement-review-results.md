@@ -32,3 +32,18 @@
 - Status: Resolved
 - Description: The test file (game-loop.test.ts:38-39) uses module-level mutable variables `lastRenderedSnapshot` and `lastInteractionMode` that are reset manually at the start of some tests but not others. Tests like `test_handleMessage_stirring_human` (line 67) set `lastInteractionMode = null` but not `lastRenderedSnapshot = null`, relying on the prior test's state having been set. If Deno ever runs these tests in parallel or the execution order changes, tests will read stale values from other tests. Each test should fully reset its own state, or use a setup/teardown pattern.
 - Decision Reason: Updated all test functions to reset both lastRenderedSnapshot and lastInteractionMode at the start of each test for proper isolation.
+
+### CQ-006: test_handleMessage_error_does_not_update_state does not reset lastInteractionMode
+- Status: Resolved
+- Description: The test `test_handleMessage_error_does_not_update_state` (game-loop.test.ts:168-176) only resets `lastRenderedSnapshot = null` at the start but does not reset `lastInteractionMode = null`. This is inconsistent with the fix applied in CQ-005, where all other tests were updated to reset both variables. While the test still passes because the error path does not modify interaction mode, a stale `lastInteractionMode` from a preceding test would be present in scope, violating the isolation principle. The reset line should be `lastInteractionMode = null` as well.
+- Decision Reason: Added `lastInteractionMode = null;` reset line at the start of the test.
+
+### CQ-007: test_handleMessage_game_over does not assert interactionMode is null
+- Status: Resolved
+- Description: The test `test_handleMessage_game_over` (game-loop.test.ts:154-166) verifies that the rendered snapshot has `phase: "GAME_OVER"` but never asserts that `lastInteractionMode` is `null`. Since GAME_OVER has `awaiting: null`, the interaction mode should be `null` (spectator mode). Without this assertion, a regression that incorrectly sets a non-null interaction mode for GAME_OVER would go undetected. An assertion like `assertEquals(lastInteractionMode, null)` should be added.
+- Decision Reason: Added `assertEquals(lastInteractionMode, null);` assertion after the phase assertion.
+
+### CQ-008: test_handleMessage_updates_state_manager does not reset test isolation variables
+- Status: Resolved
+- Description: The test `test_handleMessage_updates_state_manager` (game-loop.test.ts:178-185) does not reset `lastRenderedSnapshot` or `lastInteractionMode` at the start, unlike every other test in the file. While the test does not assert on these values, it is inconsistent with the isolation pattern established by CQ-005. For uniformity and to prevent any future confusion if assertions are added, both variables should be reset at the start.
+- Decision Reason: Added both `lastRenderedSnapshot = null;` and `lastInteractionMode = null;` reset lines at the start of the test.
