@@ -10,8 +10,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, Response
 
 from server.game import Game
 from server.game_registry import GameRegistry
@@ -24,6 +23,12 @@ from server.player import (
     PlayAction,
     SkipStirAction,
     StirAction,
+)
+from server.schemas import (
+    CreateGameResponse,
+    DeleteGameResponse,
+    HealthResponse,
+    ListGamesResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,17 +55,22 @@ async def lifespan(app):
         pass
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    title="Tractor Game",
+    description="Multiplayer tractor card game API. Core gameplay uses WebSocket at `/game/{game_id}`.",
+    version="0.1.0",
+    lifespan=lifespan,
+)
 
 # ---- REST Endpoints ----
 
 
-@app.get("/health")
+@app.get("/health", response_model=HealthResponse, tags=["System"], summary="Health check")
 async def health():
     return {"status": "ok"}
 
 
-@app.post("/api/game", status_code=201)
+@app.post("/api/game", status_code=201, response_model=CreateGameResponse, tags=["Game"], summary="Create a new game")
 async def create_game():
     players = [AutoPlayer(i) for i in range(3)]
     players.append(HumanPlayer(_HUMAN_PLAYER_INDEX, ws=None))
@@ -77,12 +87,12 @@ async def create_game():
     return {"game_id": game_id}
 
 
-@app.get("/api/game")
+@app.get("/api/game", response_model=ListGamesResponse, tags=["Game"], summary="List active games")
 async def list_games():
     return {"games": registry.list_games()}
 
 
-@app.delete("/api/game/{game_id}")
+@app.delete("/api/game/{game_id}", response_model=DeleteGameResponse, tags=["Game"], summary="Delete a game")
 async def delete_game(game_id: str):
     game = registry.get(game_id)
     if game is not None:
@@ -218,11 +228,24 @@ def _extract_card_ids(cards: list) -> list[str]:
 # ---- Static files ----
 
 _static_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static"))
-if os.path.isdir(_static_dir):
-    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
 
 @app.get("/")
 async def index():
-    html_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "index.html"))
-    return FileResponse(html_path)
+    html_path = os.path.join(_static_dir, "index.html")
+    if os.path.isfile(html_path):
+        return FileResponse(html_path)
+    return Response(status_code=404, content="Frontend not built. Run: deno task build")
+
+
+@app.get("/{path:path}")
+async def serve_static(path: str):
+    """Serve static files from static/ directory. Falls back to index.html for unknown paths."""
+    file_path = os.path.join(_static_dir, path)
+    if os.path.isfile(file_path):
+        return FileResponse(file_path)
+    # Fallback to index.html for SPA routing
+    html_path = os.path.join(_static_dir, "index.html")
+    if os.path.isfile(html_path):
+        return FileResponse(html_path)
+    return Response(status_code=404, content="Not found")
