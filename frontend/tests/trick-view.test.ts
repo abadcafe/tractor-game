@@ -104,3 +104,24 @@ Deno.test("test_renderTrickView_slot_with_empty_cards", () => {
   const labels = el.querySelectorAll(".player-label");
   assertEquals(labels.length, 1);
 });
+
+Deno.test("test_renderTrickView_current_player_highlight", () => {
+  const snap = makeSnapshot({
+    trick: {
+      lead_player: 0,
+      lead_type: "single",
+      slots: [
+        { player: 0, cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }] },
+        { player: 1, cards: [{ id: "D2-hearts-9", suit: "hearts", rank: "9" }] },
+      ],
+      current_player: 1,
+    },
+  });
+  const el = renderTrickView(snap);
+  const slots = el.querySelectorAll(".trick-slot");
+  assertEquals(slots.length, 2);
+  // Slot for player 0 should NOT have 'current' class
+  assertEquals(slots[0].classList.contains("current"), false);
+  // Slot for player 1 should have 'current' class
+  assertEquals(slots[1].classList.contains("current"), true);
+});
