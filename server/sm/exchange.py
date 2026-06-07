@@ -1,0 +1,93 @@
+"""Exchange (换底牌) state machine for 升级 (Shengji/Tractor).
+
+The declarer picks up the 8 bottom cards, then discards 8 cards from their
+combined hand. The discarded cards become the new bottom cards used for scoring.
+"""
+
+from pydantic import BaseModel, ConfigDict
+
+from server.sm.card_model import Card
+
+
+# ---- Models ----
+
+
+class ExchangeInput(BaseModel):
+    """Input to create an exchange state."""
+
+    model_config = ConfigDict(frozen=True)
+
+    declarer_player: int
+    bottom_cards: list[Card]
+    declarer_hand: list[Card]
+
+
+class ExchangeResult(BaseModel):
+    """Result after the declarer completes the discard."""
+
+    model_config = ConfigDict(frozen=True)
+
+    new_hand: list[Card]
+    new_bottom_cards: list[Card]
+
+
+class ExchangeState(BaseModel):
+    """State of the exchange process."""
+
+    model_config = ConfigDict(frozen=True)
+
+    phase: str  # "PICKED_UP" | "COMPLETE"
+    hand_after_pickup: list[Card]
+    count: int
+    declarer_player: int
+    result: ExchangeResult | None
+
+
+# ---- State Machine ----
+
+
+def create_exchange(input: ExchangeInput) -> ExchangeState:
+    """Combine declarer hand + bottom cards. Set phase to PICKED_UP."""
+    hand_after_pickup = list(input.declarer_hand) + list(input.bottom_cards)
+    return ExchangeState(
+        phase="PICKED_UP",
+        hand_after_pickup=hand_after_pickup,
+        count=len(input.bottom_cards),
+        declarer_player=input.declarer_player,
+        result=None,
+    )
+
+
+def discard(state: ExchangeState, cards: list[Card]) -> ExchangeState:
+    """Validate and discard cards from hand_after_pickup.
+
+    Raises ValueError if card count is wrong or cards are not in hand.
+    Returns new state with phase COMPLETE and result set.
+    """
+    if len(cards) != state.count:
+        raise ValueError(
+            f"count: expected {state.count} cards, got {len(cards)}"
+        )
+
+    hand_ids = {c.id for c in state.hand_after_pickup}
+    discard_ids = [c.id for c in cards]
+
+    for cid in discard_ids:
+        if cid not in hand_ids:
+            raise ValueError(f"not in hand: card {cid}")
+
+    discard_set = set(discard_ids)
+    new_hand = [c for c in state.hand_after_pickup if c.id not in discard_set]
+
+    result = ExchangeResult(
+        new_hand=new_hand,
+        new_bottom_cards=list(cards),
+    )
+
+    return ExchangeState(
+        phase="COMPLETE",
+        hand_after_pickup=state.hand_after_pickup,
+        count=state.count,
+        declarer_player=state.declarer_player,
+        result=result,
+    )
