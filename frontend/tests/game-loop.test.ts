@@ -43,12 +43,20 @@ function mockRender(snapshot: StateSnapshot, _container: Element, interactionMod
   lastInteractionMode = interactionMode;
 }
 
+// Mock container that tracks appendChild calls for toast verification
+let appendedElements: Element[] = [];
+
+const mockDocument = {
+  createElement: (tag: string) => ({ className: "", textContent: "", remove: () => {} }),
+};
+
 // Mock container
 const mockContainer = {
   innerHTML: "",
-  appendChild: () => {},
+  appendChild: (child: Element) => { appendedElements.push(child); },
   querySelector: () => null,
   querySelectorAll: () => [],
+  ownerDocument: mockDocument,
 } as unknown as Element;
 
 Deno.test("test_handleMessage_deal_bid_shows_bidding", () => {
@@ -169,12 +177,16 @@ Deno.test("test_handleMessage_game_over", () => {
 Deno.test("test_handleMessage_error_does_not_update_state", () => {
   lastRenderedSnapshot = null;
   lastInteractionMode = null;
+  appendedElements = [];
   const stateManager = new StateManager();
   const loop = new GameLoop(stateManager, mockRender, mockContainer);
   const msg: ServerMessage = { type: "error", message: "something went wrong" };
   loop.handleMessage(msg);
   // Error messages should not update state or re-render
   assertEquals(lastRenderedSnapshot, null);
+  // showErrorToast should have been called (appended a toast element)
+  assertEquals(appendedElements.length, 1);
+  assertEquals(appendedElements[0].textContent, "something went wrong");
 });
 
 Deno.test("test_handleMessage_updates_state_manager", () => {
@@ -191,6 +203,7 @@ Deno.test("test_handleMessage_updates_state_manager", () => {
 Deno.test("test_handleMessage_error_stores_error_message", () => {
   lastRenderedSnapshot = null;
   lastInteractionMode = null;
+  appendedElements = [];
   const stateManager = new StateManager();
   const loop = new GameLoop(stateManager, mockRender, mockContainer);
   assertEquals(loop.getLastError(), null);

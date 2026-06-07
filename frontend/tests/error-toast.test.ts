@@ -1,6 +1,6 @@
 import { assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { DOMParser } from "jsr:@b-fuze/deno-dom@0.1.56";
-import { showErrorToast } from "../ui/error-toast.ts";
+import { showErrorToast, setToastDuration, TOAST_DURATION_MS } from "../ui/error-toast.ts";
 
 const doc = new DOMParser().parseFromString(
   `<html><body><div id="app"></div></body></html>`,
@@ -36,12 +36,18 @@ Deno.test("test_showErrorToast_auto_removes", async () => {
   const existing = container.querySelectorAll(".error-toast");
   existing.forEach((e) => e.remove());
 
+  // Use a very short duration so the test completes quickly
+  const originalDuration = TOAST_DURATION_MS;
+  setToastDuration(10);
+
   showErrorToast("临时错误");
   assertNotEquals(container.querySelector(".error-toast"), null);
 
-  // The toast should auto-remove after a timeout (we use a short timeout in test)
-  // In the real implementation it uses 3000ms. We can't wait that long in tests,
-  // so we verify the mechanism exists by checking the element was created.
-  // The auto-removal is verified by the CSS animation + setTimeout in the implementation.
-  assertEquals(container.querySelector(".error-toast") !== null, true);
+  // Wait for the toast to auto-remove
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  assertEquals(container.querySelector(".error-toast"), null);
+
+  // Restore original duration
+  setToastDuration(originalDuration);
 });

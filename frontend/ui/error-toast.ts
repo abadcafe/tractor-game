@@ -1,14 +1,46 @@
 /**
+ * Default duration (ms) before a toast auto-removes.
+ * Exported so tests can override it.
+ */
+export let TOAST_DURATION_MS = 3000;
+
+/**
+ * Maximum number of visible toasts at once.
+ * Excess toasts are removed (oldest first).
+ */
+export const MAX_VISIBLE_TOASTS = 3;
+
+/**
+ * Override the toast duration (useful for testing).
+ */
+export function setToastDuration(ms: number): void {
+  TOAST_DURATION_MS = ms;
+}
+
+/**
  * Display a transient error message as a toast notification.
  * The toast is appended to the given container (defaults to #app)
- * and auto-removes after 3 seconds.
+ * and auto-removes after TOAST_DURATION_MS.
+ * Limits visible toasts to MAX_VISIBLE_TOASTS to prevent spam.
  */
 export function showErrorToast(message: string, container?: Element): void {
   const target = container ?? (typeof document !== "undefined" ? document.querySelector("#app") : null);
-  if (!target) return;
+  if (!target) {
+    console.warn(`showErrorToast: no container found for message "${message}"`);
+    return;
+  }
 
   const doc = target.ownerDocument ?? (typeof document !== "undefined" ? document : null);
-  if (!doc) return;
+  if (!doc) {
+    console.warn(`showErrorToast: no document available for message "${message}"`);
+    return;
+  }
+
+  // Remove excess toasts (oldest first) to prevent spam
+  const existing = target.querySelectorAll(".error-toast");
+  while (existing.length >= MAX_VISIBLE_TOASTS) {
+    existing[0].remove();
+  }
 
   const toast = doc.createElement("div");
   toast.className = "error-toast";
@@ -17,5 +49,5 @@ export function showErrorToast(message: string, container?: Element): void {
 
   setTimeout(() => {
     toast.remove();
-  }, 3000);
+  }, TOAST_DURATION_MS);
 }
