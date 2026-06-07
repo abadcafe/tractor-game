@@ -9,10 +9,22 @@ converts between them.
 """
 
 import asyncio
+import logging
 import random
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+def _log_task_exception(task: asyncio.Task) -> None:
+    """Log exceptions from fire-and-forget create_task calls."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.exception("Unhandled exception in player action task: %s", exc)
 
 
 # ---- PlayerAction types ----
@@ -118,7 +130,8 @@ class AutoPlayer(Player):
         if trump_cards and random.random() < 0.5:
             card = random.choice(trump_cards)
             action = BidAction(cards=[card], count=1)
-            asyncio.create_task(game.act(self.index, action))
+            task = asyncio.create_task(game.act(self.index, action))
+            task.add_done_callback(_log_task_exception)
 
     async def _handle_stir(self, snapshot: Any, game: Any) -> None:
         """Act during STIRRING phase."""
@@ -133,7 +146,8 @@ class AutoPlayer(Player):
             action = StirAction(cards=cards)
         else:
             action = SkipStirAction()
-        asyncio.create_task(game.act(self.index, action))
+        task = asyncio.create_task(game.act(self.index, action))
+        task.add_done_callback(_log_task_exception)
 
     async def _handle_discard(self, snapshot: Any, game: Any) -> None:
         """Randomly discard cards during EXCHANGE phase."""
@@ -147,7 +161,8 @@ class AutoPlayer(Player):
         else:
             cards = []
         action = DiscardAction(cards=cards)
-        asyncio.create_task(game.act(self.index, action))
+        task = asyncio.create_task(game.act(self.index, action))
+        task.add_done_callback(_log_task_exception)
 
     async def _handle_play(self, snapshot: Any, game: Any) -> None:
         """Pick a random legal play."""
@@ -159,12 +174,14 @@ class AutoPlayer(Player):
         chosen = random.choice(legal)
         # chosen is a sm.PlayAction Pydantic model with .cards attribute
         action = PlayAction(cards=chosen.cards)
-        asyncio.create_task(game.act(self.index, action))
+        task = asyncio.create_task(game.act(self.index, action))
+        task.add_done_callback(_log_task_exception)
 
     async def _handle_next_round(self, game: Any) -> None:
         """Submit NextRoundAction."""
         action = NextRoundAction()
-        asyncio.create_task(game.act(self.index, action))
+        task = asyncio.create_task(game.act(self.index, action))
+        task.add_done_callback(_log_task_exception)
 
 
 # ---- HumanPlayer ----
