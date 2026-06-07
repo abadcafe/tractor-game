@@ -17,7 +17,6 @@ from server.sm.card_model import Card, Rank, Suit, create_decks
 from server.sm.constants import (
     BOTTOM_CARD_COUNT,
     get_team_index,
-    next_player_ccw,
 )
 from server.sm import deal_bid as db
 from server.sm import stirring as stir_mod
