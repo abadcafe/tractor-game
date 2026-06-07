@@ -2,7 +2,7 @@ import { assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/ass
 import { DOMParser } from "jsr:@b-fuze/deno-dom@0.1.56";
 import { StateManager } from "../core/state.ts";
 import { GameLoop } from "../engine/game-loop.ts";
-import { validatePlay, validateBidCards, validateDiscard } from "../engine/input-validator.ts";
+import { validatePlay, validateBidCards } from "../engine/input-validator.ts";
 import { render } from "../ui/renderer.ts";
 import type { StateSnapshot, ServerMessage, InteractionMode, ClientAction, ActionCallbacks } from "../core/types.ts";
 import { HUMAN_PLAYER_INDEX } from "../config.ts";
@@ -52,6 +52,13 @@ let lastRenderedSnapshot: StateSnapshot | null = null;
 let lastRenderedCallbacks: ActionCallbacks | undefined = undefined;
 let lastRenderedSelectedIds: Set<string> | undefined = undefined;
 
+function resetTrackingState(): void {
+  lastRenderedMode = null;
+  lastRenderedSnapshot = null;
+  lastRenderedCallbacks = undefined;
+  lastRenderedSelectedIds = undefined;
+}
+
 function trackingRender(
   snapshot: StateSnapshot,
   container: Element,
@@ -67,9 +74,8 @@ function trackingRender(
 }
 
 Deno.test("test_integration_ws_to_render", () => {
-  // Reset
-  lastRenderedMode = null;
-  lastRenderedSnapshot = null;
+  // Reset shared state
+  resetTrackingState();
   const container = doc!.querySelector("#app")!;
   const stateManager = new StateManager();
   const gameLoop = new GameLoop(stateManager, trackingRender, container);
@@ -163,6 +169,7 @@ Deno.test("test_integration_bid_action", () => {
     onCardClick: () => {},
     onAction: () => {},
     onBid: (cardIds: string[]) => { bidCards = cardIds; },
+    onStir: () => {},
     onPass: () => {},
     onNewGame: () => {},
   };
@@ -230,8 +237,8 @@ Deno.test("test_integration_stir_action", () => {
 });
 
 Deno.test("test_integration_error_message", () => {
-  lastRenderedSnapshot = null;
-  lastRenderedMode = null;
+  // Reset shared state
+  resetTrackingState();
   const container = doc!.querySelector("#app")!;
   const stateManager = new StateManager();
   const gameLoop = new GameLoop(stateManager, trackingRender, container);
@@ -260,7 +267,8 @@ Deno.test("test_integration_error_message", () => {
 });
 
 Deno.test("test_integration_stir_not_human_ignored", () => {
-  lastRenderedMode = null;
+  // Reset shared state
+  resetTrackingState();
   const container = doc!.querySelector("#app")!;
   const stateManager = new StateManager();
   const gameLoop = new GameLoop(stateManager, trackingRender, container);
