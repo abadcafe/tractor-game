@@ -488,16 +488,6 @@ body {
   opacity: 0.5;
 }
 
-#btn-pass {
-  background: rgba(255, 255, 255, 0.15);
-  color: var(--text-light);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-}
-
-#btn-pass:hover {
-  background: rgba(255, 255, 255, 0.25);
-}
-
 /* ===== Side Panel ===== */
 
 #side-panel {
@@ -613,6 +603,31 @@ body {
 #bidding-panel button.pass-btn {
   background: rgba(255, 0, 0, 0.3);
   border-color: #f44336;
+}
+
+#bidding-panel .bid-cards {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+#bidding-panel .bid-card {
+  padding: 8px 12px;
+  font-size: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-radius: var(--border-radius);
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  cursor: pointer;
+  min-width: 60px;
+}
+
+#bidding-panel .bid-card:hover {
+  background: var(--gold);
+  color: black;
+  border-color: var(--gold);
 }
 
 /* ===== Stirring UI ===== */

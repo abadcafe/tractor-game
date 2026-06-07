@@ -1,13 +1,15 @@
 """Tests for sm.exchange module."""
+from typing import Literal
+
 import pytest
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.exchange import (
-    ExchangeState, ExchangeInput, ExchangeResult,
+    ExchangeInput, ExchangeResult,
     create_exchange, discard,
 )
 
 
-def _card(suit: Suit, rank: Rank, deck: int = 1) -> Card:
+def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
     return Card(
         id=f"D{deck}-{suit.value}-{rank.value}",
         suit=suit, rank=rank,
@@ -30,7 +32,7 @@ def _make_hand(count: int, offset: int = 0) -> list[Card]:
         card_in_deck = idx % suits_per_deck
         suit = suits[card_in_deck % 4]
         rank = ranks[card_in_deck // 4 % len(ranks)]
-        cards.append(_card(suit, rank, deck_idx + 1))
+        cards.append(_card(suit, rank, deck_idx + 1))  # type: ignore[reportArgumentType]
     return cards
 
 

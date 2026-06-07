@@ -36,6 +36,7 @@ def _play_first_legal(state: RoundState) -> RoundState:
         lead_slot = trick.slots[trick.lead_player]
         assert lead_slot is not None and lead_slot.cards is not None
         lead_cards = lead_slot.cards
+        assert trick.lead_type is not None
         lead_action = PlayAction(type=trick.lead_type, cards=lead_cards)
 
     legal_plays = get_legal_plays(
@@ -145,8 +146,10 @@ class TestDealBidPhase:
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         assert state.phase == "DEAL_BID"
+        assert state.deal_bid_state is not None
         initial_cursor = state.deal_bid_state.deal_cursor
         state = deal_next_card(state)
+        assert state.deal_bid_state is not None
         assert state.deal_bid_state.deal_cursor == initial_cursor + 1
 
     def test_reveal_during_deal_bid(self) -> None:
@@ -161,6 +164,7 @@ class TestDealBidPhase:
             state = deal_next_card(state)
 
         # Find a trump rank card and reveal
+        assert state.deal_bid_state is not None
         for p in range(4):
             trump_cards = [c for c in state.deal_bid_state.players_hand[p]
                           if c.rank == Rank.TWO and not c.is_joker]
@@ -169,8 +173,10 @@ class TestDealBidPhase:
                     player=p, cards=[trump_cards[0]], kind="trump_rank",
                     suit=trump_cards[0].suit, joker_type=None, count=1,
                 )
+                assert state.deal_bid_state is not None
                 old_events = len(state.deal_bid_state.bid_events)
                 state = reveal(state, event)
+                assert state.deal_bid_state is not None
                 assert len(state.deal_bid_state.bid_events) > old_events
                 break
 
@@ -226,6 +232,7 @@ class TestStirringPhase:
         state = _complete_deal_bid_no_bid(state)
         assert state.phase == "STIRRING"
         # With empty trump, find a trump-rank pair in the current player's hand
+        assert state.stirring_state is not None
         cur = state.stirring_state.current_player
         hand = state.players_hand[cur]
         # Find two cards of the same suit with trump rank
@@ -275,6 +282,7 @@ class TestStirringPhase:
         ))
         state = _complete_deal_bid_no_bid(state)
         assert state.phase == "STIRRING"
+        assert state.stirring_state is not None
         cur = state.stirring_state.current_player
         hand = state.players_hand[cur]
         # A single card is in the player's hand but the stirring module
@@ -474,6 +482,7 @@ class TestRoundDeclarer:
         for _ in range(20):
             state = deal_next_card(state)
         # Find trump rank card in team 0 player's hand (players 0, 3)
+        assert state.deal_bid_state is not None
         for p in [0, 3]:
             trump_cards = [c for c in state.deal_bid_state.players_hand[p]
                            if c.rank == Rank.TWO and not c.is_joker]
@@ -486,6 +495,7 @@ class TestRoundDeclarer:
                 break
         state = _deal_all_cards(state)
         assert state.phase == "STIRRING"
+        assert state.deal_bid_state is not None
         assert state.deal_bid_state.bid_winner is not None
         assert state.declarer_team == 0  # unchanged
         assert state.declarer_player is not None
@@ -502,6 +512,7 @@ class TestRoundDeclarer:
         for _ in range(20):
             state = deal_next_card(state)
         # Find trump rank card in team 1 player's hand (players 1, 2)
+        assert state.deal_bid_state is not None
         for p in [1, 2]:
             trump_cards = [c for c in state.deal_bid_state.players_hand[p]
                            if c.rank == Rank.TWO and not c.is_joker]

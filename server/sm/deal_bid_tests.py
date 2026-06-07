@@ -150,7 +150,7 @@ class TestDealNextCard:
         state = create_deal_bid(DealBidInput(
             deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
         ))
-        for i in range(5):
+        for _ in range(5):
             state = deal_next_card(state)
         assert state.deal_cursor == 5
 

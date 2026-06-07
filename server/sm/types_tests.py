@@ -1,4 +1,6 @@
 """Tests for sm.types module."""
+from typing import Literal
+
 import pytest
 from pydantic import ValidationError
 from server.sm.card_model import Card, Suit, Rank
@@ -8,7 +10,7 @@ from server.sm.types import (
 )
 
 
-def _card(suit: Suit, rank: Rank, deck: int = 1) -> Card:
+def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
     return Card(
         id=f"D{deck}-{suit.value}-{rank.value}",
         suit=suit, rank=rank,
@@ -121,7 +123,7 @@ class TestBidEvent:
         cards = [_card(Suit.HEARTS, Rank.TWO)]
         with pytest.raises(ValidationError):
             BidEvent(
-                player=0, cards=cards, kind="invalid",
+                player=0, cards=cards, kind="invalid",  # type: ignore[reportArgumentType]
                 suit=Suit.HEARTS, joker_type=None, count=1,
             )
 
@@ -131,7 +133,7 @@ class TestBidEvent:
         with pytest.raises(ValidationError):
             BidEvent(
                 player=0, cards=cards, kind="joker",
-                suit=None, joker_type="invalid", count=2,
+                suit=None, joker_type="invalid", count=2,  # type: ignore[reportArgumentType]
             )
 
     def test_bid_event_trump_rank_requires_suit(self) -> None:
@@ -176,7 +178,7 @@ class TestStirAction:
     def test_stir_action_kind_literal(self) -> None:
         """StirAction.kind must be 'stir' or 'pass'."""
         with pytest.raises(ValidationError):
-            StirAction(player=0, kind="invalid", new_suit=None)
+            StirAction(player=0, kind="invalid", new_suit=None)  # type: ignore[reportArgumentType]
 
     def test_stir_action_stir_with_no_trump(self) -> None:
         """StirAction.kind='stir' allows new_suit=None for joker pair (no trump)."""
@@ -207,7 +209,7 @@ class TestPlayer:
     def test_player_team_literal(self) -> None:
         """Player.team must be 0 or 1."""
         with pytest.raises(ValidationError):
-            Player(index=0, team=2, hand=[])
+            Player(index=0, team=2, hand=[])  # type: ignore[reportArgumentType]
 
     def test_player_hand_mutable(self) -> None:
         """Player.hand is mutable (Player is NOT frozen)."""

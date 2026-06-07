@@ -84,21 +84,14 @@ export class HandView {
     }
   }
 
-  /** Initialize play/pass button handlers. */
+  /** Initialize play button handler. */
   initButtons(): void {
     const playBtn = document.getElementById('btn-play') as HTMLButtonElement;
-    const passBtn = document.getElementById('btn-pass') as HTMLButtonElement;
 
     playBtn?.addEventListener('click', () => {
       const selected = this.getSelected();
       if (selected.length > 0 && this.onPlay) {
         this.onPlay(selected);
-      }
-    });
-
-    passBtn?.addEventListener('click', () => {
-      if (this.onPlay) {
-        this.onPlay([]);
       }
     });
   }

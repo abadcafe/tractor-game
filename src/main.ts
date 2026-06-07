@@ -9,7 +9,6 @@
 
 import type { Card } from './core/card';
 import { Renderer } from './ui/renderer';
-import { SettingsView, type SettingsData } from './ui/settings';
 import { Scoreboard } from './ui/scoreboard';
 
 // ---- Global error handler ----
@@ -44,14 +43,6 @@ let currentState: any = null;
 // ---- Bootstrap ----
 
 const renderer = new Renderer();
-
-SettingsView.init((data: SettingsData) => {
-  apiCallRaw('/api/config', {
-    api_key: data.apiKey,
-    model: data.model,
-    base_url: data.baseUrl,
-  });
-});
 
 // ---- New Game Button ----
 
@@ -132,23 +123,6 @@ async function apiCall(action: string, body?: Record<string, unknown>): Promise<
   return resp.json();
 }
 
-async function apiCallRaw(path: string, body: unknown): Promise<void> {
-  const opts: RequestInit = {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  };
-
-  try {
-    const resp = await fetchWithRetry(path, opts, '配置更新');
-    if (!resp.ok) {
-      console.error(`Config API error: ${resp.status} ${resp.statusText}`);
-    }
-  } catch (err) {
-    console.error('Config API call failed:', err);
-  }
-}
-
 // ---- Response Handler ----
 
 function handleResponse(resp: GameStateResponse): void {
@@ -157,6 +131,12 @@ function handleResponse(resp: GameStateResponse): void {
   renderer.render(currentState);
 
   if (!resp.awaitingAction) return;
+
+  const humanActions = new Set(['bid', 'set_trump', 'stir', 'discard', 'play']);
+  if (humanActions.has(resp.awaitingAction) && currentState.currentPlayerIndex !== HUMAN_PLAYER_INDEX) {
+    Scoreboard.log('等待 AI 操作...');
+    return;
+  }
 
   switch (resp.awaitingAction) {
     case 'bid':
@@ -189,11 +169,40 @@ function handleResponse(resp: GameStateResponse): void {
 // ---- Action Handlers (human input only, AI handled server-side) ----
 
 function handleBid(resp: GameStateResponse): void {
-  const validLevels = resp.validBidLevels ?? [];
-  renderer.showBidding(validLevels as any, true, async (level: any, pass: boolean) => {
+  // 亮牌规则：显示玩家的级牌，让玩家选择亮牌
+  const hand = currentState?.players[HUMAN_PLAYER_INDEX]?.hand ?? [];
+  const trumpRank = currentState?.trumpRank ?? '2';
+
+  // 找出级牌（当前级别的牌）
+  const dominantCards = hand.filter((c: any) => c.rank === trumpRank);
+
+  if (dominantCards.length === 0) {
+    Scoreboard.log('没有级牌，跳过叫牌');
+    apiCall('/bid', { playerIndex: HUMAN_PLAYER_INDEX, pass: true })
+      .then(handleResponse)
+      .catch((err) => {
+        Scoreboard.log('自动跳过叫牌失败');
+        console.error(err);
+      });
+    return;
+  }
+
+  // 显示级牌按钮
+  renderer.showBidding(dominantCards as any, true, async (selectedCards: any, pass: boolean) => {
     try {
-      const r = await apiCall('/bid', { playerIndex: HUMAN_PLAYER_INDEX, level, pass });
-      handleResponse(r);
+      if (pass) {
+        const r = await apiCall('/bid', { playerIndex: HUMAN_PLAYER_INDEX, pass: true });
+        handleResponse(r);
+      } else {
+        // 亮牌：使用第一张牌的花色作为主牌花色
+        const cardIds = selectedCards.map((c: any) => c.id);
+        const r = await apiCall('/bid', {
+          playerIndex: HUMAN_PLAYER_INDEX,
+          cardIds: cardIds,
+          pass: false
+        });
+        handleResponse(r);
+      }
     } catch (err) {
       Scoreboard.log('叫牌失败');
       console.error(err);
@@ -202,6 +211,12 @@ function handleBid(resp: GameStateResponse): void {
 }
 
 function handleSetTrump(): void {
+  const winnerIndex = getBidWinnerIndex();
+  if (winnerIndex !== HUMAN_PLAYER_INDEX) {
+    Scoreboard.log('等待庄家选择主牌...');
+    return;
+  }
+
   renderer.showTrumpSelection(async (trumpSuit: any) => {
     try {
       const r = await apiCall('/set-trump', { playerIndex: HUMAN_PLAYER_INDEX, trumpSuit });
@@ -211,6 +226,16 @@ function handleSetTrump(): void {
       console.error(err);
     }
   });
+}
+
+function getBidWinnerIndex(): number | null {
+  const bids = currentState?.biddingHistory ?? [];
+  for (let i = bids.length - 1; i >= 0; i--) {
+    if (!bids[i].pass) {
+      return bids[i].playerIndex;
+    }
+  }
+  return null;
 }
 
 function handleStir(): void {

@@ -4,53 +4,54 @@
 
 import { Rank, Suit } from '../core/card';
 
-export type BidCallback = (level: Rank | null, pass: boolean) => void;
+export type BidCallback = (cards: any[], pass: boolean) => void;
 export type StirCallback = (trumpSuit: Suit | null) => void; // null = pass
 export type TrumpCallback = (trumpSuit: Suit) => void;
 
 export class BiddingView {
-  /** Show bidding panel for the human player. */
+  /** Show bidding panel for the human player (亮牌规则). */
   static showBidding(
-    validLevels: Rank[],
+    cards: any[],  // 级牌列表
     canPass: boolean,
-    onBid: BidCallback,
+    onBid: (cards: any[], pass: boolean) => void,
   ): void {
     this.removeExistingPanels();
 
     const panel = document.createElement('div');
     panel.id = 'bidding-panel';
 
-    if (validLevels.length === 0) {
-      panel.innerHTML = `<h3>叫牌</h3><p style="color:#aaa;font-size:12px;margin:6px 0;">已无更高级别可叫</p>`;
+    if (cards.length === 0) {
+      panel.innerHTML = `<h3>亮牌</h3><p style="color:#aaa;font-size:12px;margin:6px 0;">没有级牌，跳过叫牌</p>`;
     } else {
-      panel.innerHTML = `<h3>叫牌</h3>`;
+      panel.innerHTML = `<h3>亮牌</h3><p style="color:#aaa;font-size:12px;margin:6px 0;">选择要亮的级牌（当前级别）</p>`;
     }
 
-    const buttons = document.createElement('div');
-    buttons.className = 'bid-buttons';
+    const cardContainer = document.createElement('div');
+    cardContainer.className = 'bid-cards';
 
-    for (const level of validLevels) {
-      const btn = document.createElement('button');
-      btn.textContent = level;
-      btn.addEventListener('click', () => {
+    for (const card of cards) {
+      const cardEl = document.createElement('button');
+      cardEl.className = 'bid-card';
+      cardEl.textContent = `${card.suit}${card.rank}`;
+      cardEl.addEventListener('click', () => {
         panel.remove();
-        onBid(level, false);
+        onBid([card], false);
       });
-      buttons.appendChild(btn);
+      cardContainer.appendChild(cardEl);
     }
 
-    if (canPass) {
+    if (canPass && cards.length > 0) {
       const passBtn = document.createElement('button');
       passBtn.className = 'pass-btn';
       passBtn.textContent = '不叫';
       passBtn.addEventListener('click', () => {
         panel.remove();
-        onBid(null, true);
+        onBid([], true);
       });
-      buttons.appendChild(passBtn);
+      cardContainer.appendChild(passBtn);
     }
 
-    panel.appendChild(buttons);
+    panel.appendChild(cardContainer);
     document.getElementById('game-table')?.appendChild(panel);
   }
 

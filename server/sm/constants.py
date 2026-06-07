@@ -14,7 +14,6 @@ from server.sm.card_model import Rank
 # ---- Player Positioning ----
 
 PLAYER_COUNT: int = 4
-HUMAN_PLAYER_INDEX: int = 3
 
 # ---- Team Mapping ----
 
@@ -31,7 +30,7 @@ CCW_NEXT: MappingProxyType[int, int] = MappingProxyType({0: 1, 1: 3, 3: 2, 2: 0}
 
 def _validate_player(player: int) -> None:
     """Raise ValueError if player is not in [0, PLAYER_COUNT)."""
-    if not isinstance(player, int) or player < 0 or player >= PLAYER_COUNT:
+    if player < 0 or player >= PLAYER_COUNT:
         raise ValueError(
             f"Invalid player index {player!r}; must be an int in [0, {PLAYER_COUNT})"
         )

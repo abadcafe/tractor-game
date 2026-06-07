@@ -1,5 +1,6 @@
 """Tests for sm.comparator module."""
-import pytest
+from typing import Literal
+
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.comparator import (
     trump_order, effective_suit, compare_plays, sort_by_trump_order,
@@ -7,7 +8,7 @@ from server.sm.comparator import (
 )
 
 
-def _card(suit: Suit, rank: Rank, deck: int = 1) -> Card:
+def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
     return Card(
         id=f"D{deck}-{suit.value}-{rank.value}",
         suit=suit, rank=rank,

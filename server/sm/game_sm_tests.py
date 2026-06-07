@@ -2,7 +2,7 @@
 from server.sm.card_model import Rank
 from server.sm.scoring import RoundResult
 from server.sm.game_sm import (
-    GameState, create_game, start_game, process_round_result,
+    create_game, start_game, process_round_result,
 )
 
 

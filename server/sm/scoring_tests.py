@@ -1,11 +1,13 @@
 """Tests for sm.scoring module."""
+from typing import Literal
+
 import pytest
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.types import PlayType, CompletedTrick, CompletedTrickSlot
-from server.sm.scoring import calculate_score, RoundResult
+from server.sm.scoring import calculate_score
 
 
-def _card(suit: Suit, rank: Rank, deck: int = 1) -> Card:
+def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
     """Create a card with correct point values per spec: 5=5, 10=10, K=10, else 0."""
     pts_map: dict[Rank, int] = {
         Rank.FIVE: 5, Rank.TEN: 10, Rank.KING: 10,

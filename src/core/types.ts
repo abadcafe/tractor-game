@@ -76,9 +76,6 @@ export interface TeamState {
 // ---- Game Configuration ----
 
 export interface GameSettings {
-  apiKey: string;
-  model: string;
-  baseUrl: string;
   targetLevel: Rank;
   bottomCardCount: number;
 }

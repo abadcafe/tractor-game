@@ -1,4 +1,6 @@
 """Tests for sm.play_rules module."""
+from typing import Literal
+
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.types import PlayType, PlayAction
 from server.sm.play_rules import (
@@ -8,7 +10,7 @@ from server.sm.play_rules import (
 from server.sm.comparator import effective_suit
 
 
-def _card(suit: Suit, rank: Rank, deck: int = 1) -> Card:
+def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
     return Card(
         id=f"D{deck}-{suit.value}-{rank.value}",
         suit=suit, rank=rank,

@@ -1,13 +1,14 @@
 """Tests for sm.stirring module."""
-import pytest
+from typing import Literal
+
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.stirring import (
-    StirringState, StirInput, StirResult,
+    StirInput,
     create_stirring, pass_stir, stir, get_stir_result,
 )
 
 
-def _card(suit: Suit, rank: Rank, deck: int = 1) -> Card:
+def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
     return Card(
         id=f"D{deck}-{suit.value}-{rank.value}",
         suit=suit, rank=rank,

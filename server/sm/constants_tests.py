@@ -6,8 +6,7 @@ from server.sm.constants import (
     PLAYER_COUNT, BOTTOM_CARD_COUNT, TOTAL_CARDS,
     TEAM_0, TEAM_1, CCW_NEXT, LEVELS, TOTAL_POINTS,
     get_team_index, get_partner_index, next_player_ccw,
-    advance_level, ScoreThreshold, SCORE_THRESHOLDS,
-    HUMAN_PLAYER_INDEX,
+    advance_level, SCORE_THRESHOLDS,
 )
 
 
@@ -97,9 +96,6 @@ class TestScoringConstants:
         """Thresholds must be strictly increasing in max_points."""
         for i in range(len(SCORE_THRESHOLDS) - 1):
             assert SCORE_THRESHOLDS[i].max_points < SCORE_THRESHOLDS[i + 1].max_points
-
-    def test_human_player_index(self) -> None:
-        assert HUMAN_PLAYER_INDEX == 3
 
 
 class TestImmutability:

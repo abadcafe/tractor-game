@@ -6,7 +6,7 @@ and the legal play enumeration for leading and following.
 
 from itertools import combinations
 
-from server.sm.card_model import Card, Suit, Rank, _SUITED_RANKS
+from server.sm.card_model import Card, Suit, Rank, SUITED_RANKS
 from server.sm.comparator import effective_suit
 from server.sm.types import PlayAction, PlayType
 
@@ -25,7 +25,7 @@ def _non_trump_rank_order(rank: Rank, trump_rank: Rank) -> int:
     """
     # Build the non-trump ordering: all suited ranks except trump_rank
     order = 0
-    for r in _SUITED_RANKS:
+    for r in SUITED_RANKS:
         if r == trump_rank:
             continue
         order += 1
@@ -36,7 +36,7 @@ def _non_trump_rank_order(rank: Rank, trump_rank: Rank) -> int:
 
 def _trump_rank_order(rank: Rank) -> int:
     """Return rank ordering for the trump suit (full ordering including all ranks)."""
-    for i, r in enumerate(_SUITED_RANKS):
+    for i, r in enumerate(SUITED_RANKS):
         if r == rank:
             return i + 1
     # Jokers in trump

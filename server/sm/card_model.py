@@ -46,7 +46,7 @@ class Rank(str, Enum):
 
 _JOKER_RANKS: tuple[Rank, ...] = (Rank.SMALL_JOKER, Rank.BIG_JOKER)
 
-_SUITED_RANKS: tuple[Rank, ...] = (
+SUITED_RANKS: tuple[Rank, ...] = (
     Rank.TWO, Rank.THREE, Rank.FOUR, Rank.FIVE,
     Rank.SIX, Rank.SEVEN, Rank.EIGHT, Rank.NINE,
     Rank.TEN, Rank.JACK, Rank.QUEEN, Rank.KING, Rank.ACE,
@@ -144,7 +144,7 @@ def create_decks() -> list[Card]:
     cards: list[Card] = []
     for deck in (1, 2):
         for suit in (Suit.HEARTS, Suit.SPADES, Suit.DIAMONDS, Suit.CLUBS):
-            for rank in _SUITED_RANKS:
+            for rank in SUITED_RANKS:
                 cards.append(_make_card(suit, rank, deck))
         cards.append(_make_card(Suit.JOKER, Rank.SMALL_JOKER, deck))
         cards.append(_make_card(Suit.JOKER, Rank.BIG_JOKER, deck))

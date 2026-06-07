@@ -57,7 +57,6 @@
         <div class="player-cards hand" id="cards-south"></div>
         <div id="action-bar">
           <button id="btn-play" disabled>出牌</button>
-          <button id="btn-pass">不出</button>
         </div>
       </div>
     </div>
@@ -76,31 +75,7 @@
         <h3>出牌记录</h3>
         <div id="log-entries"></div>
       </div>
-      <button id="btn-settings">⚙ 设置</button>
       <button id="btn-new-game">🔄 新游戏</button>
-    </div>
-
-    <!-- Settings Modal -->
-    <div id="settings-modal" class="modal hidden">
-      <div class="modal-content">
-        <h2>设置</h2>
-        <label>
-          OpenAI API Key:
-          <input type="password" id="input-api-key" placeholder="sk-...">
-        </label>
-        <label>
-          Model:
-          <input type="text" id="input-model" value="gpt-4o" placeholder="gpt-4o">
-        </label>
-        <label>
-          API Base URL:
-          <input type="text" id="input-base-url" value="https://api.openai.com/v1" placeholder="https://api.openai.com/v1">
-        </label>
-        <div class="modal-actions">
-          <button id="btn-save-settings">保存</button>
-          <button id="btn-close-settings">取消</button>
-        </div>
-      </div>
     </div>
   </div>
 
