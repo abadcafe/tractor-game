@@ -328,7 +328,7 @@ def _transition_to_stirring(state: RoundState, deal_bid: db.DealBidState) -> Rou
                 valid_winner = True
             else:
                 # Invalid: ignore and treat as no bid
-                declarer_player = state.last_declarer_player
+                declarer_player = state.last_declarer_player if state.last_declarer_player is not None else state.start_player
 
         trump_suit = deal_bid.bid_winner.suit if valid_winner else None
         defender_team = 1 - declarer_team

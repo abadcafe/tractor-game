@@ -1,5 +1,7 @@
 """Tests for sm.round_sm module."""
 import random
+from collections import Counter
+
 import pytest
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.types import BidEvent, PlayAction
@@ -227,7 +229,6 @@ class TestStirringPhase:
         cur = state.stirring_state.current_player
         hand = state.players_hand[cur]
         # Find two cards of the same suit with trump rank
-        from collections import Counter
         suit_counts: Counter[Suit] = Counter()
         for c in hand:
             if c.rank == state.trump_rank and not c.is_joker:
