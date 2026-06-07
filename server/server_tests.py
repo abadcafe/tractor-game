@@ -409,3 +409,87 @@ def test_reconnect_replaces_ws(sync_client, clean_registry):
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
         data = ws.receive_json()
         assert data["type"] == "state"
+
+
+# ---- Static file serving ----
+
+
+@pytest.mark.asyncio
+async def test_index_returns_404_when_not_built(client, clean_registry):
+    """GET / returns 404 with helpful message when static/index.html does not exist."""
+    import os
+    from server.server import _static_dir
+
+    index_path = os.path.join(_static_dir, "index.html")
+    existed = os.path.isfile(index_path)
+    try:
+        # Temporarily rename index.html if it exists
+        if existed:
+            os.rename(index_path, index_path + ".bak")
+        response = await client.get("/")
+        assert response.status_code == 404
+        assert "Frontend not built" in response.text
+    finally:
+        if existed:
+            os.rename(index_path + ".bak", index_path)
+
+
+@pytest.mark.asyncio
+async def test_index_returns_html_when_built(client, clean_registry):
+    """GET / returns 200 with HTML when static/index.html exists."""
+    import os
+    from server.server import _static_dir
+
+    index_path = os.path.join(_static_dir, "index.html")
+    existed = os.path.isfile(index_path)
+    try:
+        if not existed:
+            os.makedirs(_static_dir, exist_ok=True)
+            with open(index_path, "w") as f:
+                f.write("<!DOCTYPE html><html><body>test</body></html>")
+        response = await client.get("/")
+        assert response.status_code == 200
+        assert "test" in response.text
+    finally:
+        if not existed and os.path.isfile(index_path):
+            os.remove(index_path)
+
+
+@pytest.mark.asyncio
+async def test_serve_static_existing_file(client, clean_registry):
+    """GET /config.js serves the file from static/ directory."""
+    response = await client.get("/config.js")
+    assert response.status_code == 200
+    # config.js exists in static/ from the build output
+    assert "javascript" in response.headers.get("content-type", "")
+
+
+@pytest.mark.asyncio
+async def test_serve_static_subdirectory_file(client, clean_registry):
+    """GET /core/types.js serves files from subdirectories in static/."""
+    response = await client.get("/core/types.js")
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_serve_static_unknown_path_returns_404(client, clean_registry):
+    """GET /nonexistent/file.js returns 404 when file does not exist."""
+    response = await client.get("/nonexistent/file.js")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_path_traversal_unencoded_returns_404(client, clean_registry):
+    """Unencoded path traversal is normalized by the ASGI layer, so the handler
+    receives a cleaned path. Since the target doesn't exist, returns 404."""
+    response = await client.get("/../../../etc/passwd")
+    # ASGI normalizes /../../../etc/passwd -> /etc/passwd which doesn't exist
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_path_traversal_encoded_returns_403(client, clean_registry):
+    """Encoded path traversal attempts bypass ASGI normalization and are blocked by
+    the server's path traversal protection with 403."""
+    response = await client.get("/..%2F..%2F..%2Fetc/passwd")
+    assert response.status_code == 403
