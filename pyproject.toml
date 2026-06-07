@@ -20,12 +20,14 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = [
+    "server",
     "server/sm",
     "tests",
 ]
 python_files = ["*_tests.py", "test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
+asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 72
