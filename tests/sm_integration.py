@@ -4,31 +4,24 @@ These tests drive the complete game flow from start to game-over,
 using actual state machine operations (deal_next_card, reveal, stir,
 pass_stir, discard, play) -- NOT manually constructed result objects.
 """
-import random
 import pytest
-from server.sm.card_model import Card, Suit, Rank, create_decks
-from server.sm.types import BidEvent, PlayAction, PlayType
-from server.sm.constants import (
-    get_team_index, get_partner_index, next_player_ccw,
-    PLAYER_COUNT, BOTTOM_CARD_COUNT, LEVELS,
+from server.sm.card_model import Card, Suit, Rank
+from server.sm.types import (
+    BidEvent, PlayAction, PlayType, CompletedTrick, CompletedTrickSlot,
 )
-from server.sm.comparator import bid_value, is_trump_card
+from server.sm.constants import LEVELS
 from server.sm.play_rules import get_legal_plays
-from server.sm.deal_bid import create_deal_bid, deal_next_card as db_deal_next, reveal as db_reveal, DealBidInput
-from server.sm.stirring import create_stirring, pass_stir as st_pass, stir as st_stir, StirInput
-from server.sm.exchange import create_exchange, discard as ex_discard, ExchangeInput
-from server.sm.trick import create_trick, play as tr_play, TrickInput
-from server.sm.scoring import calculate_score, RoundResult
-from server.sm.types import CompletedTrick, CompletedTrickSlot
+from server.sm.scoring import calculate_score
 from server.sm.round_sm import (
     create_round, deal_next_card as rn_deal, reveal as rn_reveal,
-    pass_stir as rn_pass, stir as rn_stir, discard as rn_discard,
+    pass_stir as rn_pass, discard as rn_discard,
     play as rn_play, is_round_complete, get_round_result, RoundInput,
+    RoundState,
 )
 from server.sm.game_sm import create_game, start_game, process_round_result
 
 
-def _play_first_legal(round_state) -> object:
+def _play_first_legal(round_state: RoundState) -> RoundState:
     """Play the first legal play for the current player in the trick.
 
     Uses get_legal_plays to find a valid play instead of blindly playing
@@ -48,7 +41,7 @@ def _play_first_legal(round_state) -> object:
     else:
         # Build the lead action from the lead player's slot
         lead_slot = trick.slots[trick.lead_player]
-        assert lead_slot is not None and lead_slot.cards is not None
+        assert lead_slot is not None
         lead_cards = lead_slot.cards
         lead_action = PlayAction(type=trick.lead_type, cards=lead_cards)
 
@@ -63,7 +56,7 @@ def _play_first_legal(round_state) -> object:
     return rn_play(round_state, cards=legal_plays[0].cards)
 
 
-def _complete_round_no_bid(round_state) -> object:
+def _complete_round_no_bid(round_state: RoundState) -> RoundState:
     """Drive a round through all phases with no bids, all pass stirring."""
     # Deal-bid: deal all 100 cards without revealing
     while round_state.phase == "DEAL_BID":
@@ -197,8 +190,8 @@ class TestE2EFullRound:
 
         assert round_state.phase == "EXCHANGE"
         assert round_state.exchange_state is not None
-        # Discard first 8 cards from combined hand
-        discards = round_state.exchange_state.hand_after_pickup[:8]
+        # Discard cards using the dynamic count from exchange state
+        discards = round_state.exchange_state.hand_after_pickup[:round_state.exchange_state.count]
         round_state = rn_discard(round_state, discards)
         assert round_state.phase == "PLAYING"
         assert round_state.trick_state is not None
@@ -217,7 +210,7 @@ class TestE2EMultipleRounds:
             # Run a full round using actual state machine operations
             round_state = create_round(RoundInput(
                 declarer_team=game.declarer_team,
-                trump_rank=game.team0_level if game.declarer_team == 0 else game.team1_level,
+                trump_rank=game.team0_level if (game.declarer_team or 0) == 0 else game.team1_level,
                 last_declarer_player=game.last_declarer_player,
                 team0_level=game.team0_level,
                 team1_level=game.team1_level,
