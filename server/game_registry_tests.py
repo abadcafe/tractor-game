@@ -200,3 +200,19 @@ def test_cleanup_expired_mixed():
     assert removed == 1
     assert registry.get(old_id) is None
     assert registry.get(new_id) is new_game
+
+
+def test_list_games_returns_real_phase():
+    """list_games should use game.get_phase() for phase info, not a simple is_over() check."""
+    from unittest.mock import MagicMock
+    registry = GameRegistry()
+    game1 = MagicMock()
+    game1.get_phase.return_value = "DEAL_BID"
+    game2 = MagicMock()
+    game2.get_phase.return_value = "PLAYING"
+    id1 = registry.create(game1)
+    id2 = registry.create(game2)
+    result = registry.list_games()
+    phases = {r["game_id"]: r["phase"] for r in result}
+    assert phases[id1] == "DEAL_BID"
+    assert phases[id2] == "PLAYING"
