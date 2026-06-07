@@ -200,7 +200,11 @@ class Game:
         After applying the action, pushes state to the appropriate player(s).
         If the action causes GAME_OVER, pushes final state to all players
         and invokes the on_game_over callback.
+
+        Raises ValueError if player_index is out of range.
         """
+        if player_index < 0 or player_index >= len(self._players):
+            raise ValueError(f"Player index {player_index} out of range (0-{len(self._players) - 1})")
         phase = self.get_phase()
 
         if phase == "DEAL_BID" and isinstance(action, BidAction):
@@ -253,6 +257,7 @@ class Game:
                 if self._on_game_over is not None:
                     self._on_game_over(self)
             else:
+                self._cancelled = False
                 self._round_state = round_sm.create_round(round_sm.RoundInput(
                     declarer_team=self._game_state.declarer_team,
                     trump_rank=self._game_state.team0_level,
@@ -260,6 +265,8 @@ class Game:
                     team0_level=self._game_state.team0_level,
                     team1_level=self._game_state.team1_level,
                 ))
+                # Start a new dealing loop for the next round
+                self._dealing_task = asyncio.create_task(self._dealing_loop())
                 # Push state to dealing target
                 if self._round_state.deal_bid_state is not None:
                     await self._push_state_to_player(self._round_state.deal_bid_state.deal_target)
@@ -272,8 +279,8 @@ class Game:
         Raises RuntimeError if called before run().
         Raises ValueError if for_player is out of range.
         """
-        if for_player < 0 or for_player >= 4:
-            raise ValueError(f"Player index {for_player} out of range (0-3)")
+        if for_player < 0 or for_player >= len(self._players):
+            raise ValueError(f"Player index {for_player} out of range (0-{len(self._players) - 1})")
         if self._round_state is None:
             raise RuntimeError("Game not started")
 
@@ -443,8 +450,8 @@ class Game:
         Raises ValueError if any card_id is not found in the player's hand.
         Raises ValueError if player_index is out of range.
         """
-        if player_index < 0 or player_index >= 4:
-            raise ValueError(f"Player index {player_index} out of range (0-3)")
+        if player_index < 0 or player_index >= len(self._players):
+            raise ValueError(f"Player index {player_index} out of range (0-{len(self._players) - 1})")
         if self._round_state is None:
             raise RuntimeError("Game not started")
 
@@ -513,6 +520,6 @@ class Game:
         await self._players[player_index].on_state(self)
 
     async def _push_state_to_all(self) -> None:
-        """Push state to all 4 players."""
-        for i in range(4):
+        """Push state to all players."""
+        for i in range(len(self._players)):
             await self._players[i].on_state(self)
