@@ -221,6 +221,7 @@ class TestStirringPhase:
 
     def test_stir_during_stirring(self) -> None:
         """stir during STIRRING changes trump suit."""
+        random.seed(10)
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
             last_declarer_player=None,
@@ -243,14 +244,13 @@ class TestStirringPhase:
             if cnt >= 2 and s != state.trump_suit:
                 target_suit = s
                 break
-        if target_suit is not None:
-            pair = [c for c in hand if c.rank == state.trump_rank and not c.is_joker and c.suit == target_suit][:2]
-            state = stir(state, cards=pair)
-            assert state.trump_suit == target_suit
-        else:
-            # If no pair available in hand, find any 2 cards of same suit
-            # that form a valid stir (trump rank pair)
-            pytest.skip("No trump-rank pair available in current player's hand for stirring")
+        assert target_suit is not None, (
+            f"No trump-rank pair available in player {cur}'s hand for stirring. "
+            f"Hand: {[c.id for c in hand]}"
+        )
+        pair = [c for c in hand if c.rank == state.trump_rank and not c.is_joker and c.suit == target_suit][:2]
+        state = stir(state, cards=pair)
+        assert state.trump_suit == target_suit
 
     def test_stir_cards_not_in_hand_rejected(self) -> None:
         """stir with cards not in current player's hand is rejected."""
@@ -341,6 +341,7 @@ class TestPlayingPhase:
         # Play a complete trick: 4 players play
         trick = state.trick_state
         assert trick is not None
+        lead_player = trick.lead_player
         # Play all 4 cards for the first trick using legal plays
         for _ in range(4):
             if state.phase != "PLAYING":
@@ -349,6 +350,17 @@ class TestPlayingPhase:
             if trick is None or trick.phase == "RESOLVED":
                 break
             state = _play_first_legal(state)
+
+        # After the trick, a new trick should have started (or we moved to scoring)
+        assert len(state.trick_history) == 1
+        assert state.defender_points >= 0
+        if state.phase == "PLAYING":
+            # New trick started: lead player is the winner of the first trick
+            new_trick = state.trick_state
+            assert new_trick is not None
+            assert new_trick.phase == "LEADING"
+            winner = state.trick_history[0].winner
+            assert new_trick.lead_player == winner
 
     def test_playing_all_tricks_to_scoring(self) -> None:
         """After all tricks are played, round enters SCORING."""
@@ -403,11 +415,15 @@ class TestScoringPhase:
                 trick = state.trick_state
                 if trick is None:
                     break
-        if state.phase == "SCORING":
-            assert is_round_complete(state) is False
-            # Scoring is auto-computed on transition; check result is available
-            # The round should transition to COMPLETE after scoring
-            # In this design, SCORING is a transient state that immediately computes
+        # SCORING is transient and immediately transitions to COMPLETE
+        assert state.phase == "COMPLETE"
+        assert is_round_complete(state) is True
+        result = get_round_result(state)
+        assert result is not None
+        assert result.next_declarer_team in (0, 1)
+        assert result.next_declarer_player in (0, 1, 2, 3)
+        assert isinstance(result.total_defender_points, int)
+        assert isinstance(result.bottom_card_bonus, int)
 
 
 class TestRoundDeclarer:

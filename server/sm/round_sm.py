@@ -40,21 +40,6 @@ class RoundInput(BaseModel):
     team1_level: Rank
 
 
-class RoundResult(BaseModel):
-    """Alias for scoring.RoundResult used by the round state machine."""
-
-    model_config = ConfigDict(frozen=True)
-
-    team0_new_level: Rank
-    team1_new_level: Rank
-    next_declarer_team: int
-    next_declarer_player: int
-    total_defender_points: int
-    declarer_level_change: int
-    switch_declarer: bool
-    bottom_card_bonus: int
-
-
 class RoundState(BaseModel):
     """Internal state of the round state machine."""
 
@@ -74,6 +59,7 @@ class RoundState(BaseModel):
     stirring_state: stir_mod.StirringState | None
     exchange_state: exc.ExchangeState | None
     trick_state: trick_mod.TrickState | None
+    current_lead_player: int | None
     result: scoring.RoundResult | None
     team0_level: Rank
     team1_level: Rank
@@ -117,6 +103,7 @@ def create_round(input: RoundInput) -> RoundState:
         stirring_state=None,
         exchange_state=None,
         trick_state=None,
+        current_lead_player=None,
         result=None,
         team0_level=input.team0_level,
         team1_level=input.team1_level,
@@ -422,6 +409,7 @@ def _start_next_trick(state: RoundState, lead_player: int) -> RoundState:
     return state.model_copy(update={
         "phase": "PLAYING",
         "trick_state": trick_state,
+        "current_lead_player": lead_player,
     })
 
 
