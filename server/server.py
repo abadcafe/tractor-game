@@ -90,8 +90,8 @@ async def delete_game(game_id: str):
         if human.is_connected():
             try:
                 await human.on_state(game)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to push final state before delete: %s", e)
             human.set_ws(None)
         await game.cancel()
     registry.delete(game_id)
@@ -209,6 +209,8 @@ def _extract_card_ids(cards: list) -> list[str]:
         if isinstance(c, str):
             ids.append(c)
         elif isinstance(c, dict):
+            if "id" not in c:
+                raise ValueError(f"Invalid card format: missing 'id' field in {c}")
             ids.append(c["id"])
         else:
             raise ValueError(f"Invalid card format: {c}")
@@ -217,12 +219,12 @@ def _extract_card_ids(cards: list) -> list[str]:
 
 # ---- Static files ----
 
-_static_dir = os.path.join(os.path.dirname(__file__), "..", "static")
+_static_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static"))
 if os.path.isdir(_static_dir):
     app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
 
 @app.get("/")
 async def index():
-    html_path = os.path.join(os.path.dirname(__file__), "..", "index.html")
+    html_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "index.html"))
     return FileResponse(html_path)
