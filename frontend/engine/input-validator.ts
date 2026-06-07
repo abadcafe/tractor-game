@@ -1,0 +1,50 @@
+import type { Card, PlayAction } from "../core/types.ts";
+import { isJoker } from "../core/card.ts";
+
+/**
+ * Validate selected cards against a list of legal play actions.
+ * Returns the first matching PlayAction, or null if no match.
+ * Matching: every selected card ID must appear in the action's card IDs.
+ */
+export function validatePlay(
+  selectedCards: Card[],
+  legalActions: PlayAction[],
+): PlayAction | null {
+  if (selectedCards.length === 0) {
+    return null;
+  }
+  const selectedIds = new Set(selectedCards.map((c) => c.id));
+  for (const action of legalActions) {
+    const actionIds = new Set(action.cards.map((c) => c.id));
+    if ([...selectedIds].every((id) => actionIds.has(id))) {
+      return action;
+    }
+  }
+  return null;
+}
+
+/**
+ * Validate that the number of selected discard cards matches the expected count.
+ */
+export function validateDiscard(
+  selectedCards: Card[],
+  expectedCount: number,
+): boolean {
+  return selectedCards.length === expectedCount;
+}
+
+/**
+ * Validate that all selected cards are valid for bidding:
+ * each must be a joker or have the trump rank, and selection must not be empty.
+ */
+export function validateBidCards(
+  selectedCards: Card[],
+  trumpRank: string,
+): boolean {
+  if (selectedCards.length === 0) {
+    return false;
+  }
+  return selectedCards.every(
+    (c) => isJoker(c) || c.rank === trumpRank,
+  );
+}
