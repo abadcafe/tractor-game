@@ -120,6 +120,43 @@ async def test_delete_nonexistent_returns_200(client, clean_registry):
     assert response.json()["ok"] is True
 
 
+def test_delete_game_with_active_ws(sync_client, clean_registry):
+    """DELETE a game that has an active WebSocket connection.
+
+    The server should push a final state message to the WS and then
+    return 200 with {"ok": true}. We use a background thread to call
+    DELETE while the WS is open.
+    """
+    import threading
+    from server.server import registry
+
+    create_resp = sync_client.post("/api/game")
+    game_id = create_resp.json()["game_id"]
+    result = {"status_code": None}
+
+    def do_delete():
+        resp = sync_client.delete(f"/api/game/{game_id}")
+        result["status_code"] = resp.status_code
+
+    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        initial = ws.receive_json()
+        assert initial["type"] == "state"
+        # Start DELETE in a background thread
+        t = threading.Thread(target=do_delete)
+        t.start()
+        # The server should push a final state and close the WS
+        try:
+            ws.receive_json(timeout=5.0)
+        except Exception:
+            # Acceptable: WS closed after state push
+            pass
+        t.join(timeout=5.0)
+
+    assert result["status_code"] == 200
+    # Verify game is removed
+    assert registry.get(game_id) is None
+
+
 # ---- Human player index ----
 
 
@@ -243,16 +280,18 @@ def test_ws_bid_action_receives_response(sync_client, clean_registry):
         initial = ws.receive_json()
         assert initial["type"] == "state"
         ws.send_json({"type": "bid", "cards": []})
+        response = None
         try:
             response = ws.receive_json(timeout=2.0)
-            # Server must respond with either "state" or "error"
-            assert response["type"] in ("state", "error")
         except Exception:
             # If no response within timeout, the server may have processed
             # the bid asynchronously without sending an immediate response
             # (e.g., the bid was silently rejected by sm).
             # This is acceptable for invalid bids during wrong phase.
             pass
+        if response is not None:
+            # Server must respond with either "state" or "error"
+            assert response["type"] in ("state", "error")
 
 
 def test_ws_play_action_receives_response(sync_client, clean_registry):
@@ -266,11 +305,13 @@ def test_ws_play_action_receives_response(sync_client, clean_registry):
         initial = ws.receive_json()
         assert initial["type"] == "state"
         ws.send_json({"type": "play", "cards": []})
+        response = None
         try:
             response = ws.receive_json(timeout=2.0)
-            assert response["type"] in ("state", "error")
         except Exception:
             pass
+        if response is not None:
+            assert response["type"] in ("state", "error")
 
 
 def test_ws_next_round_action_receives_response(sync_client, clean_registry):
@@ -284,11 +325,13 @@ def test_ws_next_round_action_receives_response(sync_client, clean_registry):
         initial = ws.receive_json()
         assert initial["type"] == "state"
         ws.send_json({"type": "next_round"})
+        response = None
         try:
             response = ws.receive_json(timeout=2.0)
-            assert response["type"] in ("state", "error")
         except Exception:
             pass
+        if response is not None:
+            assert response["type"] in ("state", "error")
 
 
 def test_ws_stir_action_receives_response(sync_client, clean_registry):
@@ -299,11 +342,13 @@ def test_ws_stir_action_receives_response(sync_client, clean_registry):
         initial = ws.receive_json()
         assert initial["type"] == "state"
         ws.send_json({"type": "stir", "cards": [], "pass": False})
+        response = None
         try:
             response = ws.receive_json(timeout=2.0)
-            assert response["type"] in ("state", "error")
         except Exception:
             pass
+        if response is not None:
+            assert response["type"] in ("state", "error")
 
 
 def test_ws_discard_action_receives_response(sync_client, clean_registry):
@@ -314,11 +359,13 @@ def test_ws_discard_action_receives_response(sync_client, clean_registry):
         initial = ws.receive_json()
         assert initial["type"] == "state"
         ws.send_json({"type": "discard", "cards": []})
+        response = None
         try:
             response = ws.receive_json(timeout=2.0)
-            assert response["type"] in ("state", "error")
         except Exception:
             pass
+        if response is not None:
+            assert response["type"] in ("state", "error")
 
 
 # ---- WebSocket: Error Handling ----
@@ -336,14 +383,16 @@ def test_ws_invalid_action_returns_error(sync_client, clean_registry):
         initial = ws.receive_json()
         assert initial["type"] == "state"
         ws.send_json({"type": "unknown_action", "data": "value"})
+        response = None
         try:
             response = ws.receive_json(timeout=2.0)
-            assert response["type"] == "error"
-            assert "message" in response
         except Exception:
             # If the server closes the connection instead of sending error,
             # that's also acceptable (connection close = rejection).
             pass
+        if response is not None:
+            assert response["type"] == "error"
+            assert "message" in response
 
 
 # ---- Reconnect ----

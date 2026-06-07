@@ -7,6 +7,7 @@ concerns only. Contains no game logic.
 import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -27,10 +28,29 @@ from server.player import (
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
+_HUMAN_PLAYER_INDEX = 3
 registry = GameRegistry()
 
-_HUMAN_PLAYER_INDEX = 3
+
+async def _cleanup_loop():
+    """Periodic cleanup of expired games."""
+    while True:
+        await asyncio.sleep(300)
+        registry.cleanup_expired(max_age_seconds=3600)
+
+
+@asynccontextmanager
+async def lifespan(app):
+    task = asyncio.create_task(_cleanup_loop())
+    yield
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+app = FastAPI(lifespan=lifespan)
 
 # ---- REST Endpoints ----
 
@@ -69,13 +89,7 @@ async def delete_game(game_id: str):
         human = game.get_player(_HUMAN_PLAYER_INDEX)
         if human.is_connected():
             try:
-                snap = game.snapshot(_HUMAN_PLAYER_INDEX)
-                await human._ws.send_json({
-                    "type": "state",
-                    "awaiting": snap.awaiting_action,
-                    "state": snap.to_dict(),
-                })
-                await human._ws.close()
+                await human.on_state(game)
             except Exception:
                 pass
             human.set_ws(None)
@@ -199,20 +213,6 @@ def _extract_card_ids(cards: list) -> list[str]:
         else:
             raise ValueError(f"Invalid card format: {c}")
     return ids
-
-
-# ---- Lifespan ----
-
-
-@app.on_event("startup")
-async def _startup_cleanup():
-    """Periodic cleanup of expired games."""
-    async def _cleanup_loop():
-        while True:
-            await asyncio.sleep(300)
-            registry.cleanup_expired(max_age_seconds=3600)
-
-    asyncio.create_task(_cleanup_loop())
 
 
 # ---- Static files ----
