@@ -42,6 +42,7 @@ def _play_first_legal(round_state: RoundState) -> RoundState:
         lead_slot = trick.slots[trick.lead_player]
         assert lead_slot is not None
         lead_cards = lead_slot.cards
+        assert trick.lead_type is not None
         lead_action = PlayAction(type=trick.lead_type, cards=lead_cards)
 
     legal_plays = get_legal_plays(
