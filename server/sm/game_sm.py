@@ -26,7 +26,7 @@ class GameOverResult(BaseModel):
 class GameState(BaseModel):
     """State of the full game."""
 
-    model_config = ConfigDict(frozen=False)
+    model_config = ConfigDict(frozen=True)
 
     phase: Literal["IDLE", "IN_ROUND", "GAME_OVER"]
     team0_level: Rank
@@ -90,6 +90,8 @@ def process_round_result(state: GameState, result: RoundResult) -> GameState:
             "team0_level": new_team0,
             "team1_level": new_team1,
             "winning_team": winning,
+            "declarer_team": None,
+            "last_declarer_player": None,
         })
 
     # Game continues

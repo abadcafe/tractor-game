@@ -1,5 +1,4 @@
 """Tests for sm.game_sm module."""
-import pytest
 from server.sm.card_model import Rank
 from server.sm.scoring import RoundResult
 from server.sm.game_sm import (
@@ -171,3 +170,111 @@ class TestGameOver:
         state = process_round_result(state, r2)
         assert state.phase == "IN_ROUND"
         assert state.team1_level == Rank.FIVE
+
+
+class TestInvalidTransitions:
+    def test_start_game_when_in_round(self) -> None:
+        """Cannot start game when already in round."""
+        state = create_game()
+        state = start_game(state)
+        try:
+            start_game(state)
+            raise AssertionError("Expected ValueError for invalid phase transition")
+        except ValueError:
+            pass
+
+    def test_start_game_when_game_over(self) -> None:
+        """Cannot start game when game is over."""
+        state = create_game()
+        state = start_game(state)
+        result = RoundResult(
+            team0_new_level=Rank.ACE,
+            team1_new_level=Rank.TWO,
+            next_declarer_team=0,
+            next_declarer_player=0,
+            total_defender_points=0,
+            declarer_level_change=3,
+            switch_declarer=False,
+            bottom_card_bonus=0,
+        )
+        state = process_round_result(state, result)
+        try:
+            start_game(state)
+            raise AssertionError("Expected ValueError for invalid phase transition")
+        except ValueError:
+            pass
+
+    def test_process_round_result_when_idle(self) -> None:
+        """Cannot process round result when game is idle."""
+        state = create_game()
+        result = RoundResult(
+            team0_new_level=Rank.FIVE,
+            team1_new_level=Rank.TWO,
+            next_declarer_team=0,
+            next_declarer_player=0,
+            total_defender_points=0,
+            declarer_level_change=2,
+            switch_declarer=False,
+            bottom_card_bonus=0,
+        )
+        try:
+            process_round_result(state, result)
+            raise AssertionError("Expected ValueError for invalid phase transition")
+        except ValueError:
+            pass
+
+
+class TestEdgeCases:
+    def test_game_over_both_teams_ace(self) -> None:
+        """When both teams reach ACE, team 0 wins (tie-breaker)."""
+        state = create_game()
+        state = start_game(state)
+        result = RoundResult(
+            team0_new_level=Rank.ACE,
+            team1_new_level=Rank.ACE,
+            next_declarer_team=0,
+            next_declarer_player=0,
+            total_defender_points=0,
+            declarer_level_change=3,
+            switch_declarer=False,
+            bottom_card_bonus=0,
+        )
+        state = process_round_result(state, result)
+        assert state.phase == "GAME_OVER"
+        assert state.winning_team == 0
+        assert state.team0_level == Rank.ACE
+        assert state.team1_level == Rank.ACE
+
+    def test_game_over_resets_declarer_fields(self) -> None:
+        """On game over, declarer_team and last_declarer_player are reset to None."""
+        state = create_game()
+        state = start_game(state)
+        # First round to set declarer fields
+        r1 = RoundResult(
+            team0_new_level=Rank.FOUR,
+            team1_new_level=Rank.TWO,
+            next_declarer_team=0,
+            next_declarer_player=3,
+            total_defender_points=20,
+            declarer_level_change=1,
+            switch_declarer=False,
+            bottom_card_bonus=0,
+        )
+        state = process_round_result(state, r1)
+        assert state.declarer_team == 0
+        assert state.last_declarer_player == 3
+        # Second round ends the game
+        r2 = RoundResult(
+            team0_new_level=Rank.ACE,
+            team1_new_level=Rank.TWO,
+            next_declarer_team=0,
+            next_declarer_player=3,
+            total_defender_points=0,
+            declarer_level_change=3,
+            switch_declarer=False,
+            bottom_card_bonus=0,
+        )
+        state = process_round_result(state, r2)
+        assert state.phase == "GAME_OVER"
+        assert state.declarer_team is None
+        assert state.last_declarer_player is None
