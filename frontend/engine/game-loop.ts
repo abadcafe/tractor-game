@@ -1,6 +1,7 @@
 import type { StateSnapshot, ServerMessage, InteractionMode } from "../core/types.ts";
 import type { StateManager } from "../core/state.ts";
 import { HUMAN_PLAYER_INDEX } from "../config.ts";
+import { showErrorToast } from "../ui/error-toast.ts";
 
 /**
  * Core game loop orchestrator.
@@ -31,6 +32,7 @@ export class GameLoop {
   handleMessage(msg: ServerMessage): void {
     if (msg.type === "error") {
       this.lastError = msg.message;
+      showErrorToast(msg.message, this.container);
       return;
     }
 
