@@ -1,4 +1,4 @@
-import { assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { DOMParser } from "jsr:@b-fuze/deno-dom@0.1.56";
 import { renderTrickView } from "../ui/components/trick-view.ts";
 import type { StateSnapshot } from "../core/types.ts";
@@ -46,7 +46,7 @@ Deno.test("test_renderTrickView_shows_played_cards", () => {
   const snap = makeSnapshot();
   const el = renderTrickView(snap);
   const trickCards = el.querySelectorAll(".trick-card");
-  assertEquals(trickCards.length >= 1, true);
+  assertEquals(trickCards.length, 1);
 });
 
 Deno.test("test_renderTrickView_empty_trick", () => {
@@ -60,5 +60,47 @@ Deno.test("test_renderTrickView_player_labels", () => {
   const snap = makeSnapshot();
   const el = renderTrickView(snap);
   const labels = el.querySelectorAll(".player-label");
-  assertEquals(labels.length >= 1, true);
+  assertEquals(labels.length, 1);
+});
+
+Deno.test("test_renderTrickView_multiple_slots", () => {
+  const snap = makeSnapshot({
+    trick: {
+      lead_player: 0,
+      lead_type: "single",
+      slots: [
+        { player: 0, cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }] },
+        { player: 1, cards: [{ id: "D2-hearts-9", suit: "hearts", rank: "9" }] },
+        { player: 2, cards: [{ id: "D3-spades-J", suit: "spades", rank: "J" }] },
+      ],
+      current_player: 3,
+    },
+  });
+  const el = renderTrickView(snap);
+  const slots = el.querySelectorAll(".trick-slot");
+  assertEquals(slots.length, 3);
+  const trickCards = el.querySelectorAll(".trick-card");
+  assertEquals(trickCards.length, 3);
+  const labels = el.querySelectorAll(".player-label");
+  assertEquals(labels.length, 3);
+});
+
+Deno.test("test_renderTrickView_slot_with_empty_cards", () => {
+  const snap = makeSnapshot({
+    trick: {
+      lead_player: 0,
+      lead_type: "single",
+      slots: [
+        { player: 0, cards: [] },
+      ],
+      current_player: 3,
+    },
+  });
+  const el = renderTrickView(snap);
+  const slots = el.querySelectorAll(".trick-slot");
+  assertEquals(slots.length, 1);
+  const trickCards = el.querySelectorAll(".trick-card");
+  assertEquals(trickCards.length, 0);
+  const labels = el.querySelectorAll(".player-label");
+  assertEquals(labels.length, 1);
 });

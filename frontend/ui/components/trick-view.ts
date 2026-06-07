@@ -18,7 +18,8 @@ export function renderTrickView(snapshot: StateSnapshot): HTMLElement {
   }
 
   for (const slot of snapshot.trick.slots) {
-    const slotEl = el("div", { class: "trick-slot" });
+    const isCurrentPlayer = slot.player === snapshot.trick!.current_player;
+    const slotEl = el("div", { class: isCurrentPlayer ? "trick-slot current" : "trick-slot" });
 
     // Add player label from SEAT_MAP
     const seatInfo = SEAT_MAP[slot.player];
