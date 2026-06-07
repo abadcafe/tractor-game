@@ -32,20 +32,19 @@
 
 ### CQ-009: Exception handling in delete_game silently swallows errors from human.on_state
 - Status: Resolved
-- Description: At `server/server.py:91-94`, when pushing the final state to an active WebSocket before deletion, the code catches `Exception` and silently passes. If `on_state` fails (e.g., WebSocket already half-closed, serialization error), the human player receives no notification and the error is invisible. The `set_ws(None)` at line 95 still runs, which is correct for cleanup, but there is no logging of the failure. In production, this makes debugging connection issues difficult. At minimum, a `logger.debug` or `logger.warning` should be added inside the except block to record the failure reason.
-- Decision Reason: (implementer fills for Don't Fix status)
 
 ### CQ-010: _parse_action does not handle KeyError from _extract_card_ids on malformed dict cards
 - Status: Resolved
-- Description: At `server/server.py:212`, `_extract_card_ids` accesses `c["id"]` for dict-format cards without a `try/except KeyError`. If a client sends `{"cards": [{"suit": "hearts"}]}` (missing the "id" key), this raises an unhandled `KeyError` which propagates up. The `_parse_action` caller catches `ValueError` (line 157) but not `KeyError`, so the exception reaches the generic `except Exception` handler at line 162 and returns an error message. This technically works but the error message will be a generic Python traceback string rather than a clean user-facing message like `"Invalid card format: missing 'id' field"`. The `ValueError` raised by the `else` branch at line 214 is the intended pattern -- the dict branch should follow the same convention.
-- Decision Reason: (implementer fills for Don't Fix status)
 
 ### CQ-011: Static file mount uses relative path that may resolve incorrectly
 - Status: Resolved
-- Description: At `server/server.py:220`, `_static_dir` is computed as `os.path.join(os.path.dirname(__file__), "..", "static")`. This uses a relative `..` component which is resolved at import time. While this works for the standard project layout, the resulting path may contain `..` segments (e.g., `/home/lfw/works/tractor-game/server/../static`). `os.path.abspath()` should be called to normalize the path. The same issue exists at line 227 for `html_path`. This matters if any downstream code compares paths or if FastAPI/Starlette does path resolution that doesn't handle `..` consistently.
-- Decision Reason: (implementer fills for Don't Fix status)
 
 ### CQ-012: No input validation on game_id path parameter in DELETE endpoint
 - Status: Don't Fix
 - Description: At `server/server.py:85`, the `game_id` parameter is a plain `str` with no validation. While `registry.get()` gracefully returns `None` for invalid IDs, the endpoint accepts arbitrarily long strings, special characters, or path-traversal-like inputs (e.g., `../../../etc/passwd`). FastAPI's path parameter extraction handles URL decoding, but the downstream `registry.get(game_id)` does a dictionary lookup, so there is no actual security vulnerability. However, for production robustness, a Pydantic model or regex constraint (e.g., `Path(game_id, pattern=r"^[a-f0-9]{32}$")`) would be appropriate since `GameRegistry.create()` generates `uuid4().hex` strings.
 - Decision Reason: No security vulnerability exists - `registry.get(game_id)` is a dictionary lookup that returns None for unknown keys. Adding regex validation would change the API contract and require updating tests. The test `test_delete_nonexistent_returns_200` already verifies graceful handling of arbitrary strings. This is a production hardening concern, not a task requirement. All 20 tests pass without this change.
+
+### CQ-013: Initial state push in normal WS connect path is not wrapped in try/finally
+- Status: Resolved
+- Description: At `server/server.py:137-144`, the normal (non-game-over) WebSocket connect path sets the WS reference on the human player (`human_player.set_ws(websocket)` at line 137), then pushes initial state via `game.snapshot()` (line 139) and `websocket.send_json()` (line 140). If either of these raises an exception (e.g., the websocket connection was already closed by the client between accept and send, or snapshot raises), the exception propagates out of the function WITHOUT entering the `try/finally` block at lines 146-171. This means `human_player.set_ws(None)` at line 171 never runs, leaving the HumanPlayer with a stale/dead WebSocket reference. Subsequent connection attempts would be rejected by the `is_connected()` check at line 113, effectively making the game unplayable. Compare with the game-over branch (lines 118-135) which correctly wraps snapshot/send in its own `try/finally` that always calls `set_ws(None)`. The fix is to move the `human_player.set_ws(websocket)` call inside the `try` block at line 146, or wrap lines 137-144 in their own try/except that calls `set_ws(None)` and re-raises.
+- Decision Reason:

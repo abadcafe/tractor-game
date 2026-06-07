@@ -135,13 +135,17 @@ async def websocket_game(websocket: WebSocket, game_id: str):
         return
 
     human_player.set_ws(websocket)
-    await websocket.accept()
-    snap = game.snapshot(_HUMAN_PLAYER_INDEX)
-    await websocket.send_json({
-        "type": "state",
-        "awaiting": snap.awaiting_action,
-        "state": snap.to_dict(),
-    })
+    try:
+        await websocket.accept()
+        snap = game.snapshot(_HUMAN_PLAYER_INDEX)
+        await websocket.send_json({
+            "type": "state",
+            "awaiting": snap.awaiting_action,
+            "state": snap.to_dict(),
+        })
+    except Exception:
+        human_player.set_ws(None)
+        return
 
     try:
         while True:
