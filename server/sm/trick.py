@@ -114,8 +114,9 @@ def play(state: TrickState, player: int, cards: list[Card]) -> TrickState:
     # Validate follow-suit if following
     if state.phase == "FOLLOWING":
         lead_cards = state.slots[state.lead_player].cards
-        if lead_cards is None or len(lead_cards) == 0:
+        if len(lead_cards) == 0:
             raise ValueError("Lead cards must exist in FOLLOWING phase")
+        assert state.lead_type is not None, "lead_type must be set in FOLLOWING phase"
         lead_action = PlayAction(type=state.lead_type, cards=lead_cards)
         legal_plays = get_legal_plays(
             hand=hand,
@@ -187,11 +188,8 @@ def _resolve(state: TrickState) -> None:
     lead_cards = lead_slot.cards
     if len(lead_cards) == 0:
         raise ValueError("Lead cards must exist at resolution")
-    lead_suit = effective_suit(lead_cards[0], state.trump_suit, state.trump_rank)
-    if lead_suit == "trump":
-        lead_suit_obj = None  # compare_plays handles trump internally
-    else:
-        lead_suit_obj = lead_suit
+    lead_suit_raw = effective_suit(lead_cards[0], state.trump_suit, state.trump_rank)
+    lead_suit_obj: Suit | None = None if not isinstance(lead_suit_raw, Suit) else lead_suit_raw
 
     # Find winner by comparing each play against current best
     winner = state.lead_player

@@ -2,6 +2,11 @@
 
 ## Task Review Issues
 
+### TR-001: Dead None-check on lead_cards in follow-suit validation (line 117)
+- Status: Resolved
+- Description: At trick.py:117, the code reads `if lead_cards is None or len(lead_cards) == 0:`. The `is None` check is dead code because `CompletedTrickSlot.cards` is typed as `list[Card]` (not Optional) in types.py:95, and all slots are initialized with `cards=[]` in `create_trick` (line 73) or `cards=list(cards)` in `play` (line 145). The `lead_cards` variable is `lead_slot.cards` (line 116), which is always a list, never None. This is the same class of issue reported in CQ-009 but in the `play()` function rather than `_resolve()`. The `_resolve` function was fixed (lines 188, 199, 207 now only check `len(...) == 0`), but line 117 in `play()` was missed.
+- Decision Reason: Removed `is None` check to match the pattern already used in `_resolve()`. `lead_cards` is always `list[Card]`, never None.
+
 ## Code Quality Issues
 
 ### CQ-001: TrickState.phase should be Literal["LEADING", "FOLLOWING", "RESOLVED"] not str
