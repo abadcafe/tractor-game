@@ -4,7 +4,6 @@ These tests drive the complete game flow from start to game-over,
 using actual state machine operations (deal_next_card, reveal, stir,
 pass_stir, discard, play) -- NOT manually constructed result objects.
 """
-import pytest
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.types import (
     BidEvent, PlayAction, PlayType, CompletedTrick, CompletedTrickSlot,
@@ -261,13 +260,23 @@ class TestE2EMultipleRounds:
 
 class TestE2EScoringBoundaryCases:
     def _completed_trick(self, lead_type: PlayType, card_count: int, winner: int) -> CompletedTrick:
-        """Create a minimal CompletedTrick for scoring tests."""
-        slot = CompletedTrickSlot(
-            player=winner, cards=[Card(id=f"D1-spades-3", suit=Suit.SPADES, rank=Rank.THREE,
-                                        is_joker=False, is_big_joker=False, points=0, deck=1)] * card_count,
-        )
+        """Create a minimal CompletedTrick for scoring tests.
+
+        Always includes a slot for lead_player=0 so the primary lookup path
+        in _find_lead_card_count/_find_lead_cards is exercised rather than
+        the fallback.
+        """
+        lead_cards = [Card(id=f"D1-spades-3", suit=Suit.SPADES, rank=Rank.THREE,
+                           is_joker=False, is_big_joker=False, points=0, deck=1)] * card_count
+        slots = [CompletedTrickSlot(player=0, cards=lead_cards)]
+        if winner != 0:
+            slots.append(CompletedTrickSlot(
+                player=winner,
+                cards=[Card(id=f"D1-spades-3", suit=Suit.SPADES, rank=Rank.THREE,
+                            is_joker=False, is_big_joker=False, points=0, deck=1)] * card_count,
+            ))
         return CompletedTrick(
-            lead_player=0, lead_type=lead_type, slots=[slot],
+            lead_player=0, lead_type=lead_type, slots=slots,
             winner=winner, points=0,
         )
 
