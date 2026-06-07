@@ -74,3 +74,28 @@ Deno.test("test_renderScoringOverlay_next_round_callback", () => {
   nextButton!.dispatchEvent(new Event("click", { bubbles: true }));
   assertEquals(nextRoundCalled, true);
 });
+
+Deno.test("test_renderScoringOverlay_null_scoring", () => {
+  const snap = makeSnapshot({ scoring: null });
+  const el = renderScoringOverlay(snap, "next_round");
+  // Should not throw; overlay rendered with no scoring details
+  const text = el.textContent ?? "";
+  assertEquals(text.includes("Defender Points"), false);
+  assertEquals(text.includes("Declarer Team"), false);
+  assertEquals(text.includes("Bottom Cards"), false);
+  // Button should still appear since interactionMode is "next_round"
+  const buttons = el.querySelectorAll("button");
+  const buttonTexts = Array.from(buttons).map((b) => b.textContent);
+  assertEquals(buttonTexts.includes("下一轮"), true);
+});
+
+Deno.test("test_renderScoringOverlay_next_round_button_no_callback", () => {
+  const snap = makeSnapshot();
+  // Provide "next_round" mode but no callback
+  const el = renderScoringOverlay(snap, "next_round");
+  const buttons = el.querySelectorAll("button");
+  const nextButton = Array.from(buttons).find((b) => b.textContent === "下一轮");
+  assertNotEquals(nextButton, undefined);
+  // Clicking should not throw
+  nextButton!.dispatchEvent(new Event("click", { bubbles: true }));
+});
