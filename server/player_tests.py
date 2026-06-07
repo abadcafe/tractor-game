@@ -176,6 +176,21 @@ async def test_auto_player_next_round():
 
 
 @pytest.mark.asyncio
+async def test_auto_player_ignores_wrong_player_next_round():
+    """AutoPlayer does not submit NextRoundAction when current_player != self.index."""
+    snap = _make_snapshot(
+        phase="COMPLETE",
+        awaiting_action="next_round",
+        current_player=2,
+    )
+    game = _make_game(snap)
+    player = AutoPlayer(index=0)
+    await player.on_state(game)
+    await asyncio.sleep(0.05)
+    game.act.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_auto_player_discard_when_current():
     """AutoPlayer submits DiscardAction when awaiting discard and it's their turn."""
     card1 = MagicMock(id="c1")

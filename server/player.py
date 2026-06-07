@@ -117,7 +117,7 @@ class AutoPlayer(Player):
         elif snapshot.phase == "PLAYING" and snapshot.awaiting_action == "play":
             await self._handle_play(snapshot, game)
         elif snapshot.phase == "COMPLETE" and snapshot.awaiting_action == "next_round":
-            await self._handle_next_round(game)
+            await self._handle_next_round(snapshot, game)
 
     async def _handle_deal_bid(self, snapshot: Any, game: Any) -> None:
         """Randomly decide whether to bid during DEAL_BID phase.
@@ -177,8 +177,10 @@ class AutoPlayer(Player):
         task = asyncio.create_task(game.act(self.index, action))
         task.add_done_callback(_log_task_exception)
 
-    async def _handle_next_round(self, game: Any) -> None:
+    async def _handle_next_round(self, snapshot: Any, game: Any) -> None:
         """Submit NextRoundAction."""
+        if snapshot.current_player != self.index:
+            return
         action = NextRoundAction()
         task = asyncio.create_task(game.act(self.index, action))
         task.add_done_callback(_log_task_exception)
