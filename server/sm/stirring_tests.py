@@ -3,7 +3,7 @@ import pytest
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.stirring import (
     StirringState, StirInput, StirResult,
-    create_stirring, pass_stir, stir,
+    create_stirring, pass_stir, stir, get_stir_result,
 )
 
 
@@ -60,6 +60,18 @@ class TestPassStir:
         # Player 0 passes
         state = pass_stir(state, player=state.current_player)
         assert state.phase == "COMPLETE"
+
+    def test_pass_stir_wrong_player_rejected(self) -> None:
+        """Pass from a player who is not current_player is rejected."""
+        state = create_stirring(StirInput(
+            trump_suit=Suit.HEARTS, trump_rank=Rank.TWO, declarer_player=0,
+        ))
+        # current_player is 1; pass from player 0 should be rejected
+        old_phase = state.phase
+        old_current = state.current_player
+        state = pass_stir(state, player=0)
+        assert state.phase == old_phase
+        assert state.current_player == old_current
 
 
 class TestStir:
@@ -203,5 +215,7 @@ class TestStirFullFlow:
         for _ in range(4):
             state = pass_stir(state, player=state.current_player)
         assert state.phase == "COMPLETE"
-        # Result should have final_trump_suit = original
-        assert state.trump_suit == Suit.HEARTS
+        # Use get_stir_result to extract StirResult
+        result = get_stir_result(state)
+        assert result.final_trump_suit == Suit.HEARTS
+        assert result.stir_count == 0

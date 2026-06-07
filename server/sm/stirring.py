@@ -86,7 +86,11 @@ def pass_stir(state: StirringState, player: int) -> StirringState:
     """Player passes. Add to pass_set and advance current_player.
 
     If all 4 players have passed, phase becomes COMPLETE.
+    Rejects if player is not the current player.
     """
+    if player != state.current_player:
+        return state
+
     new_pass_set = state.pass_set | {player}
     new_action = StirAction(player=player, kind="pass", new_suit=None)
 
@@ -110,15 +114,6 @@ def pass_stir(state: StirringState, player: int) -> StirringState:
         pass_set=new_pass_set,
         actions=state.actions + (new_action,),
     )
-
-
-def _pair_priority(cards: list[Card], trump_rank: Rank) -> int:
-    """Calculate the priority value for a pair of cards.
-
-    Uses bid_value from comparator for priority comparison.
-    Pair values: ♦=200, ♣=201, ♥=202, ♠=203, small_joker=204, big_joker=205.
-    """
-    return bid_value(cards, trump_rank)
 
 
 def stir(
@@ -162,7 +157,7 @@ def stir(
         new_suit = cards[0].suit
 
     # 4. Priority check
-    new_priority = _pair_priority(cards, state.trump_rank)
+    new_priority = bid_value(cards, state.trump_rank)
 
     if state.trump_suit is None:
         # 空主: any trump-rank pair is accepted
@@ -182,7 +177,7 @@ def stir(
         # Non-joker pair on 空主: always accepted
     else:
         # Non-empty trump: priority must be higher
-        current_priority = _pair_priority(
+        current_priority = bid_value(
             _make_trump_pair(state.trump_suit, state.trump_rank),
             state.trump_rank,
         )
@@ -200,6 +195,15 @@ def stir(
         pass_set=frozenset(),
         actions=state.actions + (new_action,),
     )
+
+
+def get_stir_result(state: StirringState) -> StirResult:
+    """Extract the result from a completed stirring phase.
+
+    Returns the final trump suit and the number of stir actions taken.
+    """
+    stir_count = sum(1 for a in state.actions if a.kind == "stir")
+    return StirResult(final_trump_suit=state.trump_suit, stir_count=stir_count)
 
 
 def _make_trump_pair(suit: Suit, rank: Rank) -> list[Card]:
