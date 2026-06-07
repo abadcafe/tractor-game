@@ -214,3 +214,13 @@ class HumanPlayer(Player):
     def is_connected(self) -> bool:
         """Return True if this player has an active WebSocket connection."""
         return self._ws is not None
+
+    async def close_ws(self) -> None:
+        """Close the WebSocket connection if active, then clear the reference."""
+        if self._ws is not None:
+            ws = self._ws
+            self._ws = None
+            try:
+                await ws.close()
+            except Exception:
+                pass

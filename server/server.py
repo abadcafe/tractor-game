@@ -92,7 +92,7 @@ async def delete_game(game_id: str):
                 await human.on_state(game)
             except Exception as e:
                 logger.debug("Failed to push final state before delete: %s", e)
-            human.set_ws(None)
+            await human.close_ws()
         await game.cancel()
     registry.delete(game_id)
     return {"ok": True}
@@ -147,6 +147,10 @@ async def websocket_game(websocket: WebSocket, game_id: str):
                 await game.act(_HUMAN_PLAYER_INDEX, action)
 
                 if game.is_over():
+                    try:
+                        await human_player.on_state(game)
+                    except Exception:
+                        pass
                     break
             except ValueError as e:
                 await websocket.send_json({
