@@ -24,12 +24,6 @@ from server.player import (
     SkipStirAction,
     StirAction,
 )
-from server.schemas import (
-    CreateGameResponse,
-    DeleteGameResponse,
-    HealthResponse,
-    ListGamesResponse,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -55,22 +49,17 @@ async def lifespan(app):
         pass
 
 
-app = FastAPI(
-    title="Tractor Game",
-    description="Multiplayer tractor card game API. Core gameplay uses WebSocket at `/game/{game_id}`.",
-    version="0.1.0",
-    lifespan=lifespan,
-)
+app = FastAPI(lifespan=lifespan)
 
 # ---- REST Endpoints ----
 
 
-@app.get("/health", response_model=HealthResponse, tags=["System"], summary="Health check")
+@app.get("/health")
 async def health():
     return {"status": "ok"}
 
 
-@app.post("/api/game", status_code=201, response_model=CreateGameResponse, tags=["Game"], summary="Create a new game")
+@app.post("/api/game", status_code=201)
 async def create_game():
     players = [AutoPlayer(i) for i in range(3)]
     players.append(HumanPlayer(_HUMAN_PLAYER_INDEX, ws=None))
@@ -87,12 +76,12 @@ async def create_game():
     return {"game_id": game_id}
 
 
-@app.get("/api/game", response_model=ListGamesResponse, tags=["Game"], summary="List active games")
+@app.get("/api/game")
 async def list_games():
     return {"games": registry.list_games()}
 
 
-@app.delete("/api/game/{game_id}", response_model=DeleteGameResponse, tags=["Game"], summary="Delete a game")
+@app.delete("/api/game/{game_id}")
 async def delete_game(game_id: str):
     game = registry.get(game_id)
     if game is not None:
@@ -241,7 +230,9 @@ async def index():
 @app.get("/{path:path}")
 async def serve_static(path: str):
     """Serve static files from static/ directory. Falls back to index.html for unknown paths."""
-    file_path = os.path.join(_static_dir, path)
+    file_path = os.path.normpath(os.path.join(_static_dir, path))
+    if not file_path.startswith(_static_dir + os.sep) and file_path != _static_dir:
+        return Response(status_code=403, content="Forbidden")
     if os.path.isfile(file_path):
         return FileResponse(file_path)
     # Fallback to index.html for SPA routing
