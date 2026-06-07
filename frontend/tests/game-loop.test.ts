@@ -163,10 +163,12 @@ Deno.test("test_handleMessage_game_over", () => {
   }, null);
   loop.handleMessage(msg);
   assertEquals(lastRenderedSnapshot!.phase, "GAME_OVER");
+  assertEquals(lastInteractionMode, null);
 });
 
 Deno.test("test_handleMessage_error_does_not_update_state", () => {
   lastRenderedSnapshot = null;
+  lastInteractionMode = null;
   const stateManager = new StateManager();
   const loop = new GameLoop(stateManager, mockRender, mockContainer);
   const msg: ServerMessage = { type: "error", message: "something went wrong" };
@@ -176,6 +178,8 @@ Deno.test("test_handleMessage_error_does_not_update_state", () => {
 });
 
 Deno.test("test_handleMessage_updates_state_manager", () => {
+  lastRenderedSnapshot = null;
+  lastInteractionMode = null;
   const stateManager = new StateManager();
   const loop = new GameLoop(stateManager, mockRender, mockContainer);
   const snap = makeSnapshot({ phase: "PLAYING" });
