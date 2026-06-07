@@ -32,6 +32,21 @@ function makeStateMessage(): ServerMessage {
   };
 }
 
+/** Helper: wait for a condition with polling, up to maxMs. */
+async function waitFor(
+  check: () => boolean,
+  maxMs = 2000,
+  pollMs = 10,
+): Promise<void> {
+  const start = Date.now();
+  while (!check()) {
+    if (Date.now() - start > maxMs) {
+      throw new Error("waitFor timed out");
+    }
+    await new Promise((r) => setTimeout(r, pollMs));
+  }
+}
+
 Deno.test("test_connect_success", async () => {
   const server = Deno.serve({ port: 0 }, (req) => {
     const upgrade = req.headers.get("upgrade") || "";
@@ -55,8 +70,7 @@ Deno.test("test_connect_success", async () => {
   await client.connect("test-id", `ws://localhost:${port}`);
 
   // Wait for message
-  await new Promise((r) => setTimeout(r, 100));
-  assertEquals(received !== null, true);
+  await waitFor(() => received !== null);
   assertEquals(received!.type, "state");
 
   await server.shutdown();
@@ -65,11 +79,13 @@ Deno.test("test_connect_success", async () => {
 
 Deno.test("test_send_action", async () => {
   let receivedAction: string | null = null;
+  let serverReady = false;
   const server = Deno.serve({ port: 0 }, (req) => {
     const upgrade = req.headers.get("upgrade") || "";
     if (upgrade.toLowerCase() === "websocket") {
       const { socket, response } = Deno.upgradeWebSocket(req);
       socket.addEventListener("open", () => {
+        serverReady = true;
         socket.send(JSON.stringify(makeStateMessage()));
       });
       socket.addEventListener("message", (e) => {
@@ -86,13 +102,12 @@ Deno.test("test_send_action", async () => {
   client.onMessage(() => {});
 
   await client.connect("test-id", `ws://localhost:${port}`);
-  await new Promise((r) => setTimeout(r, 50));
+  await waitFor(() => serverReady);
 
   const action: ClientAction = { type: "bid", cards: ["D1-hearts-2"] };
   client.send(action);
 
-  await new Promise((r) => setTimeout(r, 100));
-  assertEquals(receivedAction !== null, true);
+  await waitFor(() => receivedAction !== null);
   const parsed = JSON.parse(receivedAction!);
   assertEquals(parsed.type, "bid");
   assertEquals(parsed.cards, ["D1-hearts-2"]);
@@ -123,7 +138,7 @@ Deno.test("test_onMessage_receives_state", async () => {
   client.onMessage((m) => { received = m; });
 
   await client.connect("test-id", `ws://localhost:${port}`);
-  await new Promise((r) => setTimeout(r, 100));
+  await waitFor(() => received !== null);
 
   assertEquals(received!.type, "state");
   if (received!.type === "state") {
@@ -157,10 +172,11 @@ Deno.test("test_onDisconnect_called", async () => {
   client.onDisconnect(() => { disconnected = true; });
 
   await client.connect("test-id", `ws://localhost:${port}`);
-  await new Promise((r) => setTimeout(r, 200));
+  await waitFor(() => disconnected);
 
   assertEquals(disconnected, true);
 
+  client.disconnect();
   await server.shutdown();
 });
 
@@ -185,11 +201,133 @@ Deno.test("test_connect_constructs_ws_url_from_game_id", async () => {
   client.onMessage(() => {});
 
   await client.connect("my-game-42", `ws://localhost:${port}`);
-  await new Promise((r) => setTimeout(r, 100));
+  await waitFor(() => requestedPath !== "");
 
   // WsClient should have connected to /game/my-game-42
   assertEquals(requestedPath, "/game/my-game-42");
 
   await server.shutdown();
   client.disconnect();
+});
+
+Deno.test("test_reconnects_after_server_disconnect", async () => {
+  let connectionCount = 0;
+  let latestReceived: ServerMessage | null = null;
+
+  const server = Deno.serve({ port: 0 }, (req) => {
+    const upgrade = req.headers.get("upgrade") || "";
+    if (upgrade.toLowerCase() === "websocket") {
+      const { socket, response } = Deno.upgradeWebSocket(req);
+      socket.addEventListener("open", () => {
+        connectionCount++;
+        socket.send(JSON.stringify(makeStateMessage()));
+        // Close after first connection to trigger reconnect
+        if (connectionCount === 1) {
+          setTimeout(() => socket.close(), 50);
+        }
+      });
+      return response;
+    }
+    return new Response("Not Found", { status: 404 });
+  });
+
+  const addr = server.addr;
+  const port = typeof addr === "object" && "port" in addr ? addr.port : 0;
+
+  const client = new WsClient();
+  client.onMessage((msg) => { latestReceived = msg; });
+  client.onDisconnect(() => {});
+
+  await client.connect("test-id", `ws://localhost:${port}`);
+
+  // Wait for reconnection: connectionCount should become 2
+  // With 1s backoff (first retry), this should happen within ~1.5s
+  await waitFor(() => connectionCount >= 2, 3000);
+
+  assertEquals(connectionCount >= 2, true);
+  assertEquals(latestReceived !== null, true);
+  assertEquals(latestReceived!.type, "state");
+
+  client.disconnect();
+  await server.shutdown();
+});
+
+Deno.test("test_reconnect_respects_max_retries", async () => {
+  let connectionCount = 0;
+
+  const server = Deno.serve({ port: 0 }, (req) => {
+    const upgrade = req.headers.get("upgrade") || "";
+    if (upgrade.toLowerCase() === "websocket") {
+      const { socket, response } = Deno.upgradeWebSocket(req);
+      socket.addEventListener("open", () => {
+        connectionCount++;
+        // Always close immediately to force reconnection attempts
+        setTimeout(() => socket.close(), 10);
+      });
+      return response;
+    }
+    return new Response("Not Found", { status: 404 });
+  });
+
+  const addr = server.addr;
+  const port = typeof addr === "object" && "port" in addr ? addr.port : 0;
+
+  const client = new WsClient();
+  client.onMessage(() => {});
+  client.onDisconnect(() => {});
+
+  await client.connect("test-id", `ws://localhost:${port}`);
+
+  // Wait long enough for all 3 retries (1s + 2s + 4s = 7s)
+  await new Promise((r) => setTimeout(r, 9000));
+
+  // Should have 1 initial + 3 retries = 4 connections max
+  assertEquals(connectionCount, 4);
+
+  client.disconnect();
+  await server.shutdown();
+});
+
+Deno.test("test_set_ws_host", async () => {
+  let requestedPath = "";
+  const server = Deno.serve({ port: 0 }, (req) => {
+    const upgrade = req.headers.get("upgrade") || "";
+    if (upgrade.toLowerCase() === "websocket") {
+      requestedPath = new URL(req.url).pathname;
+      const { socket, response } = Deno.upgradeWebSocket(req);
+      socket.addEventListener("open", () => {
+        socket.send(JSON.stringify(makeStateMessage()));
+      });
+      return response;
+    }
+    return new Response("Not Found", { status: 404 });
+  });
+
+  const addr = server.addr;
+  const port = typeof addr === "object" && "port" in addr ? addr.port : 0;
+  const client = new WsClient();
+  client.onMessage(() => {});
+  client.setWsHost(`ws://localhost:${port}`);
+
+  // connect without wsHost parameter - should use the one set via setWsHost
+  await client.connect("game-xyz");
+  await waitFor(() => requestedPath !== "");
+
+  assertEquals(requestedPath, "/game/game-xyz");
+
+  await server.shutdown();
+  client.disconnect();
+});
+
+Deno.test("test_connect_rejects_without_ws_host", async () => {
+  const client = new WsClient();
+  client.onMessage(() => {});
+
+  let threw = false;
+  try {
+    await client.connect("test-id");
+  } catch {
+    threw = true;
+  }
+  assertEquals(threw, true);
 });

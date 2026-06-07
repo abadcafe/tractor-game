@@ -9,9 +9,9 @@ export class WsClient {
   private _ws: WebSocket | null = null;
   private _messageHandler: ((msg: ServerMessage) => void) | null = null;
   private _disconnectHandler: (() => void) | null = null;
+  private _wsHost = "";
   private _reconnectAttempts = 0;
   private _reconnectGameId = "";
-  private _reconnectWsHost = "";
   private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private _disconnecting = false;
 
@@ -25,14 +25,24 @@ export class WsClient {
     this._disconnectHandler = handler;
   }
 
+  /** Set the WebSocket host URL (e.g. "ws://localhost:8080"). */
+  setWsHost(host: string): void {
+    this._wsHost = host;
+  }
+
   /** Connect to the game server. Constructs the WebSocket URL from gameId and wsHost. */
-  connect(gameId: string, wsHost: string): Promise<void> {
+  connect(gameId: string, wsHost?: string): Promise<void> {
+    if (wsHost !== undefined) {
+      this._wsHost = wsHost;
+    }
+    if (!this._wsHost) {
+      return Promise.reject(new Error("WebSocket host not set. Call setWsHost() or provide wsHost parameter."));
+    }
     this._disconnecting = false;
     this._reconnectGameId = gameId;
-    this._reconnectWsHost = wsHost;
     this._reconnectAttempts = 0;
 
-    return this._doConnect(gameId, wsHost);
+    return this._doConnect(gameId, this._wsHost);
   }
 
   /** Send an action to the server. */
@@ -61,10 +71,13 @@ export class WsClient {
       const url = `${wsHost}${WS_PATH(gameId)}`;
       const ws = new WebSocket(url);
       this._ws = ws;
+      let settled = false;
 
       ws.addEventListener("open", () => {
-        this._reconnectAttempts = 0;
-        resolve();
+        if (!settled) {
+          settled = true;
+          resolve();
+        }
       });
 
       ws.addEventListener("message", (event) => {
@@ -77,6 +90,10 @@ export class WsClient {
       });
 
       ws.addEventListener("close", () => {
+        if (!settled) {
+          settled = true;
+          reject(new Error("WebSocket connection failed"));
+        }
         this._ws = null;
         if (!this._disconnecting) {
           this._disconnectHandler?.();
@@ -85,12 +102,8 @@ export class WsClient {
       });
 
       ws.addEventListener("error", () => {
-        // On error, the close event will fire which handles reconnection
-        // If this is the initial connect and it fails, reject the promise
-        if (this._ws?.readyState !== WebSocket.OPEN) {
-          // The close event will handle reconnection; resolve to avoid unhandled rejection
-          resolve();
-        }
+        // On error, the close event will fire next which handles
+        // promise settlement and reconnection.
       });
     });
   }
@@ -105,7 +118,7 @@ export class WsClient {
 
     this._reconnectTimer = setTimeout(() => {
       this._reconnectTimer = null;
-      this._doConnect(this._reconnectGameId, this._reconnectWsHost);
+      this._doConnect(this._reconnectGameId, this._wsHost);
     }, delay);
   }
 }
