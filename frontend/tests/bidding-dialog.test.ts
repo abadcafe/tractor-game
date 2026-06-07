@@ -138,3 +138,60 @@ Deno.test("test_renderBiddingDialog_stir_callback", () => {
   stirButton!.dispatchEvent(new Event("click", { bubbles: true }));
   assertNotEquals(stirCardIds, null);
 });
+
+// --- Edge-case tests (CQ-001) ---
+
+Deno.test("test_renderBiddingDialog_other_phase_empty", () => {
+  const snap = makeSnapshot({ phase: "PLAYING" });
+  const el = renderBiddingDialog(snap, null);
+  assertNotEquals(el, null);
+  assertEquals(el.classList.contains("bidding-dialog"), true);
+  const buttons = el.querySelectorAll("button");
+  assertEquals(buttons.length, 0);
+});
+
+Deno.test("test_renderBiddingDialog_empty_hand_bid", () => {
+  const snap = makeSnapshot({ phase: "DEAL_BID", player_hand: [] });
+  let bidCardIds: string[] | null = null;
+  const onBid = (cardIds: string[]) => { bidCardIds = cardIds; };
+  const el = renderBiddingDialog(snap, "bid", onBid);
+  const bidButton = Array.from(el.querySelectorAll("button")).find((b) => b.textContent === "叫牌");
+  assertNotEquals(bidButton, undefined);
+  bidButton!.dispatchEvent(new Event("click", { bubbles: true }));
+  assertNotEquals(bidCardIds, null);
+  assertEquals(bidCardIds!.length, 0);
+});
+
+Deno.test("test_renderBiddingDialog_multiple_bid_events", () => {
+  const snap = makeSnapshot({
+    bid_events: [
+      {
+        player: 1,
+        cards: [{ id: "D1-hearts-2", suit: "hearts", rank: "2" }],
+        kind: "trump_rank",
+        suit: "hearts",
+        joker_type: null,
+        count: 1,
+      },
+      {
+        player: 2,
+        cards: [{ id: "D1-spades-2", suit: "spades", rank: "2" }],
+        kind: "trump_rank",
+        suit: "spades",
+        joker_type: null,
+        count: 1,
+      },
+      {
+        player: 0,
+        cards: [{ id: "D1-spades-BJ", suit: "joker", rank: "BJ" }],
+        kind: "joker",
+        suit: null,
+        joker_type: "big",
+        count: 1,
+      },
+    ],
+  });
+  const el = renderBiddingDialog(snap, "bid");
+  const events = el.querySelectorAll(".bid-event");
+  assertEquals(events.length, 3);
+});
