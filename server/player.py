@@ -11,7 +11,7 @@ converts between them.
 import asyncio
 import random
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -108,9 +108,10 @@ class AutoPlayer(Player):
             await self._handle_next_round(game)
 
     async def _handle_deal_bid(self, snapshot: Any, game: Any) -> None:
-        """Randomly decide whether to bid during DEAL_BID phase."""
-        if snapshot.current_player != self.index:
-            return
+        """Randomly decide whether to bid during DEAL_BID phase.
+
+        During DEAL_BID, all players may bid regardless of current_player.
+        """
         hand = snapshot.player_hand
         trump_rank = snapshot.trump_rank
         trump_cards = [c for c in hand if getattr(c, "rank", None) == trump_rank]

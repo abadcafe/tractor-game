@@ -1,8 +1,7 @@
 """Tests for server/player.py -- Player, AutoPlayer, HumanPlayer, PlayerAction types."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
-from dataclasses import fields as dataclass_fields
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -130,6 +129,36 @@ async def test_auto_player_ignores_wrong_player():
 
 
 @pytest.mark.asyncio
+async def test_auto_player_ignores_wrong_player_stirring():
+    """AutoPlayer does not stir when current_player != self.index in STIRRING."""
+    snap = _make_snapshot(
+        phase="STIRRING",
+        awaiting_action="stir",
+        current_player=2,
+    )
+    game = _make_game(snap)
+    player = AutoPlayer(index=0)
+    await player.on_state(game)
+    await asyncio.sleep(0.05)
+    game.act.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_auto_player_ignores_wrong_player_discard():
+    """AutoPlayer does not discard when current_player != self.index in EXCHANGE."""
+    snap = _make_snapshot(
+        phase="EXCHANGE",
+        awaiting_action="discard",
+        current_player=2,
+    )
+    game = _make_game(snap)
+    player = AutoPlayer(index=0)
+    await player.on_state(game)
+    await asyncio.sleep(0.05)
+    game.act.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_auto_player_next_round():
     """AutoPlayer submits NextRoundAction when awaiting next_round."""
     snap = _make_snapshot(
@@ -243,12 +272,15 @@ async def test_human_player_sends_state_on_push():
     """HumanPlayer sends state JSON via WebSocket on on_state."""
     ws = AsyncMock()
     snap = _make_snapshot()
+    snap.to_dict.return_value = {"phase": "PLAYING"}
     game = _make_game(snap)
     player = HumanPlayer(index=0, ws=ws)
     await player.on_state(game)
     ws.send_json.assert_awaited_once()
     sent_data = ws.send_json.call_args[0][0]
     assert sent_data["type"] == "state"
+    assert sent_data["state"] == {"phase": "PLAYING"}
+    snap.to_dict.assert_called_once()
 
 
 @pytest.mark.asyncio
