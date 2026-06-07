@@ -99,8 +99,6 @@
 - Description: In `server/sm/round_sm_tests.py` line 338, the variable `lead_player` is assigned from `trick.lead_player` but never referenced. Ruff reports F841. The variable appears to have been intended for assertions comparing the new trick's lead player against the first trick's winner, but the actual assertions use `state.trick_history[0].winner` directly instead. The dead assignment should be removed.
 - Decision Reason: Removed unused variable assignment.
 
-## Code Quality Issues
-
 ### CQ-015: `RoundResult` not re-exported from round_sm module
 - Status: Resolved
 - Description: The task specification lists `RoundResult` as a public entity of this module ("public operations: RoundState, RoundInput, RoundResult, create_round..."). However, `round_sm.py` does not import or re-export `RoundResult`. While the type is used via `scoring.RoundResult` in the return type of `get_round_result()` and in the `result` field of `RoundState`, the module doesn't make `RoundResult` directly importable from `server.sm.round_sm`. Consumers must import it from `server.sm.scoring` instead. To match the task spec's public API, a re-export like `from server.sm.scoring import RoundResult` should be added.
@@ -125,3 +123,23 @@
 - Status: Resolved
 - Description: The test `test_playing_all_tricks_to_scoring` in `server/sm/round_sm_tests.py` (line 358) plays tricks in a loop and then asserts `state.phase in ("SCORING", "COMPLETE")`, but never asserts `len(state.trick_history) == 25`. The loop could exit early (e.g., if `trick_state` becomes None mid-trick due to an unexpected state), and the test would still pass with fewer tricks. Adding `assert len(state.trick_history) == 25` would verify the expected game flow.
 - Decision Reason: Added `assert len(state.trick_history) == 25` assertion to verify exactly 25 tricks were played before reaching scoring.
+
+### CQ-020: Ruff F401 unused import `RoundResult` in test file
+- Status: Resolved
+- Description: `server/sm/round_sm_tests.py` line 7 imports `RoundResult` from `server.sm.round_sm`, but this symbol is never referenced anywhere in the test file (only appears in a docstring on line 389, which does not count as a usage). Running `ruff check` produces a F401 error. The import was added during review (CQ-015) to make `RoundResult` importable from the round_sm module, but the test file itself does not use the type directly in any assertion or annotation. The import should be removed to clear the lint error.
+- Decision Reason: Removed unused import from test file. All 24 tests pass, ruff clean.
+
+### CQ-021: Pyright type error in `_transition_to_stirring` -- `declarer_player` passed as `int | None` where `int` required
+- Status: Resolved
+- Description: `server/sm/round_sm.py` line 355 passes `declarer_player` (typed `int | None` on line 309) to `stir_mod.StirInput(declarer_player=declarer_player)`, but `StirInput.declarer_player` is typed as `int` (stirring.py line 40). Pyright reports `reportArgumentType` error. While the runtime code paths (Phase 1: "COMPLETE" with bid_winner, Phase 2: "NO_BID") always set `declarer_player` to a non-None value before reaching this line, the static type checker cannot prove this. The function should either add an assertion `assert declarer_player is not None` before the StirInput construction, or add a final else clause that raises an error for unexpected deal_bid phases, narrowing the type.
+- Decision Reason: Added `assert declarer_player is not None` and `assert declarer_team is not None` after the if/elif/else block. Pyright now reports 0 errors.
+
+### CQ-022: `_transition_to_stirring` missing else clause for unhandled deal_bid phases
+- Status: Resolved
+- Description: `server/sm/round_sm.py` lines 313-346 use `if / elif` for `deal_bid.phase == "COMPLETE"` and `deal_bid.phase == "NO_BID"`, but there is no `else` clause. If the function were ever called with an unexpected phase (e.g., "DEALING"), `declarer_player`, `declarer_team`, and `defender_team` would all remain `None`, causing a crash at line 334 (`1 - declarer_team`) or line 355 (`declarer_player` passed as `None` to StirInput). While the caller in `deal_next_card` (line 136) gates on `new_db.phase in ("COMPLETE", "NO_BID")`, the function itself is `def`-visible and lacks this defensive check. An `else: raise ValueError(...)` clause should be added.
+- Decision Reason: Added `else: raise ValueError(...)` clause after the elif block for "NO_BID". Also added asserts for type narrowing, which together fix CQ-021.
+
+### CQ-023: `test_round_full_round_flow` uses conditional assertion for result validation
+- Status: Resolved
+- Description: `server/sm/round_sm_tests.py` line 587 uses `if is_round_complete(state):` to conditionally check the round result. If the loop exits early (e.g., due to an unexpected state where `trick_state` becomes None), the test would pass without validating the result. While `test_scoring_produces_round_result` unconditionally asserts `state.phase == "COMPLETE"`, this full-flow test should also unconditionally assert completion after playing all 25 tricks, since the test's purpose is to validate the complete round flow.
+- Decision Reason: Replaced conditional `if is_round_complete(state):` with unconditional `assert state.phase == "COMPLETE"` and unconditional result assertions. Test purpose is to validate complete round flow, so assertions must be unconditional.

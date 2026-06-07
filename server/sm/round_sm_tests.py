@@ -4,7 +4,7 @@ import pytest
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.types import BidEvent, PlayAction
 from server.sm.round_sm import (
-    RoundState, RoundInput, RoundResult, create_round,
+    RoundState, RoundInput, create_round,
     deal_next_card, reveal, pass_stir, stir, discard, play,
     is_round_complete, get_round_result,
 )
@@ -582,10 +582,10 @@ class TestRoundFullFlow:
                 if trick is None:
                     break
 
-        # Should be in SCORING or COMPLETE
-        assert state.phase in ("SCORING", "COMPLETE")
-        if is_round_complete(state):
-            result = get_round_result(state)
-            assert result is not None
-            assert result.next_declarer_team in (0, 1)
-            assert result.next_declarer_player in (0, 1, 2, 3)
+        # Should be COMPLETE after all 25 tricks
+        assert state.phase == "COMPLETE"
+        assert is_round_complete(state) is True
+        result = get_round_result(state)
+        assert result is not None
+        assert result.next_declarer_team in (0, 1)
+        assert result.next_declarer_player in (0, 1, 2, 3)

@@ -344,6 +344,14 @@ def _transition_to_stirring(state: RoundState, deal_bid: db.DealBidState) -> Rou
             # Subsequent round: declarer_player = last_declarer_player
             declarer_player = state.last_declarer_player if state.last_declarer_player is not None else state.start_player
         defender_team = 1 - declarer_team
+    else:
+        raise ValueError(
+            f"Unexpected deal_bid phase: {deal_bid.phase}"
+        )
+
+    # At this point declarer_player and declarer_team are guaranteed non-None
+    assert declarer_player is not None
+    assert declarer_team is not None
 
     # Update players_hand from deal_bid
     new_hands = [list(h) for h in deal_bid.players_hand]
