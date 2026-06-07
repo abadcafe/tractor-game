@@ -13,3 +13,8 @@
 - Status: Don't Fix
 - Description: The commit 729275c for this deletion task also includes changes to 13 files under server/sm/, frontend files (src/main.ts, src/style.css, src/ui/*.ts), new test files under tests/, pyproject.toml, uv.lock, and deletion of working/plan task review files. These changes are unrelated to deleting obsolete modules and stubbing server.py. Bundling unrelated changes makes the commit history harder to bisect and understand.
 - Decision Reason: The commit has already been made and is part of the shared history. Rewriting history (e.g., interactive rebase to split the commit) would require force-pushing and could disrupt other collaborators/branches. The working tree is clean with no staged changes to reorganize. This is a process improvement note for future tasks, not an actionable fix at this point.
+
+### CQ-002: pyproject.toml testpaths references deleted server/tests directory
+- Status: Resolved
+- Description: pyproject.toml (line 23-26) lists "server/tests" in testpaths, but this directory was deleted as part of this task. While pytest silently skips missing directories during normal collection (the 386 tests still collect fine), this is a stale reference that could confuse developers and causes an explicit error if someone runs `pytest server/tests/` directly. The testpaths should be updated to only list existing directories.
+- Decision Reason: Removed "server/tests" from testpaths in pyproject.toml. Verified all 288 tests still pass and 386 tests are collected correctly.
