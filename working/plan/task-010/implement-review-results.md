@@ -38,3 +38,13 @@
 - Status: Resolved
 - Description: While single follow-suit is tested (test_play_follow_must_follow_suit), there is no test verifying that pair follow-suit validation works through the trick module (e.g., when lead is a pair and follower must play a pair of the same suit). Additionally, there is no test for calling play() with an empty cards list `[]`, which could cause issues in the resolution logic or infer_play_type.
 - Decision Reason:
+
+### CQ-008: Unused import CompletedTrick in test file (ruff F401)
+- Status: Resolved
+- Description: At trick_tests.py:4, `CompletedTrick` is imported from `server.sm.types` but never used anywhere in the test file. Ruff flags this as F401. While this does not affect correctness, unused imports clutter the module namespace and violate standard clean-code practices. The ruff linter explicitly catches this.
+- Decision Reason:
+
+### CQ-009: Dead None-checks in _resolve for non-optional CompletedTrickSlot.cards
+- Status: Resolved
+- Description: At trick.py:188, 199, 207, `_resolve()` checks `if lead_cards is None or len(lead_cards) == 0` and similar for `p_cards` and `best_cards`. However, `CompletedTrickSlot.cards` is typed as `list[Card]` (not Optional) in types.py:95, and all slots are initialized with `cards=[]` in `create_trick` (line 73) or `cards=list(cards)` in `play` (line 145). The None checks are dead code -- they can never be True. This makes the error messages on lines 189, 200, 208 unreachable, adding confusion about actual invariants. The `len(...) == 0` check could theoretically be reached if a slot somehow ended up with an empty list, but the None part is dead.
+- Decision Reason:

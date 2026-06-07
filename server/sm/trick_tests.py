@@ -1,7 +1,7 @@
 """Tests for sm.trick module."""
 import pytest
 from server.sm.card_model import Card, Suit, Rank
-from server.sm.types import PlayType, CompletedTrick
+from server.sm.types import PlayType
 from server.sm.trick import (
     TrickState, TrickInput, TrickResult,
     create_trick, play,

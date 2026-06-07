@@ -185,7 +185,7 @@ def _resolve(state: TrickState) -> None:
     # Get lead suit for comparison
     lead_slot = state.slots[state.lead_player]
     lead_cards = lead_slot.cards
-    if lead_cards is None or len(lead_cards) == 0:
+    if len(lead_cards) == 0:
         raise ValueError("Lead cards must exist at resolution")
     lead_suit = effective_suit(lead_cards[0], state.trump_suit, state.trump_rank)
     if lead_suit == "trump":
@@ -196,7 +196,7 @@ def _resolve(state: TrickState) -> None:
     # Find winner by comparing each play against current best
     winner = state.lead_player
     best_cards = state.slots[winner].cards
-    if best_cards is None or len(best_cards) == 0:
+    if len(best_cards) == 0:
         raise ValueError("Winner's cards must exist at resolution")
 
     for slot in state.slots:
@@ -204,7 +204,7 @@ def _resolve(state: TrickState) -> None:
         if p == winner:
             continue
         p_cards = slot.cards
-        if p_cards is None or len(p_cards) == 0:
+        if len(p_cards) == 0:
             raise ValueError(f"Player {p}'s cards must exist at resolution")
         cmp = compare_plays(
             p_cards, best_cards,
@@ -218,9 +218,8 @@ def _resolve(state: TrickState) -> None:
     # Count points from all played cards
     total_points = 0
     for slot in state.slots:
-        if slot.cards is not None:
-            for c in slot.cards:
-                total_points += c.points
+        for c in slot.cards:
+            total_points += c.points
 
     # Update defender points
     winner_team = get_team_index(winner)
