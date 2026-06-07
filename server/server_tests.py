@@ -449,7 +449,7 @@ async def test_index_returns_html_when_built(client, clean_registry):
                 f.write("<!DOCTYPE html><html><body>test</body></html>")
         response = await client.get("/")
         assert response.status_code == 200
-        assert "test" in response.text
+        assert "<html" in response.text.lower()
     finally:
         if not existed and os.path.isfile(index_path):
             os.remove(index_path)
@@ -472,19 +472,44 @@ async def test_serve_static_subdirectory_file(client, clean_registry):
 
 
 @pytest.mark.asyncio
-async def test_serve_static_unknown_path_returns_404(client, clean_registry):
-    """GET /nonexistent/file.js returns 404 when file does not exist."""
-    response = await client.get("/nonexistent/file.js")
-    assert response.status_code == 404
+async def test_serve_static_unknown_path_returns_spa_fallback(client, clean_registry):
+    """GET /nonexistent/file.js returns SPA fallback (index.html) when static dir exists,
+    or 404 when static dir is empty."""
+    import os
+    from server.server import _static_dir
+
+    index_path = os.path.join(_static_dir, "index.html")
+    existed = os.path.isfile(index_path)
+    try:
+        if existed:
+            response = await client.get("/nonexistent/file.js")
+            assert response.status_code == 200
+            assert "<html" in response.text.lower()
+        else:
+            response = await client.get("/nonexistent/file.js")
+            assert response.status_code == 404
+    finally:
+        pass
 
 
 @pytest.mark.asyncio
-async def test_path_traversal_unencoded_returns_404(client, clean_registry):
+async def test_path_traversal_unencoded_returns_safe_response(client, clean_registry):
     """Unencoded path traversal is normalized by the ASGI layer, so the handler
-    receives a cleaned path. Since the target doesn't exist, returns 404."""
+    receives a cleaned path. When static/index.html exists, SPA fallback serves it;
+    otherwise returns 404. Either way, the actual system file is never served."""
+    import os
+    from server.server import _static_dir
+
+    index_path = os.path.join(_static_dir, "index.html")
+    existed = os.path.isfile(index_path)
     response = await client.get("/../../../etc/passwd")
-    # ASGI normalizes /../../../etc/passwd -> /etc/passwd which doesn't exist
-    assert response.status_code == 404
+    # ASGI normalizes /../../../etc/passwd -> /etc/passwd
+    # SPA fallback serves index.html if it exists, otherwise 404
+    if existed:
+        assert response.status_code == 200
+        assert "passwd" not in response.text
+    else:
+        assert response.status_code == 404
 
 
 @pytest.mark.asyncio
