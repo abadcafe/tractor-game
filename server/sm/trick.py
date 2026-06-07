@@ -116,7 +116,8 @@ def play(state: TrickState, player: int, cards: list[Card]) -> TrickState:
         lead_cards = state.slots[state.lead_player].cards
         if len(lead_cards) == 0:
             raise ValueError("Lead cards must exist in FOLLOWING phase")
-        assert state.lead_type is not None, "lead_type must be set in FOLLOWING phase"
+        if state.lead_type is None:
+            raise ValueError("lead_type must be set in FOLLOWING phase")
         lead_action = PlayAction(type=state.lead_type, cards=lead_cards)
         legal_plays = get_legal_plays(
             hand=hand,
@@ -173,16 +174,20 @@ def play(state: TrickState, player: int, cards: list[Card]) -> TrickState:
 
     # Resolve when all 4 have played
     if new_played == 4:
-        _resolve(new_state)
+        return _resolve(new_state)
 
     return new_state
 
 
-def _resolve(state: TrickState) -> None:
+def _resolve(state: TrickState) -> TrickState:
     """Resolve the trick: determine winner, count points, build result.
 
-    Mutates state in-place to set phase and result.
+    Returns a new TrickState in RESOLVED phase (immutable).
     """
+    # Guard: lead_type must be set by the time we resolve
+    if state.lead_type is None:
+        raise ValueError("lead_type must be set before resolution")
+
     # Get lead suit for comparison
     lead_slot = state.slots[state.lead_player]
     lead_cards = lead_slot.cards
@@ -226,19 +231,20 @@ def _resolve(state: TrickState) -> None:
     if winner_team == defender_team:
         updated_defender_points = state.defender_points + total_points
 
-    # Build CompletedTrick
+    # Build CompletedTrick (lead_type guaranteed non-None by guard above)
     completed = CompletedTrick(
         lead_player=state.lead_player,
-        lead_type=state.lead_type,  # type: ignore[arg-type]
+        lead_type=state.lead_type,
         slots=list(state.slots),
         winner=winner,
         points=total_points,
     )
 
-    state.result = TrickResult(
+    result = TrickResult(
         winner=winner,
         points=total_points,
         updated_defender_points=updated_defender_points,
         completed_trick=completed,
     )
-    state.phase = "RESOLVED"
+
+    return state.model_copy(update={"phase": "RESOLVED", "result": result})

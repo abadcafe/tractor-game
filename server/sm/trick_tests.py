@@ -1,4 +1,6 @@
 """Tests for sm.trick module."""
+from typing import Literal
+
 import pytest
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.types import PlayType
@@ -8,7 +10,7 @@ from server.sm.trick import (
 )
 
 
-def _card(suit: Suit, rank: Rank, deck: int = 1) -> Card:
+def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
     """Create a card with correct point values per spec: 5=5, 10=10, K=10, else 0."""
     pts_map: dict[Rank, int] = {
         Rank.FIVE: 5, Rank.TEN: 10, Rank.KING: 10,
@@ -471,3 +473,38 @@ def _get_result(state: TrickState) -> TrickResult:
     assert state.phase == "RESOLVED"
     assert state.result is not None
     return state.result
+
+
+class TestPlayFollowTractorSuit:
+    def test_play_follow_tractor_must_follow_suit(self) -> None:
+        """Following a tractor lead: must play matching-length tractor of same suit if possible."""
+        # Lead: tractor of ♥A pair + ♥K pair (4 cards).
+        # Player 1 has both ♥Q pair + ♥J pair (matching tractor) and ♠Q pair + ♠J pair.
+        # Player 1 MUST follow with hearts tractor.
+        hands = [
+            [_card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2),
+             _card(Suit.HEARTS, Rank.KING, 1), _card(Suit.HEARTS, Rank.KING, 2)],
+            [_card(Suit.HEARTS, Rank.QUEEN, 1), _card(Suit.HEARTS, Rank.QUEEN, 2),
+             _card(Suit.HEARTS, Rank.JACK, 1), _card(Suit.HEARTS, Rank.JACK, 2),
+             _card(Suit.SPADES, Rank.QUEEN, 1), _card(Suit.SPADES, Rank.QUEEN, 2),
+             _card(Suit.SPADES, Rank.JACK, 1), _card(Suit.SPADES, Rank.JACK, 2)],
+            [_card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2)],
+            [_card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2)],
+        ]
+        state = create_trick(TrickInput(
+            lead_player=0, hands=hands,
+            trump_suit=Suit.SPADES, trump_rank=Rank.TWO,
+            defender_points=0, declarer_team=0,
+        ))
+        # Player 0 leads ♥A+♥K tractor (4 cards)
+        lead_cards = hands[0][:4]
+        state = play(state, player=0, cards=lead_cards)
+        assert state.lead_type == PlayType.TRACTOR
+        # Player 1 tries to play ♠Q+♠J pair (off-suit tractor) -- should be rejected
+        off_suit = hands[1][4:8]
+        with pytest.raises(ValueError, match="follow|suit|legal"):
+            play(state, player=1, cards=off_suit)
+        # Player 1 plays ♥Q+♥J pair (correct follow-suit tractor) -- should succeed
+        on_suit = hands[1][:4]
+        state = play(state, player=1, cards=on_suit)
+        assert state.played == 2
