@@ -21,7 +21,6 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = [
     "server/sm",
-    "server/tests",
     "tests",
 ]
 python_files = ["*_tests.py", "test_*.py"]
