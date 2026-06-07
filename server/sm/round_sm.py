@@ -204,7 +204,17 @@ def stir(state: RoundState, cards: list[Card]) -> RoundState:
                 f"Card {card.id} not in hand of player {cur}"
             )
 
+    old_ss = state.stirring_state
     new_ss = stir_mod.stir(state.stirring_state, cur, cards)
+
+    # Detect rejection: if the stirring module returned the state unchanged
+    # (trump_suit and actions both unchanged), the stir was invalid.
+    if (new_ss.trump_suit == old_ss.trump_suit
+            and len(new_ss.actions) == len(old_ss.actions)):
+        raise ValueError(
+            f"Stir rejected: invalid pair, wrong player, or priority too low"
+        )
+
     new_state = state.model_copy(update={
         "stirring_state": new_ss,
         "trump_suit": new_ss.trump_suit,
@@ -433,9 +443,7 @@ def _transition_to_scoring(state: RoundState) -> RoundState:
     assert declarer_team is not None
     assert declarer_player is not None
 
-    if not state.trick_history:
-        # Should not happen after 25 tricks, but guard anyway
-        return state.model_copy(update={"phase": "SCORING"})
+    assert state.trick_history, "trick_history must be non-empty after 25 tricks"
 
     last_trick = state.trick_history[-1]
 

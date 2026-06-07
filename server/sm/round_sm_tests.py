@@ -266,6 +266,23 @@ class TestStirringPhase:
         with pytest.raises(ValueError, match="not in hand"):
             stir(state, cards=fake_cards)
 
+    def test_stir_rejected_by_stirring_module(self) -> None:
+        """stir with in-hand cards that the stirring module rejects raises error."""
+        state = create_round(RoundInput(
+            declarer_team=None, trump_rank=Rank.TWO,
+            last_declarer_player=None,
+            team0_level=Rank.TWO, team1_level=Rank.TWO,
+        ))
+        state = _complete_deal_bid_no_bid(state)
+        assert state.phase == "STIRRING"
+        cur = state.stirring_state.current_player
+        hand = state.players_hand[cur]
+        # A single card is in the player's hand but the stirring module
+        # requires exactly 2 cards (a pair), so it will reject the play.
+        if hand:
+            with pytest.raises(ValueError, match="Stir rejected"):
+                stir(state, cards=[hand[0]])
+
     def test_stirring_to_exchange(self) -> None:
         """After all players pass stirring, round enters EXCHANGE."""
         state = create_round(RoundInput(
