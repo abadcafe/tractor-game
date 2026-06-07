@@ -230,8 +230,8 @@ class TestPlayResolve:
         result = _get_result(state)
         # Player 1 (team 1, defender) has ♥A which wins
         # Defender gets 5 + 10 = 15 trick points, total = 10 + 15 = 25
-        if result.winner in (1, 2):  # team 1 (defender)
-            assert result.updated_defender_points > 10
+        assert result.winner == 1
+        assert result.updated_defender_points == 25
 
     def test_play_resolve_completed_trick(self) -> None:
         """Resolved trick produces a CompletedTrick with all slots."""
@@ -375,6 +375,95 @@ class TestPlayValidation:
         state = play(state, player=2, cards=[hands[2][0]])
         assert state.phase == "RESOLVED"
         assert state.played == 4
+
+
+class TestPlayResolved:
+    def test_play_on_resolved_trick_rejected(self) -> None:
+        """Calling play() after the trick is resolved raises ValueError."""
+        hands = [
+            [_card(Suit.HEARTS, Rank.ACE)],
+            [_card(Suit.HEARTS, Rank.KING)],
+            [_card(Suit.HEARTS, Rank.QUEEN)],
+            [_card(Suit.HEARTS, Rank.JACK)],
+        ]
+        state = create_trick(TrickInput(
+            lead_player=0, hands=hands,
+            trump_suit=Suit.SPADES, trump_rank=Rank.TWO,
+            defender_points=0, declarer_team=0,
+        ))
+        state = play(state, player=0, cards=[hands[0][0]])
+        state = play(state, player=1, cards=[hands[1][0]])
+        state = play(state, player=3, cards=[hands[3][0]])
+        state = play(state, player=2, cards=[hands[2][0]])
+        assert state.phase == "RESOLVED"
+        # No cards left in hands, but we can still verify the guard
+        with pytest.raises(ValueError, match="already resolved"):
+            play(state, player=0, cards=[])
+
+
+class TestPlayEmptyCards:
+    def test_play_empty_cards_list_rejected(self) -> None:
+        """Playing an empty cards list is rejected (not in hand)."""
+        hands = [
+            [_card(Suit.HEARTS, Rank.ACE)],
+            [_card(Suit.HEARTS, Rank.KING)],
+            [_card(Suit.HEARTS, Rank.QUEEN)],
+            [_card(Suit.HEARTS, Rank.JACK)],
+        ]
+        state = create_trick(TrickInput(
+            lead_player=0, hands=hands,
+            trump_suit=Suit.SPADES, trump_rank=Rank.TWO,
+            defender_points=0, declarer_team=0,
+        ))
+        with pytest.raises(ValueError, match="Must play at least one card"):
+            play(state, player=0, cards=[])
+
+
+class TestPlayFollowPairSuit:
+    def test_play_follow_pair_must_follow_suit(self) -> None:
+        """Following a pair lead: must play pair of the led suit if possible."""
+        # Lead: pair of ♥A (2 cards). Player 1 has ♥K pair and ♠Q pair.
+        # Player 1 MUST follow hearts pair.
+        hands = [
+            [_card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2)],
+            [_card(Suit.HEARTS, Rank.KING, 1), _card(Suit.HEARTS, Rank.KING, 2),
+             _card(Suit.SPADES, Rank.QUEEN, 1), _card(Suit.SPADES, Rank.QUEEN, 2)],
+            [_card(Suit.HEARTS, Rank.QUEEN, 1), _card(Suit.HEARTS, Rank.QUEEN, 2)],
+            [_card(Suit.HEARTS, Rank.JACK, 1), _card(Suit.HEARTS, Rank.JACK, 2)],
+        ]
+        state = create_trick(TrickInput(
+            lead_player=0, hands=hands,
+            trump_suit=Suit.SPADES, trump_rank=Rank.TWO,
+            defender_points=0, declarer_team=0,
+        ))
+        # Player 0 leads ♥A pair
+        state = play(state, player=0, cards=hands[0][:2])
+        assert state.lead_type == PlayType.PAIR
+        # Player 1 tries to play ♠Q pair (off-suit) -- should be rejected
+        with pytest.raises(ValueError, match="follow|suit|legal"):
+            play(state, player=1, cards=hands[1][2:4])
+        # Player 1 plays ♥K pair (correct follow-suit) -- should succeed
+        state = play(state, player=1, cards=hands[1][:2])
+        assert state.played == 2
+
+    def test_play_follow_no_pair_can_play_anything(self) -> None:
+        """Following a pair lead: with no pair of led suit, can play any pair."""
+        # Lead: pair of ♥A. Player 1 has only ♠ cards (no ♥ pair).
+        hands = [
+            [_card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2)],
+            [_card(Suit.SPADES, Rank.QUEEN, 1), _card(Suit.SPADES, Rank.QUEEN, 2)],
+            [_card(Suit.HEARTS, Rank.KING, 1), _card(Suit.HEARTS, Rank.KING, 2)],
+            [_card(Suit.HEARTS, Rank.JACK, 1), _card(Suit.HEARTS, Rank.JACK, 2)],
+        ]
+        state = create_trick(TrickInput(
+            lead_player=0, hands=hands,
+            trump_suit=Suit.SPADES, trump_rank=Rank.TWO,
+            defender_points=0, declarer_team=0,
+        ))
+        state = play(state, player=0, cards=hands[0][:2])
+        # Player 1 has no hearts pair, plays ♠Q pair
+        state = play(state, player=1, cards=hands[1][:2])
+        assert state.played == 2
 
 
 def _get_result(state: TrickState) -> TrickResult:

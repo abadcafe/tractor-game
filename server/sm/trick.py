@@ -4,6 +4,8 @@ Manages one trick: leading player plays, then 3 followers in CCW order.
 After all 4 play, determine winner and points.
 """
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict
 
 from server.sm.card_model import Card, Suit, Rank
@@ -45,10 +47,10 @@ class TrickState(BaseModel):
 
     model_config = ConfigDict(frozen=False)
 
-    phase: str  # "LEADING" | "FOLLOWING" | "RESOLVED"
+    phase: Literal["LEADING", "FOLLOWING", "RESOLVED"]
     lead_player: int
     lead_type: PlayType | None
-    slots: list[dict]  # list of {player: int, cards: list[Card] | None}
+    slots: list[CompletedTrickSlot]
     played: int
     cur: int
     trump_suit: Suit | None
@@ -68,7 +70,7 @@ def create_trick(input: TrickInput) -> TrickState:
         phase="LEADING",
         lead_player=input.lead_player,
         lead_type=None,
-        slots=[{"player": i, "cards": None} for i in range(4)],
+        slots=[CompletedTrickSlot(player=i, cards=[]) for i in range(4)],
         played=0,
         cur=input.lead_player,
         trump_suit=input.trump_suit,
@@ -88,7 +90,7 @@ def play(state: TrickState, player: int, cards: list[Card]) -> TrickState:
     - cards are in player's hand
     - following players follow suit if possible
 
-    Returns new state (mutates and returns for efficiency, since TrickState is not frozen).
+    Returns a new TrickState (immutable state machine pattern).
     """
     # Validate it's this player's turn
     if player != state.cur:
@@ -97,6 +99,10 @@ def play(state: TrickState, player: int, cards: list[Card]) -> TrickState:
     # Validate phase is not already resolved
     if state.phase == "RESOLVED":
         raise ValueError("Trick is already resolved")
+
+    # Validate at least one card is being played
+    if not cards:
+        raise ValueError("Must play at least one card")
 
     # Validate cards are in player's hand
     hand = state.hands[player]
@@ -107,8 +113,9 @@ def play(state: TrickState, player: int, cards: list[Card]) -> TrickState:
 
     # Validate follow-suit if following
     if state.phase == "FOLLOWING":
-        lead_cards = state.slots[state.lead_player]["cards"]
-        assert lead_cards is not None, "Lead cards must exist in FOLLOWING phase"
+        lead_cards = state.slots[state.lead_player].cards
+        if lead_cards is None or len(lead_cards) == 0:
+            raise ValueError("Lead cards must exist in FOLLOWING phase")
         lead_action = PlayAction(type=state.lead_type, cards=lead_cards)
         legal_plays = get_legal_plays(
             hand=hand,
@@ -127,36 +134,59 @@ def play(state: TrickState, player: int, cards: list[Card]) -> TrickState:
         if not legal:
             raise ValueError("Play does not follow suit rules")
 
-    # Place cards in slot
-    state.slots[player]["cards"] = list(cards)
+    # Build new state (immutable)
+    new_phase = state.phase
+    new_lead_type = state.lead_type
+    new_played = state.played + 1
+    new_cur = next_player_ccw(player)
+
+    # Update slots: copy and set player's slot
+    new_slots = list(state.slots)
+    new_slots[player] = CompletedTrickSlot(player=player, cards=list(cards))
 
     # Remove cards from hand
-    new_hand = [c for c in hand if c.id not in played_ids]
-    state.hands[player] = new_hand
+    new_hands = [list(h) for h in state.hands]
+    new_hands[player] = [c for c in hand if c.id not in played_ids]
 
     # Determine lead_type on first play
     if state.played == 0:
-        state.lead_type = infer_play_type(
+        new_lead_type = infer_play_type(
             cards, state.trump_suit, state.trump_rank
         )
-        state.phase = "FOLLOWING"
+        new_phase = "FOLLOWING"
 
-    # Advance counters
-    state.played += 1
-    state.cur = next_player_ccw(player)
+    new_state = TrickState(
+        phase=new_phase,
+        lead_player=state.lead_player,
+        lead_type=new_lead_type,
+        slots=new_slots,
+        played=new_played,
+        cur=new_cur,
+        trump_suit=state.trump_suit,
+        trump_rank=state.trump_rank,
+        defender_points=state.defender_points,
+        declarer_team=state.declarer_team,
+        hands=new_hands,
+        result=state.result,
+    )
 
     # Resolve when all 4 have played
-    if state.played == 4:
-        _resolve(state)
+    if new_played == 4:
+        _resolve(new_state)
 
-    return state
+    return new_state
 
 
 def _resolve(state: TrickState) -> None:
-    """Resolve the trick: determine winner, count points, build result."""
+    """Resolve the trick: determine winner, count points, build result.
+
+    Mutates state in-place to set phase and result.
+    """
     # Get lead suit for comparison
-    lead_cards = state.slots[state.lead_player]["cards"]
-    assert lead_cards is not None
+    lead_slot = state.slots[state.lead_player]
+    lead_cards = lead_slot.cards
+    if lead_cards is None or len(lead_cards) == 0:
+        raise ValueError("Lead cards must exist at resolution")
     lead_suit = effective_suit(lead_cards[0], state.trump_suit, state.trump_rank)
     if lead_suit == "trump":
         lead_suit_obj = None  # compare_plays handles trump internally
@@ -165,15 +195,17 @@ def _resolve(state: TrickState) -> None:
 
     # Find winner by comparing each play against current best
     winner = state.lead_player
-    best_cards = state.slots[winner]["cards"]
-    assert best_cards is not None
+    best_cards = state.slots[winner].cards
+    if best_cards is None or len(best_cards) == 0:
+        raise ValueError("Winner's cards must exist at resolution")
 
     for slot in state.slots:
-        p = slot["player"]
+        p = slot.player
         if p == winner:
             continue
-        p_cards = slot["cards"]
-        assert p_cards is not None
+        p_cards = slot.cards
+        if p_cards is None or len(p_cards) == 0:
+            raise ValueError(f"Player {p}'s cards must exist at resolution")
         cmp = compare_plays(
             p_cards, best_cards,
             state.trump_suit, state.trump_rank,
@@ -186,8 +218,9 @@ def _resolve(state: TrickState) -> None:
     # Count points from all played cards
     total_points = 0
     for slot in state.slots:
-        for c in slot["cards"]:  # type: ignore[union-attr]
-            total_points += c.points
+        if slot.cards is not None:
+            for c in slot.cards:
+                total_points += c.points
 
     # Update defender points
     winner_team = get_team_index(winner)
@@ -200,10 +233,7 @@ def _resolve(state: TrickState) -> None:
     completed = CompletedTrick(
         lead_player=state.lead_player,
         lead_type=state.lead_type,  # type: ignore[arg-type]
-        slots=[
-            CompletedTrickSlot(player=s["player"], cards=s["cards"])  # type: ignore[arg-type]
-            for s in state.slots
-        ],
+        slots=list(state.slots),
         winner=winner,
         points=total_points,
     )
