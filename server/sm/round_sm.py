@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import random
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict
 
 from server.sm.card_model import Card, Rank, Suit, create_decks
@@ -24,6 +26,7 @@ from server.sm import exchange as exc
 from server.sm import trick as trick_mod
 from server.sm import scoring
 from server.sm.types import BidEvent, CompletedTrick
+from server.sm.scoring import RoundResult
 
 
 # ---- Data Models ----
@@ -46,7 +49,7 @@ class RoundState(BaseModel):
 
     model_config = ConfigDict(frozen=False)
 
-    phase: str  # "DEAL_BID" | "STIRRING" | "EXCHANGE" | "PLAYING" | "SCORING" | "COMPLETE"
+    phase: Literal["DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING", "SCORING", "COMPLETE"]
     declarer_team: int | None
     declarer_player: int | None
     defender_team: int | None
@@ -60,8 +63,7 @@ class RoundState(BaseModel):
     stirring_state: stir_mod.StirringState | None
     exchange_state: exc.ExchangeState | None
     trick_state: trick_mod.TrickState | None
-    current_lead_player: int | None
-    result: scoring.RoundResult | None
+    result: RoundResult | None
     team0_level: Rank
     team1_level: Rank
     start_player: int
@@ -103,7 +105,6 @@ def create_round(input: RoundInput) -> RoundState:
         stirring_state=None,
         exchange_state=None,
         trick_state=None,
-        current_lead_player=None,
         result=None,
         team0_level=input.team0_level,
         team1_level=input.team1_level,
@@ -294,7 +295,7 @@ def is_round_complete(state: RoundState) -> bool:
     return state.phase == "COMPLETE"
 
 
-def get_round_result(state: RoundState) -> scoring.RoundResult | None:
+def get_round_result(state: RoundState) -> RoundResult | None:
     """Return the round result if available."""
     return state.result
 
@@ -313,23 +314,23 @@ def _transition_to_stirring(state: RoundState, deal_bid: db.DealBidState) -> Rou
         winner = deal_bid.bid_winner.player
         winner_team = get_team_index(winner)
 
+        valid_winner = False
         if declarer_team is None:
             # Case A: First round with winner
             declarer_team = winner_team
             declarer_player = winner
+            valid_winner = True
         else:
             # Case B: Subsequent round with winner
             # Validate winner is on declarer team
-            if winner_team != declarer_team:
+            if winner_team == declarer_team:
+                declarer_player = winner
+                valid_winner = True
+            else:
                 # Invalid: ignore and treat as no bid
                 declarer_player = state.last_declarer_player
-                trump_suit = None
-            else:
-                declarer_player = winner
 
-        if trump_suit is None:
-            trump_suit = deal_bid.bid_winner.suit if declarer_player == winner else None
-
+        trump_suit = deal_bid.bid_winner.suit if valid_winner else None
         defender_team = 1 - declarer_team
 
     elif deal_bid.phase == "NO_BID":
@@ -414,7 +415,6 @@ def _start_next_trick(state: RoundState, lead_player: int) -> RoundState:
     return state.model_copy(update={
         "phase": "PLAYING",
         "trick_state": trick_state,
-        "current_lead_player": lead_player,
     })
 
 

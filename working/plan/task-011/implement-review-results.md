@@ -98,3 +98,30 @@
 - Status: Resolved
 - Description: In `server/sm/round_sm_tests.py` line 338, the variable `lead_player` is assigned from `trick.lead_player` but never referenced. Ruff reports F841. The variable appears to have been intended for assertions comparing the new trick's lead player against the first trick's winner, but the actual assertions use `state.trick_history[0].winner` directly instead. The dead assignment should be removed.
 - Decision Reason: Removed unused variable assignment.
+
+## Code Quality Issues
+
+### CQ-015: `RoundResult` not re-exported from round_sm module
+- Status: Resolved
+- Description: The task specification lists `RoundResult` as a public entity of this module ("public operations: RoundState, RoundInput, RoundResult, create_round..."). However, `round_sm.py` does not import or re-export `RoundResult`. While the type is used via `scoring.RoundResult` in the return type of `get_round_result()` and in the `result` field of `RoundState`, the module doesn't make `RoundResult` directly importable from `server.sm.round_sm`. Consumers must import it from `server.sm.scoring` instead. To match the task spec's public API, a re-export like `from server.sm.scoring import RoundResult` should be added.
+- Decision Reason: Added `from server.sm.scoring import RoundResult` import to make RoundResult importable from round_sm. Updated test file to import RoundResult from round_sm for verification.
+
+### CQ-016: `RoundState.phase` typed as `str` instead of `Literal` for type safety
+- Status: Resolved
+- Description: `RoundState.phase` on line 49 of `server/sm/round_sm.py` is typed as `str` with a comment listing valid values. All sub-state machines (`deal_bid.py` line 52, `trick.py` line 50) use `Literal` for their phase fields, providing compile-time and runtime type safety. Using `str` means any string could be assigned to `phase` without a type error, and IDE autocompletion/analysis cannot enforce valid phase values. This should be `Literal["DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING", "SCORING", "COMPLETE"]` for consistency with the rest of the codebase and stronger type safety.
+- Decision Reason: Changed `phase: str` to `phase: Literal["DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING", "SCORING", "COMPLETE"]` and added `from typing import Literal` import.
+
+### CQ-017: `current_lead_player` field is set but never read in round_sm.py
+- Status: Resolved
+- Description: The `current_lead_player` field on `RoundState` (line 63) is initialized to `None` on line 106 and set to `lead_player` on line 417 in `_start_next_trick`, but it is never read anywhere in the module or in the test file. This is dead data that adds cognitive overhead without providing value. Either it should be used (e.g., for assertions or external consumers) or removed.
+- Decision Reason: Removed the `current_lead_player` field from RoundState, its initialization in create_round, and its assignment in _start_next_trick. Lead player is already available via trick_state.lead_player.
+
+### CQ-018: Fragile `trump_suit` assignment logic in `_transition_to_stirring` line 331
+- Status: Resolved
+- Description: In `server/sm/round_sm.py` line 330-331, the `trump_suit` assignment uses `declarer_player == winner` as a condition to decide whether to set `trump_suit` from the bid winner's suit. In Case A and Case B valid, this works because `declarer_player` is set to `winner`. In Case B invalid (lines 323-326), `declarer_player` is set to `last_declarer_player` and `trump_suit` is set to `None`, then line 331 re-evaluates: if `last_declarer_player == winner` (edge case where previous declarer is the same player who won the bid on the wrong team), `trump_suit` would be incorrectly set. The logic works correctly for all valid inputs but the condition is semantically unclear -- it should explicitly check whether we are in the "valid winner" path rather than using an indirect comparison.
+- Decision Reason: Introduced a `valid_winner` boolean flag that is explicitly set to True only in Case A (first round with winner) and Case B valid (winner on declarer team). The trump_suit assignment now uses `trump_suit = deal_bid.bid_winner.suit if valid_winner else None`, making the intent clear and eliminating the fragile indirect comparison.
+
+### CQ-019: `test_playing_all_tricks_to_scoring` does not verify exactly 25 tricks played
+- Status: Resolved
+- Description: The test `test_playing_all_tricks_to_scoring` in `server/sm/round_sm_tests.py` (line 358) plays tricks in a loop and then asserts `state.phase in ("SCORING", "COMPLETE")`, but never asserts `len(state.trick_history) == 25`. The loop could exit early (e.g., if `trick_state` becomes None mid-trick due to an unexpected state), and the test would still pass with fewer tricks. Adding `assert len(state.trick_history) == 25` would verify the expected game flow.
+- Decision Reason: Added `assert len(state.trick_history) == 25` assertion to verify exactly 25 tricks were played before reaching scoring.

@@ -4,7 +4,7 @@ import pytest
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.types import BidEvent, PlayAction
 from server.sm.round_sm import (
-    RoundState, RoundInput, create_round,
+    RoundState, RoundInput, RoundResult, create_round,
     deal_next_card, reveal, pass_stir, stir, discard, play,
     is_round_complete, get_round_result,
 )
@@ -381,6 +381,7 @@ class TestPlayingPhase:
                     break
         # SCORING is transient and immediately transitions to COMPLETE
         assert state.phase in ("SCORING", "COMPLETE")
+        assert len(state.trick_history) == 25
 
 
 class TestScoringPhase:
