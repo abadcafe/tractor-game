@@ -1,0 +1,12 @@
+{
+  "tasks": {
+    "check": "deno check frontend/*.ts frontend/**/*.ts",
+    "build": "rm -rf static && cd frontend && tsc && cp index.html ../static/ && cp style.css ../static/",
+    "test": "deno test frontend/tests/"
+  },
+  "compilerOptions": {
+    "lib": ["dom", "dom.iterable", "deno.ns"]
+  },
+  "fmt": { "lineWidth": 100 },
+  "lint": { "rules": { "tags": ["recommended"] } }
+}
