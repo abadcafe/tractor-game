@@ -226,6 +226,10 @@ class Game:
 
         elif phase == "COMPLETE" and isinstance(action, NextRoundAction):
             round_result = round_sm.get_round_result(self._round_state)
+            if round_result is None:
+                raise ValueError(
+                    "Round result is None in COMPLETE phase; this indicates an sm layer bug"
+                )
             self._game_state = game_sm.process_round_result(self._game_state, round_result)
 
             if self._game_state.phase == "GAME_OVER":
@@ -356,7 +360,7 @@ class Game:
             }
 
         return StateSnapshot(
-            phase=rs.phase,
+            phase=self.get_phase(),
             player_hand=player_hand,
             bottom_cards=list(rs.bottom_cards),
             trump_suit=rs.trump_suit,
