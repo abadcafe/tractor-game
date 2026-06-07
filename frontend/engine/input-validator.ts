@@ -1,10 +1,10 @@
 import type { Card, PlayAction } from "../core/types.ts";
-import { isJoker } from "../core/card.ts";
+import { isJoker, isTrumpRank } from "../core/card.ts";
 
 /**
  * Validate selected cards against a list of legal play actions.
  * Returns the first matching PlayAction, or null if no match.
- * Matching: every selected card ID must appear in the action's card IDs.
+ * Matching: every selected card ID must appear in one action's card IDs (subset match).
  */
 export function validatePlay(
   selectedCards: Card[],
@@ -45,6 +45,6 @@ export function validateBidCards(
     return false;
   }
   return selectedCards.every(
-    (c) => isJoker(c) || c.rank === trumpRank,
+    (c) => isJoker(c) || isTrumpRank(c, trumpRank),
   );
 }

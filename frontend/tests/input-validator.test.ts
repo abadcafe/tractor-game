@@ -11,7 +11,6 @@ const H6 = makeCard("D1-hearts-6", "hearts", "6");
 const S2 = makeCard("D1-spades-2", "spades", "2");
 const BJ = makeCard("D2-joker-BJ", "joker", "BJ");
 const SJ = makeCard("D2-joker-SJ", "joker", "SJ");
-const D3 = makeCard("D1-diamonds-3", "diamonds", "3");
 
 function makeLegalAction(type: string, cards: Card[]): PlayAction {
   return { type, cards };
