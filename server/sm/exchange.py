@@ -76,6 +76,13 @@ def discard(state: ExchangeState, cards: list[Card]) -> ExchangeState:
         if cid not in hand_ids:
             raise ValueError(f"not in hand: card {cid}")
 
+    # Check for duplicate card IDs in input
+    seen: set[str] = set()
+    for cid in discard_ids:
+        if cid in seen:
+            raise ValueError(f"duplicate: card {cid} appears more than once")
+        seen.add(cid)
+
     discard_set = set(discard_ids)
     new_hand = [c for c in state.hand_after_pickup if c.id not in discard_set]
 

@@ -109,6 +109,18 @@ class TestDiscard:
         with pytest.raises(ValueError, match="not in hand"):
             discard(state, [fake] * 8)
 
+    def test_discard_duplicate_cards_rejected(self) -> None:
+        """Discarding the same card multiple times raises error."""
+        hand = _make_hand(25)
+        bottom = _make_hand(8, offset=25)
+        state = create_exchange(ExchangeInput(
+            declarer_player=0, bottom_cards=bottom, declarer_hand=hand,
+        ))
+        # Pick a card from hand and repeat it 8 times
+        duplicate_card = state.hand_after_pickup[0]
+        with pytest.raises(ValueError, match="duplicate"):
+            discard(state, [duplicate_card] * 8)
+
 
 class TestDiscardResult:
     def test_discard_result_new_hand(self) -> None:
