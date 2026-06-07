@@ -335,7 +335,6 @@ class TestPlayingPhase:
         # Play a complete trick: 4 players play
         trick = state.trick_state
         assert trick is not None
-        lead_player = trick.lead_player
         # Play all 4 cards for the first trick using legal plays
         for _ in range(4):
             if state.phase != "PLAYING":
@@ -471,6 +470,35 @@ class TestRoundDeclarer:
         assert state.deal_bid_state.bid_winner is not None
         assert state.declarer_team == 0  # unchanged
         assert state.declarer_player is not None
+
+    def test_round_subsequent_round_bid_winner_wrong_team(self) -> None:
+        """Subsequent round: bid winner NOT on declarer_team triggers fallback."""
+        random.seed(3)
+        state = create_round(RoundInput(
+            declarer_team=0, trump_rank=Rank.TWO,
+            last_declarer_player=2,
+            team0_level=Rank.TWO, team1_level=Rank.TWO,
+        ))
+        # Deal some cards
+        for _ in range(20):
+            state = deal_next_card(state)
+        # Find trump rank card in team 1 player's hand (players 1, 2)
+        for p in [1, 2]:
+            trump_cards = [c for c in state.deal_bid_state.players_hand[p]
+                           if c.rank == Rank.TWO and not c.is_joker]
+            if trump_cards:
+                event = BidEvent(
+                    player=p, cards=[trump_cards[0]], kind="trump_rank",
+                    suit=trump_cards[0].suit, joker_type=None, count=1,
+                )
+                state = reveal(state, event)
+                break
+        state = _deal_all_cards(state)
+        assert state.phase == "STIRRING"
+        # Winner is on team 1 but declarer_team is 0 -> fallback
+        assert state.declarer_team == 0  # unchanged
+        assert state.declarer_player == 2  # falls back to last_declarer_player
+        assert state.trump_suit is None  # fallback sets trump_suit to None
 
     def test_round_empty_trump_no_bid(self) -> None:
         """No bid = empty trump, declarer_player from start_player."""

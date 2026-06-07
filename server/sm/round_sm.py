@@ -168,7 +168,6 @@ def pass_stir(state: RoundState) -> RoundState:
 
     cur = state.stirring_state.current_player
     new_ss = stir_mod.pass_stir(state.stirring_state, cur)
-    new_state = state.model_copy(update={"stirring_state": new_ss})
 
     if new_ss.phase == "COMPLETE":
         new_state = state.model_copy(update={
@@ -177,7 +176,7 @@ def pass_stir(state: RoundState) -> RoundState:
         })
         return _transition_to_exchange(new_state)
 
-    return new_state
+    return state.model_copy(update={"stirring_state": new_ss})
 
 
 def stir(state: RoundState, cards: list[Card]) -> RoundState:
@@ -264,11 +263,6 @@ def play(state: RoundState, cards: list[Card]) -> RoundState:
     # Sync hands from trick to round state
     new_hands = [list(h) for h in new_trick.hands]
 
-    new_state = state.model_copy(update={
-        "trick_state": new_trick,
-        "players_hand": new_hands,
-    })
-
     if new_trick.phase == "RESOLVED" and new_trick.result is not None:
         # Record the completed trick
         completed_tricks = list(state.trick_history) + [
@@ -288,7 +282,11 @@ def play(state: RoundState, cards: list[Card]) -> RoundState:
         # Start next trick: winner leads
         return _start_next_trick(new_state, new_trick.result.winner)
 
-    return new_state
+    # Trick not yet resolved (still in progress)
+    return state.model_copy(update={
+        "trick_state": new_trick,
+        "players_hand": new_hands,
+    })
 
 
 def is_round_complete(state: RoundState) -> bool:
