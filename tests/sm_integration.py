@@ -266,13 +266,13 @@ class TestE2EScoringBoundaryCases:
         in _find_lead_card_count/_find_lead_cards is exercised rather than
         the fallback.
         """
-        lead_cards = [Card(id=f"D1-spades-3", suit=Suit.SPADES, rank=Rank.THREE,
+        lead_cards = [Card(id="D1-spades-3", suit=Suit.SPADES, rank=Rank.THREE,
                            is_joker=False, is_big_joker=False, points=0, deck=1)] * card_count
         slots = [CompletedTrickSlot(player=0, cards=lead_cards)]
         if winner != 0:
             slots.append(CompletedTrickSlot(
                 player=winner,
-                cards=[Card(id=f"D1-spades-3", suit=Suit.SPADES, rank=Rank.THREE,
+                cards=[Card(id="D1-spades-3", suit=Suit.SPADES, rank=Rank.THREE,
                             is_joker=False, is_big_joker=False, points=0, deck=1)] * card_count,
             ))
         return CompletedTrick(
