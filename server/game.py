@@ -7,7 +7,7 @@ get_player(), cancel(), and resolve_cards() interfaces.
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable
 
 from server.sm import game_sm, round_sm, play_rules
@@ -131,7 +131,18 @@ def _serialize_bid_event(event: BidEvent) -> dict:
 def _serialize_completed_trick(trick) -> dict:
     """Serialize a CompletedTrick to a JSON-serializable dict."""
     if isinstance(trick, dict):
-        return trick
+        result = dict(trick)
+        if "lead_type" in result and result["lead_type"] is not None and hasattr(result["lead_type"], "value"):
+            result["lead_type"] = result["lead_type"].value
+        if "slots" in result:
+            result["slots"] = [
+                {
+                    "player": slot.get("player") if isinstance(slot, dict) else getattr(slot, "player", None),
+                    "cards": [_card_to_dict(c) for c in (slot.get("cards", []) if isinstance(slot, dict) else getattr(slot, "cards", []))],
+                }
+                for slot in result["slots"]
+            ]
+        return result
     return {
         "lead_player": trick.lead_player,
         "lead_type": trick.lead_type.value,
@@ -175,7 +186,7 @@ class Game:
         self._cancelled = False
         self._dealing_task = asyncio.create_task(self._dealing_loop())
 
-    async def act(self, player_index: int, action: Player) -> None:
+    async def act(self, player_index: int, action: BidAction | PlayAction | StirAction | SkipStirAction | DiscardAction | NextRoundAction) -> None:
         """Unified action entry point. Dispatches based on current phase and action type.
 
         After applying the action, pushes state to the appropriate player(s).
@@ -201,6 +212,8 @@ class Game:
             self._round_state = round_sm.discard(self._round_state, action.cards)
             if self._round_state.phase == "PLAYING":
                 await self._push_state_to_player(self._round_state.trick_state.cur)
+            elif self._round_state.phase == "EXCHANGE" and self._round_state.exchange_state is not None:
+                await self._push_state_to_player(self._round_state.exchange_state.declarer_player)
 
         elif phase == "PLAYING" and isinstance(action, PlayAction):
             self._round_state = round_sm.play(self._round_state, action.cards)
@@ -379,7 +392,12 @@ class Game:
         self._on_game_over = callback
 
     def get_player(self, index: int) -> Player:
-        """Return the Player at the given index."""
+        """Return the Player at the given index.
+
+        Raises ValueError if the index is out of range.
+        """
+        if index < 0 or index >= len(self._players):
+            raise ValueError(f"Player index {index} out of range (0-{len(self._players) - 1})")
         return self._players[index]
 
     async def cancel(self) -> None:
@@ -436,6 +454,8 @@ class Game:
     def _convert_bid_action(self, player_index: int, action: BidAction) -> BidEvent:
         """Convert a player BidAction to an sm BidEvent."""
         cards = action.cards
+        if not cards:
+            raise ValueError("BidAction requires at least one card")
         # Determine kind, suit, joker_type from the cards
         if cards and cards[0].is_joker:
             kind = "joker"
