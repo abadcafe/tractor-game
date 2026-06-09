@@ -250,6 +250,46 @@ def detect_throws(
     return result
 
 
+def detect_throws_new(
+    hand: list[Card],
+    trump_suit: Suit | None,
+    trump_rank: Rank,
+    other_hands: list[Card],
+) -> list[list[Card]]:
+    """Detect throw options using decompose + is_biggest verification.
+
+    Per spec sections 7 and 9.7:
+    1. Group hand cards by effective suit (INCLUDE trump per spec 7.4).
+    2. For each suit group:
+       a. If fewer than 2 cards -> skip (not a throw).
+       b. Decompose the group into sub-plays.
+       c. Verify each sub-play is biggest using _is_biggest.
+       d. If all pass -> add all cards in the group as a throw option.
+    3. Return list of throw options (at most one per suit).
+    """
+    groups = _group_cards_by_effective_suit(hand, trump_suit, trump_rank)
+
+    result: list[list[Card]] = []
+    for eff_suit, cards in groups.items():
+        # A throw requires 2+ cards in the same effective suit
+        if len(cards) < 2:
+            continue
+
+        subs = decompose(cards, trump_suit, trump_rank)
+
+        # Verify each sub-play is biggest (from low to high level per spec 7.3)
+        sorted_subs = sorted(subs, key=lambda s: s.sub_level)
+        all_biggest = all(
+            _is_biggest(sub, other_hands, trump_suit, trump_rank)
+            for sub in sorted_subs
+        )
+
+        if all_biggest:
+            result.append(cards)
+
+    return result
+
+
 def get_legal_plays(
     hand: list[Card],
     is_leading: bool,

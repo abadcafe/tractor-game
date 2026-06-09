@@ -5,6 +5,7 @@ from server.sm.card_model import Card, Suit, Rank
 from server.sm.types import PlayType, PlayAction, SubPlay
 from server.sm.play_rules import (
     detect_singles, detect_pairs, detect_tractors, detect_throws,
+    detect_throws_new,
     get_legal_plays, infer_play_type, decompose, is_legal_lead,
     is_legal_follow, can_win, compare_plays_new,
 )
@@ -1007,3 +1008,126 @@ class TestComparePlaysNew:
         b = [_card(Suit.JOKER, Rank.SMALL_JOKER)]
         result = compare_plays_new(a, b, "trump", Suit.SPADES, Rank.TWO)
         assert result > 0
+
+
+class TestDetectThrowsNew:
+    def test_detect_throws_new_single_suit_all_biggest(self) -> None:
+        """All spade cards are biggest -> one throw option with all spade cards."""
+        hand = [_card(Suit.SPADES, Rank.ACE), _card(Suit.SPADES, Rank.KING)]
+        other_hands: list[Card] = []
+        throws = detect_throws_new(hand, Suit.HEARTS, Rank.TWO, other_hands)
+        assert len(throws) == 1
+        assert set(c.id for c in throws[0]) == {hand[0].id, hand[1].id}
+
+    def test_detect_throws_new_sub_play_not_biggest(self) -> None:
+        """Sub-play not biggest -> no throw for that suit.
+
+        Hand: spK, spQ. Other hand has spA. spQ is not biggest single.
+        """
+        hand = [_card(Suit.SPADES, Rank.KING), _card(Suit.SPADES, Rank.QUEEN)]
+        other_hands = [_card(Suit.SPADES, Rank.ACE)]
+        throws = detect_throws_new(hand, Suit.HEARTS, Rank.TWO, other_hands)
+        assert len(throws) == 0
+
+    def test_detect_throws_new_pair_biggest(self) -> None:
+        """Pair of spA-A is biggest pair -> throw option."""
+        hand = [_card(Suit.SPADES, Rank.ACE, 1), _card(Suit.SPADES, Rank.ACE, 2)]
+        other_hands: list[Card] = []
+        throws = detect_throws_new(hand, Suit.HEARTS, Rank.TWO, other_hands)
+        assert len(throws) == 1
+
+    def test_detect_throws_new_pair_not_biggest(self) -> None:
+        """Pair of spK-K but spA-A exists in other hands -> not biggest pair -> no throw."""
+        hand = [_card(Suit.SPADES, Rank.KING, 1), _card(Suit.SPADES, Rank.KING, 2)]
+        other_hands = [_card(Suit.SPADES, Rank.ACE, 1), _card(Suit.SPADES, Rank.ACE, 2)]
+        throws = detect_throws_new(hand, Suit.HEARTS, Rank.TWO, other_hands)
+        assert len(throws) == 0
+
+    def test_detect_throws_new_tractor_biggest(self) -> None:
+        """Biggest tractor in spade -> throw option."""
+        hand = [
+            _card(Suit.SPADES, Rank.ACE, 1), _card(Suit.SPADES, Rank.ACE, 2),
+            _card(Suit.SPADES, Rank.KING, 1), _card(Suit.SPADES, Rank.KING, 2),
+        ]
+        other_hands: list[Card] = []
+        throws = detect_throws_new(hand, Suit.HEARTS, Rank.TWO, other_hands)
+        assert len(throws) == 1
+        assert len(throws[0]) == 4
+
+    def test_detect_throws_new_mixed_biggest(self) -> None:
+        """Throw with tractor + pair + singles, all biggest -> valid."""
+        hand = [
+            _card(Suit.SPADES, Rank.ACE, 1), _card(Suit.SPADES, Rank.ACE, 2),
+            _card(Suit.SPADES, Rank.KING, 1), _card(Suit.SPADES, Rank.KING, 2),
+            _card(Suit.SPADES, Rank.QUEEN, 1), _card(Suit.SPADES, Rank.QUEEN, 2),
+            _card(Suit.SPADES, Rank.JACK),
+        ]
+        other_hands: list[Card] = []
+        throws = detect_throws_new(hand, Suit.HEARTS, Rank.TWO, other_hands)
+        assert len(throws) == 1
+        assert len(throws[0]) == 7
+
+    def test_detect_throws_new_trump_allowed(self) -> None:
+        """Trump cards CAN throw (spec section 7.4).
+
+        heart is trump. hA hK are trump cards, both biggest trump singles -> valid throw.
+        """
+        hand = [_card(Suit.HEARTS, Rank.ACE), _card(Suit.HEARTS, Rank.KING)]
+        throws = detect_throws_new(hand, Suit.HEARTS, Rank.TWO, [])
+        assert len(throws) == 1
+        assert len(throws[0]) == 2
+
+    def test_detect_throws_new_trump_not_biggest(self) -> None:
+        """Trump throw where a sub-play is not biggest -> no throw."""
+        # heart is trump. hK hQ but other hand has hA (biggest trump single).
+        hand = [_card(Suit.HEARTS, Rank.KING), _card(Suit.HEARTS, Rank.QUEEN)]
+        other_hands = [_card(Suit.HEARTS, Rank.ACE)]
+        throws = detect_throws_new(hand, Suit.HEARTS, Rank.TWO, other_hands)
+        assert len(throws) == 0
+
+    def test_detect_throws_new_multiple_suits(self) -> None:
+        """Multiple suits with valid throws -> one throw per suit."""
+        hand = [
+            _card(Suit.SPADES, Rank.ACE), _card(Suit.SPADES, Rank.KING),
+            _card(Suit.DIAMONDS, Rank.ACE), _card(Suit.DIAMONDS, Rank.KING),
+        ]
+        throws = detect_throws_new(hand, Suit.HEARTS, Rank.TWO, [])
+        assert len(throws) == 2
+
+    def test_detect_throws_new_single_card_not_throw(self) -> None:
+        """Single card per suit -> not a throw (need 2+ sub-plays)."""
+        hand = [_card(Suit.SPADES, Rank.ACE)]
+        throws = detect_throws_new(hand, Suit.HEARTS, Rank.TWO, [])
+        # Single card -> decompose returns 1 sub-play -> not a throw
+        assert len(throws) == 0
+
+    def test_detect_throws_new_two_singles_valid(self) -> None:
+        """Two singles of same suit, both biggest -> valid throw (2 sub-plays)."""
+        hand = [_card(Suit.SPADES, Rank.ACE), _card(Suit.SPADES, Rank.KING)]
+        throws = detect_throws_new(hand, Suit.HEARTS, Rank.TWO, [])
+        assert len(throws) == 1
+
+    def test_detect_throws_new_pair_plus_single_biggest(self) -> None:
+        """Pair + single of same suit, all biggest -> valid throw."""
+        hand = [
+            _card(Suit.SPADES, Rank.ACE, 1), _card(Suit.SPADES, Rank.ACE, 2),
+            _card(Suit.SPADES, Rank.KING),
+        ]
+        throws = detect_throws_new(hand, Suit.HEARTS, Rank.TWO, [])
+        assert len(throws) == 1
+        assert len(throws[0]) == 3
+
+    def test_detect_throws_new_verify_from_low_to_high(self) -> None:
+        """Throw verification checks from low to high level.
+
+        If a single is not biggest, throw fails immediately without checking pairs/tractors.
+        """
+        # Hand: pair spA-A + single spQ. Other has spK.
+        # single spQ is not biggest (spK exists) -> fail at level 1, don't check pair.
+        hand = [
+            _card(Suit.SPADES, Rank.ACE, 1), _card(Suit.SPADES, Rank.ACE, 2),
+            _card(Suit.SPADES, Rank.QUEEN),
+        ]
+        other_hands = [_card(Suit.SPADES, Rank.KING)]
+        throws = detect_throws_new(hand, Suit.HEARTS, Rank.TWO, other_hands)
+        assert len(throws) == 0
