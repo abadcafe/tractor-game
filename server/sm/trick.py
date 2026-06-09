@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.comparator import effective_suit
 from server.sm.constants import next_player_ccw, get_team_index
-from server.sm.play_rules import is_legal_follow, compare_plays_new
+from server.sm.play_rules import is_legal_follow, compare_plays
 from server.sm.types import CompletedTrick, CompletedTrickSlot
 
 
@@ -180,7 +180,7 @@ def _resolve(state: TrickState) -> TrickState:
         p_cards = slot.cards
         if len(p_cards) == 0:
             raise ValueError(f"Player {p}'s cards must exist at resolution")
-        cmp = compare_plays_new(
+        cmp = compare_plays(
             p_cards, best_cards,
             lead_eff,
             state.trump_suit, state.trump_rank,

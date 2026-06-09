@@ -3,7 +3,7 @@ from typing import Literal
 
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.comparator import (
-    trump_order, effective_suit, compare_plays, sort_by_trump_order,
+    trump_order, effective_suit, sort_by_trump_order,
     is_trump_card, bid_value, trump_rank_order,
 )
 
@@ -91,38 +91,6 @@ class TestEffectiveSuit:
         """When trump_suit=None, only jokers and trump rank are trump."""
         c = _card(Suit.HEARTS, Rank.ACE)
         assert effective_suit(c, None, Rank.TWO) == Suit.HEARTS
-
-
-class TestComparePlays:
-    def test_compare_plays_trump_beats_non_trump(self) -> None:
-        """Any trump play beats any non-trump play."""
-        trump_card = [_card(Suit.HEARTS, Rank.TWO)]
-        non_trump_card = [_card(Suit.SPADES, Rank.ACE)]
-        assert compare_plays(trump_card, non_trump_card, Suit.HEARTS, Rank.TWO, Suit.SPADES) > 0
-
-    def test_compare_plays_both_trump(self) -> None:
-        """Higher trump order wins among trump plays."""
-        big_joker = [_card(Suit.JOKER, Rank.BIG_JOKER)]
-        small_joker = [_card(Suit.JOKER, Rank.SMALL_JOKER)]
-        assert compare_plays(big_joker, small_joker, Suit.HEARTS, Rank.TWO, None) > 0
-
-    def test_compare_plays_same_suit(self) -> None:
-        """Same non-trump suit: higher rank wins."""
-        ace = [_card(Suit.SPADES, Rank.ACE)]
-        king = [_card(Suit.SPADES, Rank.KING)]
-        assert compare_plays(ace, king, Suit.HEARTS, Rank.TWO, Suit.SPADES) > 0
-
-    def test_compare_plays_different_suit_lead_wins(self) -> None:
-        """Different non-trump suits: lead suit wins."""
-        spade = [_card(Suit.SPADES, Rank.ACE)]
-        diamond = [_card(Suit.DIAMONDS, Rank.ACE)]
-        assert compare_plays(spade, diamond, Suit.HEARTS, Rank.TWO, Suit.SPADES) > 0
-
-    def test_compare_plays_different_suit_off_suit(self) -> None:
-        """Different non-trump suits: non-lead suit loses."""
-        spade = [_card(Suit.SPADES, Rank.ACE)]
-        diamond = [_card(Suit.DIAMONDS, Rank.ACE)]
-        assert compare_plays(diamond, spade, Suit.HEARTS, Rank.TWO, Suit.SPADES) < 0
 
 
 class TestIsTrumpCard:

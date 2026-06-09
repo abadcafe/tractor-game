@@ -199,7 +199,7 @@ class AutoPlayer(Player):
             logger.warning("AutoPlayer %d: no legal actions in PLAYING phase!", self.index)
             return
         chosen = random.choice(legal)
-        # chosen is a list[Card] (plain card list from get_legal_plays_new)
+        # chosen is a list[Card] (plain card list from get_legal_plays)
         action = PlayAction(cards=chosen)
         self._action_count += 1
         if self._action_count % 50 == 0:

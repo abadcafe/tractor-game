@@ -115,59 +115,6 @@ def effective_suit(
     return card.suit
 
 
-# ---- Compare Plays ----
-
-
-def compare_plays(
-    a_cards: list[Card],
-    b_cards: list[Card],
-    trump_suit: Suit | None,
-    trump_rank: Rank,
-    lead_suit: Suit | None,
-) -> int:
-    """Compare two plays (each a list of cards).
-
-    Returns > 0 if a wins, < 0 if b wins, 0 if tie.
-
-    Rules:
-      - Trump beats non-trump.
-      - Both trump: compare by max trump_order.
-      - Both non-trump, same suit: compare by max RANK_ORDER.
-      - Both non-trump, different suit: lead suit wins.
-    """
-    a_has_trump = any(is_trump_card(c, trump_suit, trump_rank) for c in a_cards)
-    b_has_trump = any(is_trump_card(c, trump_suit, trump_rank) for c in b_cards)
-
-    if a_has_trump and not b_has_trump:
-        return 1
-    if b_has_trump and not a_has_trump:
-        return -1
-
-    if a_has_trump and b_has_trump:
-        a_max = max(trump_order(c, trump_suit, trump_rank) for c in a_cards)
-        b_max = max(trump_order(c, trump_suit, trump_rank) for c in b_cards)
-        return a_max - b_max
-
-    # Both non-trump: determine effective suits
-    a_eff = effective_suit(a_cards[0], trump_suit, trump_rank)
-    b_eff = effective_suit(b_cards[0], trump_suit, trump_rank)
-
-    if a_eff == b_eff:
-        # Same suit: compare by max RANK_ORDER
-        a_max = max(RANK_ORDER[c.rank] for c in a_cards)
-        b_max = max(RANK_ORDER[c.rank] for c in b_cards)
-        return a_max - b_max
-
-    # Different suits: lead suit wins
-    if lead_suit is not None and a_eff == lead_suit:
-        return 1
-    if lead_suit is not None and b_eff == lead_suit:
-        return -1
-
-    # Neither is the lead suit (shouldn't happen in normal play)
-    return 0
-
-
 # ---- Bid Value ----
 
 

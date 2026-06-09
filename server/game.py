@@ -307,7 +307,7 @@ class Game:
                 for i in range(4):
                     if i != for_player:
                         other_hands.extend(rs.players_hand[i])
-                legal_actions = play_rules.get_legal_plays_new(
+                legal_actions = play_rules.get_legal_plays(
                     hand=player_hand,
                     is_leading=is_leading,
                     lead_cards=lead_cards,
