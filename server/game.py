@@ -12,7 +12,7 @@ from typing import Callable
 
 from server.sm import game_sm, round_sm, play_rules
 from server.sm.card_model import Card, Suit, Rank
-from server.sm.types import BidEvent, PlayAction as SmPlayAction, PlayType as SmPlayType
+from server.sm.types import BidEvent
 from server.player import Player, BidAction, StirAction, SkipStirAction, DiscardAction, PlayAction, NextRoundAction
 
 logger = logging.getLogger(__name__)
@@ -83,10 +83,7 @@ class StateSnapshot:
             "trick": self._serialize_trick(self.trick),
             "trick_history": [_serialize_completed_trick(t) for t in self.trick_history],
             "legal_actions": [
-                {
-                    "type": entry.type.value,
-                    "cards": [_card_to_dict(c) for c in entry.cards],
-                }
+                [_card_to_dict(c) for c in entry]
                 for entry in self.legal_actions
             ],
             "awaiting_action": self.awaiting_action,
@@ -295,7 +292,7 @@ class Game:
         can_act_in_playing = False  # whether current player can act in PLAYING
         if rs.phase == "PLAYING" and rs.trick_state is not None:
             is_leading = rs.trick_state.phase == "LEADING"
-            lead_action = None
+            lead_cards = None
             if is_leading:
                 can_act_in_playing = True
             else:
@@ -304,18 +301,21 @@ class Game:
                 if lead_slots:
                     lead_cards = lead_slots[0].cards if lead_slots[0].cards else []
                     if lead_cards:
-                        # Use SINGLE as placeholder for lead_type; the actual
-                        # type is determined by decompose at resolution time
-                        lead_action = SmPlayAction(type=SmPlayType.SINGLE, cards=lead_cards)
                         can_act_in_playing = True
                     # else: lead player hasn't played yet, followers must wait
             if can_act_in_playing:
-                legal_actions = play_rules.get_legal_plays(
+                # Compute other_hands: all cards not in current player's hand
+                other_hands: list = []
+                for i in range(4):
+                    if i != for_player:
+                        other_hands.extend(rs.players_hand[i])
+                legal_actions = play_rules.get_legal_plays_new(
                     hand=player_hand,
                     is_leading=is_leading,
-                    lead_action=lead_action,
+                    lead_cards=lead_cards,
                     trump_suit=rs.trump_suit,
                     trump_rank=rs.trump_rank,
+                    other_hands=other_hands,
                 )
                 # Safety: if legal_actions is empty despite can_act, no valid play yet
                 if not legal_actions:

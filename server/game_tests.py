@@ -129,23 +129,22 @@ async def test_snapshot_current_player_deal_bid():
 async def test_snapshot_legal_actions_in_playing():
     """Legal actions should be populated during PLAYING phase.
 
-    legal_actions stores sm.PlayAction Pydantic model objects (not dicts).
-    Each PlayAction has .type (PlayType enum) and .cards (list[Card])
-    attributes. This is important because AutoPlayer accesses entry.cards
-    via attribute access. The to_dict() method handles serialization
-    to JSON format for the WebSocket output.
+    After Task 010 refactor, legal_actions is list[list[Card]].
+    Each entry is a plain list of Card objects (no .type attribute).
     """
     game = _create_game_with_auto_players()
     await game.run()
     snap = game.snapshot(for_player=0)
     assert isinstance(snap.legal_actions, list)
-    # If in PLAYING phase, legal_actions should contain PlayAction objects
+    # If in PLAYING phase, legal_actions should contain card lists
     if snap.phase == "PLAYING" and len(snap.legal_actions) > 0:
         entry = snap.legal_actions[0]
-        # Must have .cards and .type attributes (sm.PlayAction is a Pydantic model)
-        assert hasattr(entry, "cards")
-        assert hasattr(entry, "type")
-        assert isinstance(entry.cards, list)
+        # Entry is a list of Card objects (not a PlayAction)
+        assert isinstance(entry, list)
+        assert not hasattr(entry, "type")  # not a PlayAction
+        if len(entry) > 0:
+            from server.sm.card_model import Card
+            assert isinstance(entry[0], Card)
 
 
 @pytest.mark.asyncio
@@ -454,8 +453,7 @@ async def test_snapshot_to_dict_json_serializable():
     This is critical because HumanPlayer.on_state() calls ws.send_json() which
     requires JSON-serializable data. The sm Card/Suit/Rank types are Pydantic
     models and enums that are not directly JSON-serializable. legal_actions
-    contains sm.PlayAction objects which must be serialized to dicts with
-    "type" and "cards" keys in the to_dict() output.
+    is now list[list[Card]], serialized to list of card-dict lists.
     """
     game = _create_game_with_auto_players()
     await game.run()
@@ -471,15 +469,14 @@ async def test_snapshot_to_dict_json_serializable():
     assert "player_hand" in result
     assert "trump_rank" in result
     assert "current_player" in result
-    # legal_actions must be a list of dicts (not sm.PlayAction objects)
+    # legal_actions must be a list of lists (card lists, not PlayAction dicts)
     assert isinstance(result["legal_actions"], list)
     if len(result["legal_actions"]) > 0:
         legal_entry = result["legal_actions"][0]
-        assert isinstance(legal_entry, dict)
-        assert "type" in legal_entry
-        assert "cards" in legal_entry
-        assert isinstance(legal_entry["type"], str)
-        assert isinstance(legal_entry["cards"], list)
+        assert isinstance(legal_entry, list)  # list of card dicts
+        if len(legal_entry) > 0:
+            assert "id" in legal_entry[0]
+            assert "type" not in legal_entry[0]
 
 
 @pytest.mark.asyncio
@@ -551,3 +548,159 @@ async def test_resolve_cards_raises_on_unknown_id():
     await game.run()
     with pytest.raises(ValueError):
         game.resolve_cards(player_index=0, card_ids=["NONEXISTENT-CARD-ID"])
+
+
+# ---- Bug 1 regression: bid must not trigger _push_state_to_all cascade ----
+
+
+@pytest.mark.asyncio
+async def test_bid_during_deal_bid_does_not_push_state_to_all():
+    """BidAction during DEAL_BID must NOT call _push_state_to_all().
+
+    Regression test for Bug 1: when a bid triggered _push_state_to_all(),
+    each AutoPlayer.on_state() would create_task(bid) → game.act() →
+    _push_state_to_all() → on_state() → … an exponential task cascade
+    that consumed all CPU and memory.
+
+    The fix: bid during DEAL_BID does not push state at all — the
+    dealing loop pushes to all players every 0.5s anyway, so the next
+    tick carries the updated bid_winner.
+    """
+    game = _create_game_with_auto_players()
+    await game.run()
+    snap = game.snapshot(for_player=0)
+
+    if snap.phase != "DEAL_BID" or len(snap.player_hand) == 0:
+        await game.cancel()
+        pytest.skip("Game not in DEAL_BID or no cards to bid with")
+
+    # Find a trump rank card to bid with
+    trump_cards = [c for c in snap.player_hand if c.rank == snap.trump_rank]
+    if not trump_cards:
+        await game.cancel()
+        pytest.skip("No trump rank cards in hand to bid with")
+
+    action = BidAction(cards=trump_cards[:1], count=1)
+
+    with patch.object(game, "_push_state_to_all", wraps=game._push_state_to_all) as mock_push:
+        with patch.object(game, "_push_state_to_player", wraps=game._push_state_to_player) as mock_push_one:
+            try:
+                await game.act(player_index=0, action=action)
+            except ValueError:
+                pass  # bid may be rejected for various reasons, that's fine
+
+            # _push_state_to_all must NOT have been called
+            mock_push.assert_not_called()
+
+    await game.cancel()
+
+
+# ---- Bug 2 regression: snapshot must contain player_hand_counts ----
+
+
+@pytest.mark.asyncio
+async def test_snapshot_to_dict_contains_all_required_fields():
+    """StateSnapshot.to_dict() must contain ALL fields from spec section 5.5.
+
+    Regression test for Bug 2: the `player_hand_counts` field was missing
+    from StateSnapshot, causing the frontend's game-table component to
+    show "0 张" for every player because `snapshot.player_hand_counts[i]`
+    evaluated to `undefined ?? 0`.
+
+    This test asserts the complete set of required fields so any future
+    addition to the spec is also caught if the server doesn't serialize it.
+    """
+    game = _create_game_with_auto_players()
+    await game.run()
+    snap = game.snapshot(for_player=0)
+    result = snap.to_dict()
+
+    # Complete list of required fields per spec section 5.5
+    required_fields = [
+        "phase",
+        "player_hand",
+        "player_hand_counts",
+        "bottom_cards",
+        "trump_suit",
+        "trump_rank",
+        "declarer_team",
+        "declarer_player",
+        "current_player",
+        "defender_points",
+        "trick",
+        "trick_history",
+        "legal_actions",
+        "awaiting_action",
+        "scoring",
+        "winning_team",
+        "team0_level",
+        "team1_level",
+        "bid_events",
+        "bid_winner",
+        "stirring_state",
+        "exchange_state",
+    ]
+
+    for field in required_fields:
+        assert field in result, f"Missing required field: {field}"
+
+    # player_hand_counts specifically: must be a list of 4 ints
+    assert isinstance(result["player_hand_counts"], list)
+    assert len(result["player_hand_counts"]) == 4
+    for count in result["player_hand_counts"]:
+        assert isinstance(count, int)
+
+    await game.cancel()
+
+
+# ---- Task 010: new get_legal_plays signature ----
+
+
+@pytest.mark.asyncio
+async def test_snapshot_legal_actions_are_card_lists():
+    """Legal actions entries are plain card lists, not PlayAction objects.
+
+    After the refactor, legal_actions is list[list[Card]].
+    Each entry is a list of Card objects (no .type attribute).
+    """
+    game = _create_game_with_auto_players()
+    await game.run()
+    snap = game.snapshot(for_player=0)
+    if snap.phase == "PLAYING" and len(snap.legal_actions) > 0:
+        entry = snap.legal_actions[0]
+        # Entry is a list of Card objects, not a PlayAction
+        assert isinstance(entry, list)
+        assert not hasattr(entry, "type")  # not a PlayAction
+        if len(entry) > 0:
+            from server.sm.card_model import Card
+            assert isinstance(entry[0], Card)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_legal_actions_to_dict_format():
+    """to_dict() serializes legal_actions as list of card-dict lists (no 'type' field)."""
+    game = _create_game_with_auto_players()
+    await game.run()
+    snap = game.snapshot(for_player=0)
+    d = snap.to_dict()
+    if snap.phase == "PLAYING" and len(d.get("legal_actions", [])) > 0:
+        entry = d["legal_actions"][0]
+        # Entry is a list of card dicts, not a dict with 'type' key
+        assert isinstance(entry, list)
+        if len(entry) > 0:
+            assert "id" in entry[0]  # card dict format
+            assert "type" not in entry[0]  # no PlayAction wrapper
+
+
+@pytest.mark.asyncio
+async def test_snapshot_completed_trick_no_lead_type():
+    """CompletedTrick no longer has lead_type field.
+
+    After Task-009, _serialize_completed_trick should not include lead_type.
+    """
+    game = _create_game_with_auto_players()
+    await game.run()
+    snap = game.snapshot(for_player=0)
+    d = snap.to_dict()
+    for trick in d.get("trick_history", []):
+        assert "lead_type" not in trick

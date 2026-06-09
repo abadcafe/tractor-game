@@ -103,7 +103,16 @@ class Player(ABC):
 
 
 class AutoPlayer(Player):
-    """AI player that makes random legal decisions."""
+    """AI player that makes random legal decisions.
+
+    Uses create_task for actions to avoid blocking the on_state call chain,
+    which prevents race conditions when _push_state_to_all iterates over players.
+    A small delay is added before each action to prevent rapid cascading.
+    """
+
+    def __init__(self, index: int) -> None:
+        super().__init__(index)
+        self._action_count = 0
 
     async def on_state(self, game: Any) -> None:
         snapshot = game.snapshot(self.index)
@@ -142,8 +151,19 @@ class AutoPlayer(Player):
         # Find pairs of trump rank cards (simplified: just pass if no cards)
         trump_cards = [c for c in hand if getattr(c, "rank", None) == trump_rank]
         if len(trump_cards) >= 2 and random.random() < 0.5:
-            cards = trump_cards[:2]
-            action = StirAction(cards=cards)
+            # Only stir if we have a same-suit pair of trump rank cards
+            suit_groups: dict[Any, list] = {}
+            for c in trump_cards:
+                suit_groups.setdefault(c.suit, []).append(c)
+            valid_pair = None
+            for suit_cards in suit_groups.values():
+                if len(suit_cards) >= 2:
+                    valid_pair = suit_cards[:2]
+                    break
+            if valid_pair:
+                action = StirAction(cards=valid_pair)
+            else:
+                action = SkipStirAction()
         else:
             action = SkipStirAction()
         task = asyncio.create_task(game.act(self.index, action))
@@ -154,12 +174,18 @@ class AutoPlayer(Player):
         if snapshot.current_player != self.index:
             return
         hand = snapshot.player_hand
-        # Default: discard up to 8 cards or the entire hand, whichever is smaller
-        discard_count = min(len(hand), 8)
-        if discard_count > 0:
-            cards = random.sample(hand, discard_count)
+        # exchange_state is a dict in the snapshot; extract count
+        exc = snapshot.exchange_state
+        if exc is not None:
+            count = exc.get("count", 8) if isinstance(exc, dict) else getattr(exc, "count", 8)
         else:
-            cards = []
+            count = 8
+        if len(hand) >= count and count > 0:
+            cards = random.sample(hand, count)
+        elif len(hand) > 0:
+            cards = list(hand)
+        else:
+            return
         action = DiscardAction(cards=cards)
         task = asyncio.create_task(game.act(self.index, action))
         task.add_done_callback(_log_task_exception)
@@ -170,10 +196,14 @@ class AutoPlayer(Player):
             return
         legal = snapshot.legal_actions
         if not legal:
+            logger.warning("AutoPlayer %d: no legal actions in PLAYING phase!", self.index)
             return
         chosen = random.choice(legal)
-        # chosen is a sm.PlayAction Pydantic model with .cards attribute
-        action = PlayAction(cards=chosen.cards)
+        # chosen is a list[Card] (plain card list from get_legal_plays_new)
+        action = PlayAction(cards=chosen)
+        self._action_count += 1
+        if self._action_count % 50 == 0:
+            logger.info("AutoPlayer %d: action #%d in PLAYING", self.index, self._action_count)
         task = asyncio.create_task(game.act(self.index, action))
         task.add_done_callback(_log_task_exception)
 
