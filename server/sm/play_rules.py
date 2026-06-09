@@ -745,3 +745,120 @@ def decompose(
     result.sort(key=lambda s: s.sub_level, reverse=True)
 
     return result
+
+
+# ---- is_legal_lead ----
+
+
+def _is_biggest(
+    sub: SubPlay,
+    other_hands: list[Card],
+    trump_suit: Suit | None,
+    trump_rank: Rank,
+) -> bool:
+    """Check if a sub-play is the biggest of its type in its effective suit.
+
+    For single (pair_count=0): no other card of same effective suit has higher
+    RANK_ORDER (or higher trump_rank_order for trump group).
+    For pair (pair_count=1): no other pair of same effective suit has higher RANK_ORDER.
+    For tractor (pair_count>=2): no other tractor of same effective suit with
+    same or greater length beats it.
+    """
+    eff = sub.suit
+    cards = sub.cards
+    pair_count = sub.pair_count
+
+    # Filter other_hands to same effective suit
+    others = [c for c in other_hands if effective_suit(c, trump_suit, trump_rank) == eff]
+
+    if pair_count == 0:
+        # Single: check if any other card has higher rank
+        sub_rank = cards[0].rank
+        sub_order = _rank_order_for_suit(sub_rank, eff, trump_suit, trump_rank)
+        for c in others:
+            other_order = _rank_order_for_suit(c.rank, eff, trump_suit, trump_rank)
+            if other_order > sub_order:
+                return False
+        return True
+
+    if pair_count == 1:
+        # Pair: check if any other pair has higher rank
+        sub_rank = cards[0].rank
+        sub_order = _rank_order_for_suit(sub_rank, eff, trump_suit, trump_rank)
+
+        # Group others by rank
+        other_by_rank: dict[Rank, list[Card]] = {}
+        for c in others:
+            other_by_rank.setdefault(c.rank, []).append(c)
+
+        for rank, rank_cards in other_by_rank.items():
+            if len(rank_cards) >= 2:
+                other_order = _rank_order_for_suit(rank, eff, trump_suit, trump_rank)
+                if other_order > sub_order:
+                    return False
+        return True
+
+    # pair_count >= 2: tractor
+    # Decompose others to find all tractors
+    other_subs = decompose(others, trump_suit, trump_rank) if others else []
+    other_tractors = [s for s in other_subs if s.pair_count >= 2]
+
+    for ot in other_tractors:
+        # If other tractor is longer, it contains a same-length sub-tractor
+        # that can beat sub (longer tractor always wins).
+        if ot.pair_count > pair_count:
+            return False
+        # Same length: compare max rank order
+        if ot.pair_count == pair_count:
+            sub_max_order = max(
+                _rank_order_for_suit(c.rank, eff, trump_suit, trump_rank)
+                for c in cards
+            )
+            ot_max_order = max(
+                _rank_order_for_suit(c.rank, eff, trump_suit, trump_rank)
+                for c in ot.cards
+            )
+            if ot_max_order > sub_max_order:
+                return False
+
+    return True
+
+
+def is_legal_lead(
+    hand: list[Card],
+    played_cards: list[Card],
+    trump_suit: Suit | None,
+    trump_rank: Rank,
+    other_hands: list[Card],
+) -> bool:
+    """Verify that a leading play is legal per spec section 6.1.
+
+    1. played_cards must be a subset of hand
+    2. All played cards must have the same effective suit
+    3. If decomposition yields multiple sub-plays (throw), verify each sub-play
+       is the biggest of its type using verify_throw logic (spec 7.3).
+    """
+    if not played_cards:
+        return False
+
+    # Step 1: played_cards must be a subset of hand
+    hand_ids = {c.id for c in hand}
+    for c in played_cards:
+        if c.id not in hand_ids:
+            return False
+
+    # Step 2: all played cards must have the same effective suit
+    eff_suits = {effective_suit(c, trump_suit, trump_rank) for c in played_cards}
+    if len(eff_suits) != 1:
+        return False
+
+    # Step 3: decompose and verify throw if multi-sub-play
+    subs = decompose(played_cards, trump_suit, trump_rank)
+    if len(subs) > 1:
+        # Verify from lowest level to highest (spec 7.3)
+        sorted_subs = sorted(subs, key=lambda s: s.sub_level)
+        for sub in sorted_subs:
+            if not _is_biggest(sub, other_hands, trump_suit, trump_rank):
+                return False
+
+    return True

@@ -5,7 +5,7 @@ from server.sm.card_model import Card, Suit, Rank
 from server.sm.types import PlayType, PlayAction, SubPlay
 from server.sm.play_rules import (
     detect_singles, detect_pairs, detect_tractors, detect_throws,
-    get_legal_plays, infer_play_type, decompose,
+    get_legal_plays, infer_play_type, decompose, is_legal_lead,
 )
 from server.sm.comparator import effective_suit
 
@@ -518,3 +518,104 @@ class TestDecompose:
         tractor_subs = [s for s in subs if s.pair_count >= 2]
         assert len(tractor_subs) == 1
         assert tractor_subs[0].pair_count == 3
+
+
+class TestIsLegalLead:
+    def test_is_legal_lead_single(self) -> None:
+        """Single card lead is always legal (no throw verification)."""
+        hand = [_card(Suit.HEARTS, Rank.ACE)]
+        played = [_card(Suit.HEARTS, Rank.ACE)]
+        assert is_legal_lead(hand, played, Suit.SPADES, Rank.TWO, []) is True
+
+    def test_is_legal_lead_pair(self) -> None:
+        """Pair lead is always legal (single sub-play, no throw check)."""
+        hand = [_card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2)]
+        played = hand[:]
+        assert is_legal_lead(hand, played, Suit.SPADES, Rank.TWO, []) is True
+
+    def test_is_legal_lead_tractor(self) -> None:
+        """Tractor lead is always legal (single sub-play)."""
+        hand = [
+            _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
+            _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2),
+        ]
+        assert is_legal_lead(hand, hand, Suit.SPADES, Rank.TWO, []) is True
+
+    def test_is_legal_lead_throw_valid(self) -> None:
+        """Throw with all biggest sub-plays is legal.
+
+        spA spK with no other sp cards in other hands -> both are biggest singles.
+        """
+        hand = [_card(Suit.SPADES, Rank.ACE), _card(Suit.SPADES, Rank.KING)]
+        other_hands: list[Card] = []  # no other sp cards
+        assert is_legal_lead(hand, hand, Suit.HEARTS, Rank.TWO, other_hands) is True
+
+    def test_is_legal_lead_throw_invalid_single_not_biggest(self) -> None:
+        """Throw with a non-biggest single triggers failure.
+
+        spK spQ but other hand has spA -> spQ is not biggest (spA exists).
+        This IS a throw (2 singles = 2 sub-plays), so verification applies.
+        """
+        hand = [_card(Suit.SPADES, Rank.KING), _card(Suit.SPADES, Rank.QUEEN)]
+        other_hands = [_card(Suit.SPADES, Rank.ACE)]
+        result = is_legal_lead(hand, hand, Suit.HEARTS, Rank.TWO, other_hands)
+        assert result is False
+
+    def test_is_legal_lead_throw_pair_not_biggest(self) -> None:
+        """Throw with a non-biggest pair triggers failure."""
+        # Hand: pair spQ-Q + single spA. Other hand has pair spK-K.
+        hand = [
+            _card(Suit.SPADES, Rank.QUEEN, 1), _card(Suit.SPADES, Rank.QUEEN, 2),
+            _card(Suit.SPADES, Rank.ACE),
+        ]
+        other_hands = [_card(Suit.SPADES, Rank.KING, 1), _card(Suit.SPADES, Rank.KING, 2)]
+        # decompose -> [pair spQ-Q, single spA]. Verify each is biggest:
+        # pair spQ-Q: is there a bigger sp pair? spK-K exists -> NO. Throw fails.
+        result = is_legal_lead(hand, hand, Suit.HEARTS, Rank.TWO, other_hands)
+        assert result is False
+
+    def test_is_legal_lead_not_in_hand(self) -> None:
+        """Cards not in hand -> illegal."""
+        hand = [_card(Suit.HEARTS, Rank.ACE)]
+        played = [_card(Suit.HEARTS, Rank.KING)]  # not in hand
+        assert is_legal_lead(hand, played, Suit.SPADES, Rank.TWO, []) is False
+
+    def test_is_legal_lead_different_suits(self) -> None:
+        """Cards of different effective suits -> illegal."""
+        hand = [_card(Suit.HEARTS, Rank.ACE), _card(Suit.SPADES, Rank.KING)]
+        played = hand[:]
+        assert is_legal_lead(hand, played, Suit.DIAMONDS, Rank.TWO, []) is False
+
+    def test_is_legal_lead_trump_and_non_trump_mix(self) -> None:
+        """Mixing trump and non-trump cards -> different effective suits -> illegal."""
+        # hA is non-trump, sp2 is trump (trump_rank=2)
+        hand = [_card(Suit.HEARTS, Rank.ACE), _card(Suit.SPADES, Rank.TWO)]
+        played = hand[:]
+        assert is_legal_lead(hand, played, Suit.DIAMONDS, Rank.TWO, []) is False
+
+    def test_is_legal_lead_throw_tractor_not_biggest(self) -> None:
+        """Throw containing a tractor that is not biggest -> fails."""
+        # Hand: tractor sp3-3-4-4 + single spA. Other hand has tractor sp5-5-6-6.
+        hand = [
+            _card(Suit.SPADES, Rank.THREE, 1), _card(Suit.SPADES, Rank.THREE, 2),
+            _card(Suit.SPADES, Rank.FOUR, 1), _card(Suit.SPADES, Rank.FOUR, 2),
+            _card(Suit.SPADES, Rank.ACE),
+        ]
+        other_hands = [
+            _card(Suit.SPADES, Rank.FIVE, 1), _card(Suit.SPADES, Rank.FIVE, 2),
+            _card(Suit.SPADES, Rank.SIX, 1), _card(Suit.SPADES, Rank.SIX, 2),
+        ]
+        result = is_legal_lead(hand, hand, Suit.HEARTS, Rank.TWO, other_hands)
+        assert result is False
+
+    def test_is_legal_lead_throw_biggest_tractor(self) -> None:
+        """Throw with biggest tractor and biggest single -> legal."""
+        # Hand: tractor spK-K-A-A + single spQ. No bigger sp tractors or singles in others.
+        hand = [
+            _card(Suit.SPADES, Rank.KING, 1), _card(Suit.SPADES, Rank.KING, 2),
+            _card(Suit.SPADES, Rank.ACE, 1), _card(Suit.SPADES, Rank.ACE, 2),
+            _card(Suit.SPADES, Rank.QUEEN),
+        ]
+        other_hands: list[Card] = []
+        result = is_legal_lead(hand, hand, Suit.HEARTS, Rank.TWO, other_hands)
+        assert result is True
