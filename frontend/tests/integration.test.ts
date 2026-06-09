@@ -34,7 +34,7 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     declarer_player: 3,
     current_player: 3,
     defender_points: 15,
-    legal_actions: [{ type: "single", cards: [{ id: "D1-hearts-5", suit: "hearts", rank: "5" }] }],
+    legal_actions: [[{ id: "D1-hearts-5", suit: "hearts", rank: "5" }]],
     trick: null,
     trick_history: [],
     bid_events: [],
@@ -122,9 +122,9 @@ Deno.test("test_integration_play_action", () => {
     onAction: (action: string) => {
       if (action === "play") {
         const selectedCards = snap.player_hand.filter((c) => selectedCardIds.has(c.id));
-        const playAction = validatePlay(selectedCards, snap.legal_actions);
-        if (playAction) {
-          sentAction = { type: "play", cards: playAction.cards.map((c) => c.id) };
+        const matchedCards = validatePlay(selectedCards, snap.legal_actions);
+        if (matchedCards) {
+          sentAction = { type: "play", cards: matchedCards.map((c) => c.id) };
         }
       }
     },

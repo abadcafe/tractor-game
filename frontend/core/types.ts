@@ -5,12 +5,6 @@ export interface Card {
   rank: string;
 }
 
-/** A legal play action returned in StateSnapshot.legal_actions. */
-export interface PlayAction {
-  type: string;
-  cards: Card[];
-}
-
 /** One player's contribution in a trick slot. */
 export interface TrickSlot {
   player: number;
@@ -20,7 +14,6 @@ export interface TrickSlot {
 /** A completed trick in trick_history. */
 export interface CompletedTrick {
   lead_player: number;
-  lead_type: string;
   slots: TrickSlot[];
   winner: number;
   points: number;
@@ -52,11 +45,10 @@ export interface StateSnapshot {
   current_player: number;
   defender_points: number;
 
-  legal_actions: PlayAction[];
+  legal_actions: Card[][];
 
   trick: {
     lead_player: number;
-    lead_type: string | null;
     slots: TrickSlot[];
     current_player: number;
   } | null;

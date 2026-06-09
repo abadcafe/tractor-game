@@ -1,23 +1,23 @@
-import type { Card, PlayAction } from "../core/types.ts";
+import type { Card } from "../core/types.ts";
 import { isJoker, isTrumpRank } from "../core/card.ts";
 
 /**
- * Validate selected cards against a list of legal play actions.
- * Returns the first matching PlayAction, or null if no match.
- * Matching: every selected card ID must appear in one action's card IDs (subset match).
+ * Validate selected cards against a list of legal play options.
+ * Returns the first matching card list, or null if no match.
+ * Matching: every selected card ID must appear in one option's card IDs (subset match).
  */
 export function validatePlay(
   selectedCards: Card[],
-  legalActions: PlayAction[],
-): PlayAction | null {
+  legalActions: Card[][],
+): Card[] | null {
   if (selectedCards.length === 0) {
     return null;
   }
   const selectedIds = new Set(selectedCards.map((c) => c.id));
-  for (const action of legalActions) {
-    const actionIds = new Set(action.cards.map((c) => c.id));
+  for (const cards of legalActions) {
+    const actionIds = new Set(cards.map((c) => c.id));
     if ([...selectedIds].every((id) => actionIds.has(id))) {
-      return action;
+      return cards;
     }
   }
   return null;

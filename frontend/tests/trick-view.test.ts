@@ -24,7 +24,6 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     legal_actions: [],
     trick: {
       lead_player: 0,
-      lead_type: "single",
       slots: [{ player: 0, cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }] }],
       current_player: 3,
     },
@@ -67,7 +66,6 @@ Deno.test("test_renderTrickView_multiple_slots", () => {
   const snap = makeSnapshot({
     trick: {
       lead_player: 0,
-      lead_type: "single",
       slots: [
         { player: 0, cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }] },
         { player: 1, cards: [{ id: "D2-hearts-9", suit: "hearts", rank: "9" }] },
@@ -89,7 +87,6 @@ Deno.test("test_renderTrickView_slot_with_empty_cards", () => {
   const snap = makeSnapshot({
     trick: {
       lead_player: 0,
-      lead_type: "single",
       slots: [
         { player: 0, cards: [] },
       ],
@@ -109,7 +106,6 @@ Deno.test("test_renderTrickView_current_player_highlight", () => {
   const snap = makeSnapshot({
     trick: {
       lead_player: 0,
-      lead_type: "single",
       slots: [
         { player: 0, cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }] },
         { player: 1, cards: [{ id: "D2-hearts-9", suit: "hearts", rank: "9" }] },

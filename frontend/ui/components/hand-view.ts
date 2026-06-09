@@ -23,8 +23,8 @@ export function renderHandView(
 
   // Build a set of legal card IDs for highlighting
   const legalCardIds = new Set<string>();
-  for (const action of snapshot.legal_actions) {
-    for (const card of action.cards) {
+  for (const cards of snapshot.legal_actions) {
+    for (const card of cards) {
       legalCardIds.add(card.id);
     }
   }

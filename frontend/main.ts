@@ -49,9 +49,9 @@ function main() {
 
       if (action === "play") {
         const selectedCards = snap.player_hand.filter((c) => selectedCardIds.has(c.id));
-        const playAction = validatePlay(selectedCards, snap.legal_actions);
-        if (playAction) {
-          wsClient.send({ type: "play", cards: playAction.cards.map((c) => c.id) });
+        const matchedCards = validatePlay(selectedCards, snap.legal_actions);
+        if (matchedCards) {
+          wsClient.send({ type: "play", cards: matchedCards.map((c) => c.id) });
           selectedCardIds.clear();
         } else {
           showErrorToast("无效的出牌组合", container);
