@@ -584,25 +584,12 @@ def decompose(
             key = (c.rank, c.suit)
             rank_suit_groups.setdefault(key, []).append(c)
 
-        # Find pairs: (rank, suit) groups with >= 2 cards
-        # Each such group forms a pair; if >= 4 cards, multiple pairs
-        pair_keys: list[tuple[Rank, Suit]] = []
-        single_cards: list[Card] = []
-        pair_key_cards: dict[tuple[Rank, Suit], list[Card]] = {}
-        for key, group_cards in rank_suit_groups.items():
-            n_pairs = len(group_cards) // 2
-            remainder = len(group_cards) % 2
-            pair_key_cards[key] = group_cards
-            for _ in range(n_pairs):
-                pair_keys.append(key)
-            if remainder == 1:
-                single_cards.append(group_cards[-1])
-
         # Create a flat list of pair entries, each pointing to its key and
         # owning a distinct pair of cards from the group.  When a (rank, suit)
         # group has 4+ cards (2-deck game), it contributes multiple pairs; each
         # pair must reference different card instances.
         pair_entries: list[tuple[tuple[Rank, Suit], list[Card]]] = []
+        single_cards: list[Card] = []
         for key, group_cards in rank_suit_groups.items():
             n_pairs = len(group_cards) // 2
             remainder = len(group_cards) % 2

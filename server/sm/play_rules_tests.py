@@ -481,6 +481,15 @@ class TestDecompose:
         assert len(subs) == 1
         assert subs[0].pair_count == 2
 
+    # --- Bug regression ---
+    def test_decompose_trump_single_no_duplicate(self) -> None:
+        """Regression: trump group with single card must not produce duplicate SubPlay entries."""
+        c = _card(Suit.HEARTS, Rank.THREE)
+        subs = decompose([c], Suit.HEARTS, Rank.FIVE)
+        assert len(subs) == 1
+        assert subs[0].pair_count == 0
+        assert subs[0].cards == [c]
+
     # --- Edge cases ---
     def test_decompose_empty(self) -> None:
         """Empty cards -> empty list."""
