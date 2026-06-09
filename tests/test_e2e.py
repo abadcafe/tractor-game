@@ -320,7 +320,7 @@ async def test_game_over_removes_from_registry(client):
 # ---- SubPlay Integration Tests ----
 
 
-from server.sm.card_model import Card as SmCard, Suit as SmSuit, Rank as SmRank
+from server.sm.card_model import Card as SmCard, Suit as SmSuit, Rank as SmRank, POINTS_MAP
 from server.sm.trick import create_trick, play as trick_play, TrickInput
 from server.sm.scoring import calculate_score
 from server.sm.types import CompletedTrick, CompletedTrickSlot
@@ -331,7 +331,6 @@ from server.sm.play_rules import (
 
 
 def _card(suit: SmSuit, rank: SmRank, deck: int = 1) -> SmCard:
-    from server.sm.card_model import POINTS_MAP
     return SmCard(
         id=f"D{deck}-{suit.value}-{rank.value}",
         suit=suit, rank=rank,
