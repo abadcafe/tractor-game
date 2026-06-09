@@ -7,7 +7,7 @@ and the legal play enumeration for leading and following.
 from itertools import combinations
 
 from server.sm.card_model import Card, Suit, Rank, SUITED_RANKS
-from server.sm.comparator import effective_suit, trump_rank_order
+from server.sm.comparator import SUIT_OFFSET, effective_suit, trump_rank_order
 from server.sm.types import PlayAction, PlayType, SubPlay
 
 
@@ -609,8 +609,6 @@ def decompose(
         # - Different ranks: adjacent if no other pair's position falls between them
         # - Same rank (different suits): adjacent only if SUIT_OFFSET difference > 1
         #   (non-adjacent suits, with a gap between their position values)
-        from server.sm.comparator import SUIT_OFFSET
-
         all_positions = sorted({trump_rank_order(rep_cards[k], trump_suit, trump_rank) for k in pair_keys})
 
         def _are_adjacent_t(k1: tuple[Rank, Suit], k2: tuple[Rank, Suit]) -> bool:
