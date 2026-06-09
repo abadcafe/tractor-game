@@ -645,13 +645,17 @@ def _compare_same_suit(
 
     # Get the max rank order across all highest-level sub-plays
     if is_trump:
+        # Use trump_rank_order (comparator) which distinguishes sub-types:
+        #   trump-suit level=80, other-suit level=70+offset, etc.
+        # _rank_order_for_suit only gives组内 position (1-15), which
+        # collapses different sub-types at the same rank.
         a_max_rank = max(
-            _rank_order_for_suit(c.rank, a_eff_suit, trump_suit, trump_rank)
+            trump_rank_order(c, trump_suit, trump_rank)
             for s in a_high_subs
             for c in s.cards
         )
         b_max_rank = max(
-            _rank_order_for_suit(c.rank, b_eff_suit, trump_suit, trump_rank)
+            trump_rank_order(c, trump_suit, trump_rank)
             for s in b_high_subs
             for c in s.cards
         )

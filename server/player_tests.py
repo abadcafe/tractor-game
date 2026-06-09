@@ -1,7 +1,7 @@
 """Tests for server/player.py -- Player, AutoPlayer, HumanPlayer, PlayerAction types."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -28,6 +28,17 @@ def _make_snapshot(
     snap.legal_actions = legal_actions or []
     snap.trump_rank = trump_rank
     snap.player_hand = player_hand if player_hand is not None else []
+    snap.exchange_state = None
+    snap.stirring_state = None
+    snap.scoring = None
+    snap.trick = None
+    snap.trick_history = []
+    snap.bid_events = []
+    snap.winning_team = None
+    snap.declarer_team = None
+    snap.declarer_player = None
+    snap.defender_points = 0
+    snap.trump_suit = None
     return snap
 
 
@@ -345,3 +356,102 @@ def test_human_player_is_connected_false_after_set_ws_none():
     assert player.is_connected() is True
     player.set_ws(None)
     assert player.is_connected() is False
+
+
+# ---- Bug 4 regression: stir must use same-suit pairs ----
+
+
+@pytest.mark.asyncio
+async def test_auto_player_stir_only_uses_same_suit_pairs():
+    """AutoPlayer._handle_stir must only stir with same-suit pairs of trump rank.
+
+    Regression test for Bug 4: when a player had 2+ trump-rank cards of
+    different suits, the old code did `trump_cards[:2]` which could pick
+    two cards of different suits — an invalid stir pair. The stirring SM
+    would reject it, but the AutoPlayer would keep retrying with the same
+    invalid pair in a tight loop.
+
+    The fix groups trump-rank cards by suit and only picks a pair from
+    a single suit group.
+    """
+    from server.sm.card_model import Suit, Rank, Card
+
+    # Create 2 trump-rank cards of DIFFERENT suits and 1 of the same suit (forming a valid pair)
+    card_hearts_2 = Card(
+        id="D1-H-2", suit=Suit.HEARTS, rank=Rank.TWO,
+        is_joker=False, is_big_joker=False, points=0, deck=1,
+    )
+    card_spades_2 = Card(
+        id="D1-S-2", suit=Suit.SPADES, rank=Rank.TWO,
+        is_joker=False, is_big_joker=False, points=0, deck=1,
+    )
+    card_hearts_2_d2 = Card(
+        id="D2-H-2", suit=Suit.HEARTS, rank=Rank.TWO,
+        is_joker=False, is_big_joker=False, points=0, deck=2,
+    )
+
+    snap = _make_snapshot(
+        phase="STIRRING",
+        awaiting_action="stir",
+        current_player=0,
+        player_hand=[card_hearts_2, card_spades_2, card_hearts_2_d2],
+        trump_rank=Rank.TWO,
+    )
+    game = _make_game(snap)
+    player = AutoPlayer(index=0)
+
+    # Force random.random() to 0.4 so the stir branch is taken
+    with patch("server.player.random.random", return_value=0.4):
+        await player.on_state(game)
+
+    await asyncio.sleep(0.05)
+    game.act.assert_awaited()
+    call_args = game.act.call_args
+    action = call_args[0][1]
+
+    if isinstance(action, StirAction):
+        # If stirring, both cards must be the same suit
+        assert len(action.cards) == 2
+        suits = {c.suit for c in action.cards}
+        assert len(suits) == 1, (
+            f"StirAction used cards of different suits: {suits}"
+        )
+
+
+# ---- Bug 5 regression: exchange_state is a dict, not an object ----
+
+
+@pytest.mark.asyncio
+async def test_auto_player_discard_with_dict_exchange_state():
+    """AutoPlayer._handle_discard must handle exchange_state as a dict.
+
+    Regression test for Bug 5: the snapshot's exchange_state is a dict
+    (e.g. {"count": 8, "declarer_player": 0}) but the old code accessed
+    it with `.count` (attribute syntax) which raised AttributeError on
+    dicts. The fix uses `.get("count", 8)` for dict access.
+    """
+    card1 = MagicMock(id="c1")
+    card2 = MagicMock(id="c2")
+    card3 = MagicMock(id="c3")
+
+    # exchange_state as a dict (the actual type produced by snapshot())
+    snap = _make_snapshot(
+        phase="EXCHANGE",
+        awaiting_action="discard",
+        current_player=0,
+        player_hand=[card1, card2, card3],
+    )
+    snap.exchange_state = {"count": 3, "declarer_player": 0, "phase": "PICKED_UP"}
+
+    game = _make_game(snap)
+    player = AutoPlayer(index=0)
+
+    # Must not raise AttributeError
+    await player.on_state(game)
+    await asyncio.sleep(0.05)
+
+    game.act.assert_awaited()
+    call_args = game.act.call_args
+    action = call_args[0][1]
+    assert isinstance(action, DiscardAction)
+    assert len(action.cards) == 3

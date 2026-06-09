@@ -725,6 +725,73 @@ class TestComparePlays:
         result = compare_plays(a, b, "trump", Suit.SPADES, Rank.TWO)
         assert result > 0
 
+    # --- Trump sub-type comparison (spec 2.3 / 8.4) ---
+    def test_compare_plays_trump_suit_level_beats_other_suit_level(self) -> None:
+        """Trump-suit level card beats other-suit level card at same rank.
+
+        trump_suit=♥, trump_rank=5:
+          ♥5 = 主花色级牌 (spec value=80)
+          ♠5 = 其他花色级牌 (spec value=73)
+        ♥5 should win.
+        """
+        a = [_card(Suit.HEARTS, Rank.FIVE)]
+        b = [_card(Suit.SPADES, Rank.FIVE)]
+        # lead_eff=♠ (spades is trump, so both are trump)
+        result = compare_plays(a, b, Suit.SPADES, Suit.HEARTS, Rank.FIVE)
+        assert result > 0
+
+    def test_compare_plays_trump_suit_level_beats_diamond_level(self) -> None:
+        """Trump-suit level card beats diamond-level card (lowest other-suit level).
+
+        trump_suit=♥, trump_rank=5:
+          ♥5 = 80
+          ♦5 = 70 + 0 = 70
+        ♥5 should win.
+        """
+        a = [_card(Suit.HEARTS, Rank.FIVE)]
+        b = [_card(Suit.DIAMONDS, Rank.FIVE)]
+        result = compare_plays(a, b, Suit.DIAMONDS, Suit.HEARTS, Rank.FIVE)
+        assert result > 0
+
+    def test_compare_plays_other_suit_level_ordering(self) -> None:
+        """Other-suit level cards ordered by SUIT_OFFSET: ♦ < ♣ < ♥ < ♠.
+
+        trump_rank=5, trump_suit=♥:
+          ♣5 = 70 + 1 = 71
+          ♠5 = 70 + 3 = 73
+        ♠5 should beat ♣5.
+        """
+        a = [_card(Suit.SPADES, Rank.FIVE)]
+        b = [_card(Suit.CLUBS, Rank.FIVE)]
+        result = compare_plays(a, b, Suit.HEARTS, Suit.HEARTS, Rank.FIVE)
+        assert result > 0
+
+    def test_compare_plays_trump_pair_sub_type_diff(self) -> None:
+        """Both trump pairs at same rank, different sub-types.
+
+        trump_suit=♥, trump_rank=5:
+          ♥5♥5 = 主花色级牌对子 (max rank = 80)
+          ♠5♠5 = 其他花色级牌对子 (max rank = 73)
+        ♥5♥5 should win.
+        """
+        a = [_card(Suit.HEARTS, Rank.FIVE, 1), _card(Suit.HEARTS, Rank.FIVE, 2)]
+        b = [_card(Suit.SPADES, Rank.FIVE, 1), _card(Suit.SPADES, Rank.FIVE, 2)]
+        result = compare_plays(a, b, Suit.SPADES, Suit.HEARTS, Rank.FIVE)
+        assert result > 0
+
+    def test_compare_plays_trump_suit_non_level_vs_other_suit_level(self) -> None:
+        """Trump-suit non-level card vs other-suit level card at same rank.
+
+        trump_suit=♥, trump_rank=K:
+          ♥A = 主花色非级牌 (spec value=45+14=59)
+          ♠K = 其他花色级牌 (spec value=70+3=73)
+        ♠K should win (73 > 59).
+        """
+        a = [_card(Suit.HEARTS, Rank.ACE)]
+        b = [_card(Suit.SPADES, Rank.KING)]
+        result = compare_plays(a, b, Suit.SPADES, Suit.HEARTS, Rank.KING)
+        assert result < 0
+
 
 class TestDetectThrows:
     def test_detect_throws_single_suit_all_biggest(self) -> None:
