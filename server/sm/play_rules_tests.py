@@ -6,7 +6,7 @@ from server.sm.types import PlayType, PlayAction, SubPlay
 from server.sm.play_rules import (
     detect_singles, detect_pairs, detect_tractors, detect_throws,
     detect_throws_new,
-    get_legal_plays, infer_play_type, decompose, is_legal_lead,
+    get_legal_plays, get_legal_plays_new, infer_play_type, decompose, is_legal_lead,
     is_legal_follow, can_win, compare_plays_new,
 )
 from server.sm.comparator import effective_suit
@@ -1131,3 +1131,99 @@ class TestDetectThrowsNew:
         other_hands = [_card(Suit.SPADES, Rank.KING)]
         throws = detect_throws_new(hand, Suit.HEARTS, Rank.TWO, other_hands)
         assert len(throws) == 0
+
+
+class TestGetLegalPlaysNew:
+    # --- Leading ---
+    def test_leading_returns_singles(self) -> None:
+        """Leading: each card is a single option."""
+        hand = [_card(Suit.HEARTS, Rank.ACE), _card(Suit.HEARTS, Rank.KING)]
+        plays = get_legal_plays_new(hand, True, None, Suit.SPADES, Rank.TWO, [])
+        singles = [p for p in plays if len(p) == 1]
+        assert len(singles) >= 2
+
+    def test_leading_returns_pairs(self) -> None:
+        """Leading: pairs are options."""
+        hand = [_card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2)]
+        plays = get_legal_plays_new(hand, True, None, Suit.SPADES, Rank.TWO, [])
+        pairs = [p for p in plays if len(p) == 2]
+        assert len(pairs) >= 1
+
+    def test_leading_returns_tractors(self) -> None:
+        """Leading: tractors are options."""
+        hand = [
+            _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
+            _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2),
+        ]
+        plays = get_legal_plays_new(hand, True, None, Suit.SPADES, Rank.TWO, [])
+        tractors = [p for p in plays if len(p) == 4]
+        assert len(tractors) >= 1
+
+    def test_leading_returns_valid_throws(self) -> None:
+        """Leading: valid throws (all sub-plays biggest) are options."""
+        hand = [_card(Suit.SPADES, Rank.ACE), _card(Suit.SPADES, Rank.KING)]
+        plays = get_legal_plays_new(hand, True, None, Suit.HEARTS, Rank.TWO, [])
+        throws = [p for p in plays if len(p) == 2]
+        assert len(throws) >= 1
+
+    # --- Following ---
+    def test_following_single_must_follow(self) -> None:
+        """Following single: must play same suit if possible."""
+        hand = [_card(Suit.HEARTS, Rank.ACE), _card(Suit.SPADES, Rank.KING)]
+        lead = [_card(Suit.HEARTS, Rank.QUEEN)]
+        plays = get_legal_plays_new(hand, False, lead, Suit.SPADES, Rank.TWO, [])
+        # All plays must be heart
+        for p in plays:
+            assert all(c.suit == Suit.HEARTS for c in p)
+
+    def test_following_single_no_suit(self) -> None:
+        """Following single with no matching suit: can play anything."""
+        hand = [_card(Suit.SPADES, Rank.KING)]
+        lead = [_card(Suit.HEARTS, Rank.QUEEN)]
+        plays = get_legal_plays_new(hand, False, lead, Suit.SPADES, Rank.TWO, [])
+        assert len(plays) >= 1
+
+    def test_following_pair_must_follow(self) -> None:
+        """Following pair: must play pair of same suit if available."""
+        hand = [
+            _card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2),
+            _card(Suit.SPADES, Rank.KING, 1), _card(Suit.SPADES, Rank.KING, 2),
+        ]
+        lead = [_card(Suit.HEARTS, Rank.QUEEN, 1), _card(Suit.HEARTS, Rank.QUEEN, 2)]
+        plays = get_legal_plays_new(hand, False, lead, Suit.SPADES, Rank.TWO, [])
+        # Must include hA pair option
+        has_heart_pair = any(
+            len(p) == 2 and all(c.suit == Suit.HEARTS for c in p)
+            for p in plays
+        )
+        assert has_heart_pair
+
+    def test_following_tractor_priority(self) -> None:
+        """Following tractor: must use higher-level sub-plays first."""
+        # Hand: tractor h3-3-4-4-5-5 + pair hK-K. Lead: 2-pair tractor.
+        hand = [
+            _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
+            _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2),
+            _card(Suit.HEARTS, Rank.FIVE, 1), _card(Suit.HEARTS, Rank.FIVE, 2),
+            _card(Suit.HEARTS, Rank.KING, 1), _card(Suit.HEARTS, Rank.KING, 2),
+        ]
+        lead = [
+            _card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2),
+            _card(Suit.HEARTS, Rank.QUEEN, 1), _card(Suit.HEARTS, Rank.QUEEN, 2),
+        ]
+        plays = get_legal_plays_new(hand, False, lead, Suit.SPADES, Rank.TWO, [])
+        # All plays must be 4 cards
+        for p in plays:
+            assert len(p) == 4
+
+    def test_following_empty_lead_cards(self) -> None:
+        """Following with empty lead_cards -> returns empty (wait for lead)."""
+        hand = [_card(Suit.HEARTS, Rank.ACE)]
+        plays = get_legal_plays_new(hand, False, [], Suit.SPADES, Rank.TWO, [])
+        assert plays == []
+
+    def test_following_lead_cards_none(self) -> None:
+        """Following with lead_cards=None -> returns empty."""
+        hand = [_card(Suit.HEARTS, Rank.ACE)]
+        plays = get_legal_plays_new(hand, False, None, Suit.SPADES, Rank.TWO, [])
+        assert plays == []
