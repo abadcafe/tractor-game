@@ -34,6 +34,27 @@ class PlayAction(BaseModel):
     cards: list[Card]
 
 
+class SubPlay(BaseModel):
+    """A sub-pattern within a play: single, pair, or tractor.
+
+    pair_count: 0=single, 1=pair, >=2=tractor
+    suit: effective suit of this sub-play ("trump" or a Suit enum)
+    """
+    model_config = ConfigDict(frozen=True)
+
+    pair_count: int
+    cards: list[Card]
+    suit: Suit | str
+
+    @property
+    def sub_level(self) -> int:
+        """Sub-play level: pair_count + 1.
+
+        single=1, pair=2, 2-pair tractor=3, 3-pair tractor=4, ...
+        """
+        return self.pair_count + 1
+
+
 class BidEvent(BaseModel):
     """Records a bid event: revealing cards from hand during bidding."""
 

@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.types import (
     PlayType, PlayAction, BidEvent, StirAction, Player,
-    CompletedTrick, CompletedTrickSlot,
+    CompletedTrick, CompletedTrickSlot, SubPlay,
 )
 
 
@@ -257,3 +257,78 @@ class TestCompletedTrick:
         slot = CompletedTrickSlot(player=0, cards=[_card(Suit.HEARTS, Rank.ACE)])
         with pytest.raises(ValidationError):
             slot.player = 1
+
+
+class TestSubPlay:
+    def test_subplay_single(self) -> None:
+        """Single card: pair_count=0."""
+        c = _card(Suit.HEARTS, Rank.ACE)
+        sp = SubPlay(pair_count=0, cards=[c], suit=Suit.HEARTS)
+        assert sp.pair_count == 0
+        assert len(sp.cards) == 1
+        assert sp.suit == Suit.HEARTS
+
+    def test_subplay_pair(self) -> None:
+        """Pair: pair_count=1."""
+        c1 = _card(Suit.HEARTS, Rank.ACE, 1)
+        c2 = _card(Suit.HEARTS, Rank.ACE, 2)
+        sp = SubPlay(pair_count=1, cards=[c1, c2], suit=Suit.HEARTS)
+        assert sp.pair_count == 1
+        assert len(sp.cards) == 2
+
+    def test_subplay_tractor(self) -> None:
+        """Tractor (2 pairs): pair_count=2."""
+        cards = [
+            _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
+            _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2),
+        ]
+        sp = SubPlay(pair_count=2, cards=cards, suit=Suit.HEARTS)
+        assert sp.pair_count == 2
+        assert len(sp.cards) == 4
+
+    def test_subplay_tractor_3_pairs(self) -> None:
+        """Tractor (3 pairs): pair_count=3, 6 cards."""
+        cards = [
+            _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
+            _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2),
+            _card(Suit.HEARTS, Rank.FIVE, 1), _card(Suit.HEARTS, Rank.FIVE, 2),
+        ]
+        sp = SubPlay(pair_count=3, cards=cards, suit=Suit.HEARTS)
+        assert sp.pair_count == 3
+        assert len(sp.cards) == 6
+
+    def test_subplay_trump_suit(self) -> None:
+        """SubPlay suit can be 'trump' string."""
+        c = _card(Suit.JOKER, Rank.BIG_JOKER)
+        sp = SubPlay(pair_count=0, cards=[c], suit="trump")
+        assert sp.suit == "trump"
+
+    def test_subplay_level_single(self) -> None:
+        """sub_level for single: pair_count=0 -> level=1."""
+        sp = SubPlay(pair_count=0, cards=[], suit=Suit.HEARTS)
+        assert sp.sub_level == 1
+
+    def test_subplay_level_pair(self) -> None:
+        """sub_level for pair: pair_count=1 -> level=2."""
+        sp = SubPlay(pair_count=1, cards=[], suit=Suit.HEARTS)
+        assert sp.sub_level == 2
+
+    def test_subplay_level_tractor(self) -> None:
+        """sub_level for tractor: pair_count=2 -> level=3."""
+        sp = SubPlay(pair_count=2, cards=[], suit=Suit.HEARTS)
+        assert sp.sub_level == 3
+
+    def test_subplay_level_tractor_3_pairs(self) -> None:
+        """sub_level for 3-pair tractor: pair_count=3 -> level=4."""
+        sp = SubPlay(pair_count=3, cards=[], suit=Suit.HEARTS)
+        assert sp.sub_level == 4
+
+    def test_subplay_frozen(self) -> None:
+        """SubPlay is immutable (Pydantic frozen model)."""
+        c = _card(Suit.HEARTS, Rank.ACE)
+        sp = SubPlay(pair_count=0, cards=[c], suit=Suit.HEARTS)
+        try:
+            sp.pair_count = 1  # type: ignore
+            assert False, "Should have raised"
+        except Exception:
+            pass  # Expected: frozen model
