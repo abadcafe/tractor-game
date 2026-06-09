@@ -3,7 +3,6 @@ from typing import Literal
 
 import pytest
 from server.sm.card_model import Card, Suit, Rank
-from server.sm.types import PlayType
 from server.sm.trick import (
     TrickState, TrickInput, TrickResult,
     create_trick, play,
@@ -45,7 +44,6 @@ class TestCreateTrick:
         assert state.lead_player == 0
         assert state.cur == 0
         assert state.played == 0
-        assert state.lead_type is None
 
     def test_create_trick_lead_player(self) -> None:
         """Current player starts as lead_player."""
@@ -78,10 +76,9 @@ class TestPlayLead:
         state = play(state, player=0, cards=[hands[0][0]])
         assert state.phase == "FOLLOWING"
         assert state.played == 1
-        assert state.lead_type == PlayType.SINGLE
 
     def test_play_lead_pair(self) -> None:
-        """Leading a pair sets lead_type=PAIR."""
+        """Leading a pair transitions to FOLLOWING."""
         hands = [
             [_card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2)],
             [_card(Suit.HEARTS, Rank.KING, 1), _card(Suit.HEARTS, Rank.KING, 2)],
@@ -95,10 +92,10 @@ class TestPlayLead:
         ))
         pair = hands[0][:2]
         state = play(state, player=0, cards=pair)
-        assert state.lead_type == PlayType.PAIR
+        assert state.phase == "FOLLOWING"
 
-    def test_play_lead_sets_lead_type(self) -> None:
-        """Lead play sets the lead_type for the trick."""
+    def test_play_lead_sets_following(self) -> None:
+        """Lead play transitions to FOLLOWING phase."""
         hands = [
             [_card(Suit.HEARTS, Rank.ACE)],
             [_card(Suit.HEARTS, Rank.KING)],
@@ -111,7 +108,7 @@ class TestPlayLead:
             defender_points=0, declarer_team=0,
         ))
         state = play(state, player=0, cards=[hands[0][0]])
-        assert state.lead_type == PlayType.SINGLE
+        assert state.phase == "FOLLOWING"
 
 
 class TestPlayFollow:
@@ -256,7 +253,6 @@ class TestPlayResolve:
         assert result.completed_trick is not None
         assert len(result.completed_trick.slots) == 4
         assert result.completed_trick.lead_player == 0
-        assert result.completed_trick.lead_type == PlayType.SINGLE
 
     def test_play_lead_trump_beats_non_trump(self) -> None:
         """Trump card beats non-trump card."""
@@ -440,7 +436,6 @@ class TestPlayFollowPairSuit:
         ))
         # Player 0 leads ♥A pair
         state = play(state, player=0, cards=hands[0][:2])
-        assert state.lead_type == PlayType.PAIR
         # Player 1 tries to play ♠Q pair (off-suit) -- should be rejected
         with pytest.raises(ValueError, match="follow|suit|legal"):
             play(state, player=1, cards=hands[1][2:4])
@@ -499,7 +494,6 @@ class TestPlayFollowTractorSuit:
         # Player 0 leads ♥A+♥K tractor (4 cards)
         lead_cards = hands[0][:4]
         state = play(state, player=0, cards=lead_cards)
-        assert state.lead_type == PlayType.TRACTOR
         # Player 1 tries to play ♠Q+♠J pair (off-suit tractor) -- should be rejected
         off_suit = hands[1][4:8]
         with pytest.raises(ValueError, match="follow|suit|legal"):
@@ -508,3 +502,45 @@ class TestPlayFollowTractorSuit:
         on_suit = hands[1][:4]
         state = play(state, player=1, cards=on_suit)
         assert state.played == 2
+
+
+class TestPlayResolveNewComparison:
+    def test_resolve_pair_beats_single_same_suit(self) -> None:
+        """When all 4 play pairs, the highest pair wins."""
+        hands = [
+            [_card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2)],  # 0: h3 pair
+            [_card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2)],      # 1: hA pair
+            [_card(Suit.HEARTS, Rank.KING, 1), _card(Suit.HEARTS, Rank.KING, 2)],     # 2: hK pair
+            [_card(Suit.HEARTS, Rank.QUEEN, 1), _card(Suit.HEARTS, Rank.QUEEN, 2)],   # 3: hQ pair
+        ]
+        state = create_trick(TrickInput(
+            lead_player=0, hands=hands,
+            trump_suit=Suit.SPADES, trump_rank=Rank.TWO,
+            defender_points=0, declarer_team=0,
+        ))
+        state = play(state, player=0, cards=hands[0])
+        state = play(state, player=1, cards=hands[1])
+        state = play(state, player=3, cards=hands[3])
+        state = play(state, player=2, cards=hands[2])
+        result = _get_result(state)
+        assert result.winner == 1  # hA pair wins
+
+    def test_resolve_trump_pair_beats_non_trump_pair(self) -> None:
+        """Trump pair beats non-trump pair."""
+        hands = [
+            [_card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2)],      # 0: hA pair (non-trump)
+            [_card(Suit.SPADES, Rank.THREE, 1), _card(Suit.SPADES, Rank.THREE, 2)],   # 1: sp3 pair (trump)
+            [_card(Suit.HEARTS, Rank.KING, 1), _card(Suit.HEARTS, Rank.KING, 2)],     # 2: hK pair
+            [_card(Suit.HEARTS, Rank.QUEEN, 1), _card(Suit.HEARTS, Rank.QUEEN, 2)],   # 3: hQ pair
+        ]
+        state = create_trick(TrickInput(
+            lead_player=0, hands=hands,
+            trump_suit=Suit.SPADES, trump_rank=Rank.TWO,
+            defender_points=0, declarer_team=0,
+        ))
+        state = play(state, player=0, cards=hands[0])
+        state = play(state, player=1, cards=hands[1])
+        state = play(state, player=3, cards=hands[3])
+        state = play(state, player=2, cards=hands[2])
+        result = _get_result(state)
+        assert result.winner == 1  # trump pair wins

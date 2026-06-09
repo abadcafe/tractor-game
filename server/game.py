@@ -12,7 +12,7 @@ from typing import Callable
 
 from server.sm import game_sm, round_sm, play_rules
 from server.sm.card_model import Card, Suit, Rank
-from server.sm.types import BidEvent, PlayAction as SmPlayAction
+from server.sm.types import BidEvent, PlayAction as SmPlayAction, PlayType as SmPlayType
 from server.player import Player, BidAction, StirAction, SkipStirAction, DiscardAction, PlayAction, NextRoundAction
 
 logger = logging.getLogger(__name__)
@@ -41,6 +41,7 @@ class StateSnapshot:
 
     phase: str
     player_hand: list
+    player_hand_counts: list[int]
     bottom_cards: list
     trump_suit: Suit | None
     trump_rank: Rank
@@ -71,6 +72,7 @@ class StateSnapshot:
         return {
             "phase": self.phase,
             "player_hand": [_card_to_dict(c) for c in self.player_hand],
+            "player_hand_counts": self.player_hand_counts,
             "bottom_cards": [_card_to_dict(c) for c in self.bottom_cards],
             "trump_suit": self.trump_suit.value if self.trump_suit is not None else None,
             "trump_rank": self.trump_rank.value,
@@ -143,8 +145,8 @@ def _serialize_completed_trick(trick) -> dict:
                 for slot in result["slots"]
             ]
         return result
-    lead_type = trick.lead_type
-    if hasattr(lead_type, "value"):
+    lead_type = trick.lead_type if hasattr(trick, 'lead_type') else None
+    if lead_type is not None and hasattr(lead_type, "value"):
         lead_type = lead_type.value
     return {
         "lead_player": trick.lead_player,
@@ -206,43 +208,31 @@ class Game:
         if player_index < 0 or player_index >= len(self._players):
             raise ValueError(f"Player index {player_index} out of range (0-{len(self._players) - 1})")
         phase = self.get_phase()
+        logger.debug("Game.act: player=%d action=%s phase=%s", player_index, type(action).__name__, phase)
 
         if phase == "DEAL_BID" and isinstance(action, BidAction):
             bid_event = self._convert_bid_action(player_index, action)
             self._round_state = round_sm.reveal(self._round_state, bid_event)
-            await self._push_state_to_all()
+            # No state push here: the dealing loop pushes to all players every
+            # 0.75s, so the next tick will carry the updated bid_winner.
+            # Pushing here would trigger AutoPlayer.on_state → create_task(bid)
+            # → act → _push_state_to_all → on_state → … exponential cascade.
 
         elif phase == "STIRRING" and isinstance(action, SkipStirAction):
             self._round_state = round_sm.pass_stir(self._round_state)
-            if self._round_state.phase == "EXCHANGE" and self._round_state.exchange_state is not None:
-                # Transitioned to EXCHANGE: push to declarer player
-                await self._push_state_to_player(self._round_state.exchange_state.declarer_player)
-            elif self._round_state.stirring_state is not None:
-                await self._push_state_to_player(self._round_state.stirring_state.current_player)
+            await self._push_state_to_all()
 
         elif phase == "STIRRING" and isinstance(action, StirAction):
             self._round_state = round_sm.stir(self._round_state, action.cards)
-            if self._round_state.phase == "EXCHANGE" and self._round_state.exchange_state is not None:
-                # Transitioned to EXCHANGE: push to declarer player
-                await self._push_state_to_player(self._round_state.exchange_state.declarer_player)
-            elif self._round_state.stirring_state is not None:
-                await self._push_state_to_player(self._round_state.stirring_state.current_player)
+            await self._push_state_to_all()
 
         elif phase == "EXCHANGE" and isinstance(action, DiscardAction):
             self._round_state = round_sm.discard(self._round_state, action.cards)
-            if self._round_state.phase == "PLAYING":
-                await self._push_state_to_player(self._round_state.trick_state.cur)
-            elif self._round_state.phase == "EXCHANGE" and self._round_state.exchange_state is not None:
-                await self._push_state_to_player(self._round_state.exchange_state.declarer_player)
+            await self._push_state_to_all()
 
         elif phase == "PLAYING" and isinstance(action, PlayAction):
             self._round_state = round_sm.play(self._round_state, action.cards)
-            if self._round_state.phase == "PLAYING":
-                await self._push_state_to_player(self._round_state.trick_state.cur)
-            elif self._round_state.phase == "COMPLETE":
-                # Round finished after 25 tricks; notify the declarer
-                target = self._round_state.declarer_player if self._round_state.declarer_player is not None else 0
-                await self._push_state_to_player(target)
+            await self._push_state_to_all()
 
         elif phase == "COMPLETE" and isinstance(action, NextRoundAction):
             round_result = round_sm.get_round_result(self._round_state)
@@ -267,9 +257,7 @@ class Game:
                 ))
                 # Start a new dealing loop for the next round
                 self._dealing_task = asyncio.create_task(self._dealing_loop())
-                # Push state to dealing target
-                if self._round_state.deal_bid_state is not None:
-                    await self._push_state_to_player(self._round_state.deal_bid_state.deal_target)
+                await self._push_state_to_all()
         else:
             raise ValueError(f"Invalid action {type(action).__name__} in phase {phase}")
 
@@ -290,6 +278,9 @@ class Game:
         # player_hand
         player_hand = list(rs.players_hand[for_player]) if for_player < len(rs.players_hand) else []
 
+        # player_hand_counts: card count for each player (for game table display)
+        player_hand_counts = [len(h) for h in rs.players_hand]
+
         # current_player derivation
         current_player = for_player  # default
         if rs.phase == "DEAL_BID" and rs.deal_bid_state is not None:
@@ -305,23 +296,34 @@ class Game:
 
         # legal_actions
         legal_actions: list = []
+        can_act_in_playing = False  # whether current player can act in PLAYING
         if rs.phase == "PLAYING" and rs.trick_state is not None:
             is_leading = rs.trick_state.phase == "LEADING"
             lead_action = None
-            if not is_leading:
-                # Build a lead PlayAction from the lead_type
-                lead_type = rs.trick_state.lead_type
+            if is_leading:
+                can_act_in_playing = True
+            else:
+                # Following: only compute legal actions if lead cards exist
                 lead_slots = rs.trick_state.slots
-                if lead_slots and lead_type is not None:
+                if lead_slots:
                     lead_cards = lead_slots[0].cards if lead_slots[0].cards else []
-                    lead_action = SmPlayAction(type=lead_type, cards=lead_cards)
-            legal_actions = play_rules.get_legal_plays(
-                hand=player_hand,
-                is_leading=is_leading,
-                lead_action=lead_action,
-                trump_suit=rs.trump_suit,
-                trump_rank=rs.trump_rank,
-            )
+                    if lead_cards:
+                        # Use SINGLE as placeholder for lead_type; the actual
+                        # type is determined by decompose at resolution time
+                        lead_action = SmPlayAction(type=SmPlayType.SINGLE, cards=lead_cards)
+                        can_act_in_playing = True
+                    # else: lead player hasn't played yet, followers must wait
+            if can_act_in_playing:
+                legal_actions = play_rules.get_legal_plays(
+                    hand=player_hand,
+                    is_leading=is_leading,
+                    lead_action=lead_action,
+                    trump_suit=rs.trump_suit,
+                    trump_rank=rs.trump_rank,
+                )
+                # Safety: if legal_actions is empty despite can_act, no valid play yet
+                if not legal_actions:
+                    can_act_in_playing = False
 
         # awaiting_action
         awaiting_action = None
@@ -329,7 +331,7 @@ class Game:
             awaiting_action = "stir"
         elif rs.phase == "EXCHANGE":
             awaiting_action = "discard"
-        elif rs.phase == "PLAYING":
+        elif rs.phase == "PLAYING" and can_act_in_playing:
             awaiting_action = "play"
         elif rs.phase == "COMPLETE":
             awaiting_action = "next_round"
@@ -340,7 +342,6 @@ class Game:
             ts = rs.trick_state
             trick = {
                 "lead_player": ts.lead_player,
-                "lead_type": ts.lead_type,
                 "slots": [
                     {"player": slot.player, "cards": slot.cards}
                     for slot in ts.slots
@@ -385,6 +386,7 @@ class Game:
         return StateSnapshot(
             phase=self.get_phase(),
             player_hand=player_hand,
+            player_hand_counts=player_hand_counts,
             bottom_cards=list(rs.bottom_cards),
             trump_suit=rs.trump_suit,
             trump_rank=rs.trump_rank,
@@ -487,7 +489,7 @@ class Game:
                 if self._round_state.phase != "DEAL_BID":
                     break
 
-                await asyncio.sleep(0.75)
+                await asyncio.sleep(0.5)
         except Exception:
             logger.exception("Dealing loop failed with unexpected exception")
 
@@ -514,10 +516,6 @@ class Game:
             joker_type=joker_type,
             count=action.count,
         )
-
-    async def _push_state_to_player(self, player_index: int) -> None:
-        """Push state to a single player."""
-        await self._players[player_index].on_state(self)
 
     async def _push_state_to_all(self) -> None:
         """Push state to all players."""

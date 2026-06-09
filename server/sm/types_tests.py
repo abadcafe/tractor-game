@@ -226,7 +226,6 @@ class TestCompletedTrick:
         slot1 = CompletedTrickSlot(player=1, cards=[_card(Suit.HEARTS, Rank.KING)])
         trick = CompletedTrick(
             lead_player=0,
-            lead_type=PlayType.SINGLE,
             slots=[slot0, slot1],
             winner=0,
             points=10,
@@ -246,7 +245,7 @@ class TestCompletedTrick:
         """CompletedTrick is immutable (frozen=True)."""
         slot = CompletedTrickSlot(player=0, cards=[_card(Suit.HEARTS, Rank.ACE)])
         trick = CompletedTrick(
-            lead_player=0, lead_type=PlayType.SINGLE,
+            lead_player=0,
             slots=[slot], winner=0, points=10,
         )
         with pytest.raises(ValidationError):

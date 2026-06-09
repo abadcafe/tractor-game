@@ -455,6 +455,8 @@ def _transition_to_scoring(state: RoundState) -> RoundState:
         declarer_player=declarer_player,
         team0_level=state.team0_level,
         team1_level=state.team1_level,
+        trump_suit=state.trump_suit,
+        trump_rank=state.trump_rank,
     )
 
     return state.model_copy(update={

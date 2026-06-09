@@ -3,7 +3,7 @@ from typing import Literal
 
 import pytest
 from server.sm.card_model import Card, Suit, Rank
-from server.sm.types import PlayType, CompletedTrick, CompletedTrickSlot
+from server.sm.types import CompletedTrick, CompletedTrickSlot
 from server.sm.scoring import calculate_score
 
 
@@ -21,55 +21,66 @@ def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
     )
 
 
+# Default trump settings for scoring tests
+_TRUMP_SUIT = Suit.SPADES
+_TRUMP_RANK = Rank.TWO
+
+
 def _completed_trick(
-    lead_type: PlayType, card_count: int, winner: int,
+    card_count: int, winner: int,
     *,
-    throw_sub_pattern: str = "singles",
+    card_pattern: str = "single",
+    trump_suit: Suit | None = _TRUMP_SUIT,
+    trump_rank: Rank = _TRUMP_RANK,
 ) -> CompletedTrick:
     """Create a minimal CompletedTrick for scoring tests.
 
-    calculate_score uses last_trick.lead_type to determine multiplier
+    calculate_score uses decompose on the lead cards to determine multiplier
     and last_trick.winner to determine which team gets the ambush bonus.
     card_count is encoded in the slot's cards length.
 
-    For THROW type, throw_sub_pattern controls the card composition so
-    calculate_score can distinguish sub-patterns:
-      "singles" - all different ranks (no pair sub-pattern), multiplier x2
-      "pair"    - at least one pair (same rank), multiplier x4
-      "tractor" - at least a 4-card tractor, multiplier 2^N
+    card_pattern controls the card composition:
+      "single"  - all different ranks, non-trump suit (single sub-play)
+      "pair"    - two cards of same rank (pair sub-play)
+      "tractor" - consecutive pairs forming a tractor
+      "throw_singles" - multi-card throw of singles
+      "throw_pair"    - multi-card throw containing a pair
+      "throw_tractor" - multi-card throw containing a tractor
     """
-    if lead_type == PlayType.THROW:
-        if throw_sub_pattern == "singles":
-            # Each card has a different rank -> no pair possible
-            ranks = [Rank.THREE, Rank.FOUR, Rank.SIX, Rank.SEVEN,
-                     Rank.EIGHT, Rank.NINE, Rank.JACK, Rank.QUEEN]
-            cards = [_card(Suit.SPADES, ranks[i]) for i in range(card_count)]
-        elif throw_sub_pattern == "pair":
-            # Two cards of same rank -> pair sub-pattern
-            cards = [_card(Suit.SPADES, Rank.THREE, 1),
-                     _card(Suit.SPADES, Rank.THREE, 2)]
-        elif throw_sub_pattern == "tractor":
-            # 4+ cards forming consecutive pairs -> tractor sub-pattern
-            cards = [_card(Suit.SPADES, Rank.THREE, 1),
-                     _card(Suit.SPADES, Rank.THREE, 2),
-                     _card(Suit.SPADES, Rank.FOUR, 1),
-                     _card(Suit.SPADES, Rank.FOUR, 2)]
-            # Extend if card_count > 4
-            extra_ranks = [Rank.SIX, Rank.SEVEN]
-            i = 0
-            while len(cards) < card_count:
-                r = extra_ranks[i % len(extra_ranks)]
-                cards.append(_card(Suit.SPADES, r, 1))
-                cards.append(_card(Suit.SPADES, r, 2))
-                i += 1
-            cards = cards[:card_count]
-        else:
-            cards = [_card(Suit.SPADES, Rank.THREE)] * card_count
+    if card_pattern == "pair":
+        cards = [_card(Suit.HEARTS, Rank.THREE, 1),
+                 _card(Suit.HEARTS, Rank.THREE, 2)]
+    elif card_pattern == "tractor":
+        # Consecutive pairs in non-trump suit (HEARTS), trump_rank=TWO skipped
+        # Non-trump ordering: THREE=1, FOUR=2, FIVE=3, SIX=4, SEVEN=5, EIGHT=6, ...
+        tractor_ranks = [Rank.THREE, Rank.FOUR, Rank.FIVE, Rank.SIX,
+                         Rank.SEVEN, Rank.EIGHT, Rank.NINE, Rank.TEN]
+        cards = []
+        for r in tractor_ranks:
+            if len(cards) >= card_count:
+                break
+            cards.append(_card(Suit.HEARTS, r, 1))
+            cards.append(_card(Suit.HEARTS, r, 2))
+        cards = cards[:card_count]
+    elif card_pattern == "throw_singles":
+        # Non-trump suit (HEARTS) with all different ranks -> throw of singles
+        ranks = [Rank.THREE, Rank.FOUR, Rank.FIVE, Rank.SIX,
+                 Rank.EIGHT, Rank.NINE, Rank.JACK, Rank.QUEEN]
+        cards = [_card(Suit.HEARTS, ranks[i]) for i in range(card_count)]
+    elif card_pattern == "throw_pair":
+        # Non-trump suit with a pair
+        cards = [_card(Suit.HEARTS, Rank.THREE, 1),
+                 _card(Suit.HEARTS, Rank.THREE, 2)]
+    elif card_pattern == "throw_tractor":
+        # Non-trump suit (HEARTS) with a 4-card tractor (THREE, FOUR consecutive)
+        cards = [_card(Suit.HEARTS, Rank.THREE, 1),
+                 _card(Suit.HEARTS, Rank.THREE, 2),
+                 _card(Suit.HEARTS, Rank.FOUR, 1),
+                 _card(Suit.HEARTS, Rank.FOUR, 2)]
     else:
-        cards = [_card(Suit.SPADES, Rank.THREE)] * card_count
+        # Single card
+        cards = [_card(Suit.HEARTS, Rank.THREE)] * card_count
 
-    # Place cards in the lead player's slot so _find_lead_cards finds them
-    # directly, not via the fallback path.
     lead_player = 0
     lead_slot = CompletedTrickSlot(player=lead_player, cards=cards)
     slots: list[CompletedTrickSlot] = [lead_slot]
@@ -77,7 +88,7 @@ def _completed_trick(
         winner_slot = CompletedTrickSlot(player=winner, cards=[])
         slots.append(winner_slot)
     return CompletedTrick(
-        lead_player=lead_player, lead_type=lead_type, slots=slots,
+        lead_player=lead_player, slots=slots,
         winner=winner, points=0,
     )
 
@@ -88,11 +99,13 @@ class TestCalculateScore:
         result = calculate_score(
             defender_points=0,
             bottom_cards=[],
-            last_trick=_completed_trick(PlayType.SINGLE, 1, winner=0),
+            last_trick=_completed_trick(1, winner=0),
             declarer_team=0,
             declarer_player=0,
             team0_level=Rank.TWO,
             team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         assert result.declarer_level_change == 3
         assert result.switch_declarer is False
@@ -106,11 +119,13 @@ class TestCalculateScore:
         result = calculate_score(
             defender_points=35,
             bottom_cards=[],
-            last_trick=_completed_trick(PlayType.SINGLE, 1, winner=0),
+            last_trick=_completed_trick(1, winner=0),
             declarer_team=0,
             declarer_player=0,
             team0_level=Rank.TWO,
             team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         assert result.declarer_level_change == 2
         assert result.team0_new_level == Rank.FOUR  # TWO + 2 = FOUR
@@ -121,11 +136,13 @@ class TestCalculateScore:
         result = calculate_score(
             defender_points=50,
             bottom_cards=[],
-            last_trick=_completed_trick(PlayType.SINGLE, 1, winner=0),
+            last_trick=_completed_trick(1, winner=0),
             declarer_team=0,
             declarer_player=0,
             team0_level=Rank.TWO,
             team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         assert result.declarer_level_change == 1
         assert result.team0_new_level == Rank.THREE  # TWO + 1 = THREE
@@ -136,11 +153,13 @@ class TestCalculateScore:
         result = calculate_score(
             defender_points=100,
             bottom_cards=[],
-            last_trick=_completed_trick(PlayType.SINGLE, 1, winner=1),
+            last_trick=_completed_trick(1, winner=1),
             declarer_team=0,
             declarer_player=0,
             team0_level=Rank.TWO,
             team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         assert result.declarer_level_change == 0
         assert result.switch_declarer is True
@@ -153,11 +172,13 @@ class TestCalculateScore:
         result = calculate_score(
             defender_points=130,
             bottom_cards=[],
-            last_trick=_completed_trick(PlayType.SINGLE, 1, winner=1),
+            last_trick=_completed_trick(1, winner=1),
             declarer_team=0,
             declarer_player=0,
             team0_level=Rank.FIVE,
             team1_level=Rank.THREE,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         assert result.declarer_level_change == -1
         assert result.switch_declarer is True
@@ -169,11 +190,13 @@ class TestCalculateScore:
         result = calculate_score(
             defender_points=180,
             bottom_cards=[],
-            last_trick=_completed_trick(PlayType.SINGLE, 1, winner=1),
+            last_trick=_completed_trick(1, winner=1),
             declarer_team=0,
             declarer_player=0,
             team0_level=Rank.FIVE,
             team1_level=Rank.THREE,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         assert result.declarer_level_change == -2
         assert result.team0_new_level == Rank.THREE  # FIVE - 2 = THREE
@@ -184,11 +207,13 @@ class TestCalculateScore:
         result = calculate_score(
             defender_points=200,
             bottom_cards=[],
-            last_trick=_completed_trick(PlayType.SINGLE, 1, winner=1),
+            last_trick=_completed_trick(1, winner=1),
             declarer_team=0,
             declarer_player=0,
             team0_level=Rank.FIVE,
             team1_level=Rank.THREE,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         assert result.declarer_level_change == -3
         assert result.team0_new_level == Rank.TWO    # FIVE - 3 = TWO (clamped at 2)
@@ -202,11 +227,13 @@ class TestAmbushMultiplier:
         result = calculate_score(
             defender_points=10,
             bottom_cards=bottom,
-            last_trick=_completed_trick(PlayType.SINGLE, 1, winner=1),
+            last_trick=_completed_trick(1, winner=1, card_pattern="single"),
             declarer_team=0,
             declarer_player=0,
             team0_level=Rank.TWO,
             team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         # bottom_base = 5+10 = 15; bonus = 15*2 = 30; total = 10+30 = 40
         assert result.bottom_card_bonus == 30
@@ -218,11 +245,13 @@ class TestAmbushMultiplier:
         result = calculate_score(
             defender_points=10,
             bottom_cards=bottom,
-            last_trick=_completed_trick(PlayType.PAIR, 2, winner=1),
+            last_trick=_completed_trick(2, winner=1, card_pattern="pair"),
             declarer_team=0,
             declarer_player=0,
             team0_level=Rank.TWO,
             team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         # bottom_base = 5+5 = 10; bonus = 10*4 = 40; total = 10+40 = 50
         assert result.bottom_card_bonus == 40
@@ -237,11 +266,13 @@ class TestAmbushMultiplier:
         result = calculate_score(
             defender_points=10,
             bottom_cards=bottom,
-            last_trick=_completed_trick(PlayType.TRACTOR, 4, winner=1),
+            last_trick=_completed_trick(4, winner=1, card_pattern="tractor"),
             declarer_team=0,
             declarer_player=0,
             team0_level=Rank.TWO,
             team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         # bottom_base = 5+5+10+10 = 30; bonus = 30*16 = 480; total = 10+480 = 490
         assert result.bottom_card_bonus == 480
@@ -257,11 +288,13 @@ class TestAmbushMultiplier:
         result = calculate_score(
             defender_points=10,
             bottom_cards=bottom,
-            last_trick=_completed_trick(PlayType.TRACTOR, 6, winner=1),
+            last_trick=_completed_trick(6, winner=1, card_pattern="tractor"),
             declarer_team=0,
             declarer_player=0,
             team0_level=Rank.TWO,
             team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         # bottom_base = 5+5+10+10+10+10 = 50; bonus = 50*64 = 3200; total = 10+3200 = 3210
         assert result.bottom_card_bonus == 3200
@@ -279,11 +312,13 @@ class TestAmbushMultiplier:
         result = calculate_score(
             defender_points=0,
             bottom_cards=bottom,
-            last_trick=_completed_trick(PlayType.TRACTOR, 8, winner=1),
+            last_trick=_completed_trick(8, winner=1, card_pattern="tractor"),
             declarer_team=0,
             declarer_player=0,
             team0_level=Rank.TWO,
             team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         # bottom_base = 5+5+0+0+0+0+10+10 = 30; multiplier = 2^8 = 256; bonus = 7680
         assert result.bottom_card_bonus == 30 * 256
@@ -294,15 +329,16 @@ class TestAmbushMultiplier:
             _card(Suit.SPADES, Rank.FIVE, 1), _card(Suit.SPADES, Rank.FIVE, 2),
             _card(Suit.SPADES, Rank.TEN, 1), _card(Suit.SPADES, Rank.TEN, 2),
         ]
-        # THROW with 4 cards that contain a 4-card tractor sub-pattern
         result = calculate_score(
             defender_points=0,
             bottom_cards=bottom,
-            last_trick=_completed_trick(PlayType.THROW, 4, winner=1, throw_sub_pattern="tractor"),
+            last_trick=_completed_trick(4, winner=1, card_pattern="throw_tractor"),
             declarer_team=0,
             declarer_player=0,
             team0_level=Rank.TWO,
             team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         # THROW with tractor sub-pattern -> 2^4 = 16; bottom_base = 30; bonus = 30*16 = 480
         assert result.bottom_card_bonus == 30 * 16
@@ -312,15 +348,16 @@ class TestAmbushMultiplier:
         bottom = [
             _card(Suit.SPADES, Rank.FIVE, 1), _card(Suit.SPADES, Rank.FIVE, 2),
         ]
-        # THROW with 2 cards that form a pair sub-pattern (no tractor)
         result = calculate_score(
             defender_points=0,
             bottom_cards=bottom,
-            last_trick=_completed_trick(PlayType.THROW, 2, winner=1, throw_sub_pattern="pair"),
+            last_trick=_completed_trick(2, winner=1, card_pattern="throw_pair"),
             declarer_team=0,
             declarer_player=0,
             team0_level=Rank.TWO,
             team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         # THROW with pair sub-pattern -> x4; bottom_base = 5+5 = 10; bonus = 10*4 = 40
         assert result.bottom_card_bonus == 40
@@ -328,15 +365,16 @@ class TestAmbushMultiplier:
     def test_ambush_throw_all_singles_x2(self) -> None:
         """THROW of all singles uses x2."""
         bottom = [_card(Suit.SPADES, Rank.FIVE), _card(Suit.SPADES, Rank.TEN)]
-        # THROW with 2 cards that are all singles (no pair sub-pattern)
         result = calculate_score(
             defender_points=0,
             bottom_cards=bottom,
-            last_trick=_completed_trick(PlayType.THROW, 2, winner=1, throw_sub_pattern="singles"),
+            last_trick=_completed_trick(2, winner=1, card_pattern="throw_singles"),
             declarer_team=0,
             declarer_player=0,
             team0_level=Rank.TWO,
             team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         # THROW all singles -> x2; bottom_base = 5+10 = 15; bonus = 15*2 = 30
         assert result.bottom_card_bonus == (5 + 10) * 2
@@ -347,11 +385,13 @@ class TestAmbushMultiplier:
         result = calculate_score(
             defender_points=10,
             bottom_cards=bottom,
-            last_trick=_completed_trick(PlayType.SINGLE, 1, winner=0),
+            last_trick=_completed_trick(1, winner=0, card_pattern="single"),
             declarer_team=0,
             declarer_player=0,
             team0_level=Rank.TWO,
             team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         assert result.bottom_card_bonus == 0
         assert result.total_defender_points == 10
@@ -363,11 +403,13 @@ class TestDeclarerRotation:
         result = calculate_score(
             defender_points=0,
             bottom_cards=[],
-            last_trick=_completed_trick(PlayType.SINGLE, 1, winner=0),
+            last_trick=_completed_trick(1, winner=0),
             declarer_team=0,
             declarer_player=0,
             team0_level=Rank.TWO,
             team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         assert result.next_declarer_team == 0
         assert result.next_declarer_player == 3  # partner of 0
@@ -379,11 +421,13 @@ class TestDeclarerRotation:
         result = calculate_score(
             defender_points=100,
             bottom_cards=[],
-            last_trick=_completed_trick(PlayType.SINGLE, 1, winner=1),
+            last_trick=_completed_trick(1, winner=1),
             declarer_team=0,
             declarer_player=0,
             team0_level=Rank.TWO,
             team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         assert result.next_declarer_team == 1
         assert result.next_declarer_player == 1  # CCW next of 0
@@ -415,11 +459,13 @@ class TestBoundaryValues:
         result = calculate_score(
             defender_points=points,
             bottom_cards=[],
-            last_trick=_completed_trick(PlayType.SINGLE, 1, winner=0),
+            last_trick=_completed_trick(1, winner=0),
             declarer_team=0,
             declarer_player=0,
             team0_level=Rank.TWO,
             team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         assert result.declarer_level_change == expected_change
         assert result.switch_declarer == expected_switch
@@ -431,11 +477,13 @@ class TestDeclarerTeam1:
         result = calculate_score(
             defender_points=0,
             bottom_cards=[],
-            last_trick=_completed_trick(PlayType.SINGLE, 1, winner=1),
+            last_trick=_completed_trick(1, winner=1),
             declarer_team=1,
             declarer_player=1,
             team0_level=Rank.TWO,
             team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         assert result.declarer_level_change == 3
         assert result.switch_declarer is False
@@ -449,11 +497,13 @@ class TestDeclarerTeam1:
         result = calculate_score(
             defender_points=100,
             bottom_cards=[],
-            last_trick=_completed_trick(PlayType.SINGLE, 1, winner=0),
+            last_trick=_completed_trick(1, winner=0),
             declarer_team=1,
             declarer_player=1,
             team0_level=Rank.TWO,
             team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         assert result.declarer_level_change == 0
         assert result.switch_declarer is True
@@ -476,11 +526,13 @@ class TestOver200:
         result = calculate_score(
             defender_points=50,
             bottom_cards=bottom,
-            last_trick=_completed_trick(PlayType.TRACTOR, 6, winner=1),
+            last_trick=_completed_trick(6, winner=1, card_pattern="tractor"),
             declarer_team=0,
             declarer_player=0,
             team0_level=Rank.TWO,
             team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         # total = 50 + 3200 = 3250 -> fallback: -3, switch
         assert result.declarer_level_change == -3
@@ -494,11 +546,13 @@ class TestOver200:
         result = calculate_score(
             defender_points=200,
             bottom_cards=[],
-            last_trick=_completed_trick(PlayType.SINGLE, 1, winner=1),
+            last_trick=_completed_trick(1, winner=1),
             declarer_team=0,
             declarer_player=0,
             team0_level=Rank.TWO,
             team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
         )
         assert result.declarer_level_change == -3
         assert result.switch_declarer is True

@@ -135,7 +135,6 @@ class CompletedTrick(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     lead_player: int
-    lead_type: PlayType
     slots: list[CompletedTrickSlot]
     winner: int
     points: int

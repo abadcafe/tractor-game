@@ -10,7 +10,7 @@ from collections import Counter
 
 from pydantic import BaseModel, ConfigDict
 
-from server.sm.card_model import Card, Rank
+from server.sm.card_model import Card, Suit, Rank
 from server.sm.constants import (
     SCORE_THRESHOLDS,
     advance_level,
@@ -19,6 +19,8 @@ from server.sm.constants import (
     next_player_ccw,
 )
 from server.sm.types import CompletedTrick, PlayType
+from server.sm.play_rules import decompose
+from server.sm.comparator import effective_suit
 
 
 class RoundResult(BaseModel):
@@ -36,27 +38,47 @@ class RoundResult(BaseModel):
     bottom_card_bonus: int
 
 
-def _compute_ambush_multiplier(last_trick: CompletedTrick) -> int:
+def _compute_ambush_multiplier(
+    last_trick: CompletedTrick,
+    trump_suit: Suit | None,
+    trump_rank: Rank,
+) -> int:
     """Compute the ambush multiplier based on the last trick's lead type.
 
-    For SINGLE, PAIR, TRACTOR: use the standard multiplier.
+    Uses decompose to determine the lead play structure from the lead cards.
+    For SINGLE/PAIR: use the standard multiplier.
+    For TRACTOR: 2^(card_count).
     For THROW: analyze the actual cards to find the best sub-pattern.
     """
-    lead_type = last_trick.lead_type
-
-    if lead_type == PlayType.SINGLE:
+    lead_cards = _find_lead_cards(last_trick)
+    if not lead_cards:
         return 2
-    if lead_type == PlayType.PAIR:
-        return 4
-    if lead_type == PlayType.TRACTOR:
-        # Find the lead player's slot to count cards; fall back to any slot
-        total_cards = _find_lead_card_count(last_trick)
-        return 2 ** total_cards if total_cards > 0 else 2
 
-    # THROW: analyze sub-patterns from the lead player's cards
-    if lead_type == PlayType.THROW:
-        lead_cards = _find_lead_cards(last_trick)
+    lead_eff = effective_suit(lead_cards[0], trump_suit, trump_rank)
+    subs = decompose(lead_cards, trump_suit, trump_rank)
+
+    if len(subs) == 0:
+        return 2
+
+    # Determine the primary sub-play type
+    # The lead type is determined by the highest-level sub-play
+    max_level = max(s.sub_level for s in subs)
+    has_throw = len(subs) > 1 and lead_eff != "trump"
+
+    if has_throw:
+        # THROW: analyze sub-patterns from the lead player's cards
         return _throw_multiplier(lead_cards)
+
+    if max_level == 1:
+        # SINGLE
+        return 2
+    if max_level == 2:
+        # PAIR
+        return 4
+    if max_level >= 3:
+        # TRACTOR: 2^(card_count)
+        total_cards = len(lead_cards)
+        return 2 ** total_cards if total_cards > 0 else 2
 
     return 2  # fallback
 
@@ -188,6 +210,8 @@ def calculate_score(
     declarer_player: int,
     team0_level: Rank,
     team1_level: Rank,
+    trump_suit: Suit | None,
+    trump_rank: Rank,
 ) -> RoundResult:
     """Calculate the score result for a round.
 
@@ -204,7 +228,7 @@ def calculate_score(
 
     # Compute ambush bonus
     if is_ambush:
-        multiplier = _compute_ambush_multiplier(last_trick)
+        multiplier = _compute_ambush_multiplier(last_trick, trump_suit, trump_rank)
         bottom_card_bonus = bottom_base * multiplier
     else:
         bottom_card_bonus = 0

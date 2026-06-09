@@ -4,7 +4,7 @@ from collections import Counter
 
 import pytest
 from server.sm.card_model import Card, Suit, Rank
-from server.sm.types import BidEvent, PlayAction
+from server.sm.types import BidEvent, PlayAction, PlayType
 from server.sm.round_sm import (
     RoundState, RoundInput, create_round,
     deal_next_card, reveal, pass_stir, stir, discard, play,
@@ -32,12 +32,11 @@ def _play_first_legal(state: RoundState) -> RoundState:
     if is_leading:
         lead_action: PlayAction | None = None
     else:
-        # Build the lead action from the lead player's slot
+        # Build the lead cards from the lead player's slot
         lead_slot = trick.slots[trick.lead_player]
         assert lead_slot is not None and lead_slot.cards is not None
         lead_cards = lead_slot.cards
-        assert trick.lead_type is not None
-        lead_action = PlayAction(type=trick.lead_type, cards=lead_cards)
+        lead_action: PlayAction | None = PlayAction(type=PlayType.SINGLE, cards=lead_cards)
 
     legal_plays = get_legal_plays(
         hand=hand,

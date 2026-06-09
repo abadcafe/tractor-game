@@ -42,8 +42,9 @@ def _play_first_legal(round_state: RoundState) -> RoundState:
         lead_slot = trick.slots[trick.lead_player]
         assert lead_slot is not None
         lead_cards = lead_slot.cards
-        assert trick.lead_type is not None
-        lead_action = PlayAction(type=trick.lead_type, cards=lead_cards)
+        # Use PlayType.SINGLE as placeholder; the actual type doesn't matter
+        # for get_legal_plays since it delegates to follow rules by lead_type
+        lead_action = PlayAction(type=PlayType.SINGLE, cards=lead_cards)
 
     legal_plays = get_legal_plays(
         hand=hand,
@@ -260,24 +261,43 @@ class TestE2EMultipleRounds:
 
 
 class TestE2EScoringBoundaryCases:
-    def _completed_trick(self, lead_type: PlayType, card_count: int, winner: int) -> CompletedTrick:
+    def _completed_trick(self, card_pattern: str, card_count: int, winner: int) -> CompletedTrick:
         """Create a minimal CompletedTrick for scoring tests.
 
         Always includes a slot for lead_player=0 so the primary lookup path
         in _find_lead_card_count/_find_lead_cards is exercised rather than
         the fallback.
         """
-        lead_cards = [Card(id="D1-spades-3", suit=Suit.SPADES, rank=Rank.THREE,
-                           is_joker=False, is_big_joker=False, points=0, deck=1)] * card_count
+        if card_pattern == "pair":
+            lead_cards = [
+                Card(id="D1-hearts-3", suit=Suit.HEARTS, rank=Rank.THREE,
+                     is_joker=False, is_big_joker=False, points=0, deck=1),
+                Card(id="D2-hearts-3", suit=Suit.HEARTS, rank=Rank.THREE,
+                     is_joker=False, is_big_joker=False, points=0, deck=2),
+            ]
+        elif card_pattern == "tractor":
+            lead_cards = [
+                Card(id="D1-hearts-3", suit=Suit.HEARTS, rank=Rank.THREE,
+                     is_joker=False, is_big_joker=False, points=0, deck=1),
+                Card(id="D2-hearts-3", suit=Suit.HEARTS, rank=Rank.THREE,
+                     is_joker=False, is_big_joker=False, points=0, deck=2),
+                Card(id="D1-hearts-4", suit=Suit.HEARTS, rank=Rank.FOUR,
+                     is_joker=False, is_big_joker=False, points=0, deck=1),
+                Card(id="D2-hearts-4", suit=Suit.HEARTS, rank=Rank.FOUR,
+                     is_joker=False, is_big_joker=False, points=0, deck=2),
+            ]
+        else:
+            lead_cards = [Card(id="D1-hearts-3", suit=Suit.HEARTS, rank=Rank.THREE,
+                               is_joker=False, is_big_joker=False, points=0, deck=1)] * card_count
         slots = [CompletedTrickSlot(player=0, cards=lead_cards)]
         if winner != 0:
             slots.append(CompletedTrickSlot(
                 player=winner,
-                cards=[Card(id="D1-spades-3", suit=Suit.SPADES, rank=Rank.THREE,
+                cards=[Card(id="D1-hearts-3", suit=Suit.HEARTS, rank=Rank.THREE,
                             is_joker=False, is_big_joker=False, points=0, deck=1)] * card_count,
             ))
         return CompletedTrick(
-            lead_player=0, lead_type=lead_type, slots=slots,
+            lead_player=0, slots=slots,
             winner=winner, points=0,
         )
 
@@ -286,18 +306,20 @@ class TestE2EScoringBoundaryCases:
         # 0 points = big light (+3)
         result = calculate_score(
             defender_points=0, bottom_cards=[],
-            last_trick=self._completed_trick(PlayType.SINGLE, 1, winner=0),
+            last_trick=self._completed_trick("single", 1, winner=0),
             declarer_team=0, declarer_player=0,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
+            trump_suit=Suit.SPADES, trump_rank=Rank.TWO,
         )
         assert result.declarer_level_change == 3
 
         # 80 points = switch boundary
         result = calculate_score(
             defender_points=80, bottom_cards=[],
-            last_trick=self._completed_trick(PlayType.SINGLE, 1, winner=1),
+            last_trick=self._completed_trick("single", 1, winner=1),
             declarer_team=0, declarer_player=0,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
+            trump_suit=Suit.SPADES, trump_rank=Rank.TWO,
         )
         assert result.switch_declarer is True
         assert result.declarer_level_change == 0
@@ -316,9 +338,10 @@ class TestE2EScoringBoundaryCases:
         ]
         result = calculate_score(
             defender_points=0, bottom_cards=bottom,
-            last_trick=self._completed_trick(PlayType.TRACTOR, 4, winner=1),
+            last_trick=self._completed_trick("tractor", 4, winner=1),
             declarer_team=0, declarer_player=0,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
+            trump_suit=Suit.SPADES, trump_rank=Rank.TWO,
         )
         # 4-card tractor: (5+5+10+10) * 2^4 = 30 * 16 = 480
         assert result.bottom_card_bonus == 480
