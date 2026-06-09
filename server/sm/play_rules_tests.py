@@ -6,6 +6,7 @@ from server.sm.types import PlayType, PlayAction, SubPlay
 from server.sm.play_rules import (
     detect_singles, detect_pairs, detect_tractors, detect_throws,
     get_legal_plays, infer_play_type, decompose, is_legal_lead,
+    is_legal_follow,
 )
 from server.sm.comparator import effective_suit
 
@@ -619,3 +620,148 @@ class TestIsLegalLead:
         other_hands: list[Card] = []
         result = is_legal_lead(hand, hand, Suit.HEARTS, Rank.TWO, other_hands)
         assert result is True
+
+
+class TestIsLegalFollow:
+    # --- Basic count and hand checks ---
+    def test_is_legal_follow_wrong_count(self) -> None:
+        """Played card count must match lead card count."""
+        hand = [_card(Suit.HEARTS, Rank.ACE), _card(Suit.HEARTS, Rank.KING)]
+        lead = [_card(Suit.HEARTS, Rank.QUEEN)]
+        played = [_card(Suit.HEARTS, Rank.ACE), _card(Suit.HEARTS, Rank.KING)]
+        assert is_legal_follow(hand, played, lead, Suit.SPADES, Rank.TWO) is False
+
+    def test_is_legal_follow_not_in_hand(self) -> None:
+        """Cards not in hand -> illegal."""
+        hand = [_card(Suit.HEARTS, Rank.ACE)]
+        lead = [_card(Suit.HEARTS, Rank.QUEEN)]
+        played = [_card(Suit.HEARTS, Rank.KING)]  # not in hand
+        assert is_legal_follow(hand, played, lead, Suit.SPADES, Rank.TWO) is False
+
+    # --- Single following ---
+    def test_is_legal_follow_single_must_follow_suit(self) -> None:
+        """Must follow suit with single if possible."""
+        hand = [_card(Suit.HEARTS, Rank.ACE), _card(Suit.SPADES, Rank.KING)]
+        lead = [_card(Suit.HEARTS, Rank.QUEEN)]
+        # Must play hA, not spK
+        assert is_legal_follow(hand, [_card(Suit.HEARTS, Rank.ACE)], lead, Suit.SPADES, Rank.TWO) is True
+        assert is_legal_follow(hand, [_card(Suit.SPADES, Rank.KING)], lead, Suit.SPADES, Rank.TWO) is False
+
+    def test_is_legal_follow_single_no_suit_play_anything(self) -> None:
+        """No cards of lead suit -> can play anything."""
+        hand = [_card(Suit.SPADES, Rank.KING)]
+        lead = [_card(Suit.HEARTS, Rank.QUEEN)]
+        assert is_legal_follow(hand, [_card(Suit.SPADES, Rank.KING)], lead, Suit.SPADES, Rank.TWO) is True
+
+    # --- Pair following ---
+    def test_is_legal_follow_pair_must_play_pair(self) -> None:
+        """Must play pair of lead suit if available."""
+        hand = [
+            _card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2),
+            _card(Suit.SPADES, Rank.KING, 1), _card(Suit.SPADES, Rank.KING, 2),
+        ]
+        lead = [_card(Suit.HEARTS, Rank.QUEEN, 1), _card(Suit.HEARTS, Rank.QUEEN, 2)]
+        # Must play hA pair
+        assert is_legal_follow(hand, [_card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2)], lead, Suit.SPADES, Rank.TWO) is True
+        # Cannot play spK pair
+        assert is_legal_follow(hand, [_card(Suit.SPADES, Rank.KING, 1), _card(Suit.SPADES, Rank.KING, 2)], lead, Suit.SPADES, Rank.TWO) is False
+
+    def test_is_legal_follow_pair_no_pair_play_two_singles(self) -> None:
+        """No pair of lead suit -> must play 2 cards of lead suit if available."""
+        hand = [_card(Suit.HEARTS, Rank.ACE), _card(Suit.HEARTS, Rank.KING), _card(Suit.SPADES, Rank.QUEEN)]
+        lead = [_card(Suit.HEARTS, Rank.TEN, 1), _card(Suit.HEARTS, Rank.TEN, 2)]
+        # Must play 2 heart cards
+        assert is_legal_follow(hand, [_card(Suit.HEARTS, Rank.ACE), _card(Suit.HEARTS, Rank.KING)], lead, Suit.SPADES, Rank.TWO) is True
+        # Cannot play 1 heart + 1 spade
+        assert is_legal_follow(hand, [_card(Suit.HEARTS, Rank.ACE), _card(Suit.SPADES, Rank.QUEEN)], lead, Suit.SPADES, Rank.TWO) is False
+
+    def test_is_legal_follow_pair_no_suit_play_any_two(self) -> None:
+        """No cards of lead suit -> can play any 2."""
+        hand = [_card(Suit.SPADES, Rank.KING), _card(Suit.SPADES, Rank.QUEEN)]
+        lead = [_card(Suit.HEARTS, Rank.TEN, 1), _card(Suit.HEARTS, Rank.TEN, 2)]
+        assert is_legal_follow(hand, hand, lead, Suit.SPADES, Rank.TWO) is True
+
+    # --- Tractor following ---
+    def test_is_legal_follow_tractor_must_play_matching_tractor(self) -> None:
+        """Must play matching-length tractor if available."""
+        hand = [
+            _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
+            _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2),
+        ]
+        lead = [
+            _card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2),
+            _card(Suit.HEARTS, Rank.KING, 1), _card(Suit.HEARTS, Rank.KING, 2),
+        ]
+        # Must play h3-3-4-4 tractor
+        assert is_legal_follow(hand, hand, lead, Suit.SPADES, Rank.TWO) is True
+
+    def test_is_legal_follow_tractor_priority_from_high_to_low(self) -> None:
+        """Must use higher-level sub-plays first when following tractor.
+
+        Lead: 2-pair tractor (4 cards). Hand has 3-pair tractor + independent pair.
+        Must use the 3-pair tractor (take 2 pairs from it), not the independent pair.
+        """
+        # Hand: tractor h3-3-4-4-5-5 + pair hK-K
+        hand = [
+            _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
+            _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2),
+            _card(Suit.HEARTS, Rank.FIVE, 1), _card(Suit.HEARTS, Rank.FIVE, 2),
+            _card(Suit.HEARTS, Rank.KING, 1), _card(Suit.HEARTS, Rank.KING, 2),
+        ]
+        lead = [
+            _card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2),
+            _card(Suit.HEARTS, Rank.QUEEN, 1), _card(Suit.HEARTS, Rank.QUEEN, 2),
+        ]
+        # Legal: use tractor h3-3-4-4 (2 pairs from the 3-pair tractor)
+        legal_play = [
+            _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
+            _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2),
+        ]
+        assert is_legal_follow(hand, legal_play, lead, Suit.SPADES, Rank.TWO) is True
+
+        # Illegal: use pair hK-K + pair h3-3 (skips higher tractor)
+        illegal_play = [
+            _card(Suit.HEARTS, Rank.KING, 1), _card(Suit.HEARTS, Rank.KING, 2),
+            _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
+        ]
+        assert is_legal_follow(hand, illegal_play, lead, Suit.SPADES, Rank.TWO) is False
+
+    def test_is_legal_follow_tractor_partial_with_singles(self) -> None:
+        """No matching tractor, have pairs -> play all pairs + fill with singles."""
+        hand = [
+            _card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2),
+            _card(Suit.HEARTS, Rank.KING),
+            _card(Suit.SPADES, Rank.QUEEN),
+        ]
+        lead = [
+            _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
+            _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2),
+        ]
+        # Must play: pair hA-A (2 cards) + hK (1) + spQ (1) = 4 cards
+        played = [
+            _card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2),
+            _card(Suit.HEARTS, Rank.KING),
+            _card(Suit.SPADES, Rank.QUEEN),
+        ]
+        assert is_legal_follow(hand, played, lead, Suit.SPADES, Rank.TWO) is True
+
+    # --- Throw following ---
+    def test_is_legal_follow_throw_must_follow_suit(self) -> None:
+        """Following a throw: must play all same-suit cards if possible."""
+        hand = [_card(Suit.HEARTS, Rank.ACE), _card(Suit.HEARTS, Rank.KING), _card(Suit.SPADES, Rank.QUEEN)]
+        lead = [_card(Suit.HEARTS, Rank.TEN), _card(Suit.HEARTS, Rank.NINE)]
+        # Must play both heart cards
+        assert is_legal_follow(hand, [_card(Suit.HEARTS, Rank.ACE), _card(Suit.HEARTS, Rank.KING)], lead, Suit.SPADES, Rank.TWO) is True
+        # Cannot skip hK for spQ
+        assert is_legal_follow(hand, [_card(Suit.HEARTS, Rank.ACE), _card(Suit.SPADES, Rank.QUEEN)], lead, Suit.SPADES, Rank.TWO) is False
+
+    # --- Effective suit ---
+    def test_is_legal_follow_trump_as_lead_eff(self) -> None:
+        """Trump cards have effective suit 'trump'. Following trump lead must play trump."""
+        # trump_suit=heart, trump_rank=2. hA is trump.
+        hand = [_card(Suit.HEARTS, Rank.ACE), _card(Suit.SPADES, Rank.KING)]
+        lead = [_card(Suit.HEARTS, Rank.TWO)]  # trump card
+        # hA is trump (trump_suit=heart), so must follow with hA
+        assert is_legal_follow(hand, [_card(Suit.HEARTS, Rank.ACE)], lead, Suit.HEARTS, Rank.TWO) is True
+        # spK is not trump, so illegal
+        assert is_legal_follow(hand, [_card(Suit.SPADES, Rank.KING)], lead, Suit.HEARTS, Rank.TWO) is False
