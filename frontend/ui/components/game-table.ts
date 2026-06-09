@@ -1,9 +1,10 @@
 import type { StateSnapshot } from "../../core/types.ts";
 import { el } from "../dom.ts";
 import { SEAT_MAP } from "../../config.ts";
+import { cardDisplay } from "../../core/card.ts";
 
 /**
- * Render the game table with four player areas.
+ * Render the game table with four player areas and trick view in center.
  * Each area shows: player label, card count, declarer marker, current player highlight.
  */
 export function renderGameTable(snapshot: StateSnapshot): HTMLElement {
@@ -37,6 +38,27 @@ export function renderGameTable(snapshot: StateSnapshot): HTMLElement {
     }
 
     table.appendChild(area);
+  }
+
+  // Render trick view in center area
+  if (snapshot.trick) {
+    const trickView = el("div", { class: "trick-view" });
+    for (const slot of snapshot.trick.slots) {
+      const isCurrentPlayer = slot.player === snapshot.trick.current_player;
+      const slotEl = el("div", { class: isCurrentPlayer ? "trick-slot current" : "trick-slot" });
+
+      const seatInfo = SEAT_MAP[slot.player];
+      if (seatInfo) {
+        slotEl.appendChild(el("span", { class: "player-label" }, seatInfo.label));
+      }
+
+      for (const card of slot.cards) {
+        slotEl.appendChild(el("span", { class: `trick-card suit-${card.suit}` }, cardDisplay(card)));
+      }
+
+      trickView.appendChild(slotEl);
+    }
+    table.appendChild(trickView);
   }
 
   return table;

@@ -1,5 +1,5 @@
-import type { StateSnapshot, InteractionMode } from "../../core/types.ts";
-import { cardDisplay } from "../../core/card.ts";
+import type { StateSnapshot, InteractionMode, Card } from "../../core/types.ts";
+import { cardDisplay, isTrump } from "../../core/card.ts";
 
 /**
  * Render the human player's hand with card display, click selection,
@@ -29,8 +29,12 @@ export function renderHandView(
     }
   }
 
-  // Sort cards by suit then rank
+  // Sort cards: trump first, then by suit and rank
   const sortedHand = [...snapshot.player_hand].sort((a, b) => {
+    const aTrump = isTrump(a, snapshot.trump_suit, snapshot.trump_rank);
+    const bTrump = isTrump(b, snapshot.trump_suit, snapshot.trump_rank);
+    if (aTrump && !bTrump) return -1;
+    if (!aTrump && bTrump) return 1;
     const suitCompare = a.suit.localeCompare(b.suit);
     if (suitCompare !== 0) return suitCompare;
     return a.rank.localeCompare(b.rank);
@@ -39,7 +43,7 @@ export function renderHandView(
   // Render each card
   for (const card of sortedHand) {
     const cardSpan = document.createElement("span");
-    cardSpan.classList.add("card");
+    cardSpan.classList.add("card", `suit-${card.suit}`);
     cardSpan.textContent = cardDisplay(card);
 
     if (legalCardIds.has(card.id)) {

@@ -1,7 +1,6 @@
 import type { StateSnapshot, InteractionMode, ActionCallbacks } from "../core/types.ts";
 import { renderGameTable } from "./components/game-table.ts";
 import { renderHandView } from "./components/hand-view.ts";
-import { renderTrickView } from "./components/trick-view.ts";
 import { renderScoreboard } from "./components/scoreboard.ts";
 import { renderBiddingDialog } from "./components/bidding-dialog.ts";
 import { renderScoringOverlay } from "./components/scoring-overlay.ts";
@@ -29,7 +28,7 @@ export function render(
   // Clear the container
   container.innerHTML = "";
 
-  // Always render: game table, hand view, trick view, scoreboard
+  // Always render: game table (includes trick view), hand view, scoreboard
   container.appendChild(renderGameTable(snapshot));
 
   container.appendChild(
@@ -42,7 +41,6 @@ export function render(
     ),
   );
 
-  container.appendChild(renderTrickView(snapshot));
   container.appendChild(renderScoreboard(snapshot));
 
   // Conditionally render bidding dialog for bid or stir interaction modes

@@ -21,10 +21,13 @@ body { font-family: "Microsoft YaHei", sans-serif; background: #1a5c2e; color: #
 .card:hover { transform: translateY(-4px); }
 .card.selected { border-color: #ffd700; transform: translateY(-12px); background: #fffbe6; }
 .card.legal { border-color: #2ecc71; }
+.card.suit-hearts, .card.suit-diamonds { color: #e74c3c; }
+.card.suit-spades, .card.suit-clubs { color: #333; }
 
 /* === Trick View === */
 .trick-view { grid-area: trick; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
 .trick-card { background: #fff; color: #333; border-radius: 6px; padding: 4px 12px; font-size: 18px; min-width: 50px; text-align: center; }
+.trick-card.suit-hearts, .trick-card.suit-diamonds { color: #e74c3c; }
 .trick-slot { display: flex; gap: 4px; align-items: center; }
 .trick-slot.current { background: rgba(255,215,0,0.15); border-radius: 4px; padding: 2px 4px; }
 .trick-slot .player-label { font-size: 12px; min-width: 40px; text-align: right; }

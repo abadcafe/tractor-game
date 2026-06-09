@@ -45,6 +45,14 @@ export function isTrumpRank(c: Card, rank: string): boolean {
   return !isJoker(c) && c.rank === rank;
 }
 
+/** Returns true if the card is a trump card. */
+export function isTrump(c: Card, trumpSuit: string | null, trumpRank: string): boolean {
+  if (isJoker(c)) return true;
+  if (isTrumpRank(c, trumpRank)) return true;
+  if (trumpSuit !== null && c.suit === trumpSuit) return true;
+  return false;
+}
+
 /** Returns true if the card is a point card (5, 10, or K). */
 export function isPointCard(c: Card): boolean {
   return c.rank in POINT_VALUES;

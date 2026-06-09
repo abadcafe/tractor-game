@@ -29,7 +29,7 @@ export function renderTrickView(snapshot: StateSnapshot): HTMLElement {
 
     // Add each card in this slot
     for (const card of slot.cards) {
-      slotEl.appendChild(el("span", { class: "trick-card" }, cardDisplay(card)));
+      slotEl.appendChild(el("span", { class: `trick-card suit-${card.suit}` }, cardDisplay(card)));
     }
 
     trickView.appendChild(slotEl);
