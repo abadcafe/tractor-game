@@ -329,3 +329,16 @@ class TestSubPlay:
         sp = SubPlay(pair_count=0, cards=[c], suit=Suit.HEARTS)
         with pytest.raises(ValidationError):
             sp.pair_count = 1  # type: ignore
+
+    def test_subplay_negative_pair_count_rejected(self) -> None:
+        """SubPlay rejects negative pair_count."""
+        with pytest.raises(ValidationError):
+            SubPlay(pair_count=-1, cards=[], suit=Suit.HEARTS)
+
+    def test_subplay_mismatched_cards_count_rejected(self) -> None:
+        """SubPlay rejects cards count that doesn't match pair_count."""
+        c1 = _card(Suit.HEARTS, Rank.ACE, 1)
+        c2 = _card(Suit.HEARTS, Rank.ACE, 2)
+        c3 = _card(Suit.HEARTS, Rank.ACE, 1)  # 3 cards for pair_count=1 (needs 2)
+        with pytest.raises(ValidationError):
+            SubPlay(pair_count=1, cards=[c1, c2, c3], suit=Suit.HEARTS)
