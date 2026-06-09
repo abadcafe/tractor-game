@@ -203,9 +203,21 @@ class Game:
 
         if phase == "DEAL_BID" and isinstance(action, BidAction):
             bid_event = self._convert_bid_action(player_index, action)
+            old_winner = (
+                self._round_state.deal_bid_state.bid_winner
+                if self._round_state.deal_bid_state is not None
+                else None
+            )
             self._round_state = round_sm.reveal(self._round_state, bid_event)
+            new_winner = (
+                self._round_state.deal_bid_state.bid_winner
+                if self._round_state.deal_bid_state is not None
+                else None
+            )
+            if new_winner is old_winner:
+                raise ValueError("叫牌无效：牌张不符合规则或优先级不足")
             # No state push here: the dealing loop pushes to all players every
-            # 0.75s, so the next tick will carry the updated bid_winner.
+            # 0.5s, so the next tick will carry the updated bid_winner.
             # Pushing here would trigger AutoPlayer.on_state → create_task(bid)
             # → act → _push_state_to_all → on_state → … exponential cascade.
 

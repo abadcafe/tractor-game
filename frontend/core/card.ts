@@ -21,13 +21,15 @@ export function suitSymbol(suit: string): string {
   return SUIT_SYMBOLS[suit] ?? suit;
 }
 
-/** Returns a display string for a card (symbol + rank, or joker label). */
+/** Returns a display string for a card (symbol + rank, or joker label).
+ *  Uses newline to stack suit above rank for vertical card layout.
+ */
 export function cardDisplay(c: Card): string {
   if (c.suit === "joker") {
-    if (c.rank === "SJ") return "🃏小王";
-    if (c.rank === "BJ") return "🃏大王";
+    if (c.rank === "SJ") return "小\n王";
+    if (c.rank === "BJ") return "大\n王";
   }
-  return suitSymbol(c.suit) + c.rank;
+  return suitSymbol(c.suit) + "\n" + c.rank;
 }
 
 /** Returns true if the card is a joker (small or big). */

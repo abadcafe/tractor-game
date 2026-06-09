@@ -1,7 +1,14 @@
 import type { StateSnapshot, InteractionMode, BidEvent } from "../../core/types.ts";
-import { cardDisplay, isTrumpRank, isJoker } from "../../core/card.ts";
+import { cardDisplay, suitSymbol, isTrumpRank, isJoker } from "../../core/card.ts";
 
 const SUIT_PRIORITY = ["spades", "hearts", "clubs", "diamonds"];
+
+const SUIT_CN: Record<string, string> = {
+  spades: "黑桃",
+  hearts: "红桃",
+  clubs: "梅花",
+  diamonds: "方块",
+};
 
 /** Pick the strongest valid bid (single or pair) from the hand.
  *  Returns null if no valid bid exists.
@@ -166,14 +173,22 @@ export function renderBiddingDialog(
   return container;
 }
 
+/** Compact display for a card in bid events (horizontal, no newline). */
+function _compactCard(c: { suit: string; rank: string }): string {
+  if (c.suit === "joker") {
+    return c.rank === "BJ" ? "大王" : "小王";
+  }
+  return suitSymbol(c.suit) + c.rank;
+}
+
 /** Format a bid event for display. */
 function formatBidEvent(event: BidEvent): string {
-  const cardsStr = event.cards.map(cardDisplay).join("");
+  const cardsStr = event.cards.map(_compactCard).join(" ");
   if (event.kind === "trump_rank" && event.suit) {
-    return `Player ${event.player}: ${cardsStr} (suit: ${event.suit})`;
+    return `玩家${event.player}: ${cardsStr} (${SUIT_CN[event.suit] ?? event.suit}主)`;
   }
   if (event.kind === "joker" && event.joker_type) {
-    return `Player ${event.player}: ${cardsStr} (${event.joker_type} joker)`;
+    return `玩家${event.player}: ${cardsStr} (${event.joker_type === "big" ? "大" : "小"}王)`;
   }
-  return `Player ${event.player}: ${cardsStr}`;
+  return `玩家${event.player}: ${cardsStr}`;
 }

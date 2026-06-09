@@ -286,6 +286,11 @@ def play(state: RoundState, cards: list[Card]) -> RoundState:
             "defender_points": new_trick.result.updated_defender_points,
         })
 
+        # If all hands are empty, round is over (can happen before 25 tricks
+        # when players play pairs/tractors).
+        if all(len(h) == 0 for h in new_hands):
+            return _transition_to_scoring(new_state)
+
         trick_count = len(new_state.trick_history)
         if trick_count >= 25:
             return _transition_to_scoring(new_state)

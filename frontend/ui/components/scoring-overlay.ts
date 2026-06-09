@@ -1,6 +1,18 @@
 import type { StateSnapshot, InteractionMode } from "../../core/types.ts";
 import { el } from "../dom.ts";
 
+const SUIT_NAMES: Record<string, string> = {
+  spades: "♠",
+  hearts: "♥",
+  clubs: "♣",
+  diamonds: "♦",
+  joker: "🃏",
+};
+
+function suitName(s: string): string {
+  return SUIT_NAMES[s] ?? s;
+}
+
 /**
  * Render a round scoring overlay showing scoring details and optionally
  * a "下一轮" (next round) button when the human declarer needs to acknowledge.
@@ -20,18 +32,18 @@ export function renderScoringOverlay(
   if (snapshot.scoring) {
     overlay.appendChild(
       el("div", { class: "scoring-overlay__defender-points" },
-        `Defender Points: ${snapshot.scoring.defender_points}`),
+        `敌方得分: ${snapshot.scoring.defender_points}`),
     );
     overlay.appendChild(
       el("div", { class: "scoring-overlay__declarer-team" },
-        `Declarer Team: ${snapshot.scoring.declarer_team}`),
+        `庄家队伍: ${snapshot.scoring.declarer_team === 0 ? "队伍0" : "队伍1"}`),
     );
 
     if (snapshot.scoring.bottom_cards.length > 0) {
-      const cardTexts = snapshot.scoring.bottom_cards.map((c) => `${c.rank}${c.suit}`).join(", ");
+      const cardTexts = snapshot.scoring.bottom_cards.map((c) => `${suitName(c.suit)}${c.rank}`).join(", ");
       overlay.appendChild(
         el("div", { class: "scoring-overlay__bottom-cards" },
-          `Bottom Cards: ${cardTexts}`),
+          `底牌: ${cardTexts}`),
       );
     }
   }
