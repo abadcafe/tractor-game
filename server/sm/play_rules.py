@@ -4,6 +4,8 @@ Implements the Shengji/Tractor play rules for singles, pairs, tractors, throws,
 and the legal play enumeration for leading and following.
 """
 
+from itertools import product as iterproduct
+
 from server.sm.card_model import Card, Suit, Rank, SUITED_RANKS
 from server.sm.comparator import SUIT_OFFSET, effective_suit, trump_rank_order
 from server.sm.types import SubPlay
@@ -237,8 +239,6 @@ def _enumerate_follow_branches(
     # Expand each combo into branches, considering all tractor starting positions.
     # Each combo is a list of (SubPlay, extracted_count). For tractor sub-plays,
     # there are (N - K + 1) possible consecutive K-pair starting positions.
-    from itertools import product as iterproduct
-
     all_branches: list[list[Card]] = []
     for combo in extraction_combos:
         # Build a list of "options" for each active extraction in the combo.
@@ -325,7 +325,6 @@ def _generate_extractions(
             ranges.append([0, 1])
 
     # Generate Cartesian product
-    from itertools import product as iterproduct
     combos: list[list[tuple[SubPlay, int]]] = []
 
     for extraction_values in iterproduct(*ranges):

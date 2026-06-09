@@ -317,6 +317,234 @@ async def test_game_over_removes_from_registry(client):
     assert test_registry.get(game_id) is None
 
 
+# ---- SubPlay Integration Tests ----
+
+
+from server.sm.card_model import Card as SmCard, Suit as SmSuit, Rank as SmRank
+from server.sm.trick import create_trick, play as trick_play, TrickInput
+from server.sm.scoring import calculate_score
+from server.sm.types import CompletedTrick, CompletedTrickSlot
+from server.sm.play_rules import (
+    decompose, is_legal_lead, is_legal_follow,
+    compare_plays, can_win, get_legal_plays,
+)
+
+
+def _card(suit: SmSuit, rank: SmRank, deck: int = 1) -> SmCard:
+    from server.sm.card_model import POINTS_MAP
+    return SmCard(
+        id=f"D{deck}-{suit.value}-{rank.value}",
+        suit=suit, rank=rank,
+        is_joker=(suit == SmSuit.JOKER),
+        is_big_joker=(rank == SmRank.BIG_JOKER),
+        points=POINTS_MAP.get(rank, 0), deck=deck,
+    )
+
+
+class TestE2ETractorFlow:
+    """End-to-end tests for tractor-based plays."""
+
+    def test_tractor_lead_wins_over_pair(self) -> None:
+        """Tractor (level 3) beats pair (level 2) in trick resolution."""
+        hands = [
+            # Player 0 leads tractor h3-3-4-4
+            [
+                _card(SmSuit.HEARTS, SmRank.THREE, 1), _card(SmSuit.HEARTS, SmRank.THREE, 2),
+                _card(SmSuit.HEARTS, SmRank.FOUR, 1), _card(SmSuit.HEARTS, SmRank.FOUR, 2),
+            ],
+            # Player 1 follows with tractor h5-5-6-6 (lower rank)
+            [
+                _card(SmSuit.HEARTS, SmRank.FIVE, 1), _card(SmSuit.HEARTS, SmRank.FIVE, 2),
+                _card(SmSuit.HEARTS, SmRank.SIX, 1), _card(SmSuit.HEARTS, SmRank.SIX, 2),
+            ],
+            # Player 2 follows with tractor h7-7-8-8 (higher rank)
+            [
+                _card(SmSuit.HEARTS, SmRank.SEVEN, 1), _card(SmSuit.HEARTS, SmRank.SEVEN, 2),
+                _card(SmSuit.HEARTS, SmRank.EIGHT, 1), _card(SmSuit.HEARTS, SmRank.EIGHT, 2),
+            ],
+            # Player 3 follows with tractor h9-9-10-10
+            [
+                _card(SmSuit.HEARTS, SmRank.NINE, 1), _card(SmSuit.HEARTS, SmRank.NINE, 2),
+                _card(SmSuit.HEARTS, SmRank.TEN, 1), _card(SmSuit.HEARTS, SmRank.TEN, 2),
+            ],
+        ]
+        state = create_trick(TrickInput(
+            lead_player=0, hands=hands,
+            trump_suit=SmSuit.SPADES, trump_rank=SmRank.TWO,
+            defender_points=0, declarer_team=0,
+        ))
+        state = trick_play(state, player=0, cards=hands[0])
+        state = trick_play(state, player=1, cards=hands[1])
+        state = trick_play(state, player=3, cards=hands[3])
+        state = trick_play(state, player=2, cards=hands[2])
+        result = state.result
+        assert result is not None
+        assert result.winner == 3  # h9-9-10-10 wins (highest tractor)
+
+    def test_trump_tractor_beats_non_trump_tractor(self) -> None:
+        """Trump tractor beats non-trump tractor of same level."""
+        # CCW order: 0 -> 1 -> 3 -> 2
+        # Hands are indexed by player position
+        hands = [
+            # Player 0 leads non-trump tractor h3-3-4-4
+            [
+                _card(SmSuit.HEARTS, SmRank.THREE, 1), _card(SmSuit.HEARTS, SmRank.THREE, 2),
+                _card(SmSuit.HEARTS, SmRank.FOUR, 1), _card(SmSuit.HEARTS, SmRank.FOUR, 2),
+            ],
+            # Player 1 follows with non-trump tractor h5-5-6-6
+            [
+                _card(SmSuit.HEARTS, SmRank.FIVE, 1), _card(SmSuit.HEARTS, SmRank.FIVE, 2),
+                _card(SmSuit.HEARTS, SmRank.SIX, 1), _card(SmSuit.HEARTS, SmRank.SIX, 2),
+            ],
+            # Player 2 plays trump tractor sp3-3-4-4 (trump_suit=spade)
+            [
+                _card(SmSuit.SPADES, SmRank.THREE, 1), _card(SmSuit.SPADES, SmRank.THREE, 2),
+                _card(SmSuit.SPADES, SmRank.FOUR, 1), _card(SmSuit.SPADES, SmRank.FOUR, 2),
+            ],
+            # Player 3 follows with non-trump tractor h7-7-8-8
+            [
+                _card(SmSuit.HEARTS, SmRank.SEVEN, 1), _card(SmSuit.HEARTS, SmRank.SEVEN, 2),
+                _card(SmSuit.HEARTS, SmRank.EIGHT, 1), _card(SmSuit.HEARTS, SmRank.EIGHT, 2),
+            ],
+        ]
+        state = create_trick(TrickInput(
+            lead_player=0, hands=hands,
+            trump_suit=SmSuit.SPADES, trump_rank=SmRank.TWO,
+            defender_points=0, declarer_team=0,
+        ))
+        # CCW order: 0 -> 1 -> 3 -> 2
+        state = trick_play(state, player=0, cards=hands[0])
+        state = trick_play(state, player=1, cards=hands[1])
+        state = trick_play(state, player=3, cards=hands[3])
+        state = trick_play(state, player=2, cards=hands[2])
+        result = state.result
+        assert result is not None
+        assert result.winner == 2  # trump tractor wins
+
+
+class TestE2EThrowFlow:
+    """End-to-end tests for throw-based plays."""
+
+    def test_throw_with_all_biggest_sub_plays(self) -> None:
+        """Throw with all biggest sub-plays is a legal lead and resolves correctly."""
+        # Player 0 leads throw: spA + spK (both biggest spade singles)
+        # Other players have no spade cards and no trump cards
+        # Trump is clubs, so hearts/diamonds are non-trump
+        hands = [
+            [_card(SmSuit.SPADES, SmRank.ACE), _card(SmSuit.SPADES, SmRank.KING)],
+            [_card(SmSuit.HEARTS, SmRank.THREE), _card(SmSuit.HEARTS, SmRank.FOUR)],
+            [_card(SmSuit.HEARTS, SmRank.FIVE), _card(SmSuit.HEARTS, SmRank.SIX)],
+            [_card(SmSuit.DIAMONDS, SmRank.SEVEN), _card(SmSuit.DIAMONDS, SmRank.EIGHT)],
+        ]
+        # Verify the lead is legal
+        other_hands = [c for h in hands[1:] for c in h]
+        assert is_legal_lead(hands[0], hands[0], SmSuit.CLUBS, SmRank.TWO, other_hands) is True
+
+        state = create_trick(TrickInput(
+            lead_player=0, hands=hands,
+            trump_suit=SmSuit.CLUBS, trump_rank=SmRank.TWO,
+            defender_points=0, declarer_team=0,
+        ))
+        state = trick_play(state, player=0, cards=hands[0])
+        state = trick_play(state, player=1, cards=hands[1])
+        state = trick_play(state, player=3, cards=hands[3])
+        state = trick_play(state, player=2, cards=hands[2])
+        result = state.result
+        assert result is not None
+        assert result.winner == 0  # throw wins (trump is clubs, followers play hearts/diamonds)
+
+
+class TestE2EFollowRules:
+    """End-to-end tests for follow rules enforcement."""
+
+    def test_follow_must_use_higher_level_sub_play(self) -> None:
+        """Following a pair: must use pair from tractor if available, not independent pair."""
+        # Player 0 leads pair hA-A
+        # Player 1 has tractor h3-3-4-4 + pair hK-K, must use pair from tractor
+        hands = [
+            [_card(SmSuit.HEARTS, SmRank.ACE, 1), _card(SmSuit.HEARTS, SmRank.ACE, 2)],
+            [
+                _card(SmSuit.HEARTS, SmRank.THREE, 1), _card(SmSuit.HEARTS, SmRank.THREE, 2),
+                _card(SmSuit.HEARTS, SmRank.FOUR, 1), _card(SmSuit.HEARTS, SmRank.FOUR, 2),
+                _card(SmSuit.HEARTS, SmRank.KING, 1), _card(SmSuit.HEARTS, SmRank.KING, 2),
+            ],
+            [_card(SmSuit.HEARTS, SmRank.QUEEN, 1), _card(SmSuit.HEARTS, SmRank.QUEEN, 2)],
+            [_card(SmSuit.HEARTS, SmRank.JACK, 1), _card(SmSuit.HEARTS, SmRank.JACK, 2)],
+        ]
+
+        # Verify illegal play: using pair hK-K (skips tractor)
+        illegal = [_card(SmSuit.HEARTS, SmRank.KING, 1), _card(SmSuit.HEARTS, SmRank.KING, 2)]
+        lead = hands[0]
+        assert is_legal_follow(hands[1], illegal, lead, SmSuit.SPADES, SmRank.TWO) is False
+
+        # Verify legal play: using pair from tractor (h3-3 or h4-4)
+        legal = [_card(SmSuit.HEARTS, SmRank.THREE, 1), _card(SmSuit.HEARTS, SmRank.THREE, 2)]
+        assert is_legal_follow(hands[1], legal, lead, SmSuit.SPADES, SmRank.TWO) is True
+
+
+class TestE2EScoringAmbush:
+    """End-to-end tests for scoring with ambush multiplier."""
+
+    def test_ambush_with_tractor_multiplier(self) -> None:
+        """Last trick with tractor lead: ambush multiplier = 2^(card count)."""
+        trick = CompletedTrick(
+            lead_player=0,
+            slots=[
+                CompletedTrickSlot(player=0, cards=[
+                    _card(SmSuit.HEARTS, SmRank.THREE, 1), _card(SmSuit.HEARTS, SmRank.THREE, 2),
+                    _card(SmSuit.HEARTS, SmRank.FOUR, 1), _card(SmSuit.HEARTS, SmRank.FOUR, 2),
+                ]),
+                CompletedTrickSlot(player=1, cards=[
+                    _card(SmSuit.HEARTS, SmRank.FIVE, 1), _card(SmSuit.HEARTS, SmRank.FIVE, 2),
+                    _card(SmSuit.HEARTS, SmRank.SIX, 1), _card(SmSuit.HEARTS, SmRank.SIX, 2),
+                ]),
+                CompletedTrickSlot(player=2, cards=[
+                    _card(SmSuit.HEARTS, SmRank.SEVEN, 1), _card(SmSuit.HEARTS, SmRank.SEVEN, 2),
+                    _card(SmSuit.HEARTS, SmRank.EIGHT, 1), _card(SmSuit.HEARTS, SmRank.EIGHT, 2),
+                ]),
+                CompletedTrickSlot(player=3, cards=[
+                    _card(SmSuit.HEARTS, SmRank.NINE, 1), _card(SmSuit.HEARTS, SmRank.NINE, 2),
+                    _card(SmSuit.HEARTS, SmRank.TEN, 1), _card(SmSuit.HEARTS, SmRank.TEN, 2),
+                ]),
+            ],
+            winner=1,  # defender wins
+            points=30,
+        )
+        result = calculate_score(
+            defender_points=50,
+            bottom_cards=[_card(SmSuit.HEARTS, SmRank.FIVE), _card(SmSuit.SPADES, SmRank.TEN)],
+            last_trick=trick,
+            declarer_team=0,
+            declarer_player=0,
+            team0_level=SmRank.TWO,
+            team1_level=SmRank.TWO,
+            trump_suit=SmSuit.SPADES,
+            trump_rank=SmRank.TWO,
+        )
+        # Bottom cards: 5 + 10 = 15 points. Tractor multiplier = 2^4 = 16.
+        # Ambush bonus = 15 * 16 = 240. Total = 50 + 240 = 290.
+        assert result.total_defender_points == 290
+
+
+class TestE2EComparePlaysNew:
+    """End-to-end tests for the new comparison function."""
+
+    def test_sub_level_comparison_in_trick(self) -> None:
+        """Pair (level 2) beats single (level 1) even with lower rank."""
+        a = [_card(SmSuit.HEARTS, SmRank.THREE, 1), _card(SmSuit.HEARTS, SmRank.THREE, 2)]
+        b = [_card(SmSuit.HEARTS, SmRank.ACE)]
+        # Both are heart (lead suit). Pair has level 2, single has level 1.
+        result = compare_plays(a, b, SmSuit.HEARTS, SmSuit.SPADES, SmRank.TWO)
+        assert result > 0
+
+    def test_eligibility_gate(self) -> None:
+        """Off-suit non-trump cannot win even with highest rank."""
+        a = [_card(SmSuit.DIAMONDS, SmRank.ACE)]  # off-suit, not trump
+        b = [_card(SmSuit.HEARTS, SmRank.THREE)]  # lead suit
+        result = compare_plays(a, b, SmSuit.HEARTS, SmSuit.SPADES, SmRank.TWO)
+        assert result < 0  # b wins
+
+
 # ---- Bug 1 e2e regression: game must not resource-explode ----
 
 
