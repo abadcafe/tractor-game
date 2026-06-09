@@ -34,6 +34,7 @@ export interface StateSnapshot {
   phase: "DEAL_BID" | "STIRRING" | "EXCHANGE" | "PLAYING" | "COMPLETE" | "GAME_OVER";
 
   player_hand: Card[];
+  player_hand_counts: number[];
   bottom_cards: Card[];
 
   trump_rank: string;
