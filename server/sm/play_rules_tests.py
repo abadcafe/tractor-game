@@ -6,7 +6,7 @@ from server.sm.types import PlayType, PlayAction, SubPlay
 from server.sm.play_rules import (
     detect_singles, detect_pairs, detect_tractors, detect_throws,
     get_legal_plays, infer_play_type, decompose, is_legal_lead,
-    is_legal_follow,
+    is_legal_follow, can_win, compare_plays_new,
 )
 from server.sm.comparator import effective_suit
 
@@ -891,3 +891,119 @@ class TestIsLegalFollow:
             _card(Suit.HEARTS, Rank.QUEEN), _card(Suit.HEARTS, Rank.TEN),
         ]
         assert is_legal_follow(hand2, played, lead, Suit.SPADES, Rank.TWO) is True
+
+
+class TestCanWin:
+    def test_can_win_all_lead_suit(self) -> None:
+        """All cards are lead suit -> can win."""
+        cards = [_card(Suit.HEARTS, Rank.ACE), _card(Suit.HEARTS, Rank.KING)]
+        assert can_win(cards, Suit.HEARTS, Suit.SPADES, Rank.TWO) is True
+
+    def test_can_win_all_trump(self) -> None:
+        """All cards are trump -> can win (trump = lead_eff when lead is trump)."""
+        cards = [_card(Suit.JOKER, Rank.BIG_JOKER)]
+        assert can_win(cards, "trump", Suit.SPADES, Rank.TWO) is True
+
+    def test_can_win_lead_is_trump_play_trump(self) -> None:
+        """Lead is trump, play is trump -> can win."""
+        cards = [_card(Suit.SPADES, Rank.ACE)]  # trump when trump_suit=spade
+        assert can_win(cards, "trump", Suit.SPADES, Rank.TWO) is True
+
+    def test_can_win_off_suit_non_trump(self) -> None:
+        """Card is neither lead suit nor trump -> cannot win."""
+        cards = [_card(Suit.DIAMONDS, Rank.ACE)]
+        assert can_win(cards, Suit.HEARTS, Suit.SPADES, Rank.TWO) is False
+
+    def test_can_win_off_suit_but_trump(self) -> None:
+        """Card is not lead suit but is trump -> can win."""
+        # sp2 is trump when trump_suit=spade, trump_rank=2
+        cards = [_card(Suit.SPADES, Rank.TWO)]
+        assert can_win(cards, Suit.HEARTS, Suit.SPADES, Rank.TWO) is True
+
+    def test_can_win_mixed_lead_and_off_suit(self) -> None:
+        """One card is lead suit, one is off-suit non-trump -> cannot win."""
+        cards = [_card(Suit.HEARTS, Rank.ACE), _card(Suit.DIAMONDS, Rank.KING)]
+        assert can_win(cards, Suit.HEARTS, Suit.SPADES, Rank.TWO) is False
+
+    def test_can_win_mixed_lead_and_trump(self) -> None:
+        """One card is lead suit, one is trump -> CAN win.
+
+        Per spec 8.2: any card that is (not lead_suit AND not trump) -> cannot win.
+        Trump cards are always OK. So hA + sp2(trump) -> both valid -> can win.
+        """
+        # hA (lead suit) + sp2 (trump, trump_suit=spade, trump_rank=2)
+        cards = [_card(Suit.HEARTS, Rank.ACE), _card(Suit.SPADES, Rank.TWO)]
+        assert can_win(cards, Suit.HEARTS, Suit.SPADES, Rank.TWO) is True
+
+
+class TestComparePlaysNew:
+    # --- can_win gating ---
+    def test_compare_plays_new_a_wins_by_eligibility(self) -> None:
+        """A can win, B cannot -> A wins."""
+        a = [_card(Suit.HEARTS, Rank.THREE)]
+        b = [_card(Suit.DIAMONDS, Rank.ACE)]  # off-suit, not trump
+        result = compare_plays_new(a, b, Suit.HEARTS, Suit.SPADES, Rank.TWO)
+        assert result > 0
+
+    def test_compare_plays_new_b_wins_by_eligibility(self) -> None:
+        """B can win, A cannot -> B wins."""
+        a = [_card(Suit.DIAMONDS, Rank.ACE)]
+        b = [_card(Suit.HEARTS, Rank.THREE)]
+        result = compare_plays_new(a, b, Suit.HEARTS, Suit.SPADES, Rank.TWO)
+        assert result < 0
+
+    def test_compare_plays_new_neither_can_win(self) -> None:
+        """Neither can win -> tie (0)."""
+        a = [_card(Suit.DIAMONDS, Rank.ACE)]
+        b = [_card(Suit.CLUBS, Rank.KING)]
+        result = compare_plays_new(a, b, Suit.HEARTS, Suit.SPADES, Rank.TWO)
+        assert result == 0
+
+    # --- Trump vs non-trump ---
+    def test_compare_plays_new_trump_beats_non_trump(self) -> None:
+        """All-trump play beats all-lead-suit play."""
+        # spA is trump (trump_suit=spade)
+        a = [_card(Suit.SPADES, Rank.ACE)]
+        b = [_card(Suit.HEARTS, Rank.ACE)]
+        result = compare_plays_new(a, b, Suit.HEARTS, Suit.SPADES, Rank.TWO)
+        assert result > 0
+
+    # --- Sub-level comparison ---
+    def test_compare_plays_new_pair_beats_single(self) -> None:
+        """Pair (level 2) beats single (level 1), even if single has higher rank."""
+        # hA pair vs hK single -- pair wins by level
+        a = [_card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2)]
+        b = [_card(Suit.HEARTS, Rank.KING)]
+        result = compare_plays_new(a, b, Suit.HEARTS, Suit.SPADES, Rank.TWO)
+        assert result > 0
+
+    def test_compare_plays_new_tractor_beats_pair(self) -> None:
+        """Tractor (level 3) beats pair (level 2)."""
+        a = [
+            _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
+            _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2),
+        ]
+        b = [_card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2)]
+        result = compare_plays_new(a, b, Suit.HEARTS, Suit.SPADES, Rank.TWO)
+        assert result > 0
+
+    def test_compare_plays_new_same_level_higher_rank_wins(self) -> None:
+        """Same sub-level: higher max rank wins."""
+        a = [_card(Suit.HEARTS, Rank.ACE)]
+        b = [_card(Suit.HEARTS, Rank.KING)]
+        result = compare_plays_new(a, b, Suit.HEARTS, Suit.SPADES, Rank.TWO)
+        assert result > 0
+
+    def test_compare_plays_new_same_level_same_rank_tie(self) -> None:
+        """Same sub-level, same max rank -> tie."""
+        a = [_card(Suit.HEARTS, Rank.ACE, 1)]
+        b = [_card(Suit.HEARTS, Rank.ACE, 2)]
+        result = compare_plays_new(a, b, Suit.HEARTS, Suit.SPADES, Rank.TWO)
+        assert result == 0
+
+    def test_compare_plays_new_both_trump_higher_wins(self) -> None:
+        """Both trump: higher trump_rank_order wins."""
+        a = [_card(Suit.JOKER, Rank.BIG_JOKER)]
+        b = [_card(Suit.JOKER, Rank.SMALL_JOKER)]
+        result = compare_plays_new(a, b, "trump", Suit.SPADES, Rank.TWO)
+        assert result > 0
