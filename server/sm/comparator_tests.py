@@ -191,9 +191,6 @@ class TestSortByTrumpOrder:
         assert sorted_cards[2].rank == Rank.ACE
 
 
-from server.sm.comparator import trump_rank_order
-
-
 class TestSUITOffset:
     def test_suit_offset_matches_spec(self) -> None:
         """SUIT_OFFSET must match spec section 2.3: diamond=0, club=1, heart=2, spade=3."""
