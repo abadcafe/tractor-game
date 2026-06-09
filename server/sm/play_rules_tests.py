@@ -303,10 +303,6 @@ def test_get_legal_plays_following_empty_lead_cards() -> None:
     assert result == []
 
 
-from server.sm.types import SubPlay
-from server.sm.play_rules import decompose
-
-
 class TestDecompose:
     # --- Singles ---
     def test_decompose_single_card(self) -> None:
