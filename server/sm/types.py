@@ -46,6 +46,19 @@ class SubPlay(BaseModel):
     cards: list[Card]
     suit: Suit | str
 
+    @model_validator(mode="after")
+    def _validate_pair_count_and_cards(self) -> "SubPlay":
+        if self.pair_count < 0:
+            raise ValueError("pair_count must be >= 0")
+        if len(self.cards) > 0:
+            expected = 1 if self.pair_count == 0 else self.pair_count * 2
+            if len(self.cards) != expected:
+                raise ValueError(
+                    f"cards count ({len(self.cards)}) must equal {expected} "
+                    f"for pair_count={self.pair_count}"
+                )
+        return self
+
     @property
     def sub_level(self) -> int:
         """Sub-play level: pair_count + 1.

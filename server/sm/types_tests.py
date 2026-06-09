@@ -327,8 +327,5 @@ class TestSubPlay:
         """SubPlay is immutable (Pydantic frozen model)."""
         c = _card(Suit.HEARTS, Rank.ACE)
         sp = SubPlay(pair_count=0, cards=[c], suit=Suit.HEARTS)
-        try:
+        with pytest.raises(ValidationError):
             sp.pair_count = 1  # type: ignore
-            assert False, "Should have raised"
-        except Exception:
-            pass  # Expected: frozen model
