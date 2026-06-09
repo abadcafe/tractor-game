@@ -583,14 +583,13 @@ async def test_bid_during_deal_bid_does_not_push_state_to_all():
     action = BidAction(cards=trump_cards[:1], count=1)
 
     with patch.object(game, "_push_state_to_all", wraps=game._push_state_to_all) as mock_push:
-        with patch.object(game, "_push_state_to_player", wraps=game._push_state_to_player) as mock_push_one:
-            try:
-                await game.act(player_index=0, action=action)
-            except ValueError:
-                pass  # bid may be rejected for various reasons, that's fine
+        try:
+            await game.act(player_index=0, action=action)
+        except ValueError:
+            pass  # bid may be rejected for various reasons, that's fine
 
-            # _push_state_to_all must NOT have been called
-            mock_push.assert_not_called()
+        # _push_state_to_all must NOT have been called
+        mock_push.assert_not_called()
 
     await game.cancel()
 
