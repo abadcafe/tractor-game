@@ -127,16 +127,16 @@ def get_legal_plays(
     Following: enumerate options respecting sub-play priority rules.
     """
     if is_leading:
-        return _leading_plays_new(hand, trump_suit, trump_rank, other_hands)
+        return _leading_plays(hand, trump_suit, trump_rank, other_hands)
 
     # Following
     if lead_cards is None or len(lead_cards) == 0:
         return []
 
-    return _following_plays_new(hand, lead_cards, trump_suit, trump_rank)
+    return _following_plays(hand, lead_cards, trump_suit, trump_rank)
 
 
-def _leading_plays_new(
+def _leading_plays(
     hand: list[Card],
     trump_suit: Suit | None,
     trump_rank: Rank,
@@ -160,7 +160,7 @@ def _leading_plays_new(
     return result
 
 
-def _following_plays_new(
+def _following_plays(
     hand: list[Card],
     lead_cards: list[Card],
     trump_suit: Suit | None,

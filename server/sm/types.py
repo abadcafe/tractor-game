@@ -1,10 +1,9 @@
 """Shared type definitions used across Shengji/Tractor state machines.
 
-Defines enums and Pydantic models for play types, bid events, stir actions,
+Defines Pydantic models for bid events, stir actions, sub-plays,
 player representation, and completed trick data.
 """
 
-from enum import Enum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -15,23 +14,7 @@ from server.sm.card_model import Card, Suit
 # ---- Enums ----
 
 
-class PlayType(str, Enum):
-    SINGLE = "single"
-    PAIR = "pair"
-    TRACTOR = "tractor"
-    THROW = "throw"
-
-
 # ---- Action / Event Models ----
-
-
-class PlayAction(BaseModel):
-    """A player's play: the type of play and the cards involved."""
-
-    model_config = ConfigDict(frozen=True)
-
-    type: PlayType
-    cards: list[Card]
 
 
 class SubPlay(BaseModel):

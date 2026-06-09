@@ -3,9 +3,8 @@
 Defines the Player ABC, AutoPlayer (random AI), HumanPlayer (WebSocket-driven),
 and player-facing action dataclasses (BidAction, StirAction, PlayAction, etc.).
 
-These PlayerAction types are distinct from the sm internal types
-(BidEvent, StirAction, PlayAction in server/sm/types.py). Game.act()
-converts between them.
+Game.act() dispatches these player action types to the appropriate sm
+state machine operations.
 """
 
 import asyncio

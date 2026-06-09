@@ -5,7 +5,7 @@ import pytest
 from pydantic import ValidationError
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.types import (
-    PlayType, PlayAction, BidEvent, StirAction, Player,
+    BidEvent, StirAction, Player,
     CompletedTrick, CompletedTrickSlot, SubPlay,
 )
 
@@ -18,49 +18,6 @@ def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
         is_big_joker=(rank == Rank.BIG_JOKER),
         points=0, deck=deck,
     )
-
-
-class TestPlayType:
-    def test_play_type_values(self) -> None:
-        assert PlayType.SINGLE.value == "single"
-        assert PlayType.PAIR.value == "pair"
-        assert PlayType.TRACTOR.value == "tractor"
-        assert PlayType.THROW.value == "throw"
-
-
-class TestPlayAction:
-    def test_play_action_single(self) -> None:
-        """PlayAction for a single card."""
-        card = _card(Suit.HEARTS, Rank.ACE)
-        action = PlayAction(type=PlayType.SINGLE, cards=[card])
-        assert action.type == PlayType.SINGLE
-        assert len(action.cards) == 1
-        assert action.cards[0] == card
-
-    def test_play_action_pair(self) -> None:
-        """PlayAction for a pair."""
-        c1 = _card(Suit.HEARTS, Rank.ACE, 1)
-        c2 = _card(Suit.HEARTS, Rank.ACE, 2)
-        action = PlayAction(type=PlayType.PAIR, cards=[c1, c2])
-        assert action.type == PlayType.PAIR
-        assert len(action.cards) == 2
-
-    def test_play_action_tractor(self) -> None:
-        """PlayAction for a tractor."""
-        cards = [
-            _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
-            _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2),
-        ]
-        action = PlayAction(type=PlayType.TRACTOR, cards=cards)
-        assert action.type == PlayType.TRACTOR
-        assert len(action.cards) == 4
-
-    def test_play_action_frozen(self) -> None:
-        """PlayAction is immutable (frozen=True)."""
-        card = _card(Suit.HEARTS, Rank.ACE)
-        action = PlayAction(type=PlayType.SINGLE, cards=[card])
-        with pytest.raises(ValidationError):
-            action.type = PlayType.PAIR
 
 
 class TestBidEvent:
