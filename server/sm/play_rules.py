@@ -916,7 +916,7 @@ def is_legal_follow(
 
     # Step 7: sub-play priority verification
     return _verify_follow_sub_play_priority(
-        suit_in_hand, suit_in_played, lead_cards, trump_suit, trump_rank,
+        suit_in_hand, suit_in_played, lead_cards, lead_eff, trump_suit, trump_rank,
     )
 
 
@@ -924,6 +924,7 @@ def _verify_follow_sub_play_priority(
     hand_suit_cards: list[Card],
     played_suit_cards: list[Card],
     lead_cards: list[Card],
+    lead_eff: Suit | str,
     trump_suit: Suit | None,
     trump_rank: Rank,
 ) -> bool:
@@ -935,8 +936,6 @@ def _verify_follow_sub_play_priority(
     """
     if not played_suit_cards:
         return True
-
-    lead_eff = effective_suit(lead_cards[0], trump_suit, trump_rank)
 
     # Decompose hand and played into SubPlay structures
     hand_subs = decompose(hand_suit_cards, trump_suit, trump_rank) if hand_suit_cards else []

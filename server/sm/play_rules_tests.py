@@ -765,3 +765,129 @@ class TestIsLegalFollow:
         assert is_legal_follow(hand, [_card(Suit.HEARTS, Rank.ACE)], lead, Suit.HEARTS, Rank.TWO) is True
         # spK is not trump, so illegal
         assert is_legal_follow(hand, [_card(Suit.SPADES, Rank.KING)], lead, Suit.HEARTS, Rank.TWO) is False
+
+    # --- Tractor continuity (spec 7c) ---
+    def test_is_legal_follow_tractor_non_contiguous_extraction(self) -> None:
+        """Partial extraction from a tractor must be contiguous.
+
+        Hand has a 3-pair tractor h3-3-4-4-5-5. Lead is a 2-pair tractor.
+        Playing h3-3 + h5-5 (skipping h4-4) should be illegal because
+        the extracted pairs are not contiguous in the tractor's rank sequence.
+        """
+        hand = [
+            _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
+            _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2),
+            _card(Suit.HEARTS, Rank.FIVE, 1), _card(Suit.HEARTS, Rank.FIVE, 2),
+        ]
+        lead = [
+            _card(Suit.HEARTS, Rank.SEVEN, 1), _card(Suit.HEARTS, Rank.SEVEN, 2),
+            _card(Suit.HEARTS, Rank.EIGHT, 1), _card(Suit.HEARTS, Rank.EIGHT, 2),
+        ]
+        # Non-contiguous: play h3-3 + h5-5 (skip h4-4)
+        illegal_play = [
+            _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
+            _card(Suit.HEARTS, Rank.FIVE, 1), _card(Suit.HEARTS, Rank.FIVE, 2),
+        ]
+        assert is_legal_follow(hand, illegal_play, lead, Suit.SPADES, Rank.TWO) is False
+
+        # Contiguous: play h3-3 + h4-4 (from bottom of tractor)
+        legal_play = [
+            _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
+            _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2),
+        ]
+        assert is_legal_follow(hand, legal_play, lead, Suit.SPADES, Rank.TWO) is True
+
+    # --- Fewer suit cards than lead count ---
+    def test_is_legal_follow_fewer_suit_cards_tractor(self) -> None:
+        """Fewer suit cards than lead: must play all suit cards + fill.
+
+        Lead is a 4-card tractor (2 pairs). Hand has 1 pair + 1 single of
+        lead suit (3 cards) + 2 non-suit cards. Must play all 3 suit cards
+        + 1 fill card. Cannot skip a suit card.
+        """
+        hand = [
+            _card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2),
+            _card(Suit.HEARTS, Rank.KING),
+            _card(Suit.SPADES, Rank.QUEEN), _card(Suit.SPADES, Rank.JACK),
+        ]
+        lead = [
+            _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
+            _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2),
+        ]
+        # Legal: play all 3 suit cards + 1 fill
+        played = [
+            _card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2),
+            _card(Suit.HEARTS, Rank.KING),
+            _card(Suit.SPADES, Rank.QUEEN),
+        ]
+        assert is_legal_follow(hand, played, lead, Suit.SPADES, Rank.TWO) is True
+
+        # Illegal: skip hK (play pair hA-A + 2 spades, skipping hK)
+        illegal_play = [
+            _card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2),
+            _card(Suit.SPADES, Rank.QUEEN), _card(Suit.SPADES, Rank.JACK),
+        ]
+        # Should fail: hand has 3 hearts (hA-A pair + hK single) but only 2 hearts played
+        assert is_legal_follow(hand, illegal_play, lead, Suit.SPADES, Rank.TWO) is False
+
+    def test_is_legal_follow_fewer_suit_cards_throw(self) -> None:
+        """Fewer suit cards than throw length: play all suit + fill.
+
+        Lead is a 3-card throw. Hand has 2 cards of lead suit + 1 non-suit.
+        Must play all 2 suit cards + 1 fill.
+        """
+        hand = [
+            _card(Suit.HEARTS, Rank.ACE), _card(Suit.HEARTS, Rank.KING),
+            _card(Suit.SPADES, Rank.QUEEN),
+        ]
+        lead = [
+            _card(Suit.HEARTS, Rank.TEN), _card(Suit.HEARTS, Rank.NINE),
+            _card(Suit.HEARTS, Rank.EIGHT),
+        ]
+        # Legal: play all 2 hearts + 1 spade fill
+        played = [
+            _card(Suit.HEARTS, Rank.ACE), _card(Suit.HEARTS, Rank.KING),
+            _card(Suit.SPADES, Rank.QUEEN),
+        ]
+        assert is_legal_follow(hand, played, lead, Suit.SPADES, Rank.TWO) is True
+
+        # Illegal: skip a heart (play 1 heart + 2 non-hearts -- but only 1 non-heart)
+        # With only 1 non-heart, can't make 3 cards skipping a heart. Count would be wrong.
+        # So let's test: hand has 2 hearts + 2 spades. Play 1 heart + 2 spades.
+        hand2 = [
+            _card(Suit.HEARTS, Rank.ACE), _card(Suit.HEARTS, Rank.KING),
+            _card(Suit.SPADES, Rank.QUEEN), _card(Suit.SPADES, Rank.JACK),
+        ]
+        illegal_play = [
+            _card(Suit.HEARTS, Rank.ACE),
+            _card(Suit.SPADES, Rank.QUEEN), _card(Suit.SPADES, Rank.JACK),
+        ]
+        # Should fail: has 2 hearts but only played 1
+        assert is_legal_follow(hand2, illegal_play, lead, Suit.SPADES, Rank.TWO) is False
+
+    def test_is_legal_follow_no_pairs_in_hand_tractor(self) -> None:
+        """No pairs at all in lead suit when following a tractor: play any N cards."""
+        hand = [
+            _card(Suit.HEARTS, Rank.ACE), _card(Suit.HEARTS, Rank.KING),
+            _card(Suit.HEARTS, Rank.QUEEN),
+        ]
+        lead = [
+            _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
+            _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2),
+        ]
+        # No pairs in hand, all singles. Must play 4 cards but only 3 hearts.
+        # With fewer suit cards: must play all 3 hearts + 1 fill
+        # But we have no fill cards. So this should be... actually count must match.
+        # Lead is 4 cards, played must be 4. Hand has 3 hearts, 0 others.
+        # Can't make 4 cards. So this scenario can't happen with only 3 cards.
+        # Let me adjust: hand has 4 hearts (all singles) + 0 others.
+        hand2 = [
+            _card(Suit.HEARTS, Rank.ACE), _card(Suit.HEARTS, Rank.KING),
+            _card(Suit.HEARTS, Rank.QUEEN), _card(Suit.HEARTS, Rank.TEN),
+        ]
+        # 4 hearts, no pairs. Lead is 4-card tractor. Must play all 4 hearts.
+        played = [
+            _card(Suit.HEARTS, Rank.ACE), _card(Suit.HEARTS, Rank.KING),
+            _card(Suit.HEARTS, Rank.QUEEN), _card(Suit.HEARTS, Rank.TEN),
+        ]
+        assert is_legal_follow(hand2, played, lead, Suit.SPADES, Rank.TWO) is True
