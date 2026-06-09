@@ -6,8 +6,6 @@ level changes, and declarer rotation per spec section 9.
 This is NOT a state machine -- it is a pure function.
 """
 
-from collections import Counter
-
 from pydantic import BaseModel, ConfigDict
 
 from server.sm.card_model import Card, Suit, Rank
@@ -18,9 +16,8 @@ from server.sm.constants import (
     get_team_index,
     next_player_ccw,
 )
-from server.sm.types import CompletedTrick, PlayType
+from server.sm.types import CompletedTrick
 from server.sm.play_rules import decompose
-from server.sm.comparator import effective_suit
 
 
 class RoundResult(BaseModel):
@@ -43,56 +40,41 @@ def _compute_ambush_multiplier(
     trump_suit: Suit | None,
     trump_rank: Rank,
 ) -> int:
-    """Compute the ambush multiplier based on the last trick's lead type.
+    """Compute the ambush multiplier based on the last trick's lead cards.
 
     Uses decompose to determine the lead play structure from the lead cards.
-    For SINGLE/PAIR: use the standard multiplier.
-    For TRACTOR: 2^(card_count).
-    For THROW: analyze the actual cards to find the best sub-pattern.
+    For a single sub-play: single (pair_count=0) -> x2, pair (pair_count=1) -> x4,
+    tractor (pair_count>=2) -> 2^(card_count).
+    For multiple sub-plays (throw): take the max multiplier across sub-plays.
     """
     lead_cards = _find_lead_cards(last_trick)
     if not lead_cards:
         return 2
 
-    lead_eff = effective_suit(lead_cards[0], trump_suit, trump_rank)
     subs = decompose(lead_cards, trump_suit, trump_rank)
 
     if len(subs) == 0:
         return 2
 
-    # Determine the primary sub-play type
-    # The lead type is determined by the highest-level sub-play
-    max_level = max(s.sub_level for s in subs)
-    has_throw = len(subs) > 1 and lead_eff != "trump"
+    if len(subs) == 1:
+        sub = subs[0]
+        if sub.pair_count == 0:
+            return 2  # single
+        elif sub.pair_count == 1:
+            return 4  # pair
+        else:
+            return 2 ** len(sub.cards)  # tractor
 
-    if has_throw:
-        # THROW: analyze sub-patterns from the lead player's cards
-        return _throw_multiplier(lead_cards)
-
-    if max_level == 1:
-        # SINGLE
-        return 2
-    if max_level == 2:
-        # PAIR
-        return 4
-    if max_level >= 3:
-        # TRACTOR: 2^(card_count)
-        total_cards = len(lead_cards)
-        return 2 ** total_cards if total_cards > 0 else 2
-
-    return 2  # fallback
-
-
-def _find_lead_card_count(last_trick: CompletedTrick) -> int:
-    """Find the card count of the lead player's contribution to the trick."""
-    for slot in last_trick.slots:
-        if slot.player == last_trick.lead_player:
-            return len(slot.cards)
-    # Fallback: if lead_player's slot not found, use any non-empty slot
-    for slot in last_trick.slots:
-        if slot.cards:
-            return len(slot.cards)
-    return 0
+    # Multiple sub-plays: it's a throw -> max multiplier across sub-plays
+    best = 2
+    for sub in subs:
+        if sub.pair_count == 0:
+            best = max(best, 2)
+        elif sub.pair_count == 1:
+            best = max(best, 4)
+        else:
+            best = max(best, 2 ** len(sub.cards))
+    return best
 
 
 def _find_lead_cards(last_trick: CompletedTrick) -> list[Card]:
@@ -105,92 +87,6 @@ def _find_lead_cards(last_trick: CompletedTrick) -> list[Card]:
         if slot.cards:
             return slot.cards
     return []
-
-
-def _throw_multiplier(cards: list[Card]) -> int:
-    """Determine the multiplier for a THROW play by analyzing sub-patterns.
-
-    Per spec: check for tractors (consecutive pairs in same effective suit),
-    then pairs (same rank in same effective suit), then all singles.
-    Tractor -> 2^(tractor_card_count), pair -> x4, all singles -> x2.
-
-    Jokers are excluded from pair/tractor analysis and always count as singles,
-    since they have no suit rank ordering.
-    """
-    if not cards:
-        return 2
-
-    # Filter out jokers -- they cannot form pairs/tractors
-    suited_cards = [c for c in cards if not c.is_joker]
-
-    if len(suited_cards) < 2:
-        return 2
-
-    # Group cards by suit (ignoring deck difference)
-    suit_groups: dict[str, list[Card]] = {}
-    for card in suited_cards:
-        suit_groups.setdefault(card.suit.value, []).append(card)
-
-    best_multiplier = 2  # default: all singles
-
-    for suit_cards in suit_groups.values():
-        if len(suit_cards) < 2:
-            continue
-
-        # Count ranks in this suit
-        rank_counts = Counter(c.rank for c in suit_cards)
-
-        # Find pairs (ranks with count >= 2)
-        pair_ranks = sorted(
-            [r for r, cnt in rank_counts.items() if cnt >= 2],
-            key=lambda r: _rank_sort_key(r),
-        )
-
-        if len(pair_ranks) >= 2:
-            # Check for longest consecutive pair run (tractor)
-            tractor_len = _longest_consecutive_pairs(pair_ranks)
-            if tractor_len >= 2:
-                # tractor with tractor_len pairs = 2*tractor_len cards
-                tractor_cards = tractor_len * 2
-                best_multiplier = max(best_multiplier, 2 ** tractor_cards)
-            else:
-                # Has pairs but no consecutive pairs -> pair multiplier
-                best_multiplier = max(best_multiplier, 4)
-        elif len(pair_ranks) == 1:
-            # Has one pair but not enough for tractor -> pair multiplier
-            best_multiplier = max(best_multiplier, 4)
-
-    return best_multiplier
-
-
-def _rank_sort_key(rank: Rank) -> int:
-    """Return a numeric sort key for rank ordering (for consecutive pair detection)."""
-    order = {
-        Rank.TWO: 0, Rank.THREE: 1, Rank.FOUR: 2, Rank.FIVE: 3,
-        Rank.SIX: 4, Rank.SEVEN: 5, Rank.EIGHT: 6, Rank.NINE: 7,
-        Rank.TEN: 8, Rank.JACK: 9, Rank.QUEEN: 10, Rank.KING: 11, Rank.ACE: 12,
-    }
-    return order.get(rank, -1)
-
-
-def _longest_consecutive_pairs(pair_ranks: list[Rank]) -> int:
-    """Find the longest run of consecutive pair ranks."""
-    if not pair_ranks:
-        return 0
-
-    sorted_ranks = sorted(pair_ranks, key=_rank_sort_key)
-    keys = [_rank_sort_key(r) for r in sorted_ranks]
-
-    best = 1
-    current = 1
-    for i in range(1, len(keys)):
-        if keys[i] == keys[i - 1] + 1:
-            current += 1
-            best = max(best, current)
-        else:
-            current = 1
-
-    return best
 
 
 def _determine_level_change(total_points: int) -> tuple[int, bool]:

@@ -4,7 +4,7 @@ from typing import Literal
 import pytest
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.types import CompletedTrick, CompletedTrickSlot
-from server.sm.scoring import calculate_score
+from server.sm.scoring import calculate_score, _compute_ambush_multiplier
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
@@ -557,3 +557,100 @@ class TestOver200:
         assert result.declarer_level_change == -3
         assert result.switch_declarer is True
         assert result.total_defender_points == 200
+
+
+class TestAmbushMultiplierDecompose:
+    def test_ambush_multiplier_single(self) -> None:
+        """Single card -> x2."""
+        trick = CompletedTrick(
+            lead_player=0,
+            slots=[
+                CompletedTrickSlot(player=0, cards=[_card(Suit.HEARTS, Rank.ACE)]),
+                CompletedTrickSlot(player=1, cards=[_card(Suit.HEARTS, Rank.KING)]),
+                CompletedTrickSlot(player=2, cards=[_card(Suit.HEARTS, Rank.QUEEN)]),
+                CompletedTrickSlot(player=3, cards=[_card(Suit.HEARTS, Rank.JACK)]),
+            ],
+            winner=0,
+            points=10,
+        )
+        multiplier = _compute_ambush_multiplier(trick, Suit.SPADES, Rank.TWO)
+        assert multiplier == 2
+
+    def test_ambush_multiplier_pair(self) -> None:
+        """Pair lead -> x4."""
+        trick = CompletedTrick(
+            lead_player=0,
+            slots=[
+                CompletedTrickSlot(player=0, cards=[_card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2)]),
+                CompletedTrickSlot(player=1, cards=[_card(Suit.HEARTS, Rank.KING, 1), _card(Suit.HEARTS, Rank.KING, 2)]),
+                CompletedTrickSlot(player=2, cards=[_card(Suit.HEARTS, Rank.QUEEN, 1), _card(Suit.HEARTS, Rank.QUEEN, 2)]),
+                CompletedTrickSlot(player=3, cards=[_card(Suit.HEARTS, Rank.JACK, 1), _card(Suit.HEARTS, Rank.JACK, 2)]),
+            ],
+            winner=0,
+            points=20,
+        )
+        multiplier = _compute_ambush_multiplier(trick, Suit.SPADES, Rank.TWO)
+        assert multiplier == 4
+
+    def test_ambush_multiplier_tractor_2_pairs(self) -> None:
+        """2-pair tractor lead -> 2^4 = 16."""
+        trick = CompletedTrick(
+            lead_player=0,
+            slots=[
+                CompletedTrickSlot(player=0, cards=[
+                    _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
+                    _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2),
+                ]),
+                CompletedTrickSlot(player=1, cards=[
+                    _card(Suit.HEARTS, Rank.FIVE, 1), _card(Suit.HEARTS, Rank.FIVE, 2),
+                    _card(Suit.HEARTS, Rank.SIX, 1), _card(Suit.HEARTS, Rank.SIX, 2),
+                ]),
+                CompletedTrickSlot(player=2, cards=[
+                    _card(Suit.HEARTS, Rank.SEVEN, 1), _card(Suit.HEARTS, Rank.SEVEN, 2),
+                    _card(Suit.HEARTS, Rank.EIGHT, 1), _card(Suit.HEARTS, Rank.EIGHT, 2),
+                ]),
+                CompletedTrickSlot(player=3, cards=[
+                    _card(Suit.HEARTS, Rank.NINE, 1), _card(Suit.HEARTS, Rank.NINE, 2),
+                    _card(Suit.HEARTS, Rank.TEN, 1), _card(Suit.HEARTS, Rank.TEN, 2),
+                ]),
+            ],
+            winner=0,
+            points=30,
+        )
+        multiplier = _compute_ambush_multiplier(trick, Suit.SPADES, Rank.TWO)
+        assert multiplier == 16  # 2^4
+
+    def test_ambush_multiplier_throw_tractor_plus_singles(self) -> None:
+        """Throw with tractor + singles: take max sub-play multiplier.
+
+        Throw: tractor h3-3-4-4 + single hA -> tractor=2^4=16, singles=2. Max=16.
+        """
+        trick = CompletedTrick(
+            lead_player=0,
+            slots=[
+                CompletedTrickSlot(player=0, cards=[
+                    _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
+                    _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2),
+                    _card(Suit.HEARTS, Rank.ACE),
+                ]),
+                CompletedTrickSlot(player=1, cards=[
+                    _card(Suit.HEARTS, Rank.FIVE, 1), _card(Suit.HEARTS, Rank.FIVE, 2),
+                    _card(Suit.HEARTS, Rank.SIX, 1), _card(Suit.HEARTS, Rank.SIX, 2),
+                    _card(Suit.HEARTS, Rank.KING),
+                ]),
+                CompletedTrickSlot(player=2, cards=[
+                    _card(Suit.HEARTS, Rank.SEVEN, 1), _card(Suit.HEARTS, Rank.SEVEN, 2),
+                    _card(Suit.HEARTS, Rank.EIGHT, 1), _card(Suit.HEARTS, Rank.EIGHT, 2),
+                    _card(Suit.HEARTS, Rank.QUEEN),
+                ]),
+                CompletedTrickSlot(player=3, cards=[
+                    _card(Suit.HEARTS, Rank.NINE, 1), _card(Suit.HEARTS, Rank.NINE, 2),
+                    _card(Suit.HEARTS, Rank.TEN, 1), _card(Suit.HEARTS, Rank.TEN, 2),
+                    _card(Suit.HEARTS, Rank.JACK),
+                ]),
+            ],
+            winner=0,
+            points=35,
+        )
+        multiplier = _compute_ambush_multiplier(trick, Suit.SPADES, Rank.TWO)
+        assert multiplier == 16  # max(2^4, 2) = 16
