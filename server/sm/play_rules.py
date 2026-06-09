@@ -247,7 +247,10 @@ def _enumerate_follow_branches(
         for sub, extracted in combo:
             if extracted == 0:
                 continue
-            if sub.pair_count == 1 and extracted == 1:
+            if sub.pair_count == 0 and extracted == 1:
+                # Single: just the one card
+                extraction_options.append([list(sub.cards)])
+            elif sub.pair_count == 1 and extracted == 1:
                 # Pair: single fixed extraction
                 extraction_options.append([list(sub.cards)])
             elif sub.pair_count >= 2:
@@ -264,6 +267,12 @@ def _enumerate_follow_branches(
                 used_card_ids.update(c.id for c in cards)
 
             remaining_needed = lead_count - len(pair_cards_played)
+            if remaining_needed < 0:
+                continue
+            if remaining_needed == 0:
+                if len(pair_cards_played) == lead_count:
+                    all_branches.append(pair_cards_played)
+                continue
 
             # Fill remaining with same-suit singles first
             fill_suit = [

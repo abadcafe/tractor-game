@@ -16,8 +16,8 @@ body { font-family: "Microsoft YaHei", sans-serif; background: #1a5c2e; color: #
 .player-area[data-position="南"] { grid-area: south; }
 
 /* === Hand View === */
-.hand-view { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; padding: 8px; }
-.card { background: #fff; color: #333; border-radius: 6px; padding: 4px 8px; cursor: pointer; user-select: none; font-size: 16px; min-width: 40px; text-align: center; border: 2px solid transparent; transition: transform 0.1s, border-color 0.1s; }
+.hand-view { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; padding: 8px; flex-shrink: 0; min-height: 70px; }
+.card { background: #fff; color: #333; border-radius: 6px; padding: 4px 2px; cursor: pointer; user-select: none; font-size: 14px; width: 48px; text-align: center; border: 2px solid transparent; transition: transform 0.1s, border-color 0.1s; display: inline-flex; align-items: center; justify-content: center; white-space: nowrap; overflow: hidden; }
 .card:hover { transform: translateY(-4px); }
 .card.selected { border-color: #ffd700; transform: translateY(-12px); background: #fffbe6; }
 .card.legal { border-color: #2ecc71; }
@@ -26,11 +26,19 @@ body { font-family: "Microsoft YaHei", sans-serif; background: #1a5c2e; color: #
 
 /* === Trick View === */
 .trick-view { grid-area: trick; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; }
-.trick-card { background: #fff; color: #333; border-radius: 6px; padding: 4px 12px; font-size: 18px; min-width: 50px; text-align: center; }
+.trick-info-bar { font-size: 14px; color: #ffd700; font-weight: bold; text-shadow: 0 1px 2px rgba(0,0,0,0.5); }
+.trick-grid { display: grid; grid-template-areas: "north north north" "west . east" "south south south"; grid-template-columns: 1fr auto 1fr; grid-template-rows: auto auto auto; gap: 12px; align-items: center; justify-items: center; }
+.trick-slot { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px; border-radius: 8px; border: 2px solid transparent; min-width: 60px; }
+.trick-slot.lead { border-color: #ffd700; background: rgba(255,215,0,0.1); }
+.trick-slot.current { border-color: #2ecc71; background: rgba(46,204,113,0.15); }
+.trick-slot-north { grid-area: north; }
+.trick-slot-west { grid-area: west; }
+.trick-slot-east { grid-area: east; }
+.trick-slot-south { grid-area: south; }
+.trick-player-label { font-size: 12px; color: rgba(255,255,255,0.8); }
+.trick-cards { display: flex; gap: 4px; align-items: center; }
+.trick-card { background: #fff; color: #333; border-radius: 6px; padding: 4px 4px; font-size: 16px; width: 56px; text-align: center; display: inline-flex; align-items: center; justify-content: center; white-space: nowrap; overflow: hidden; }
 .trick-card.suit-hearts, .trick-card.suit-diamonds { color: #e74c3c; }
-.trick-slot { display: flex; gap: 4px; align-items: center; }
-.trick-slot.current { background: rgba(255,215,0,0.15); border-radius: 4px; padding: 2px 4px; }
-.trick-slot .player-label { font-size: 12px; min-width: 40px; text-align: right; }
 
 /* === Scoreboard === */
 .scoreboard { position: fixed; top: 8px; right: 8px; background: rgba(0,0,0,0.7); border-radius: 8px; padding: 12px; min-width: 150px; font-size: 14px; }

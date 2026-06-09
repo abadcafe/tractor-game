@@ -1,5 +1,70 @@
 import type { StateSnapshot, InteractionMode, BidEvent } from "../../core/types.ts";
-import { cardDisplay, isTrumpRank } from "../../core/card.ts";
+import { cardDisplay, isTrumpRank, isJoker } from "../../core/card.ts";
+
+const SUIT_PRIORITY = ["spades", "hearts", "clubs", "diamonds"];
+
+/** Pick the strongest valid bid (single or pair) from the hand.
+ *  Returns null if no valid bid exists.
+ */
+function selectBidCards(hand: StateSnapshot["player_hand"], trumpRank: string): string[] | null {
+  const jokers = hand.filter(isJoker);
+  const bigJokers = jokers.filter((c) => c.rank === "BJ");
+  const smallJokers = jokers.filter((c) => c.rank === "SJ");
+
+  // Joker pair is the strongest bid
+  if (bigJokers.length >= 2) return bigJokers.slice(0, 2).map((c) => c.id);
+  if (smallJokers.length >= 2) return smallJokers.slice(0, 2).map((c) => c.id);
+
+  const trumpCards = hand.filter((c) => isTrumpRank(c, trumpRank));
+  const bySuit: Record<string, typeof trumpCards> = {};
+  for (const c of trumpCards) {
+    bySuit[c.suit] = bySuit[c.suit] || [];
+    bySuit[c.suit].push(c);
+  }
+
+  // Prefer a pair over a single
+  for (const suit of SUIT_PRIORITY) {
+    if (bySuit[suit]?.length >= 2) {
+      return bySuit[suit].slice(0, 2).map((c) => c.id);
+    }
+  }
+
+  // Fallback to a single card
+  for (const suit of SUIT_PRIORITY) {
+    if (bySuit[suit]?.length >= 1) {
+      return [bySuit[suit][0].id];
+    }
+  }
+
+  return null;
+}
+
+/** Pick the strongest valid stir (must be a pair) from the hand.
+ *  Returns null if no pair exists.
+ */
+function selectStirCards(hand: StateSnapshot["player_hand"], trumpRank: string): string[] | null {
+  const jokers = hand.filter(isJoker);
+  const bigJokers = jokers.filter((c) => c.rank === "BJ");
+  const smallJokers = jokers.filter((c) => c.rank === "SJ");
+
+  if (bigJokers.length >= 2) return bigJokers.slice(0, 2).map((c) => c.id);
+  if (smallJokers.length >= 2) return smallJokers.slice(0, 2).map((c) => c.id);
+
+  const trumpCards = hand.filter((c) => isTrumpRank(c, trumpRank));
+  const bySuit: Record<string, typeof trumpCards> = {};
+  for (const c of trumpCards) {
+    bySuit[c.suit] = bySuit[c.suit] || [];
+    bySuit[c.suit].push(c);
+  }
+
+  for (const suit of SUIT_PRIORITY) {
+    if (bySuit[suit]?.length >= 2) {
+      return bySuit[suit].slice(0, 2).map((c) => c.id);
+    }
+  }
+
+  return null;
+}
 
 /**
  * Render the bidding/stirring dialog.
@@ -37,13 +102,14 @@ export function renderBiddingDialog(
     if (interactionMode === "bid") {
       const bidButton = document.createElement("button");
       bidButton.textContent = "叫牌";
+      const bidCardIds = selectBidCards(snapshot.player_hand, snapshot.trump_rank);
+      if (!bidCardIds) {
+        bidButton.disabled = true;
+        bidButton.title = "无可叫主牌";
+      }
       bidButton.addEventListener("click", () => {
-        if (onBid) {
-          // Collect all trump rank cards in the player's hand
-          const trumpRankCardIds = snapshot.player_hand
-            .filter((c) => isTrumpRank(c, snapshot.trump_rank))
-            .map((c) => c.id);
-          onBid(trumpRankCardIds);
+        if (onBid && bidCardIds) {
+          onBid(bidCardIds);
         }
       });
       container.appendChild(bidButton);
@@ -60,13 +126,14 @@ export function renderBiddingDialog(
       // Stir button
       const stirButton = document.createElement("button");
       stirButton.textContent = "反主";
+      const stirCardIds = selectStirCards(snapshot.player_hand, snapshot.trump_rank);
+      if (!stirCardIds) {
+        stirButton.disabled = true;
+        stirButton.title = "无对子主牌可反";
+      }
       stirButton.addEventListener("click", () => {
-        if (onStir) {
-          // Collect all trump rank cards in the player's hand
-          const trumpRankCardIds = snapshot.player_hand
-            .filter((c) => isTrumpRank(c, snapshot.trump_rank))
-            .map((c) => c.id);
-          onStir(trumpRankCardIds);
+        if (onStir && stirCardIds) {
+          onStir(stirCardIds);
         }
       });
       container.appendChild(stirButton);
