@@ -7,8 +7,8 @@ and the legal play enumeration for leading and following.
 from itertools import combinations
 
 from server.sm.card_model import Card, Suit, Rank, SUITED_RANKS
-from server.sm.comparator import effective_suit
-from server.sm.types import PlayAction, PlayType
+from server.sm.comparator import effective_suit, trump_rank_order
+from server.sm.types import PlayAction, PlayType, SubPlay
 
 
 # ---- Helpers ----
@@ -272,6 +272,9 @@ def get_legal_plays(
 
     # Following rules
     assert lead_action is not None, "lead_action required when following"
+    if not lead_action.cards:
+        # Lead player hasn't played yet; following players must wait.
+        return []
     lead_type = lead_action.type
     lead_cards = lead_action.cards
 
@@ -548,3 +551,191 @@ def _follow_throw(
     if len(hand) >= throw_len:
         return [PlayAction(type=PlayType.THROW, cards=hand[:throw_len])]
     return []
+
+
+# ---- Decompose ----
+
+
+def decompose(
+    cards: list[Card], trump_suit: Suit | None, trump_rank: Rank
+) -> list[SubPlay]:
+    """Decompose a set of same-effective-suit cards into SubPlay structures.
+
+    Takes a list of cards that all share the same effective suit and returns
+    a list of SubPlay structures by extracting tractors first (longest,
+    non-overlapping), then pairs, then singles.
+
+    Returns the list sorted by sub_level descending (tractors first,
+    then pairs, then singles).
+    """
+    if not cards:
+        return []
+
+    # Determine effective suit
+    eff_suit = effective_suit(cards[0], trump_suit, trump_rank)
+    is_trump_group = (eff_suit == "trump")
+
+    # For trump group: group by (rank, suit) to detect cross-suit same-rank pairs
+    # For non-trump: group by rank (all cards share the same suit)
+    if is_trump_group:
+        # Group by (rank, suit) for trump
+        rank_suit_groups: dict[tuple[Rank, Suit], list[Card]] = {}
+        for c in cards:
+            key = (c.rank, c.suit)
+            rank_suit_groups.setdefault(key, []).append(c)
+
+        # Find pairs: (rank, suit) groups with >= 2 cards
+        # Each such group forms a pair; if >= 4 cards, multiple pairs
+        pair_keys: list[tuple[Rank, Suit]] = []
+        single_cards: list[Card] = []
+        pair_key_cards: dict[tuple[Rank, Suit], list[Card]] = {}
+        for key, group_cards in rank_suit_groups.items():
+            n_pairs = len(group_cards) // 2
+            remainder = len(group_cards) % 2
+            pair_key_cards[key] = group_cards
+            for _ in range(n_pairs):
+                pair_keys.append(key)
+            if remainder == 1:
+                single_cards.append(group_cards[-1])
+
+        # Sort pairs by trump_rank_order position of representative card
+        rep_cards: dict[tuple[Rank, Suit], Card] = {}
+        for key in pair_keys:
+            if key not in rep_cards:
+                rep_cards[key] = pair_key_cards[key][0]
+        pair_keys.sort(key=lambda k: trump_rank_order(rep_cards[k], trump_suit, trump_rank))
+
+        # Adjacency for trump group:
+        # - Different ranks: adjacent if no other pair's position falls between them
+        # - Same rank (different suits): adjacent only if SUIT_OFFSET difference > 1
+        #   (non-adjacent suits, with a gap between their position values)
+        from server.sm.comparator import SUIT_OFFSET
+
+        all_positions = sorted({trump_rank_order(rep_cards[k], trump_suit, trump_rank) for k in pair_keys})
+
+        def _are_adjacent_t(k1: tuple[Rank, Suit], k2: tuple[Rank, Suit]) -> bool:
+            rank1, suit1 = k1
+            rank2, suit2 = k2
+            pos1 = trump_rank_order(rep_cards[k1], trump_suit, trump_rank)
+            pos2 = trump_rank_order(rep_cards[k2], trump_suit, trump_rank)
+
+            # Same rank: require non-adjacent suits (SUIT_OFFSET difference > 1)
+            if rank1 == rank2:
+                offset_diff = abs(SUIT_OFFSET.get(suit1, 0) - SUIT_OFFSET.get(suit2, 0))
+                return offset_diff > 1
+
+            # Different ranks: adjacent if no other pair's position falls between them
+            lo, hi = min(pos1, pos2), max(pos1, pos2)
+            for p in all_positions:
+                if lo < p < hi:
+                    return False
+            return True
+
+        # Find runs of consecutive adjacent pairs
+        runs: list[list[tuple[Rank, Suit]]] = []
+        if pair_keys:
+            current_run: list[tuple[Rank, Suit]] = [pair_keys[0]]
+            for i in range(1, len(pair_keys)):
+                if _are_adjacent_t(current_run[-1], pair_keys[i]):
+                    current_run.append(pair_keys[i])
+                else:
+                    if len(current_run) >= 2:
+                        runs.append(current_run)
+                    current_run = [pair_keys[i]]
+            if len(current_run) >= 2:
+                runs.append(current_run)
+
+        # Greedy: extract longest tractors first
+        runs.sort(key=lambda r: len(r), reverse=True)
+        used_in_tractor: set[tuple[Rank, Suit]] = set()
+        tractor_runs: list[list[tuple[Rank, Suit]]] = []
+        for run in runs:
+            if any(k in used_in_tractor for k in run):
+                continue
+            tractor_runs.append(run)
+            used_in_tractor.update(run)
+
+        # Build SubPlay list
+        result: list[SubPlay] = []
+        for run in tractor_runs:
+            tractor_cards: list[Card] = []
+            for k in run:
+                tractor_cards.extend(pair_key_cards[k][:2])
+            result.append(SubPlay(pair_count=len(run), cards=tractor_cards, suit=eff_suit))
+
+        for k in pair_keys:
+            if k in used_in_tractor:
+                continue
+            result.append(SubPlay(pair_count=1, cards=pair_key_cards[k][:2], suit=eff_suit))
+
+        for c in single_cards:
+            result.append(SubPlay(pair_count=0, cards=[c], suit=eff_suit))
+
+    else:
+        # Non-trump: group by rank
+        rank_groups: dict[Rank, list[Card]] = {}
+        for c in cards:
+            rank_groups.setdefault(c.rank, []).append(c)
+
+        pair_ranks: list[Rank] = []
+        single_cards: list[Card] = []
+        for rank, rank_cards in rank_groups.items():
+            n_pairs = len(rank_cards) // 2
+            remainder = len(rank_cards) % 2
+            for _ in range(n_pairs):
+                pair_ranks.append(rank)
+            if remainder == 1:
+                single_cards.append(rank_cards[-1])
+
+        pair_ranks.sort(key=lambda r: _non_trump_rank_order(r, trump_rank))
+
+        # Adjacency for non-trump: consecutive rank order
+        def _are_adjacent_nt(r1: Rank, r2: Rank) -> bool:
+            o1 = _non_trump_rank_order(r1, trump_rank)
+            o2 = _non_trump_rank_order(r2, trump_rank)
+            return abs(o1 - o2) == 1
+
+        # Find runs
+        runs: list[list[Rank]] = []
+        if pair_ranks:
+            current_run: list[Rank] = [pair_ranks[0]]
+            for i in range(1, len(pair_ranks)):
+                if _are_adjacent_nt(current_run[-1], pair_ranks[i]):
+                    current_run.append(pair_ranks[i])
+                else:
+                    if len(current_run) >= 2:
+                        runs.append(current_run)
+                    current_run = [pair_ranks[i]]
+            if len(current_run) >= 2:
+                runs.append(current_run)
+
+        # Greedy: extract longest tractors first
+        runs.sort(key=lambda r: len(r), reverse=True)
+        used_in_tractor: set[Rank] = set()
+        tractor_runs: list[list[Rank]] = []
+        for run in runs:
+            if any(r in used_in_tractor for r in run):
+                continue
+            tractor_runs.append(run)
+            used_in_tractor.update(run)
+
+        # Build SubPlay list
+        result = []
+        for run in tractor_runs:
+            tractor_cards: list[Card] = []
+            for r in run:
+                tractor_cards.extend(rank_groups[r][:2])
+            result.append(SubPlay(pair_count=len(run), cards=tractor_cards, suit=eff_suit))
+
+        for rank in pair_ranks:
+            if rank in used_in_tractor:
+                continue
+            result.append(SubPlay(pair_count=1, cards=rank_groups[rank][:2], suit=eff_suit))
+
+        for c in single_cards:
+            result.append(SubPlay(pair_count=0, cards=[c], suit=eff_suit))
+
+    # Sort by sub_level descending (tractors first, then pairs, then singles)
+    result.sort(key=lambda s: s.sub_level, reverse=True)
+
+    return result
