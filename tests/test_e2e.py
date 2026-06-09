@@ -325,8 +325,8 @@ from server.sm.trick import create_trick, play as trick_play, TrickInput
 from server.sm.scoring import calculate_score
 from server.sm.types import CompletedTrick, CompletedTrickSlot
 from server.sm.play_rules import (
-    decompose, is_legal_lead, is_legal_follow,
-    compare_plays, can_win, get_legal_plays,
+    is_legal_lead, is_legal_follow,
+    compare_plays,
 )
 
 
