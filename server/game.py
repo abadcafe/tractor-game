@@ -105,8 +105,8 @@ class StateSnapshot:
         if trick is None:
             return None
         result = dict(trick)
-        if "lead_type" in result and result["lead_type"] is not None and hasattr(result["lead_type"], "value"):
-            result["lead_type"] = result["lead_type"].value
+        # Remove stale lead_type key if present (no longer in CompletedTrick)
+        result.pop("lead_type", None)
         if "slots" in result:
             result["slots"] = [
                 {
@@ -134,8 +134,8 @@ def _serialize_completed_trick(trick) -> dict:
     """Serialize a CompletedTrick to a JSON-serializable dict."""
     if isinstance(trick, dict):
         result = dict(trick)
-        if "lead_type" in result and result["lead_type"] is not None and hasattr(result["lead_type"], "value"):
-            result["lead_type"] = result["lead_type"].value
+        # Remove stale lead_type key if present (no longer in CompletedTrick)
+        result.pop("lead_type", None)
         if "slots" in result:
             result["slots"] = [
                 {
@@ -145,12 +145,8 @@ def _serialize_completed_trick(trick) -> dict:
                 for slot in result["slots"]
             ]
         return result
-    lead_type = trick.lead_type if hasattr(trick, 'lead_type') else None
-    if lead_type is not None and hasattr(lead_type, "value"):
-        lead_type = lead_type.value
     return {
         "lead_player": trick.lead_player,
-        "lead_type": lead_type,
         "slots": [
             {
                 "player": slot.player,
