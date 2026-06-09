@@ -67,7 +67,7 @@ class StateSnapshot:
 
         Cards are serialized as {"id", "suit", "rank"}.
         Enums are serialized as their string values.
-        legal_actions entries are serialized as {"type", "cards"} dicts.
+        legal_actions entries are serialized as lists of card-dict lists.
         """
         return {
             "phase": self.phase,
@@ -101,18 +101,7 @@ class StateSnapshot:
         """Serialize the trick dict, converting cards within to dict format."""
         if trick is None:
             return None
-        result = dict(trick)
-        # Remove stale lead_type key if present (no longer in CompletedTrick)
-        result.pop("lead_type", None)
-        if "slots" in result:
-            result["slots"] = [
-                {
-                    "player": slot.get("player") if isinstance(slot, dict) else getattr(slot, "player", None),
-                    "cards": [_card_to_dict(c) for c in (slot.get("cards", []) if isinstance(slot, dict) else getattr(slot, "cards", []))],
-                }
-                for slot in result["slots"]
-            ]
-        return result
+        return _serialize_dict_trick(trick)
 
 
 def _serialize_bid_event(event: BidEvent) -> dict:
@@ -127,21 +116,30 @@ def _serialize_bid_event(event: BidEvent) -> dict:
     }
 
 
+def _serialize_dict_trick(trick: dict) -> dict:
+    """Serialize a dict-formatted trick/CompletedTrick, converting cards to dict format.
+
+    Shared helper for _serialize_trick and _serialize_completed_trick
+    to avoid duplicating the dict-format handling logic.
+    """
+    result = dict(trick)
+    # Remove stale lead_type key if present (no longer in CompletedTrick)
+    result.pop("lead_type", None)
+    if "slots" in result:
+        result["slots"] = [
+            {
+                "player": slot.get("player") if isinstance(slot, dict) else getattr(slot, "player", None),
+                "cards": [_card_to_dict(c) for c in (slot.get("cards", []) if isinstance(slot, dict) else getattr(slot, "cards", []))],
+            }
+            for slot in result["slots"]
+        ]
+    return result
+
+
 def _serialize_completed_trick(trick) -> dict:
     """Serialize a CompletedTrick to a JSON-serializable dict."""
     if isinstance(trick, dict):
-        result = dict(trick)
-        # Remove stale lead_type key if present (no longer in CompletedTrick)
-        result.pop("lead_type", None)
-        if "slots" in result:
-            result["slots"] = [
-                {
-                    "player": slot.get("player") if isinstance(slot, dict) else getattr(slot, "player", None),
-                    "cards": [_card_to_dict(c) for c in (slot.get("cards", []) if isinstance(slot, dict) else getattr(slot, "cards", []))],
-                }
-                for slot in result["slots"]
-            ]
-        return result
+        return _serialize_dict_trick(trick)
     return {
         "lead_player": trick.lead_player,
         "slots": [
@@ -299,7 +297,7 @@ class Game:
                 # Following: only compute legal actions if lead cards exist
                 lead_slots = rs.trick_state.slots
                 if lead_slots:
-                    lead_cards = lead_slots[0].cards if lead_slots[0].cards else []
+                    lead_cards = lead_slots[rs.trick_state.lead_player].cards
                     if lead_cards:
                         can_act_in_playing = True
                     # else: lead player hasn't played yet, followers must wait
