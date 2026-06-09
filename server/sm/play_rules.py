@@ -433,7 +433,8 @@ def _enumerate_follow_branches(
     """Enumerate branches for following a lead.
 
     Each branch represents a choice of how many pairs to extract from which
-    sub-plays, then fills the remaining slots.
+    sub-plays (with branching for tractor starting positions), then fills
+    the remaining slots.
     """
     # Separate suit subs by type
     tractor_subs = [s for s in suit_subs if s.pair_count >= 2]
@@ -451,52 +452,61 @@ def _enumerate_follow_branches(
         tractor_subs, pair_subs, single_subs, pairs_must, lead_count
     )
 
-    result: list[list[Card]] = []
+    # Expand each combo into branches, considering all tractor starting positions.
+    # Each combo is a list of (SubPlay, extracted_count). For tractor sub-plays,
+    # there are (N - K + 1) possible consecutive K-pair starting positions.
+    from itertools import product as iterproduct
+
+    all_branches: list[list[Card]] = []
     for combo in extraction_combos:
-        # combo = list of (SubPlay, extracted_pair_count) pairs
-        used_card_ids: set[str] = set()
-        pair_cards_played: list[Card] = []
+        # Build a list of "options" for each active extraction in the combo.
+        # Each option is a list of cards extracted from that sub-play.
+        extraction_options: list[list[Card]] = []
         for sub, extracted in combo:
             if extracted == 0:
                 continue
             if sub.pair_count == 1 and extracted == 1:
-                # Pair: use both cards
-                pair_cards_played.extend(sub.cards)
-                used_card_ids.update(c.id for c in sub.cards)
+                # Pair: single fixed extraction
+                extraction_options.append([list(sub.cards)])
             elif sub.pair_count >= 2:
-                # Tractor: extract 'extracted' pairs contiguously
-                tractor_cards = _extract_from_tractor(sub, extracted)
-                pair_cards_played.extend(tractor_cards)
-                used_card_ids.update(c.id for c in tractor_cards)
+                # Tractor: multiple valid starting positions
+                all_starts = _extract_from_tractor_all(sub, extracted)
+                extraction_options.append(all_starts)
 
-        remaining_needed = lead_count - len(pair_cards_played)
+        # Cartesian product of all extraction starting positions
+        for branch_cards in iterproduct(*extraction_options):
+            used_card_ids: set[str] = set()
+            pair_cards_played: list[Card] = []
+            for cards in branch_cards:
+                pair_cards_played.extend(cards)
+                used_card_ids.update(c.id for c in cards)
 
-        # Fill remaining with same-suit singles first
-        suit_singles = [
-            c for c in all_suit_cards
-            if c.id not in used_card_ids
-        ]
-        # Get singles from suit that aren't used
-        fill_suit = [c for c in suit_singles if c.id not in used_card_ids][:remaining_needed]
+            remaining_needed = lead_count - len(pair_cards_played)
 
-        used_card_ids.update(c.id for c in fill_suit)
-        fill = list(fill_suit)
-        remaining_needed -= len(fill)
+            # Fill remaining with same-suit singles first
+            fill_suit = [
+                c for c in all_suit_cards
+                if c.id not in used_card_ids
+            ][:remaining_needed]
 
-        # Fill with other-suit cards
-        fill_other = [c for c in other_cards if c.id not in used_card_ids][:remaining_needed]
-        fill.extend(fill_other)
+            used_card_ids.update(c.id for c in fill_suit)
+            fill = list(fill_suit)
+            remaining_needed -= len(fill)
 
-        play_cards = pair_cards_played + fill
-        if len(play_cards) == lead_count:
-            result.append(play_cards)
+            # Fill with other-suit cards
+            fill_other = [c for c in other_cards if c.id not in used_card_ids][:remaining_needed]
+            fill.extend(fill_other)
+
+            play_cards = pair_cards_played + fill
+            if len(play_cards) == lead_count:
+                all_branches.append(play_cards)
 
     # If no suit cards at all (can't follow), play any lead_count cards from hand
     if not all_suit_cards:
         if len(other_cards) >= lead_count:
-            result.append(list(other_cards[:lead_count]))
+            all_branches.append(list(other_cards[:lead_count]))
 
-    return result
+    return all_branches
 
 
 def _generate_extractions(
@@ -543,8 +553,13 @@ def _generate_extractions(
 
         for s, extracted in zip(all_subs, extraction_values):
             combo.append((s, extracted))
-            total_pair_count += extracted
-            total_card_count += extracted * 2 if s.pair_count >= 1 else extracted
+            # Only pairs (pair_count >= 1) contribute to the pair count floor
+            if s.pair_count >= 1:
+                total_pair_count += extracted
+                total_card_count += extracted * 2
+            else:
+                # Singles contribute card count but not pair count
+                total_card_count += extracted
 
         # Must extract at least pairs_must pairs
         if total_pair_count < pairs_must:
@@ -559,21 +574,16 @@ def _generate_extractions(
     return combos
 
 
-def _extract_from_tractor(sub: SubPlay, count: int) -> list[Card]:
-    """Extract 'count' pairs from a tractor sub-play (contiguously).
+def _extract_from_tractor_all(sub: SubPlay, count: int) -> list[list[Card]]:
+    """Extract 'count' pairs from a tractor sub-play (all valid starting positions).
 
-    Returns the extracted cards.
+    Returns a list of card lists, one per valid contiguous starting position.
+    If count == 0, returns [[]]. If count >= sub.pair_count, returns [all_cards].
     """
     if count == 0:
-        return []
+        return [[]]
     if count >= sub.pair_count:
-        return list(sub.cards)
-
-    # Group cards by rank (maintaining order within the tractor)
-    rank_order_map: dict[Rank, int] = {}
-    for i, c in enumerate(sub.cards):
-        if c.rank not in rank_order_map:
-            rank_order_map[c.rank] = i
+        return [list(sub.cards)]
 
     # Get unique ranks in order (they're already in tractor order from decompose)
     unique_ranks: list[Rank] = []
@@ -581,17 +591,18 @@ def _extract_from_tractor(sub: SubPlay, count: int) -> list[Card]:
         if c.rank not in unique_ranks:
             unique_ranks.append(c.rank)
 
-    # We need to extract 'count' consecutive pairs from this tractor.
     # There are (len(unique_ranks) - count + 1) possible starting positions.
-    # For now, take the first 'count' pairs (lowest ranks in the tractor).
-    extracted: list[Card] = []
-    for i in range(count):
-        rank = unique_ranks[i]
-        # Get both cards of this rank
-        rank_cards = [c for c in sub.cards if c.rank == rank]
-        extracted.extend(rank_cards[:2])
+    results: list[list[Card]] = []
+    num_starts = len(unique_ranks) - count + 1
+    for start in range(num_starts):
+        extracted: list[Card] = []
+        for i in range(start, start + count):
+            rank = unique_ranks[i]
+            rank_cards = [c for c in sub.cards if c.rank == rank]
+            extracted.extend(rank_cards[:2])
+        results.append(extracted)
 
-    return extracted
+    return results
 
 
 def infer_play_type(
