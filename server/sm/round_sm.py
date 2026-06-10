@@ -25,6 +25,7 @@ from server.sm import stirring as stir_mod
 from server.sm import exchange as exc
 from server.sm import trick as trick_mod
 from server.sm import scoring
+from server.sm import play_rules
 from server.sm.types import BidEvent, CompletedTrick
 from server.sm.scoring import RoundResult
 
@@ -258,8 +259,9 @@ def discard(state: RoundState, cards: list[Card]) -> RoundState:
 def play(state: RoundState, player_index: int, cards: list[Card]) -> RoundState:
     """Play cards during PLAYING phase.
 
-    Validates that player_index matches the current player, then delegates
-    to trick.play. When trick resolves, records result and starts next trick.
+    Validates that player_index matches the current player, that the played
+    cards are one of the enumerated legal plays, then delegates to trick.play.
+    When trick resolves, records result and starts next trick.
     After 25 tricks, transitions to SCORING -> COMPLETE.
     """
     if state.phase != "PLAYING":
@@ -273,6 +275,42 @@ def play(state: RoundState, player_index: int, cards: list[Card]) -> RoundState:
     if player_index != cur:
         raise ValueError(
             f"Not player {player_index}'s turn; expected player {cur}"
+        )
+
+    # Defense: verify played cards match an enumerated legal play option.
+    # This catches cases where the frontend sends a subset of a legal play
+    # (e.g. 1 card from a 2-card pair) even if the structural validators
+    # (is_legal_lead / is_legal_follow) might accept it.
+    is_leading = state.trick_state.phase == "LEADING"
+    lead_cards: list[Card] | None = None
+    if not is_leading:
+        lead_slots = state.trick_state.slots
+        lead_cards = lead_slots[state.trick_state.lead_player].cards
+
+    other_hands: list[Card] = []
+    for i in range(4):
+        if i != cur:
+            other_hands.extend(state.players_hand[i])
+
+    legal_plays = play_rules.get_legal_plays(
+        hand=state.players_hand[cur],
+        is_leading=is_leading,
+        lead_cards=lead_cards,
+        trump_suit=state.trump_suit,
+        trump_rank=state.trump_rank,
+        other_hands=other_hands,
+    )
+
+    played_ids = frozenset(c.id for c in cards)
+    matched = any(
+        len(opt) == len(cards)
+        and frozenset(c.id for c in opt) == played_ids
+        for opt in legal_plays
+    )
+    if not matched:
+        raise ValueError(
+            f"Play {[c.id for c in cards]} does not match any legal "
+            f"play option (player {cur}, {len(legal_plays)} options)"
         )
 
     new_trick = trick_mod.play(state.trick_state, cur, cards)
