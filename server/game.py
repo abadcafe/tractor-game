@@ -12,6 +12,7 @@ from typing import Callable
 
 from server.sm import game_sm, round_sm, play_rules
 from server.sm.card_model import Card, Suit, Rank
+from server.sm.result import Ok, Rejected
 from server.sm.types import BidEvent
 from server.player import Player, BidAction, StirAction, SkipStirAction, DiscardAction, PlayAction, NextRoundAction
 
@@ -61,6 +62,7 @@ class StateSnapshot:
     bid_winner: dict | None
     stirring_state: dict | None
     exchange_state: dict | None
+    next_round_confirmed: list[int]
 
     def to_dict(self) -> dict:
         """Convert to a JSON-serializable dict matching spec section 5.5.
@@ -95,6 +97,7 @@ class StateSnapshot:
             "bid_winner": _serialize_bid_event(self.bid_winner) if self.bid_winner is not None else None,
             "stirring_state": self.stirring_state,
             "exchange_state": self.exchange_state,
+            "next_round_confirmed": self.next_round_confirmed,
         }
 
     def _serialize_trick(self, trick: dict | None) -> dict | None:
@@ -168,6 +171,7 @@ class Game:
         self._dealing_task: asyncio.Task | None = None
         self._on_game_over: Callable[['Game'], None] | None = None
         self._cancelled: bool = False
+        self._next_round_confirmed: set[int] = set()
 
     async def run(self) -> None:
         """Start the game: transition to IN_ROUND, create round, start dealing loop.
@@ -190,16 +194,22 @@ class Game:
     async def act(self, player_index: int, action: BidAction | PlayAction | StirAction | SkipStirAction | DiscardAction | NextRoundAction) -> None:
         """Unified action entry point. Dispatches based on current phase and action type.
 
-        After applying the action, pushes state to the appropriate player(s).
-        If the action causes GAME_OVER, pushes final state to all players
-        and invokes the on_game_over callback.
+        After applying the action, pushes state to all players.
+        Any rejection (invalid action, race condition, etc.) sends an error
+        message to the acting player via WebSocket, then still pushes state
+        so the game never deadlocks.
 
-        Raises ValueError if player_index is out of range.
+        Raises ValueError only for absolute programming errors (e.g. player
+        index out of range).  All runtime action rejections are communicated
+        through the error channel instead of exceptions.
         """
         if player_index < 0 or player_index >= len(self._players):
             raise ValueError(f"Player index {player_index} out of range (0-{len(self._players) - 1})")
         phase = self.get_phase()
         logger.debug("Game.act: player=%d action=%s phase=%s", player_index, type(action).__name__, phase)
+
+        error_msg: str | None = None
+        should_push = True
 
         if phase == "DEAL_BID" and isinstance(action, BidAction):
             bid_event = self._convert_bid_action(player_index, action)
@@ -215,54 +225,73 @@ class Game:
                 else None
             )
             if new_winner is old_winner:
-                raise ValueError("叫牌无效：牌张不符合规则或优先级不足")
-            # No state push here: the dealing loop pushes to all players every
-            # 0.5s, so the next tick will carry the updated bid_winner.
-            # Pushing here would trigger AutoPlayer.on_state → create_task(bid)
-            # → act → _push_state_to_all → on_state → … exponential cascade.
+                error_msg = "叫牌无效：牌张不符合规则或优先级不足"
+            # Dealing loop already pushes state every 0.5s; avoid extra push
+            # here to prevent AutoPlayer bid cascades.
+            should_push = False
 
         elif phase == "STIRRING" and isinstance(action, SkipStirAction):
             self._round_state = round_sm.pass_stir(self._round_state)
-            await self._push_state_to_all()
 
         elif phase == "STIRRING" and isinstance(action, StirAction):
-            self._round_state = round_sm.stir(self._round_state, action.cards)
-            await self._push_state_to_all()
+            match round_sm.stir(self._round_state, action.cards):
+                case Ok(value=new_state):
+                    self._round_state = new_state
+                case Rejected(reason=reason):
+                    error_msg = reason
 
         elif phase == "EXCHANGE" and isinstance(action, DiscardAction):
-            self._round_state = round_sm.discard(self._round_state, action.cards)
-            await self._push_state_to_all()
+            match round_sm.discard(self._round_state, action.cards):
+                case Ok(value=new_state):
+                    self._round_state = new_state
+                case Rejected(reason=reason):
+                    error_msg = reason
 
         elif phase == "PLAYING" and isinstance(action, PlayAction):
-            self._round_state = round_sm.play(self._round_state, player_index, action.cards)
-            await self._push_state_to_all()
+            match round_sm.play(self._round_state, player_index, action.cards):
+                case Ok(value=new_state):
+                    self._round_state = new_state
+                case Rejected(reason=reason):
+                    error_msg = reason
 
         elif phase == "COMPLETE" and isinstance(action, NextRoundAction):
-            round_result = round_sm.get_round_result(self._round_state)
-            if round_result is None:
-                raise ValueError(
-                    "Round result is None in COMPLETE phase; this indicates an sm layer bug"
-                )
-            self._game_state = game_sm.process_round_result(self._game_state, round_result)
+            self._next_round_confirmed.add(player_index)
 
-            if self._game_state.phase == "GAME_OVER":
-                await self._push_state_to_all()
-                if self._on_game_over is not None:
-                    self._on_game_over(self)
-            else:
-                self._cancelled = False
-                self._round_state = round_sm.create_round(round_sm.RoundInput(
-                    declarer_team=self._game_state.declarer_team,
-                    trump_rank=self._game_state.team0_level,
-                    last_declarer_player=self._game_state.last_declarer_player,
-                    team0_level=self._game_state.team0_level,
-                    team1_level=self._game_state.team1_level,
-                ))
-                # Start a new dealing loop for the next round
-                self._dealing_task = asyncio.create_task(self._dealing_loop())
-                await self._push_state_to_all()
+            if len(self._next_round_confirmed) == 4:
+                # All 4 players confirmed: proceed to next round
+                self._next_round_confirmed.clear()
+                round_result = round_sm.get_round_result(self._round_state)
+                if round_result is None:
+                    raise ValueError(
+                        "Round result is None in COMPLETE phase; this indicates an sm layer bug"
+                    )
+                self._game_state = game_sm.process_round_result(self._game_state, round_result)
+
+                if self._game_state.phase == "GAME_OVER":
+                    await self._push_state_to_all()
+                    if self._on_game_over is not None:
+                        self._on_game_over(self)
+                    return
+                else:
+                    self._cancelled = False
+                    self._round_state = round_sm.create_round(round_sm.RoundInput(
+                        declarer_team=self._game_state.declarer_team,
+                        trump_rank=self._game_state.team0_level,
+                        last_declarer_player=self._game_state.last_declarer_player,
+                        team0_level=self._game_state.team0_level,
+                        team1_level=self._game_state.team1_level,
+                    ))
+                    # Start a new dealing loop for the next round
+                    self._dealing_task = asyncio.create_task(self._dealing_loop())
+
         else:
-            raise ValueError(f"Invalid action {type(action).__name__} in phase {phase}")
+            error_msg = f"无效的操作：{type(action).__name__} 不能在 {phase} 阶段使用"
+
+        if error_msg:
+            await self._send_error_to_player(player_index, error_msg)
+
+        if should_push:
+            await self._push_state_to_all()
 
     def snapshot(self, for_player: int) -> StateSnapshot:
         """Build a StateSnapshot for the given player.
@@ -412,6 +441,7 @@ class Game:
             bid_winner=bid_winner,
             stirring_state=stirring_state_dict,
             exchange_state=exchange_state_dict,
+            next_round_confirmed=sorted(self._next_round_confirmed),
         )
 
     def is_over(self) -> bool:
@@ -522,6 +552,10 @@ class Game:
             joker_type=joker_type,
             count=action.count,
         )
+
+    async def _send_error_to_player(self, player_index: int, message: str) -> None:
+        """Send an error message to a specific player."""
+        await self._players[player_index].send_error(message)
 
     async def _push_state_to_all(self) -> None:
         """Push state to all players."""

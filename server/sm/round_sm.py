@@ -26,6 +26,7 @@ from server.sm import exchange as exc
 from server.sm import trick as trick_mod
 from server.sm import scoring
 from server.sm import play_rules
+from server.sm.result import Ok, Rejected, StateResult
 from server.sm.types import BidEvent, CompletedTrick
 from server.sm.scoring import RoundResult
 
@@ -181,18 +182,20 @@ def pass_stir(state: RoundState) -> RoundState:
     return state.model_copy(update={"stirring_state": new_ss})
 
 
-def stir(state: RoundState, cards: list[Card]) -> RoundState:
+def stir(state: RoundState, cards: list[Card]) -> StateResult[RoundState]:
     """Stir (change trump suit) during STIRRING phase.
 
     Validates cards are in the current player's hand, then delegates
     to stirring.stir.
+
+    Returns Ok(new_state) on success, Rejected(reason) on invalid input.
     """
     if state.phase != "STIRRING":
-        raise ValueError(
-            f"Cannot stir in phase {state.phase}; expected STIRRING"
+        return Rejected(
+            f"不能在 {state.phase} 阶段反主"
         )
     if state.stirring_state is None:
-        raise ValueError("stirring_state is None")
+        return Rejected("反主状态异常")
 
     cur = state.stirring_state.current_player
     hand = state.players_hand[cur]
@@ -201,8 +204,8 @@ def stir(state: RoundState, cards: list[Card]) -> RoundState:
     hand_ids = {c.id for c in hand}
     for card in cards:
         if card.id not in hand_ids:
-            raise ValueError(
-                f"Card {card.id} not in hand of player {cur}"
+            return Rejected(
+                f"牌 {card.id} 不在玩家 {cur} 的手牌中"
             )
 
     old_ss = state.stirring_state
@@ -212,31 +215,35 @@ def stir(state: RoundState, cards: list[Card]) -> RoundState:
     # (trump_suit and actions both unchanged), the stir was invalid.
     if (new_ss.trump_suit == old_ss.trump_suit
             and len(new_ss.actions) == len(old_ss.actions)):
-        raise ValueError(
-            f"Stir rejected: invalid pair, wrong player, or priority too low"
-        )
+        return Rejected("反主无效：牌张不符合规则或优先级不足")
 
     new_state = state.model_copy(update={
         "stirring_state": new_ss,
         "trump_suit": new_ss.trump_suit,
     })
 
-    return new_state
+    return Ok(new_state)
 
 
-def discard(state: RoundState, cards: list[Card]) -> RoundState:
+def discard(state: RoundState, cards: list[Card]) -> StateResult[RoundState]:
     """Discard bottom cards during EXCHANGE phase.
 
     Delegates to exchange.discard. If exchange completes, transitions to PLAYING.
+
+    Returns Ok(new_state) on success, Rejected(reason) on invalid input.
     """
     if state.phase != "EXCHANGE":
-        raise ValueError(
-            f"Cannot discard in phase {state.phase}; expected EXCHANGE"
+        return Rejected(
+            f"不能在 {state.phase} 阶段埋牌"
         )
     if state.exchange_state is None:
-        raise ValueError("exchange_state is None")
+        return Rejected("换底牌状态异常")
 
-    new_exc = exc.discard(state.exchange_state, cards)
+    match exc.discard(state.exchange_state, cards):
+        case Ok(value=new_exc):
+            pass  # proceed below
+        case Rejected(reason=reason):
+            return Rejected(reason)
 
     if new_exc.phase == "COMPLETE" and new_exc.result is not None:
         new_hand = new_exc.result.new_hand
@@ -251,30 +258,32 @@ def discard(state: RoundState, cards: list[Card]) -> RoundState:
             "players_hand": new_hands,
             "bottom_cards": new_bottom,
         })
-        return _transition_to_playing(new_state)
+        return Ok(_transition_to_playing(new_state))
 
-    return state.model_copy(update={"exchange_state": new_exc})
+    return Ok(state.model_copy(update={"exchange_state": new_exc}))
 
 
-def play(state: RoundState, player_index: int, cards: list[Card]) -> RoundState:
+def play(state: RoundState, player_index: int, cards: list[Card]) -> StateResult[RoundState]:
     """Play cards during PLAYING phase.
 
     Validates that player_index matches the current player, that the played
     cards are one of the enumerated legal plays, then delegates to trick.play.
     When trick resolves, records result and starts next trick.
     After 25 tricks, transitions to SCORING -> COMPLETE.
+
+    Returns Ok(new_state) on success, Rejected(reason) on invalid input.
     """
     if state.phase != "PLAYING":
-        raise ValueError(
-            f"Cannot play in phase {state.phase}; expected PLAYING"
+        return Rejected(
+            f"不能在 {state.phase} 阶段出牌"
         )
     if state.trick_state is None:
-        raise ValueError("trick_state is None")
+        return Rejected("出牌状态异常")
 
     cur = state.trick_state.cur
     if player_index != cur:
-        raise ValueError(
-            f"Not player {player_index}'s turn; expected player {cur}"
+        return Rejected(
+            f"不是你的回合，当前是玩家 {cur} 的回合"
         )
 
     # Defense: verify played cards match an enumerated legal play option.
@@ -308,12 +317,13 @@ def play(state: RoundState, player_index: int, cards: list[Card]) -> RoundState:
         for opt in legal_plays
     )
     if not matched:
-        raise ValueError(
-            f"Play {[c.id for c in cards]} does not match any legal "
-            f"play option (player {cur}, {len(legal_plays)} options)"
-        )
+        return Rejected("出牌不符合规则")
 
-    new_trick = trick_mod.play(state.trick_state, cur, cards)
+    match trick_mod.play(state.trick_state, cur, cards):
+        case Ok(value=new_trick):
+            pass  # proceed below
+        case Rejected(reason=reason):
+            return Rejected(reason)
 
     # Sync hands from trick to round state
     new_hands = [list(h) for h in new_trick.hands]
@@ -333,20 +343,20 @@ def play(state: RoundState, player_index: int, cards: list[Card]) -> RoundState:
         # If all hands are empty, round is over (can happen before 25 tricks
         # when players play pairs/tractors).
         if all(len(h) == 0 for h in new_hands):
-            return _transition_to_scoring(new_state)
+            return Ok(_transition_to_scoring(new_state))
 
         trick_count = len(new_state.trick_history)
         if trick_count >= 25:
-            return _transition_to_scoring(new_state)
+            return Ok(_transition_to_scoring(new_state))
 
         # Start next trick: winner leads
-        return _start_next_trick(new_state, new_trick.result.winner)
+        return Ok(_start_next_trick(new_state, new_trick.result.winner))
 
     # Trick not yet resolved (still in progress)
-    return state.model_copy(update={
+    return Ok(state.model_copy(update={
         "trick_state": new_trick,
         "players_hand": new_hands,
-    })
+    }))
 
 
 def is_round_complete(state: RoundState) -> bool:

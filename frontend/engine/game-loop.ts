@@ -63,6 +63,10 @@ export class GameLoop {
       return "bid";
     }
 
+    if (state.phase === "COMPLETE") {
+      return "next_round";
+    }
+
     if (awaiting !== null && state.current_player === HUMAN_PLAYER_INDEX) {
       switch (awaiting) {
         case "stir":
@@ -71,8 +75,6 @@ export class GameLoop {
           return "discard";
         case "play":
           return "play";
-        case "next_round":
-          return "next_round";
         default:
           return null;
       }

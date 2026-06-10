@@ -83,6 +83,7 @@ export interface StateSnapshot {
 
   team0_level: string;
   team1_level: string;
+  next_round_confirmed: number[];
 }
 
 /** Server -> Client WebSocket message. */

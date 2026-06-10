@@ -2,7 +2,7 @@
 name = "tractor-game"
 version = "0.1.0"
 description = "tractor card game"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
@@ -31,12 +31,12 @@ asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 72
-target-version = "py311"
+target-version = "py314"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
 
 [tool.pyright]
-pythonVersion = "3.11"
+pythonVersion = "3.14"
 typeCheckingMode = "strict"
 include = ["server/sm"]

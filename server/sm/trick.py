@@ -12,6 +12,7 @@ from server.sm.card_model import Card, Suit, Rank
 from server.sm.comparator import effective_suit
 from server.sm.constants import next_player_ccw, get_team_index
 from server.sm.play_rules import is_legal_follow, is_legal_lead, compare_plays
+from server.sm.result import Ok, Rejected, StateResult
 from server.sm.types import CompletedTrick, CompletedTrickSlot
 
 
@@ -80,7 +81,7 @@ def create_trick(input: TrickInput) -> TrickState:
     )
 
 
-def play(state: TrickState, player: int, cards: list[Card]) -> TrickState:
+def play(state: TrickState, player: int, cards: list[Card]) -> StateResult[TrickState]:
     """Play cards for the current player.
 
     Validates:
@@ -88,27 +89,27 @@ def play(state: TrickState, player: int, cards: list[Card]) -> TrickState:
     - cards are in player's hand
     - following players follow suit if possible
 
-    Returns a new TrickState (immutable state machine pattern).
+    Returns Ok(new_state) on success, Rejected(reason) on invalid input.
     """
     # Validate it's this player's turn
     if player != state.cur:
-        raise ValueError(f"Not player {player}'s turn; expected player {state.cur}")
+        return Rejected(f"不是你的回合，当前是玩家 {state.cur} 的回合")
 
     # Validate phase is not already resolved
     if state.phase == "RESOLVED":
-        raise ValueError("Trick is already resolved")
+        return Rejected("该轮已结束")
 
     hand = state.hands[player]
 
     # Validate at least one card is being played
     if not cards:
-        raise ValueError("Must play at least one card")
+        return Rejected("必须至少出一张牌")
 
     # Validate cards are in player's hand
     played_ids = {c.id for c in cards}
     hand_ids = {c.id for c in hand}
     if not played_ids.issubset(hand_ids):
-        raise ValueError("Cards not in player's hand")
+        return Rejected("出的牌不在手牌中")
 
     # Validate lead legality
     if state.phase == "LEADING":
@@ -117,15 +118,17 @@ def play(state: TrickState, player: int, cards: list[Card]) -> TrickState:
             if i != player:
                 other_hands.extend(state.hands[i])
         if not is_legal_lead(hand, cards, state.trump_suit, state.trump_rank, other_hands):
-            raise ValueError("Illegal lead: cards do not form a valid play")
+            return Rejected("首出牌不符合规则")
 
     # Validate follow-suit if following
     if state.phase == "FOLLOWING":
         lead_cards = state.slots[state.lead_player].cards
         if len(lead_cards) == 0:
+            # Internal invariant: should never happen if play() is called correctly.
+            # Kept as raise because it signals a code bug, not a race condition.
             raise ValueError("Lead cards must exist in FOLLOWING phase")
         if not is_legal_follow(hand, cards, lead_cards, state.trump_suit, state.trump_rank):
-            raise ValueError("Play does not follow suit rules")
+            return Rejected("必须跟牌")
 
     # Build new state (immutable)
     new_phase = state.phase
@@ -160,9 +163,9 @@ def play(state: TrickState, player: int, cards: list[Card]) -> TrickState:
 
     # Resolve when all 4 have played
     if new_played == 4:
-        return _resolve(new_state)
+        return Ok(_resolve(new_state))
 
-    return new_state
+    return Ok(new_state)
 
 
 def _resolve(state: TrickState) -> TrickState:

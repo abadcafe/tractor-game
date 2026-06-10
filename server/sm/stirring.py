@@ -61,6 +61,7 @@ class StirringState(BaseModel):
     current_player: int
     pass_set: frozenset[int]
     actions: tuple[StirAction, ...]
+    last_stir_player: int | None = None
 
 
 # ---- Operations ----
@@ -103,6 +104,7 @@ def pass_stir(state: StirringState, player: int) -> StirringState:
             current_player=state.current_player,
             pass_set=new_pass_set,
             actions=state.actions + (new_action,),
+            last_stir_player=state.last_stir_player,
         )
 
     return StirringState(
@@ -113,6 +115,7 @@ def pass_stir(state: StirringState, player: int) -> StirringState:
         current_player=next_player_ccw(state.current_player),
         pass_set=new_pass_set,
         actions=state.actions + (new_action,),
+        last_stir_player=state.last_stir_player,
     )
 
 
@@ -133,6 +136,10 @@ def stir(
     """
     # 1. Wrong player
     if player != state.current_player:
+        return state
+
+    # 1b. Cannot stir one's own trump (prevents infinite stir loops)
+    if state.last_stir_player == player:
         return state
 
     # 2. Must be exactly 2 cards
@@ -173,6 +180,7 @@ def stir(
                 current_player=next_player_ccw(state.current_player),
                 pass_set=frozenset(),
                 actions=state.actions + (new_action,),
+                last_stir_player=player,
             )
         # Non-joker pair on 空主: always accepted
     else:
@@ -194,6 +202,7 @@ def stir(
         current_player=next_player_ccw(state.current_player),
         pass_set=frozenset(),
         actions=state.actions + (new_action,),
+        last_stir_player=player,
     )
 
 

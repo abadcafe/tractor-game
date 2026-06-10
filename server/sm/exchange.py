@@ -7,6 +7,7 @@ combined hand. The discarded cards become the new bottom cards used for scoring.
 from pydantic import BaseModel, ConfigDict
 
 from server.sm.card_model import Card
+from server.sm.result import Ok, Rejected, StateResult
 
 
 # ---- Models ----
@@ -58,15 +59,14 @@ def create_exchange(input: ExchangeInput) -> ExchangeState:
     )
 
 
-def discard(state: ExchangeState, cards: list[Card]) -> ExchangeState:
+def discard(state: ExchangeState, cards: list[Card]) -> StateResult[ExchangeState]:
     """Validate and discard cards from hand_after_pickup.
 
-    Raises ValueError if card count is wrong or cards are not in hand.
-    Returns new state with phase COMPLETE and result set.
+    Returns Ok(new_state) on success, Rejected(reason) on invalid input.
     """
     if len(cards) != state.count:
-        raise ValueError(
-            f"count: expected {state.count} cards, got {len(cards)}"
+        return Rejected(
+            f"埋牌数量错误：需要 {state.count} 张，实际 {len(cards)} 张"
         )
 
     hand_ids = {c.id for c in state.hand_after_pickup}
@@ -74,13 +74,13 @@ def discard(state: ExchangeState, cards: list[Card]) -> ExchangeState:
 
     for cid in discard_ids:
         if cid not in hand_ids:
-            raise ValueError(f"not in hand: card {cid}")
+            return Rejected(f"牌 {cid} 不在手牌中")
 
     # Check for duplicate card IDs in input
     seen: set[str] = set()
     for cid in discard_ids:
         if cid in seen:
-            raise ValueError(f"duplicate: card {cid} appears more than once")
+            return Rejected(f"牌 {cid} 重复出现")
         seen.add(cid)
 
     discard_set = set(discard_ids)
@@ -91,10 +91,10 @@ def discard(state: ExchangeState, cards: list[Card]) -> ExchangeState:
         new_bottom_cards=list(cards),
     )
 
-    return ExchangeState(
+    return Ok(ExchangeState(
         phase="COMPLETE",
         hand_after_pickup=state.hand_after_pickup,
         count=state.count,
         declarer_player=state.declarer_player,
         result=result,
-    )
+    ))

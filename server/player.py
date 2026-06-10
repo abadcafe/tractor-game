@@ -97,6 +97,13 @@ class Player(ABC):
                   game.act(self.index, action) to submit an action.
         """
 
+    async def send_error(self, message: str) -> None:
+        """Send an error message to this player.
+
+        AutoPlayer ignores errors; HumanPlayer forwards them via WebSocket.
+        """
+        pass
+
 
 # ---- AutoPlayer ----
 
@@ -223,16 +230,19 @@ class AutoPlayer(Player):
             return
         hand = snapshot.player_hand
         trump_rank = snapshot.trump_rank
-        # Find pairs of trump rank cards (simplified: just pass if no cards)
+        current_trump_suit = snapshot.trump_suit
+        # Find pairs of trump rank cards that can beat current trump
         trump_cards = [c for c in hand if getattr(c, "rank", None) == trump_rank]
         if len(trump_cards) >= 2 and random.random() < 0.5:
-            # Only stir if we have a same-suit pair of trump rank cards
             suit_groups: dict[Any, list] = {}
             for c in trump_cards:
                 suit_groups.setdefault(c.suit, []).append(c)
             valid_pair = None
-            for suit_cards in suit_groups.values():
+            for suit, suit_cards in suit_groups.items():
                 if len(suit_cards) >= 2:
+                    # Skip same-suit as current trump (can't stir to same suit)
+                    if current_trump_suit is not None and suit == current_trump_suit:
+                        continue
                     valid_pair = suit_cards[:2]
                     break
             if valid_pair:
@@ -319,6 +329,15 @@ class HumanPlayer(Player):
     def is_connected(self) -> bool:
         """Return True if this player has an active WebSocket connection."""
         return self._ws is not None
+
+    async def send_error(self, message: str) -> None:
+        """Send an error message to the human player via WebSocket."""
+        if self._ws is None:
+            return
+        await self._ws.send_json({
+            "type": "error",
+            "message": message,
+        })
 
     async def close_ws(self) -> None:
         """Close the WebSocket connection if active, then clear the reference."""

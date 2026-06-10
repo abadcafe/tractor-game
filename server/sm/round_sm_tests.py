@@ -10,6 +10,7 @@ from server.sm.round_sm import (
     deal_next_card, reveal, pass_stir, stir, discard, play,
     is_round_complete, get_round_result,
 )
+from server.sm.result import Ok, Rejected
 
 
 def _play_first_legal(state: RoundState) -> RoundState:
@@ -46,7 +47,9 @@ def _play_first_legal(state: RoundState) -> RoundState:
         other_hands=[],
     )
     assert len(legal_plays) > 0, f"No legal plays for player {cur}"
-    return play(state, player_index=cur, cards=legal_plays[0])
+    result = play(state, player_index=cur, cards=legal_plays[0])
+    assert isinstance(result, Ok), f"play rejected: {result.reason if hasattr(result, 'reason') else result}"
+    return result.value
 
 
 def _deal_all_cards(state: RoundState) -> RoundState:
@@ -104,8 +107,9 @@ def _complete_exchange(state: RoundState) -> RoundState:
     if state.exchange_state is None:
         return state
     discarded = state.exchange_state.hand_after_pickup[:state.exchange_state.count]
-    state = discard(state, discarded)
-    return state
+    result = discard(state, discarded)
+    assert isinstance(result, Ok), f"discard rejected: {result.reason if hasattr(result, 'reason') else result}"
+    return result.value
 
 
 class TestCreateRound:
@@ -250,11 +254,13 @@ class TestStirringPhase:
             f"Hand: {[c.id for c in hand]}"
         )
         pair = [c for c in hand if c.rank == state.trump_rank and not c.is_joker and c.suit == target_suit][:2]
-        state = stir(state, cards=pair)
+        result = stir(state, cards=pair)
+        assert isinstance(result, Ok)
+        state = result.value
         assert state.trump_suit == target_suit
 
     def test_stir_cards_not_in_hand_rejected(self) -> None:
-        """stir with cards not in current player's hand is rejected."""
+        """stir with cards not in current player's hand returns Rejected."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
             last_declarer_player=None,
@@ -269,11 +275,12 @@ class TestStirringPhase:
             Card(id="D2-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
                  is_joker=False, is_big_joker=False, points=0, deck=2),
         ]
-        with pytest.raises(ValueError, match="not in hand"):
-            stir(state, cards=fake_cards)
+        result = stir(state, cards=fake_cards)
+        assert isinstance(result, Rejected)
+        assert "不在" in result.reason and "手牌中" in result.reason
 
     def test_stir_rejected_by_stirring_module(self) -> None:
-        """stir with in-hand cards that the stirring module rejects raises error."""
+        """stir with in-hand cards that the stirring module rejects returns Rejected."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
             last_declarer_player=None,
@@ -287,8 +294,9 @@ class TestStirringPhase:
         # A single card is in the player's hand but the stirring module
         # requires exactly 2 cards (a pair), so it will reject the play.
         if hand:
-            with pytest.raises(ValueError, match="Stir rejected"):
-                stir(state, cards=[hand[0]])
+            result = stir(state, cards=[hand[0]])
+            assert isinstance(result, Rejected)
+            assert "反主无效" in result.reason
 
     def test_stirring_to_exchange(self) -> None:
         """After all players pass stirring, round enters EXCHANGE."""
@@ -301,6 +309,61 @@ class TestStirringPhase:
         state = _complete_stirring_all_pass(state)
         assert state.phase == "EXCHANGE"
         assert state.exchange_state is not None
+
+    def test_stir_cannot_stir_own_trump(self) -> None:
+        """Regression for Bug 2: a player who just stirred cannot stir again
+        when the turn comes back to them.  This prevents infinite stir loops."""
+        from collections import Counter
+
+        random.seed(10)
+        state = create_round(RoundInput(
+            declarer_team=None, trump_rank=Rank.TWO,
+            last_declarer_player=None,
+            team0_level=Rank.TWO, team1_level=Rank.TWO,
+        ))
+        state = _complete_deal_bid_no_bid(state)
+        assert state.phase == "STIRRING"
+        assert state.stirring_state is not None
+
+        cur = state.stirring_state.current_player
+        hand = state.players_hand[cur]
+
+        # Find a trump-rank pair in the current player's hand
+        suit_counts: Counter[Suit] = Counter()
+        for c in hand:
+            if c.rank == state.trump_rank and not c.is_joker:
+                suit_counts[c.suit] += 1
+        target_suit = None
+        for s, cnt in suit_counts.items():
+            if cnt >= 2 and s != state.trump_suit:
+                target_suit = s
+                break
+        if target_suit is None:
+            pytest.skip("No trump-rank pair available for this test")
+
+        pair = [c for c in hand
+                if c.rank == state.trump_rank and not c.is_joker and c.suit == target_suit][:2]
+
+        # First stir succeeds
+        result = stir(state, cards=pair)
+        assert isinstance(result, Ok)
+        state = result.value
+        assert state.stirring_state is not None
+        assert state.stirring_state.last_stir_player == cur
+
+        # Pass around until the turn comes back to the same player
+        for _ in range(3):
+            if state.phase != "STIRRING":
+                break
+            state = pass_stir(state)
+
+        assert state.phase == "STIRRING"
+        assert state.stirring_state is not None
+        assert state.stirring_state.current_player == cur
+
+        # Second stir from the same player is rejected
+        result = stir(state, cards=pair)
+        assert isinstance(result, Rejected)
 
 
 class TestExchangePhase:
@@ -585,8 +648,9 @@ class TestRoundValidation:
             Card(id="D2-diamonds-2", suit=Suit.DIAMONDS, rank=Rank.TWO,
                  is_joker=False, is_big_joker=False, points=0, deck=2),
         ]
-        with pytest.raises(ValueError, match="phase"):
-            stir(state, cards=cards)
+        result = stir(state, cards=cards)
+        assert isinstance(result, Rejected)
+        assert "不能" in result.reason
 
 
 class TestRoundFullFlow:

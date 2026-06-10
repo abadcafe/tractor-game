@@ -57,20 +57,20 @@ async def test_run_transitions_to_deal_bid():
 
 @pytest.mark.asyncio
 async def test_act_rejects_wrong_player():
-    """PlayAction during DEAL_BID should raise ValueError from sm."""
+    """PlayAction during DEAL_BID should be rejected without raising."""
     game = _create_game_with_auto_players()
     await game.run()
-    with pytest.raises(ValueError):
-        await game.act(player_index=0, action=PlayAction(cards=[]))
+    # Should not raise; rejection is communicated via send_error instead
+    await game.act(player_index=0, action=PlayAction(cards=[]))
 
 
 @pytest.mark.asyncio
-async def test_act_value_error_propagated():
-    """ValueError from sm should propagate through act()."""
+async def test_act_value_error_not_propagated():
+    """Invalid actions no longer raise ValueError; they send error messages."""
     game = _create_game_with_auto_players()
     await game.run()
-    with pytest.raises(ValueError):
-        await game.act(player_index=0, action=PlayAction(cards=[]))
+    # Should not raise
+    await game.act(player_index=0, action=PlayAction(cards=[]))
 
 
 # ---- snapshot() ----
@@ -279,10 +279,8 @@ async def test_act_bid_during_dealing_converts_to_bid_event():
         trump_cards = [c for c in snap.player_hand if c.rank == snap.trump_rank]
         if trump_cards:
             action = BidAction(cards=trump_cards[:1], count=1)
-            try:
-                await game.act(player_index=0, action=action)
-            except ValueError:
-                pass  # bid may be rejected for various reasons, that's fine
+            # Bid may be rejected (e.g. priority too low), but act() never raises
+            await game.act(player_index=0, action=action)
 
 
 @pytest.mark.asyncio
@@ -299,12 +297,12 @@ async def test_act_skip_stir_during_stirring():
 
 
 @pytest.mark.asyncio
-async def test_act_next_round_transitions():
-    """NextRoundAction during non-COMPLETE phase should raise ValueError."""
+async def test_act_next_round_during_non_complete():
+    """NextRoundAction during non-COMPLETE phase should be rejected without raising."""
     game = _create_game_with_auto_players()
     await game.run()
-    with pytest.raises(ValueError):
-        await game.act(player_index=0, action=NextRoundAction())
+    # Should not raise; rejection is communicated via send_error instead
+    await game.act(player_index=0, action=NextRoundAction())
 
 
 # ---- get_phase() GAME_OVER priority ----
@@ -401,7 +399,9 @@ async def test_set_on_game_over_callback_fires_on_game_over():
     # it to game_sm.process_round_result.
     with patch.object(rm, "get_round_result", return_value=mock_result):
         with patch.object(gm, "process_round_result", return_value=game_over_state):
-            await game.act(player_index=0, action=NextRoundAction())
+            # COMPLETE phase now requires all 4 players to confirm
+            for p in range(4):
+                await game.act(player_index=p, action=NextRoundAction())
 
     # Game must have transitioned to GAME_OVER
     assert game.is_over()
@@ -583,11 +583,7 @@ async def test_bid_during_deal_bid_does_not_push_state_to_all():
     action = BidAction(cards=trump_cards[:1], count=1)
 
     with patch.object(game, "_push_state_to_all", wraps=game._push_state_to_all) as mock_push:
-        try:
-            await game.act(player_index=0, action=action)
-        except ValueError:
-            pass  # bid may be rejected for various reasons, that's fine
-
+        await game.act(player_index=0, action=action)
         # _push_state_to_all must NOT have been called
         mock_push.assert_not_called()
 
