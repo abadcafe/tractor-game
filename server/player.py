@@ -128,18 +128,94 @@ class AutoPlayer(Player):
             await self._handle_next_round(snapshot, game)
 
     async def _handle_deal_bid(self, snapshot: Any, game: Any) -> None:
-        """Randomly decide whether to bid during DEAL_BID phase.
+        """Bid during DEAL_BID phase if we have a competitive bid.
 
-        During DEAL_BID, all players may bid regardless of current_player.
+        Only bids if: (a) no bid_winner yet, or (b) we can beat the
+        current winner.  Prefers pairs over singles to avoid the noise
+        of guaranteed-losing single-card bids after a pair has won.
+        A 50% random factor prevents always-bidding determinism.
         """
         hand = snapshot.player_hand
         trump_rank = snapshot.trump_rank
-        trump_cards = [c for c in hand if getattr(c, "rank", None) == trump_rank]
-        if trump_cards and random.random() < 0.5:
-            card = random.choice(trump_cards)
-            action = BidAction(cards=[card], count=1)
-            task = asyncio.create_task(game.act(self.index, action))
-            task.add_done_callback(_log_task_exception)
+
+        # 50% chance to even consider bidding (prevents deterministic always-bid)
+        if random.random() >= 0.5:
+            return
+
+        # Group trump-rank cards by suit
+        suit_groups: dict[Any, list] = {}
+        jokers: list = []
+        for c in hand:
+            if getattr(c, "rank", None) != trump_rank and not getattr(c, "is_joker", False):
+                continue
+            if getattr(c, "is_joker", False):
+                jokers.append(c)
+            else:
+                suit_groups.setdefault(c.suit, []).append(c)
+
+        # Best possible bid: prefer joker pair > trump-rank pair > trump-rank single
+        best_cards: list = []
+        best_count = 0
+        best_suit = None
+        best_kind = ""  # "joker" or "trump_rank"
+
+        # Check joker pairs (requires 2 of same rank)
+        sj = [c for c in jokers if getattr(c, "rank", None) == "SJ"]
+        bj = [c for c in jokers if getattr(c, "rank", None) == "BJ"]
+        if len(bj) >= 2:
+            best_cards = bj[:2]
+            best_count = 2
+            best_kind = "joker"
+        elif len(sj) >= 2:
+            best_cards = sj[:2]
+            best_count = 2
+            best_kind = "joker"
+
+        # Check trump-rank pairs (any suit)
+        if not best_cards:
+            for suit, cards in suit_groups.items():
+                if len(cards) >= 2:
+                    best_cards = cards[:2]
+                    best_count = 2
+                    best_suit = suit
+                    best_kind = "trump_rank"
+                    break
+
+        # Fall back to single trump-rank card
+        if not best_cards:
+            for suit, cards in suit_groups.items():
+                if cards:
+                    best_cards = [cards[0]]
+                    best_count = 1
+                    best_suit = suit
+                    best_kind = "trump_rank"
+                    break
+
+        if not best_cards:
+            return
+
+        # Check if existing bid_winner would block us
+        bid_winner = snapshot.bid_winner
+        if bid_winner is not None:
+            winner_count = getattr(bid_winner, "count", 0)
+            winner_kind = getattr(bid_winner, "kind", "")
+            # Joker pair always beats trump-rank pair; same-kind needs higher count
+            if winner_kind == "joker" and best_kind != "joker":
+                return  # can't beat joker pair with trump-rank
+            if winner_kind == "joker" and best_kind == "joker":
+                # Both joker pairs: must be bigger joker
+                winner_joker = getattr(bid_winner, "joker_type", "")
+                if winner_joker == "big":
+                    return  # big joker pair is unbeatable
+                # winner has small joker, we need big joker
+                if len(bj) < 2:
+                    return
+            if winner_count >= best_count and winner_kind == best_kind:
+                return  # same kind, count not higher
+
+        action = BidAction(cards=best_cards, count=best_count)
+        task = asyncio.create_task(game.act(self.index, action))
+        task.add_done_callback(_log_task_exception)
 
     async def _handle_stir(self, snapshot: Any, game: Any) -> None:
         """Act during STIRRING phase."""
