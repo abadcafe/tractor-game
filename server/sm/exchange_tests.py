@@ -1,7 +1,6 @@
 """Tests for sm.exchange module."""
 from typing import Literal
 
-import pytest
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.exchange import (
     ExchangeInput, ExchangeResult,

@@ -2,13 +2,11 @@
 from typing import Literal
 
 from server.sm.card_model import Card, Suit, Rank
-from server.sm.types import SubPlay
 from server.sm.play_rules import (
     detect_throws,
     get_legal_plays, decompose, is_legal_lead,
     is_legal_follow, can_win, compare_plays,
 )
-from server.sm.comparator import effective_suit
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
@@ -584,10 +582,6 @@ class TestIsLegalFollow:
 
     def test_is_legal_follow_no_pairs_in_hand_tractor(self) -> None:
         """No pairs at all in lead suit when following a tractor: play any N cards."""
-        hand = [
-            _card(Suit.HEARTS, Rank.ACE), _card(Suit.HEARTS, Rank.KING),
-            _card(Suit.HEARTS, Rank.QUEEN),
-        ]
         lead = [
             _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
             _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2),

@@ -95,7 +95,7 @@ def detect_throws(
     groups = _group_cards_by_effective_suit(hand, trump_suit, trump_rank)
 
     result: list[list[Card]] = []
-    for eff_suit, cards in groups.items():
+    for _eff_suit, cards in groups.items():
         # A throw requires 2+ cards in the same effective suit
         if len(cards) < 2:
             continue
@@ -150,7 +150,7 @@ def _leading_plays(
     # Group by effective suit
     groups = _group_cards_by_effective_suit(hand, trump_suit, trump_rank)
 
-    for eff_suit, cards in groups.items():
+    for _eff_suit, cards in groups.items():
         subs = decompose(cards, trump_suit, trump_rank)
         # Emit each SubPlay as an option
         for sub in subs:
@@ -243,15 +243,15 @@ def _enumerate_follow_branches(
     for combo in extraction_combos:
         # Build a list of "options" for each active extraction in the combo.
         # Each option is a list of cards extracted from that sub-play.
-        extraction_options: list[list[Card]] = []
+        extraction_options: list[list[list[Card]]] = []
         for sub, extracted in combo:
             if extracted == 0:
                 continue
             if sub.pair_count == 0 and extracted == 1:
-                # Single: just the one card
+                # Single: one option containing the one card
                 extraction_options.append([list(sub.cards)])
             elif sub.pair_count == 1 and extracted == 1:
-                # Pair: single fixed extraction
+                # Pair: one option containing the pair
                 extraction_options.append([list(sub.cards)])
             elif sub.pair_count >= 2:
                 # Tractor: multiple valid starting positions
@@ -528,22 +528,25 @@ def decompose(
             rank_groups.setdefault(c.rank, []).append(c)
 
         # Create a flat list of pair entries, each owning a distinct pair of cards.
-        pair_entries: list[tuple[Rank, list[Card]]] = []
+        pair_entries: list[tuple[tuple[Rank, Suit], list[Card]]] = []
         single_cards: list[Card] = []
         for rank, rank_cards in rank_groups.items():
             n_pairs = len(rank_cards) // 2
             remainder = len(rank_cards) % 2
             for i in range(n_pairs):
-                pair_entries.append((rank, rank_cards[i * 2 : i * 2 + 2]))
+                pair_entries.append(((rank, rank_cards[0].suit), rank_cards[i * 2 : i * 2 + 2]))
             if remainder == 1:
                 single_cards.append(rank_cards[-1])
 
-        pair_entries.sort(key=lambda e: _non_trump_rank_order(e[0], trump_rank))
+        pair_entries.sort(key=lambda e: _non_trump_rank_order(e[0][0], trump_rank))
 
         # Adjacency for non-trump: consecutive rank order
-        def _are_adjacent_nt(e1: tuple[Rank, list[Card]], e2: tuple[Rank, list[Card]]) -> bool:
-            o1 = _non_trump_rank_order(e1[0], trump_rank)
-            o2 = _non_trump_rank_order(e2[0], trump_rank)
+        def _are_adjacent_nt(
+            e1: tuple[tuple[Rank, Suit], list[Card]],
+            e2: tuple[tuple[Rank, Suit], list[Card]],
+        ) -> bool:
+            o1 = _non_trump_rank_order(e1[0][0], trump_rank)
+            o2 = _non_trump_rank_order(e2[0][0], trump_rank)
             return abs(o1 - o2) == 1
 
         # Find runs (indices into pair_entries)
@@ -578,7 +581,7 @@ def decompose(
                 tractor_cards.extend(pair_entries[idx][1])
             result.append(SubPlay(pair_count=len(run), cards=tractor_cards, suit=eff_suit))
 
-        for idx, (rank, pair_cards) in enumerate(pair_entries):
+        for idx, ((_rank, _suit), pair_cards) in enumerate(pair_entries):
             if idx in used_indices:
                 continue
             result.append(SubPlay(pair_count=1, cards=pair_cards, suit=eff_suit))
@@ -648,9 +651,6 @@ def _compare_same_suit(
     # Same max level: compare max rank of the highest-level sub-plays
     a_high_subs = [s for s in a_subs if s.sub_level == a_max_level]
     b_high_subs = [s for s in b_subs if s.sub_level == b_max_level]
-
-    a_eff_suit = a_high_subs[0].suit
-    b_eff_suit = b_high_subs[0].suit
 
     # Get the max rank order across all highest-level sub-plays
     if is_trump:

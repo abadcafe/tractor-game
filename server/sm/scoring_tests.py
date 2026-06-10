@@ -4,7 +4,7 @@ from typing import Literal
 import pytest
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.types import CompletedTrick, CompletedTrickSlot
-from server.sm.scoring import calculate_score, _compute_ambush_multiplier
+from server.sm.scoring import calculate_score, compute_ambush_multiplier
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
@@ -55,7 +55,7 @@ def _completed_trick(
         # Non-trump ordering: THREE=1, FOUR=2, FIVE=3, SIX=4, SEVEN=5, EIGHT=6, ...
         tractor_ranks = [Rank.THREE, Rank.FOUR, Rank.FIVE, Rank.SIX,
                          Rank.SEVEN, Rank.EIGHT, Rank.NINE, Rank.TEN]
-        cards = []
+        cards: list[Card] = []
         for r in tractor_ranks:
             if len(cards) >= card_count:
                 break
@@ -573,7 +573,7 @@ class TestAmbushMultiplierDecompose:
             winner=0,
             points=10,
         )
-        multiplier = _compute_ambush_multiplier(trick, Suit.SPADES, Rank.TWO)
+        multiplier = compute_ambush_multiplier(trick, Suit.SPADES, Rank.TWO)
         assert multiplier == 2
 
     def test_ambush_multiplier_pair(self) -> None:
@@ -589,7 +589,7 @@ class TestAmbushMultiplierDecompose:
             winner=0,
             points=20,
         )
-        multiplier = _compute_ambush_multiplier(trick, Suit.SPADES, Rank.TWO)
+        multiplier = compute_ambush_multiplier(trick, Suit.SPADES, Rank.TWO)
         assert multiplier == 4
 
     def test_ambush_multiplier_tractor_2_pairs(self) -> None:
@@ -617,7 +617,7 @@ class TestAmbushMultiplierDecompose:
             winner=0,
             points=30,
         )
-        multiplier = _compute_ambush_multiplier(trick, Suit.SPADES, Rank.TWO)
+        multiplier = compute_ambush_multiplier(trick, Suit.SPADES, Rank.TWO)
         assert multiplier == 16  # 2^4
 
     def test_ambush_multiplier_throw_tractor_plus_singles(self) -> None:
@@ -652,5 +652,5 @@ class TestAmbushMultiplierDecompose:
             winner=0,
             points=35,
         )
-        multiplier = _compute_ambush_multiplier(trick, Suit.SPADES, Rank.TWO)
+        multiplier = compute_ambush_multiplier(trick, Suit.SPADES, Rank.TWO)
         assert multiplier == 16  # max(2^4, 2) = 16

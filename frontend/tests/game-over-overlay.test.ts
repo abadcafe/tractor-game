@@ -33,6 +33,8 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     winning_team: 0,
     team0_level: "A",
     team1_level: "5",
+    player_hand_counts: [13, 13, 13, 13],
+    next_round_confirmed: [],
     ...overrides,
   };
 }
