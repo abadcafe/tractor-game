@@ -234,7 +234,7 @@ class Game:
             await self._push_state_to_all()
 
         elif phase == "PLAYING" and isinstance(action, PlayAction):
-            self._round_state = round_sm.play(self._round_state, action.cards)
+            self._round_state = round_sm.play(self._round_state, player_index, action.cards)
             await self._push_state_to_all()
 
         elif phase == "COMPLETE" and isinstance(action, NextRoundAction):

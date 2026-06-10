@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.comparator import effective_suit
 from server.sm.constants import next_player_ccw, get_team_index
-from server.sm.play_rules import is_legal_follow, compare_plays
+from server.sm.play_rules import is_legal_follow, is_legal_lead, compare_plays
 from server.sm.types import CompletedTrick, CompletedTrickSlot
 
 
@@ -109,6 +109,15 @@ def play(state: TrickState, player: int, cards: list[Card]) -> TrickState:
     hand_ids = {c.id for c in hand}
     if not played_ids.issubset(hand_ids):
         raise ValueError("Cards not in player's hand")
+
+    # Validate lead legality
+    if state.phase == "LEADING":
+        other_hands: list[Card] = []
+        for i in range(4):
+            if i != player:
+                other_hands.extend(state.hands[i])
+        if not is_legal_lead(hand, cards, state.trump_suit, state.trump_rank, other_hands):
+            raise ValueError("Illegal lead: cards do not form a valid play")
 
     # Validate follow-suit if following
     if state.phase == "FOLLOWING":

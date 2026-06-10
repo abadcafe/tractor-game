@@ -255,11 +255,12 @@ def discard(state: RoundState, cards: list[Card]) -> RoundState:
     return state.model_copy(update={"exchange_state": new_exc})
 
 
-def play(state: RoundState, cards: list[Card]) -> RoundState:
+def play(state: RoundState, player_index: int, cards: list[Card]) -> RoundState:
     """Play cards during PLAYING phase.
 
-    Delegates to trick.play. When trick resolves, records result and
-    starts next trick. After 25 tricks, transitions to SCORING -> COMPLETE.
+    Validates that player_index matches the current player, then delegates
+    to trick.play. When trick resolves, records result and starts next trick.
+    After 25 tricks, transitions to SCORING -> COMPLETE.
     """
     if state.phase != "PLAYING":
         raise ValueError(
@@ -269,6 +270,11 @@ def play(state: RoundState, cards: list[Card]) -> RoundState:
         raise ValueError("trick_state is None")
 
     cur = state.trick_state.cur
+    if player_index != cur:
+        raise ValueError(
+            f"Not player {player_index}'s turn; expected player {cur}"
+        )
+
     new_trick = trick_mod.play(state.trick_state, cur, cards)
 
     # Sync hands from trick to round state

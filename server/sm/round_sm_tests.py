@@ -46,7 +46,7 @@ def _play_first_legal(state: RoundState) -> RoundState:
         other_hands=[],
     )
     assert len(legal_plays) > 0, f"No legal plays for player {cur}"
-    return play(state, cards=legal_plays[0])
+    return play(state, player_index=cur, cards=legal_plays[0])
 
 
 def _deal_all_cards(state: RoundState) -> RoundState:
