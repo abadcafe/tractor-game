@@ -16,6 +16,13 @@ export function validatePlay(
   const selectedIds = new Set(selectedCards.map((c) => c.id));
   for (const cards of legalActions) {
     const actionIds = new Set(cards.map((c) => c.id));
+    // Require exact match (same size + all selected IDs in action).
+    // Subset match would let the player accidentally send extra cards
+    // (e.g. clicking 1 card that's part of a 2-card pair),
+    // causing hand-size imbalance that eventually deadlocks the game.
+    if (selectedIds.size !== actionIds.size) {
+      continue;
+    }
     if ([...selectedIds].every((id) => actionIds.has(id))) {
       return cards;
     }

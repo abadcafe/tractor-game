@@ -100,30 +100,6 @@ def play(state: TrickState, player: int, cards: list[Card]) -> TrickState:
 
     hand = state.hands[player]
 
-    # Auto-pass if player has no cards (prevents deadlock at end of round)
-    if not hand:
-        new_slots = list(state.slots)
-        new_slots[player] = CompletedTrickSlot(player=player, cards=[])
-        new_played = state.played + 1
-        new_cur = next_player_ccw(player)
-        new_phase = state.phase if state.played > 0 else "FOLLOWING"
-        new_state = TrickState(
-            phase=new_phase,
-            lead_player=state.lead_player,
-            slots=new_slots,
-            played=new_played,
-            cur=new_cur,
-            trump_suit=state.trump_suit,
-            trump_rank=state.trump_rank,
-            defender_points=state.defender_points,
-            declarer_team=state.declarer_team,
-            hands=[list(h) for h in state.hands],
-            result=state.result,
-        )
-        if new_played == 4:
-            return _resolve(new_state)
-        return new_state
-
     # Validate at least one card is being played
     if not cards:
         raise ValueError("Must play at least one card")

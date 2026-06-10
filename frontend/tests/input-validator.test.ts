@@ -23,10 +23,16 @@ Deno.test("test_validatePlay_matching_single", () => {
 });
 
 Deno.test("test_validatePlay_matching_pair", () => {
-  const legal: Card[][] = [[H5, makeCard("D2-hearts-5", "hearts", "5")]];
+  const pairCard = makeCard("D2-hearts-5", "hearts", "5");
+  const legal: Card[][] = [[H5, pairCard]];
+  // Selecting only 1 card of a 2-card pair should NOT match
+  // (exact-size match required to prevent hand imbalance).
   const result = validatePlay([H5], legal);
-  // selected card IDs match one of the legal options' card IDs
-  assertEquals(result !== null, true);
+  assertEquals(result, null);
+  // Selecting both cards should match
+  const result2 = validatePlay([H5, pairCard], legal);
+  assertEquals(result2 !== null, true);
+  assertEquals(result2!.length, 2);
 });
 
 Deno.test("test_validatePlay_no_match", () => {
