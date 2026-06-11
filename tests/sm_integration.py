@@ -5,6 +5,7 @@ using actual state machine operations (deal_next_card, reveal, stir,
 pass_stir, discard, play) -- NOT manually constructed result objects.
 """
 from server.sm.card_model import Card, Suit, Rank
+from server.sm.result import Ok, Rejected
 from server.sm.types import (
     BidEvent, CompletedTrick, CompletedTrickSlot,
 )
@@ -17,7 +18,19 @@ from server.sm.round_sm import (
     play as rn_play, is_round_complete, get_round_result, RoundInput,
     RoundState,
 )
-from server.sm.game_sm import create_game, start_game, process_round_result
+from server.sm.game_sm import create_game, start_game, process_round_result, GameState
+
+
+def _unwrap(result: Ok[RoundState] | Rejected) -> RoundState:
+    """Unwrap a StateResult[RoundState], asserting Ok."""
+    assert isinstance(result, Ok), f"Expected Ok, got Rejected: {result.reason}"
+    return result.value
+
+
+def _unwrap_game(result: Ok[GameState] | Rejected) -> GameState:
+    """Unwrap a StateResult[GameState], asserting Ok."""
+    assert isinstance(result, Ok), f"Expected Ok, got Rejected: {result.reason}"
+    return result.value
 
 
 def _play_first_legal(round_state: RoundState) -> RoundState:
@@ -52,7 +65,7 @@ def _play_first_legal(round_state: RoundState) -> RoundState:
         other_hands=[],
     )
     assert len(legal_plays) > 0, f"No legal plays for player {cur}"
-    return rn_play(round_state, cards=legal_plays[0])
+    return _unwrap(rn_play(round_state, player_index=cur, cards=legal_plays[0]))
 
 
 def _complete_round_no_bid(round_state: RoundState) -> RoundState:
@@ -61,18 +74,18 @@ def _complete_round_no_bid(round_state: RoundState) -> RoundState:
     while round_state.phase == "DEAL_BID":
         if round_state.deal_bid_state is None or round_state.deal_bid_state.phase != "DEALING":
             break
-        round_state = rn_deal(round_state)
+        round_state = _unwrap(rn_deal(round_state))
 
     # Stirring: all pass
     for _ in range(4):
         if round_state.phase != "STIRRING":
             break
-        round_state = rn_pass(round_state)
+        round_state = _unwrap(rn_pass(round_state))
 
     # Exchange: discard the original bottom cards
     if round_state.phase == "EXCHANGE" and round_state.exchange_state is not None:
         discards = round_state.exchange_state.hand_after_pickup[:round_state.exchange_state.count]
-        round_state = rn_discard(round_state, discards)
+        round_state = _unwrap(rn_discard(round_state, discards))
 
     # Playing: play tricks using legal plays
     # With multi-card plays, players may run out of cards before 25 tricks.
@@ -131,7 +144,7 @@ class TestE2EFullRound:
         while round_state.phase == "DEAL_BID":
             if round_state.deal_bid_state is None or round_state.deal_bid_state.phase != "DEALING":
                 break
-            round_state = rn_deal(round_state)
+            round_state = _unwrap(rn_deal(round_state))
 
         assert round_state.phase == "STIRRING"
         assert round_state.trump_suit is None  # empty trump
@@ -147,7 +160,7 @@ class TestE2EFullRound:
         for _ in range(20):
             if round_state.deal_bid_state is None or round_state.deal_bid_state.phase != "DEALING":
                 break
-            round_state = rn_deal(round_state)
+            round_state = _unwrap(rn_deal(round_state))
 
         # Find and reveal a trump rank card
         for p in range(4):
@@ -160,14 +173,14 @@ class TestE2EFullRound:
                     player=p, cards=[trump_cards[0]], kind="trump_rank",
                     suit=trump_cards[0].suit, joker_type=None, count=1,
                 )
-                round_state = rn_reveal(round_state, event)
+                round_state = _unwrap(rn_reveal(round_state, event))
                 break
 
         # Deal remaining
         while round_state.phase == "DEAL_BID":
             if round_state.deal_bid_state is None or round_state.deal_bid_state.phase != "DEALING":
                 break
-            round_state = rn_deal(round_state)
+            round_state = _unwrap(rn_deal(round_state))
 
         # If deal-bid completed with a winner, we should be in STIRRING
         if round_state.deal_bid_state is not None and round_state.deal_bid_state.bid_winner is not None:
@@ -185,17 +198,17 @@ class TestE2EFullRound:
         while round_state.phase == "DEAL_BID":
             if round_state.deal_bid_state is None or round_state.deal_bid_state.phase != "DEALING":
                 break
-            round_state = rn_deal(round_state)
+            round_state = _unwrap(rn_deal(round_state))
         for _ in range(4):
             if round_state.phase != "STIRRING":
                 break
-            round_state = rn_pass(round_state)
+            round_state = _unwrap(rn_pass(round_state))
 
         assert round_state.phase == "EXCHANGE"
         assert round_state.exchange_state is not None
         # Discard cards using the dynamic count from exchange state
         discards = round_state.exchange_state.hand_after_pickup[:round_state.exchange_state.count]
-        round_state = rn_discard(round_state, discards)
+        round_state = _unwrap(rn_discard(round_state, discards))
         assert round_state.phase == "PLAYING"
         assert round_state.trick_state is not None
 
@@ -204,9 +217,9 @@ class TestE2EMultipleRounds:
     def test_e2e_multiple_rounds_game_flow(self) -> None:
         """Drive multiple rounds through the game state machine using real round results."""
         game = create_game()
-        game = start_game(game)
+        game = _unwrap_game(start_game(game))
 
-        for i in range(6):
+        for _ in range(6):
             if game.phase == "GAME_OVER":
                 break
 
@@ -223,7 +236,7 @@ class TestE2EMultipleRounds:
             if is_round_complete(round_state):
                 result = get_round_result(round_state)
                 assert result is not None
-                game = process_round_result(game, result)
+                game = _unwrap_game(process_round_result(game, result))
             else:
                 # Round didn't complete cleanly, skip
                 break
@@ -234,11 +247,11 @@ class TestE2EMultipleRounds:
     def test_e2e_full_game_declarer_wins_fast(self) -> None:
         """Fast game: use real RoundResults from completed rounds to drive game_sm."""
         game = create_game()
-        game = start_game(game)
+        game = _unwrap_game(start_game(game))
 
         # Run actual rounds until game ends (could be many)
         max_rounds = 20
-        for i in range(max_rounds):
+        for _ in range(max_rounds):
             if game.phase == "GAME_OVER":
                 break
 
@@ -254,7 +267,7 @@ class TestE2EMultipleRounds:
             if is_round_complete(round_state):
                 result = get_round_result(round_state)
                 assert result is not None
-                game = process_round_result(game, result)
+                game = _unwrap_game(process_round_result(game, result))
             else:
                 break
 

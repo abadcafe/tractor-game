@@ -1,12 +1,11 @@
 """Tests for server/game_registry.py -- in-memory game registry with timeout cleanup."""
 
-import time
 from unittest.mock import MagicMock
 
 from server.game_registry import GameRegistry
 
 
-def _make_game(phase="IN_PROGRESS"):
+def _make_game(phase: str = "IN_PROGRESS") -> MagicMock:
     """Create a mock Game object for testing."""
     game = MagicMock()
     game.get_phase.return_value = phase

@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict
 from server.sm.card_model import Card, Rank, Suit
 from server.sm.comparator import bid_value
 from server.sm.constants import get_team_index, next_player_ccw
+from server.sm.result import Ok, Rejected, StateResult
 from server.sm.types import BidEvent
 
 
@@ -80,21 +81,22 @@ def create_deal_bid(input: DealBidInput) -> DealBidState:
     )
 
 
-def deal_next_card(state: DealBidState) -> DealBidState:
+def deal_next_card(state: DealBidState) -> StateResult[DealBidState]:
     """Deal the next card from the deck to the current target player.
-
-    Preconditions: state.phase == "DEALING" and deal_cursor < 100.
 
     After dealing, if all 100 cards have been dealt:
       - If bid_winner is set: phase transitions to COMPLETE
       - If no bid_winner: phase transitions to NO_BID
+
+    Returns Ok(new_state) on success, Rejected(reason) if not in DEALING phase
+    or all cards have already been dealt.
     """
     if state.phase != "DEALING":
-        return state
+        return Rejected(f"发牌只能在发牌阶段进行，当前阶段：{state.phase}")
 
     cursor = state.deal_cursor
     if cursor >= 100:
-        return state
+        return Rejected("所有牌已发完")
 
     card = state.deck[cursor]
     target = state.deal_target
@@ -115,36 +117,35 @@ def deal_next_card(state: DealBidState) -> DealBidState:
     else:
         new_phase = "DEALING"
 
-    return state.model_copy(update={
+    return Ok(state.model_copy(update={
         "phase": new_phase,
         "deal_cursor": new_cursor,
         "deal_target": new_target,
         "players_hand": new_hands,
-    })
+    }))
 
 
-def reveal(state: DealBidState, event: BidEvent) -> DealBidState:
+def reveal(state: DealBidState, event: BidEvent) -> StateResult[DealBidState]:
     """Process a reveal (bid) event from a player.
 
     Validates the bid per spec section 5 and updates the bid_winner
     if the new bid has strictly higher value.
 
-    Returns the updated state; if the bid is invalid, returns the
-    original state unchanged.
+    Returns Ok(new_state) on success, Rejected(reason) on invalid input.
     """
     # Precondition 0: player index must be valid
     if event.player < 0 or event.player >= 4:
-        return state
+        return Rejected(f"玩家索引无效：{event.player}")
 
     # Precondition 1: must be in DEALING phase
     if state.phase != "DEALING":
-        return state
+        return Rejected(f"叫牌只能在发牌阶段进行，当前阶段：{state.phase}")
 
     # Precondition 6: subsequent rounds - only declarer team can reveal
     if state.declarer_team is not None:
         player_team = get_team_index(event.player)
         if player_team != state.declarer_team:
-            return state
+            return Rejected("非庄家方不能叫牌")
 
     player_idx = event.player
     hand = state.players_hand[player_idx]
@@ -153,53 +154,55 @@ def reveal(state: DealBidState, event: BidEvent) -> DealBidState:
     hand_ids = {c.id for c in hand}
     for card in event.cards:
         if card.id not in hand_ids:
-            return state
+            return Rejected(f"牌 {card.id} 不在手牌中")
 
     # Precondition 4a: cards must be distinct physical cards (no duplicate IDs)
     if len(set(c.id for c in event.cards)) != len(event.cards):
-        return state
+        return Rejected("牌张重复，不能使用同一张牌两次")
 
     # Precondition 2 & 3: validate card types
     if event.kind == "trump_rank":
+        if event.suit is None:
+            return Rejected("主牌叫牌必须指定花色")
         # Each card must be trump_rank and same suit
         for card in event.cards:
             if card.rank != state.trump_rank:
-                return state
+                return Rejected(f"牌 {card.id} 不是主牌等级 {state.trump_rank.value}")
             if card.suit != event.suit:
-                return state
+                return Rejected(f"牌花色 {card.suit.value} 与声明花色 {event.suit.value} 不一致")
         if event.count not in (1, 2):
-            return state
+            return Rejected(f"叫牌数量必须为1或2，实际 {event.count}")
         if len(event.cards) != event.count:
-            return state
+            return Rejected(f"牌张数量 {len(event.cards)} 与声明数量 {event.count} 不一致")
     elif event.kind == "joker":
         # Must be a pair of jokers (same type), single joker rejected
         if event.count != 2:
-            return state
+            return Rejected("王叫牌必须出对子")
         if len(event.cards) != 2:
-            return state
+            return Rejected(f"王叫牌必须出2张，实际 {len(event.cards)} 张")
         for card in event.cards:
             if not card.is_joker:
-                return state
+                return Rejected(f"牌 {card.id} 不是王")
         # Both must be same joker type
         if event.cards[0].rank != event.cards[1].rank:
-            return state
+            return Rejected("两种王不能配对")
         if event.suit is not None:
-            return state
+            return Rejected("王叫牌不能指定花色")
 
     # Precondition 5: if bid_winner exists, new bid value must be strictly greater
     new_value = bid_value(event.cards, state.trump_rank)
     if new_value == 0:
-        return state  # Invalid bid
+        return Rejected("叫牌无效：牌张价值为零")
 
     if state.bid_winner is not None:
         current_value = bid_value(state.bid_winner.cards, state.trump_rank)
         if new_value <= current_value:
-            return state  # Not strictly greater
+            return Rejected("叫牌优先级不足")
 
     # Valid bid: update state
     new_bid_events = state.bid_events + [event]
 
-    return state.model_copy(update={
+    return Ok(state.model_copy(update={
         "bid_winner": event,
         "bid_events": new_bid_events,
-    })
+    }))

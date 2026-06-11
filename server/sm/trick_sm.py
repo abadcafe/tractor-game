@@ -46,7 +46,7 @@ class TrickResult(BaseModel):
 class TrickState(BaseModel):
     """State of a trick in progress."""
 
-    model_config = ConfigDict(frozen=False)
+    model_config = ConfigDict(frozen=True)
 
     phase: Literal["LEADING", "FOLLOWING", "RESOLVED"]
     lead_player: int

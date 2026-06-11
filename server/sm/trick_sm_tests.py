@@ -1,8 +1,8 @@
-"""Tests for sm.trick module."""
+"""Tests for sm.trick_sm module."""
 from typing import Literal
 
 from server.sm.card_model import Card, Suit, Rank
-from server.sm.trick import (
+from server.sm.trick_sm import (
     TrickState, TrickInput, TrickResult,
     create_trick, play,
 )

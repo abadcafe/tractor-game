@@ -1,48 +1,92 @@
 """Tests for server/player.py -- Player, AutoPlayer, HumanPlayer, PlayerAction types."""
 
 import asyncio
+from typing import Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from server.player import (
-    AutoPlayer, HumanPlayer,
+from server.actions import (
     BidAction, StirAction, SkipStirAction,
     DiscardAction, PlayAction, NextRoundAction,
 )
+from server.player import AutoPlayer, HumanPlayer
+from server.snapshot import (
+    ExchangeStateSnapshot, ScoringSnapshot,
+    StateSnapshot, StirringStateSnapshot, TrickSnapshot,
+)
+from server.sm.card_model import Card, Suit, Rank
+from server.sm.types import BidEvent, CompletedTrick
+
+
+def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1, suffix: str = "") -> Card:
+    """Create a real Card for testing."""
+    return Card(
+        id=f"D{deck}-{suit.value}-{rank.value}{suffix}",
+        suit=suit,
+        rank=rank,
+        is_joker=(suit == Suit.JOKER),
+        is_big_joker=(rank == Rank.BIG_JOKER),
+        points=0,
+        deck=deck,
+    )
 
 
 def _make_snapshot(
-    phase="PLAYING",
-    awaiting_action="play",
-    current_player=0,
-    legal_actions=None,
-    trump_rank="2",
-    player_hand=None,
-):
-    """Create a mock StateSnapshot."""
-    snap = MagicMock()
-    snap.phase = phase
-    snap.awaiting_action = awaiting_action
-    snap.current_player = current_player
-    snap.legal_actions = legal_actions or []
-    snap.trump_rank = trump_rank
-    snap.player_hand = player_hand if player_hand is not None else []
-    snap.exchange_state = None
-    snap.stirring_state = None
-    snap.scoring = None
-    snap.trick = None
-    snap.trick_history = []
-    snap.bid_events = []
-    snap.winning_team = None
-    snap.declarer_team = None
-    snap.declarer_player = None
-    snap.defender_points = 0
-    snap.trump_suit = None
-    return snap
+    *,
+    phase: str = "PLAYING",
+    awaiting_action: str | None = "play",
+    current_player: int = 0,
+    legal_actions: list[list[Card]] | None = None,
+    trump_rank: Rank = Rank.TWO,
+    trump_suit: Suit | None = None,
+    player_hand: list[Card] | None = None,
+    player_hand_counts: list[int] | None = None,
+    bottom_cards: list[Card] | None = None,
+    declarer_team: int | None = None,
+    declarer_player: int | None = None,
+    defender_points: int = 0,
+    trick: TrickSnapshot | None = None,
+    trick_history: list[CompletedTrick] | None = None,
+    bid_events: list[BidEvent] | None = None,
+    bid_winner: BidEvent | None = None,
+    stirring_state: StirringStateSnapshot | None = None,
+    exchange_state: ExchangeStateSnapshot | None = None,
+    scoring: ScoringSnapshot | None = None,
+    winning_team: int | None = None,
+    team0_level: Rank = Rank.TWO,
+    team1_level: Rank = Rank.TWO,
+    next_round_confirmed: list[int] | None = None,
+) -> StateSnapshot:
+    """Create a real StateSnapshot with sensible defaults."""
+    return StateSnapshot(
+        phase=phase,
+        awaiting_action=awaiting_action,
+        current_player=current_player,
+        legal_actions=legal_actions if legal_actions is not None else [],
+        trump_rank=trump_rank,
+        trump_suit=trump_suit,
+        player_hand=player_hand if player_hand is not None else [],
+        player_hand_counts=player_hand_counts if player_hand_counts is not None else [0, 0, 0, 0],
+        bottom_cards=bottom_cards if bottom_cards is not None else [],
+        declarer_team=declarer_team,
+        declarer_player=declarer_player,
+        defender_points=defender_points,
+        trick=trick,
+        trick_history=trick_history if trick_history is not None else [],
+        bid_events=bid_events if bid_events is not None else [],
+        bid_winner=bid_winner,
+        stirring_state=stirring_state,
+        exchange_state=exchange_state,
+        scoring=scoring,
+        winning_team=winning_team,
+        team0_level=team0_level,
+        team1_level=team1_level,
+        next_round_confirmed=next_round_confirmed if next_round_confirmed is not None else [],
+    )
 
 
-def _make_game(snapshot=None):
+def _make_game(snapshot: StateSnapshot | None = None) -> MagicMock:
     """Create a mock Game that returns the given snapshot."""
     game = MagicMock()
     game.snapshot = MagicMock(return_value=snapshot or _make_snapshot())
@@ -50,23 +94,26 @@ def _make_game(snapshot=None):
     return game
 
 
-# ---- PlayerAction types ----
+# ---- PlayerAction types ----山水
 
 
 def test_bid_action_fields():
-    action = BidAction(cards=["c1", "c2"], count=2)
-    assert action.cards == ["c1", "c2"]
+    c1, c2 = _card(Suit.HEARTS, Rank.TWO, 1), _card(Suit.HEARTS, Rank.TWO, 2)
+    action = BidAction(cards=[c1, c2], count=2)
+    assert action.cards == [c1, c2]
     assert action.count == 2
 
 
 def test_play_action_fields():
-    action = PlayAction(cards=["c1"])
-    assert action.cards == ["c1"]
+    c1 = _card(Suit.SPADES, Rank.ACE, 1)
+    action = PlayAction(cards=[c1])
+    assert action.cards == [c1]
 
 
 def test_stir_action_fields():
-    action = StirAction(cards=["c1", "c2"])
-    assert action.cards == ["c1", "c2"]
+    c1, c2 = _card(Suit.HEARTS, Rank.TWO, 1), _card(Suit.HEARTS, Rank.TWO, 2)
+    action = StirAction(cards=[c1, c2])
+    assert action.cards == [c1, c2]
 
 
 def test_skip_stir_action_fields():
@@ -75,8 +122,9 @@ def test_skip_stir_action_fields():
 
 
 def test_discard_action_fields():
-    action = DiscardAction(cards=["c1", "c2", "c3"])
-    assert action.cards == ["c1", "c2", "c3"]
+    c1, c2, c3 = _card(Suit.DIAMONDS, Rank.THREE, 1), _card(Suit.CLUBS, Rank.FOUR, 1), _card(Suit.SPADES, Rank.FIVE, 1)
+    action = DiscardAction(cards=[c1, c2, c3])
+    assert action.cards == [c1, c2, c3]
 
 
 def test_next_round_action_fields():
@@ -90,12 +138,12 @@ def test_next_round_action_fields():
 @pytest.mark.asyncio
 async def test_auto_player_play_when_current():
     """AutoPlayer submits a play action when it's their turn in PLAYING phase."""
-    legal = [MagicMock(cards=[MagicMock(id="c1")])]
+    card = _card(Suit.SPADES, Rank.ACE, 1)
     snap = _make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
         current_player=1,
-        legal_actions=legal,
+        legal_actions=[[card]],
     )
     game = _make_game(snap)
     player = AutoPlayer(index=1)
@@ -107,13 +155,12 @@ async def test_auto_player_play_when_current():
 @pytest.mark.asyncio
 async def test_auto_player_play_from_legal_actions():
     """AutoPlayer picks from legal_actions when playing."""
-    card1 = MagicMock(id="c1")
-    legal_play = MagicMock(cards=[card1])
+    card1 = _card(Suit.SPADES, Rank.ACE, 1)
     snap = _make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
         current_player=0,
-        legal_actions=[legal_play],
+        legal_actions=[[card1]],
     )
     game = _make_game(snap)
     player = AutoPlayer(index=0)
@@ -204,8 +251,8 @@ async def test_auto_player_ignores_wrong_player_next_round():
 @pytest.mark.asyncio
 async def test_auto_player_discard_when_current():
     """AutoPlayer submits DiscardAction when awaiting discard and it's their turn."""
-    card1 = MagicMock(id="c1")
-    card2 = MagicMock(id="c2")
+    card1 = _card(Suit.DIAMONDS, Rank.THREE, 1)
+    card2 = _card(Suit.CLUBS, Rank.FOUR, 1)
     snap = _make_snapshot(
         phase="EXCHANGE",
         awaiting_action="discard",
@@ -255,14 +302,13 @@ async def test_auto_player_stir_pass():
 @pytest.mark.asyncio
 async def test_auto_player_bid_during_dealing():
     """AutoPlayer can bid during DEAL_BID phase if hand has trump rank cards."""
-    trump_card = MagicMock(id="tc1", rank="2", suit="hearts")
-    trump_card.rank = "2"
+    trump_card = _card(Suit.HEARTS, Rank.TWO, 1)
     snap = _make_snapshot(
         phase="DEAL_BID",
         awaiting_action=None,
         current_player=0,
         player_hand=[trump_card],
-        trump_rank="2",
+        trump_rank=Rank.TWO,
     )
     game = _make_game(snap)
     player = AutoPlayer(index=0)
@@ -274,14 +320,13 @@ async def test_auto_player_bid_during_dealing():
 @pytest.mark.asyncio
 async def test_auto_player_ignores_dealing_if_no_trump_rank():
     """AutoPlayer does not bid during DEAL_BID if hand has no trump rank cards."""
-    non_trump = MagicMock(id="nt1")
-    non_trump.rank = "3"
+    non_trump = _card(Suit.SPADES, Rank.THREE, 1)
     snap = _make_snapshot(
         phase="DEAL_BID",
         awaiting_action=None,
         current_player=0,
         player_hand=[non_trump],
-        trump_rank="2",
+        trump_rank=Rank.TWO,
     )
     game = _make_game(snap)
     player = AutoPlayer(index=0)
@@ -298,15 +343,14 @@ async def test_human_player_sends_state_on_push():
     """HumanPlayer sends state JSON via WebSocket on on_state."""
     ws = AsyncMock()
     snap = _make_snapshot()
-    snap.to_dict.return_value = {"phase": "PLAYING"}
     game = _make_game(snap)
     player = HumanPlayer(index=0, ws=ws)
     await player.on_state(game)
     ws.send_json.assert_awaited_once()
     sent_data = ws.send_json.call_args[0][0]
     assert sent_data["type"] == "state"
-    assert sent_data["state"] == {"phase": "PLAYING"}
-    snap.to_dict.assert_called_once()
+    assert "state" in sent_data
+    assert sent_data["state"]["phase"] == "PLAYING"
 
 
 @pytest.mark.asyncio
@@ -374,27 +418,16 @@ async def test_auto_player_stir_only_uses_same_suit_pairs():
     The fix groups trump-rank cards by suit and only picks a pair from
     a single suit group.
     """
-    from server.sm.card_model import Suit, Rank, Card
-
-    # Create 2 trump-rank cards of DIFFERENT suits and 1 of the same suit (forming a valid pair)
-    card_hearts_2 = Card(
-        id="D1-H-2", suit=Suit.HEARTS, rank=Rank.TWO,
-        is_joker=False, is_big_joker=False, points=0, deck=1,
-    )
-    card_spades_2 = Card(
-        id="D1-S-2", suit=Suit.SPADES, rank=Rank.TWO,
-        is_joker=False, is_big_joker=False, points=0, deck=1,
-    )
-    card_hearts_2_d2 = Card(
-        id="D2-H-2", suit=Suit.HEARTS, rank=Rank.TWO,
-        is_joker=False, is_big_joker=False, points=0, deck=2,
-    )
+    # Create 2 trump-rank cards of DIFFERENT suits and 2 of the same suit (forming a valid pair)
+    card_hearts_2_d1 = _card(Suit.HEARTS, Rank.TWO, 1)
+    card_spades_2_d1 = _card(Suit.SPADES, Rank.TWO, 1)
+    card_hearts_2_d2 = _card(Suit.HEARTS, Rank.TWO, 2)
 
     snap = _make_snapshot(
         phase="STIRRING",
         awaiting_action="stir",
         current_player=0,
-        player_hand=[card_hearts_2, card_spades_2, card_hearts_2_d2],
+        player_hand=[card_hearts_2_d1, card_spades_2_d1, card_hearts_2_d2],
         trump_rank=Rank.TWO,
     )
     game = _make_game(snap)
@@ -418,30 +451,31 @@ async def test_auto_player_stir_only_uses_same_suit_pairs():
         )
 
 
-# ---- Bug 5 regression: exchange_state is a dict, not an object ----
+# ---- Exchange state typed access ----
 
 
 @pytest.mark.asyncio
-async def test_auto_player_discard_with_dict_exchange_state():
-    """AutoPlayer._handle_discard must handle exchange_state as a dict.
+async def test_auto_player_discard_with_exchange_state_snapshot():
+    """AutoPlayer._handle_discard uses ExchangeStateSnapshot.count.
 
-    Regression test for Bug 5: the snapshot's exchange_state is a dict
-    (e.g. {"count": 8, "declarer_player": 0}) but the old code accessed
-    it with `.count` (attribute syntax) which raised AttributeError on
-    dicts. The fix uses `.get("count", 8)` for dict access.
+    The snapshot's exchange_state is now a structured ExchangeStateSnapshot
+    instead of a dict, so attribute access (exc.count) works directly.
     """
-    card1 = MagicMock(id="c1")
-    card2 = MagicMock(id="c2")
-    card3 = MagicMock(id="c3")
+    card1 = _card(Suit.DIAMONDS, Rank.THREE, 1)
+    card2 = _card(Suit.CLUBS, Rank.FOUR, 1)
+    card3 = _card(Suit.SPADES, Rank.FIVE, 1)
 
-    # exchange_state as a dict (the actual type produced by snapshot())
     snap = _make_snapshot(
         phase="EXCHANGE",
         awaiting_action="discard",
         current_player=0,
         player_hand=[card1, card2, card3],
+        exchange_state=ExchangeStateSnapshot(
+            phase="PICKED_UP",
+            declarer_player=0,
+            count=3,
+        ),
     )
-    snap.exchange_state = {"count": 3, "declarer_player": 0, "phase": "PICKED_UP"}
 
     game = _make_game(snap)
     player = AutoPlayer(index=0)

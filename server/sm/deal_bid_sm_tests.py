@@ -1,10 +1,18 @@
-"""Tests for sm.deal_bid module."""
+"""Tests for sm.deal_bid_sm module."""
 from server.sm.card_model import Card, Suit, Rank, create_decks
+from server.sm.result import Ok, Rejected
 from server.sm.types import BidEvent
-from server.sm.deal_bid import (
+from server.sm.deal_bid_sm import (
     DealBidState, DealBidInput, DealBidResult,
     create_deal_bid, deal_next_card, reveal,
 )
+
+
+def _deal(state: DealBidState) -> DealBidState:
+    """Unwrap deal_next_card result, asserting Ok."""
+    result = deal_next_card(state)
+    assert isinstance(result, Ok), f"deal_next_card rejected: {result.reason}"
+    return result.value
 
 
 def _make_deck_with_specific_cards() -> tuple[list[Card], list[Card]]:
@@ -130,7 +138,7 @@ class TestDealNextCard:
         state = create_deal_bid(DealBidInput(
             deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
         ))
-        state = deal_next_card(state)
+        state = _deal(state)
         assert state.deal_cursor == 1
         assert len(state.players_hand[0]) == 1
         assert state.players_hand[0][0].id == deck[0].id
@@ -141,7 +149,7 @@ class TestDealNextCard:
         state = create_deal_bid(DealBidInput(
             deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
         ))
-        state = deal_next_card(state)
+        state = _deal(state)
         assert state.deal_target == 1
 
     def test_deal_next_card_increments_cursor(self) -> None:
@@ -151,7 +159,7 @@ class TestDealNextCard:
             deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
         ))
         for _ in range(5):
-            state = deal_next_card(state)
+            state = _deal(state)
         assert state.deal_cursor == 5
 
     def test_deal_next_card_distributes_to_hand(self) -> None:
@@ -162,7 +170,7 @@ class TestDealNextCard:
         ))
         # Deal 4 cards: one to each player
         for _ in range(4):
-            state = deal_next_card(state)
+            state = _deal(state)
         # Each player should have 1 card
         for i in range(4):
             assert len(state.players_hand[i]) == 1
@@ -175,7 +183,7 @@ class TestDealNextCard:
         ))
         # Deal 5 cards so player 0 has ♠TWO (positions 0 and 4)
         for _ in range(5):
-            state = deal_next_card(state)
+            state = _deal(state)
         # Place a bid mid-deal
         spade_twos = [c for c in state.players_hand[0] if c.rank == Rank.TWO and c.suit == Suit.SPADES]
         assert len(spade_twos) >= 1
@@ -183,11 +191,13 @@ class TestDealNextCard:
             player=0, cards=[spade_twos[0]], kind="trump_rank",
             suit=Suit.SPADES, joker_type=None, count=1,
         )
-        state = reveal(state, event)
+        result = reveal(state, event)
+        assert isinstance(result, Ok)
+        state = result.value
         # Deal remaining 95 cards
         for _ in range(95):
             if state.phase == "DEALING":
-                state = deal_next_card(state)
+                state = _deal(state)
         assert state.phase == "COMPLETE"
 
     def test_deal_next_card_all_dealt_no_bid(self) -> None:
@@ -198,7 +208,7 @@ class TestDealNextCard:
         ))
         for _ in range(100):
             if state.phase == "DEALING":
-                state = deal_next_card(state)
+                state = _deal(state)
         assert state.phase == "NO_BID"
 
 
@@ -211,7 +221,7 @@ class TestReveal:
         ))
         # Deal 5 cards so player 0 has ♠TWO (positions 0 and 4)
         for _ in range(5):
-            state = deal_next_card(state)
+            state = _deal(state)
         # Player 0 reveals single ♠TWO
         spade_twos = [c for c in state.players_hand[0] if c.rank == Rank.TWO and c.suit == Suit.SPADES]
         assert len(spade_twos) >= 1, "Player 0 should have at least one ♠TWO"
@@ -219,7 +229,9 @@ class TestReveal:
             player=0, cards=[spade_twos[0]], kind="trump_rank",
             suit=Suit.SPADES, joker_type=None, count=1,
         )
-        state = reveal(state, event)
+        result = reveal(state, event)
+        assert isinstance(result, Ok)
+        state = result.value
         assert state.bid_winner is not None
         assert state.bid_winner.player == 0
         assert state.bid_winner.suit == Suit.SPADES
@@ -232,7 +244,7 @@ class TestReveal:
         ))
         # Deal 8 cards so player 2 (team 0) has ♦TWO and player 0 has ♠TWO
         for _ in range(8):
-            state = deal_next_card(state)
+            state = _deal(state)
         # Player 2 reveals single ♦TWO (value 100, weakest)
         diamond_twos = [c for c in state.players_hand[2] if c.rank == Rank.TWO and c.suit == Suit.DIAMONDS]
         assert len(diamond_twos) >= 1, "Player 2 should have at least one ♦TWO"
@@ -240,7 +252,9 @@ class TestReveal:
             player=2, cards=[diamond_twos[0]], kind="trump_rank",
             suit=Suit.DIAMONDS, joker_type=None, count=1,
         )
-        state = reveal(state, low_bid)
+        result = reveal(state, low_bid)
+        assert isinstance(result, Ok)
+        state = result.value
         assert state.bid_winner is not None
         assert state.bid_winner.player == 2
         # Player 0 reveals single ♠TWO (value 103, strongest single)
@@ -250,7 +264,9 @@ class TestReveal:
             player=0, cards=[spade_twos[0]], kind="trump_rank",
             suit=Suit.SPADES, joker_type=None, count=1,
         )
-        state = reveal(state, high_bid)
+        result = reveal(state, high_bid)
+        assert isinstance(result, Ok)
+        state = result.value
         assert state.bid_winner is not None
         assert state.bid_winner.player == 0
         assert state.bid_winner.suit == Suit.SPADES
@@ -263,7 +279,7 @@ class TestReveal:
         ))
         # Deal 8 cards so player 0 has ♠TWO and player 1 has ♥TWO
         for _ in range(8):
-            state = deal_next_card(state)
+            state = _deal(state)
         # Player 0 reveals single ♠TWO (value 103, highest single)
         spade_twos = [c for c in state.players_hand[0] if c.rank == Rank.TWO and c.suit == Suit.SPADES]
         assert len(spade_twos) >= 1, "Player 0 should have at least one ♠TWO"
@@ -271,7 +287,9 @@ class TestReveal:
             player=0, cards=[spade_twos[0]], kind="trump_rank",
             suit=Suit.SPADES, joker_type=None, count=1,
         )
-        state = reveal(state, bid1)
+        result = reveal(state, bid1)
+        assert isinstance(result, Ok)
+        state = result.value
         # Player 1 tries single ♥TWO (value 102 < 103) -- should be rejected
         heart_twos = [c for c in state.players_hand[1] if c.rank == Rank.TWO and c.suit == Suit.HEARTS]
         assert len(heart_twos) >= 1, "Player 1 should have at least one ♥TWO"
@@ -279,31 +297,28 @@ class TestReveal:
             player=1, cards=[heart_twos[0]], kind="trump_rank",
             suit=Suit.HEARTS, joker_type=None, count=1,
         )
-        old_winner = state.bid_winner
-        state = reveal(state, bid2)
+        result = reveal(state, bid2)
+        assert isinstance(result, Rejected)
         # ♠(103) > ♥(102), so bid2 should be rejected -- winner unchanged
-        assert state.bid_winner == old_winner
         assert state.bid_winner is not None
         assert state.bid_winner.player == 0
 
     def test_reveal_wrong_phase_rejected(self) -> None:
-        """Reveal after dealing is done is rejected: bid_events count unchanged."""
+        """Reveal after dealing is done is rejected."""
         deck, _ = _make_deck_with_specific_cards()
         state = create_deal_bid(DealBidInput(
             deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
         ))
         for _ in range(100):
             if state.phase == "DEALING":
-                state = deal_next_card(state)
+                state = _deal(state)
         # Now phase is NO_BID or COMPLETE
         bid = BidEvent(
             player=0, cards=[], kind="trump_rank",
             suit=Suit.HEARTS, joker_type=None, count=1,
         )
-        old_events = len(state.bid_events)
-        state = reveal(state, bid)
-        # Reveal should be rejected: bid_events count must not change
-        assert len(state.bid_events) == old_events
+        result = reveal(state, bid)
+        assert isinstance(result, Rejected)
 
     def test_reveal_not_in_hand_rejected(self) -> None:
         """Reveal with cards not in player's hand is rejected."""
@@ -312,7 +327,7 @@ class TestReveal:
             deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
         ))
         for _ in range(5):
-            state = deal_next_card(state)
+            state = _deal(state)
         # Create a fake card not in any hand
         fake_card = Card(
             id="D1-hearts-2", suit=Suit.HEARTS, rank=Rank.TWO,
@@ -322,9 +337,8 @@ class TestReveal:
             player=0, cards=[fake_card], kind="trump_rank",
             suit=Suit.HEARTS, joker_type=None, count=1,
         )
-        old_events = len(state.bid_events)
-        state = reveal(state, bid)
-        assert len(state.bid_events) == old_events
+        result = reveal(state, bid)
+        assert isinstance(result, Rejected)
 
     def test_reveal_count_cards_mismatch_rejected(self) -> None:
         """Bid with count=2 but only 1 card is rejected."""
@@ -333,7 +347,7 @@ class TestReveal:
             deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
         ))
         for _ in range(5):
-            state = deal_next_card(state)
+            state = _deal(state)
         spade_twos = [c for c in state.players_hand[0] if c.rank == Rank.TWO and c.suit == Suit.SPADES]
         assert len(spade_twos) >= 1, "Player 0 should have at least one ♠TWO"
         # Submit 1 card but claim count=2 -- should be rejected
@@ -341,9 +355,8 @@ class TestReveal:
             player=0, cards=[spade_twos[0]], kind="trump_rank",
             suit=Suit.SPADES, joker_type=None, count=2,
         )
-        old_events = len(state.bid_events)
-        state = reveal(state, bid)
-        assert len(state.bid_events) == old_events
+        result = reveal(state, bid)
+        assert isinstance(result, Rejected)
 
     def test_reveal_count_one_with_two_cards_rejected(self) -> None:
         """Bid with count=1 but 2 cards is rejected."""
@@ -352,7 +365,7 @@ class TestReveal:
             deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
         ))
         for _ in range(5):
-            state = deal_next_card(state)
+            state = _deal(state)
         spade_twos = [c for c in state.players_hand[0] if c.rank == Rank.TWO and c.suit == Suit.SPADES]
         assert len(spade_twos) >= 2, "Player 0 should have a ♠ pair"
         # Submit 2 cards but claim count=1 -- should be rejected
@@ -360,9 +373,8 @@ class TestReveal:
             player=0, cards=[spade_twos[0], spade_twos[1]], kind="trump_rank",
             suit=Suit.SPADES, joker_type=None, count=1,
         )
-        old_events = len(state.bid_events)
-        state = reveal(state, bid)
-        assert len(state.bid_events) == old_events
+        result = reveal(state, bid)
+        assert isinstance(result, Rejected)
 
     def test_reveal_duplicate_card_ids_rejected(self) -> None:
         """Bid submitting the same card ID twice (duplicate physical card) is rejected."""
@@ -372,7 +384,7 @@ class TestReveal:
         ))
         # Deal 5 cards so player 0 has ♠TWO
         for _ in range(5):
-            state = deal_next_card(state)
+            state = _deal(state)
         spade_twos = [c for c in state.players_hand[0] if c.rank == Rank.TWO and c.suit == Suit.SPADES]
         assert len(spade_twos) >= 1, "Player 0 should have at least one ♠TWO"
         # Submit the same card twice (duplicate ID) as a pair bid
@@ -380,10 +392,8 @@ class TestReveal:
             player=0, cards=[spade_twos[0], spade_twos[0]], kind="trump_rank",
             suit=Suit.SPADES, joker_type=None, count=2,
         )
-        old_events = len(state.bid_events)
-        state = reveal(state, bid)
-        # Duplicate card IDs should be rejected
-        assert len(state.bid_events) == old_events
+        result = reveal(state, bid)
+        assert isinstance(result, Rejected)
 
     def test_reveal_non_trump_rank_rejected(self) -> None:
         """Revealing non-trump-rank cards is rejected."""
@@ -394,7 +404,7 @@ class TestReveal:
         # Deal 13 cards so player 0 has non-trump-rank cards
         # (CCW: P0 gets pos 0,4,8,12; pos 12 is from remaining pool)
         for _ in range(13):
-            state = deal_next_card(state)
+            state = _deal(state)
         # Find a non-trump-rank card in player 0's hand
         non_rank = [c for c in state.players_hand[0] if c.rank != Rank.TWO and not c.is_joker]
         assert len(non_rank) >= 1, "Player 0 should have at least one non-trump-rank card"
@@ -402,9 +412,8 @@ class TestReveal:
             player=0, cards=[non_rank[0]], kind="trump_rank",
             suit=non_rank[0].suit, joker_type=None, count=1,
         )
-        old_events = len(state.bid_events)
-        state = reveal(state, bid)
-        assert len(state.bid_events) == old_events
+        result = reveal(state, bid)
+        assert isinstance(result, Rejected)
 
     def test_reveal_single_joker_rejected(self) -> None:
         """Single joker cannot be used for reveal (must be pair)."""
@@ -414,7 +423,7 @@ class TestReveal:
         ))
         # Deal 10 cards so player 0 has at least one big joker (pos 8)
         for _ in range(10):
-            state = deal_next_card(state)
+            state = _deal(state)
         # Find a single joker in player 0's hand
         jokers = [c for c in state.players_hand[0] if c.is_joker]
         assert len(jokers) >= 1, "Player 0 should have at least one joker"
@@ -422,10 +431,8 @@ class TestReveal:
             player=0, cards=[jokers[0]], kind="joker",
             suit=None, joker_type="big" if jokers[0].is_big_joker else "small", count=1,
         )
-        old_events = len(state.bid_events)
-        state = reveal(state, bid)
-        # Single joker should be rejected: bid_events unchanged
-        assert len(state.bid_events) == old_events
+        result = reveal(state, bid)
+        assert isinstance(result, Rejected)
 
     def test_reveal_joker_pair_accepted(self) -> None:
         """Pair of big jokers is valid for reveal and accepted."""
@@ -434,7 +441,7 @@ class TestReveal:
             deck=custom_deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
         ))
         for _ in range(5):
-            state = deal_next_card(state)
+            state = _deal(state)
         # Find both big jokers in player 0's hand
         bj = [c for c in state.players_hand[0] if c.rank == Rank.BIG_JOKER]
         assert len(bj) >= 2, "Player 0 should have 2 big jokers by now"
@@ -442,10 +449,11 @@ class TestReveal:
             player=0, cards=[bj[0], bj[1]], kind="joker",
             suit=None, joker_type="big", count=2,
         )
-        old_events = len(state.bid_events)
-        state = reveal(state, event)
+        result = reveal(state, event)
+        assert isinstance(result, Ok)
+        state = result.value
         # Joker pair should be accepted: bid_events grows, bid_winner updated
-        assert len(state.bid_events) == old_events + 1
+        assert len(state.bid_events) == 1
         assert state.bid_winner is not None
         assert state.bid_winner.player == 0
         assert state.bid_winner.kind == "joker"
@@ -459,7 +467,7 @@ class TestReveal:
         ))
         # Deal 5 cards so player 0 has both big jokers
         for _ in range(5):
-            state = deal_next_card(state)
+            state = _deal(state)
         # Reveal big joker pair
         bj = [c for c in state.players_hand[0] if c.rank == Rank.BIG_JOKER]
         assert len(bj) >= 2
@@ -467,17 +475,19 @@ class TestReveal:
             player=0, cards=[bj[0], bj[1]], kind="joker",
             suit=None, joker_type="big", count=2,
         )
-        state = reveal(state, event)
+        result = reveal(state, event)
+        assert isinstance(result, Ok)
+        state = result.value
         # Deal remaining cards
         for _ in range(95):
             if state.phase == "DEALING":
-                state = deal_next_card(state)
+                state = _deal(state)
         # After all cards dealt with a joker bid, phase = COMPLETE
         assert state.phase == "COMPLETE"
         # The result should have trump_suit=None (无主)
-        result = _get_result(state)
-        assert result.trump_suit is None
-        assert result.winner == 0
+        result_data = _get_result(state)
+        assert result_data.trump_suit is None
+        assert result_data.winner == 0
 
     def test_reveal_subsequent_round_non_declarer_team_rejected(self) -> None:
         """In subsequent rounds, non-declarer-team players cannot reveal."""
@@ -488,7 +498,7 @@ class TestReveal:
         ))
         # Deal 5 cards so player 0 has ♠TWO
         for _ in range(5):
-            state = deal_next_card(state)
+            state = _deal(state)
         # Player 0 is team 0 (not declarer team), should be rejected
         spade_twos = [c for c in state.players_hand[0] if c.rank == Rank.TWO and c.suit == Suit.SPADES]
         assert len(spade_twos) >= 1, "Player 0 should have at least one ♠TWO"
@@ -496,9 +506,8 @@ class TestReveal:
             player=0, cards=[spade_twos[0]], kind="trump_rank",
             suit=Suit.SPADES, joker_type=None, count=1,
         )
-        old_events = len(state.bid_events)
-        state = reveal(state, bid)
-        assert len(state.bid_events) == old_events
+        result = reveal(state, bid)
+        assert isinstance(result, Rejected)
 
     def test_reveal_subsequent_round_declarer_team_accepted(self) -> None:
         """In subsequent rounds, declarer-team players can reveal."""
@@ -509,7 +518,7 @@ class TestReveal:
         ))
         # Deal 6 cards so player 1 has ♥TWO (position 1 and 5)
         for _ in range(6):
-            state = deal_next_card(state)
+            state = _deal(state)
         # Player 1 is team 1 (declarer), should be accepted
         heart_twos = [c for c in state.players_hand[1] if c.rank == Rank.TWO and c.suit == Suit.HEARTS]
         assert len(heart_twos) >= 1, "Player 1 should have at least one ♥TWO"
@@ -517,7 +526,9 @@ class TestReveal:
             player=1, cards=[heart_twos[0]], kind="trump_rank",
             suit=Suit.HEARTS, joker_type=None, count=1,
         )
-        state = reveal(state, bid)
+        result = reveal(state, bid)
+        assert isinstance(result, Ok)
+        state = result.value
         assert state.bid_winner is not None
         assert state.bid_winner.player == 1
         assert state.bid_winner.suit == Suit.HEARTS
@@ -533,7 +544,7 @@ class TestDealBidFullFlow:
         # Deal all cards
         for _ in range(100):
             if state.phase == "DEALING":
-                state = deal_next_card(state)
+                state = _deal(state)
         # Without any bids, should be NO_BID
         assert state.phase == "NO_BID"
 
@@ -545,7 +556,7 @@ class TestDealBidFullFlow:
         ))
         for _ in range(100):
             if state.phase == "DEALING":
-                state = deal_next_card(state)
+                state = _deal(state)
         assert state.phase == "NO_BID"
         result = _get_result(state)
         assert result.winner is None

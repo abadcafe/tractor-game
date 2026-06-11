@@ -21,7 +21,6 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = [
     "server",
-    "server/sm",
     "tests",
 ]
 python_files = ["*_tests.py", "test_*.py"]
@@ -39,4 +38,4 @@ select = ["E", "F", "W", "I"]
 [tool.pyright]
 pythonVersion = "3.14"
 typeCheckingMode = "strict"
-include = ["server/sm"]
+include = ["server", "tests"]

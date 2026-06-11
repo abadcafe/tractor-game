@@ -4,7 +4,7 @@ from typing import Literal
 import pytest
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.types import CompletedTrick, CompletedTrickSlot
-from server.sm.scoring import calculate_score, compute_ambush_multiplier
+from server.sm.scoring import calculate_score
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
@@ -560,8 +560,21 @@ class TestOver200:
 
 
 class TestAmbushMultiplierDecompose:
+    """Test ambush multiplier indirectly through calculate_score.
+
+    These tests verify the multiplier by constructing scenarios where:
+    - The defender wins the last trick (ambush condition)
+    - bottom_cards have a known total point value (bottom_base)
+    - The multiplier = result.bottom_card_bonus / bottom_base
+
+    We use a single 5-point card as bottom (bottom_base=5) so the
+    multiplier is directly readable from bottom_card_bonus.
+    """
+
+    _BOTTOM_5 = [_card(Suit.DIAMONDS, Rank.FIVE)]
+
     def test_ambush_multiplier_single(self) -> None:
-        """Single card -> x2."""
+        """Single card lead -> x2 multiplier."""
         trick = CompletedTrick(
             lead_player=0,
             slots=[
@@ -570,14 +583,25 @@ class TestAmbushMultiplierDecompose:
                 CompletedTrickSlot(player=2, cards=[_card(Suit.HEARTS, Rank.QUEEN)]),
                 CompletedTrickSlot(player=3, cards=[_card(Suit.HEARTS, Rank.JACK)]),
             ],
-            winner=0,
+            winner=1,  # defender wins -> ambush
             points=10,
         )
-        multiplier = compute_ambush_multiplier(trick, Suit.SPADES, Rank.TWO)
-        assert multiplier == 2
+        result = calculate_score(
+            defender_points=0,
+            bottom_cards=self._BOTTOM_5,
+            last_trick=trick,
+            declarer_team=0,
+            declarer_player=0,
+            team0_level=Rank.TWO,
+            team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
+        )
+        # bottom_base=5, multiplier=2 -> bonus=10
+        assert result.bottom_card_bonus == 10
 
     def test_ambush_multiplier_pair(self) -> None:
-        """Pair lead -> x4."""
+        """Pair lead -> x4 multiplier."""
         trick = CompletedTrick(
             lead_player=0,
             slots=[
@@ -586,14 +610,25 @@ class TestAmbushMultiplierDecompose:
                 CompletedTrickSlot(player=2, cards=[_card(Suit.HEARTS, Rank.QUEEN, 1), _card(Suit.HEARTS, Rank.QUEEN, 2)]),
                 CompletedTrickSlot(player=3, cards=[_card(Suit.HEARTS, Rank.JACK, 1), _card(Suit.HEARTS, Rank.JACK, 2)]),
             ],
-            winner=0,
+            winner=1,  # defender wins -> ambush
             points=20,
         )
-        multiplier = compute_ambush_multiplier(trick, Suit.SPADES, Rank.TWO)
-        assert multiplier == 4
+        result = calculate_score(
+            defender_points=0,
+            bottom_cards=self._BOTTOM_5,
+            last_trick=trick,
+            declarer_team=0,
+            declarer_player=0,
+            team0_level=Rank.TWO,
+            team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
+        )
+        # bottom_base=5, multiplier=4 -> bonus=20
+        assert result.bottom_card_bonus == 20
 
     def test_ambush_multiplier_tractor_2_pairs(self) -> None:
-        """2-pair tractor lead -> 2^4 = 16."""
+        """2-pair tractor lead -> x16 multiplier (2^4)."""
         trick = CompletedTrick(
             lead_player=0,
             slots=[
@@ -614,14 +649,25 @@ class TestAmbushMultiplierDecompose:
                     _card(Suit.HEARTS, Rank.TEN, 1), _card(Suit.HEARTS, Rank.TEN, 2),
                 ]),
             ],
-            winner=0,
+            winner=1,  # defender wins -> ambush
             points=30,
         )
-        multiplier = compute_ambush_multiplier(trick, Suit.SPADES, Rank.TWO)
-        assert multiplier == 16  # 2^4
+        result = calculate_score(
+            defender_points=0,
+            bottom_cards=self._BOTTOM_5,
+            last_trick=trick,
+            declarer_team=0,
+            declarer_player=0,
+            team0_level=Rank.TWO,
+            team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
+        )
+        # bottom_base=5, multiplier=16 -> bonus=80
+        assert result.bottom_card_bonus == 80
 
     def test_ambush_multiplier_throw_tractor_plus_singles(self) -> None:
-        """Throw with tractor + singles: take max sub-play multiplier.
+        """Throw with tractor + singles: max sub-play multiplier wins.
 
         Throw: tractor h3-3-4-4 + single hA -> tractor=2^4=16, singles=2. Max=16.
         """
@@ -649,8 +695,19 @@ class TestAmbushMultiplierDecompose:
                     _card(Suit.HEARTS, Rank.JACK),
                 ]),
             ],
-            winner=0,
+            winner=1,  # defender wins -> ambush
             points=35,
         )
-        multiplier = compute_ambush_multiplier(trick, Suit.SPADES, Rank.TWO)
-        assert multiplier == 16  # max(2^4, 2) = 16
+        result = calculate_score(
+            defender_points=0,
+            bottom_cards=self._BOTTOM_5,
+            last_trick=trick,
+            declarer_team=0,
+            declarer_player=0,
+            team0_level=Rank.TWO,
+            team1_level=Rank.TWO,
+            trump_suit=_TRUMP_SUIT,
+            trump_rank=_TRUMP_RANK,
+        )
+        # bottom_base=5, multiplier=16 -> bonus=80
+        assert result.bottom_card_bonus == 80

@@ -11,6 +11,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from server.sm.card_model import Rank
+from server.sm.result import Ok, Rejected, StateResult
 from server.sm.scoring import RoundResult
 
 
@@ -50,32 +51,36 @@ def create_game() -> GameState:
     )
 
 
-def start_game(state: GameState) -> GameState:
+def start_game(state: GameState) -> StateResult[GameState]:
     """Start the game, transitioning IDLE -> IN_ROUND.
 
     Sets both team levels to TWO and round_number to 1.
+
+    Returns Ok(new_state) on success, Rejected(reason) if not in IDLE phase.
     """
     if state.phase != "IDLE":
-        raise ValueError(
+        return Rejected(
             f"Cannot start game in phase {state.phase}; expected IDLE"
         )
-    return state.model_copy(update={
+    return Ok(state.model_copy(update={
         "phase": "IN_ROUND",
         "team0_level": Rank.TWO,
         "team1_level": Rank.TWO,
         "round_number": 1,
-    })
+    }))
 
 
-def process_round_result(state: GameState, result: RoundResult) -> GameState:
+def process_round_result(state: GameState, result: RoundResult) -> StateResult[GameState]:
     """Process a round result and update game state.
 
     Updates team levels from the result. If either team reaches ACE,
     transitions to GAME_OVER. Otherwise stays in IN_ROUND with updated
     declarer info and incremented round_number.
+
+    Returns Ok(new_state) on success, Rejected(reason) if not in IN_ROUND phase.
     """
     if state.phase != "IN_ROUND":
-        raise ValueError(
+        return Rejected(
             f"Cannot process round result in phase {state.phase}; expected IN_ROUND"
         )
 
@@ -85,20 +90,20 @@ def process_round_result(state: GameState, result: RoundResult) -> GameState:
     # Check game over: either team reaches ACE
     if new_team0 == Rank.ACE or new_team1 == Rank.ACE:
         winning = 0 if new_team0 == Rank.ACE else 1
-        return state.model_copy(update={
+        return Ok(state.model_copy(update={
             "phase": "GAME_OVER",
             "team0_level": new_team0,
             "team1_level": new_team1,
             "winning_team": winning,
             "declarer_team": None,
             "last_declarer_player": None,
-        })
+        }))
 
     # Game continues
-    return state.model_copy(update={
+    return Ok(state.model_copy(update={
         "team0_level": new_team0,
         "team1_level": new_team1,
         "declarer_team": result.next_declarer_team,
         "last_declarer_player": result.next_declarer_player,
         "round_number": state.round_number + 1,
-    })
+    }))

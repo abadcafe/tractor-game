@@ -7,23 +7,23 @@ concerns only. Contains no game logic.
 import asyncio
 import logging
 import os
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 
-from server.game import Game
-from server.game_registry import GameRegistry
-from server.player import (
-    AutoPlayer,
+from server.actions import (
     BidAction,
     DiscardAction,
-    HumanPlayer,
     NextRoundAction,
     PlayAction,
     SkipStirAction,
     StirAction,
 )
+from server.game import Game
+from server.game_registry import GameRegistry
+from server.player import AutoPlayer, HumanPlayer, Player
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ async def _cleanup_loop():
 
 
 @asynccontextmanager
-async def lifespan(app):
+async def lifespan(app: FastAPI):
     task = asyncio.create_task(_cleanup_loop())
     yield
     task.cancel()
@@ -61,7 +61,8 @@ async def health():
 
 @app.post("/api/game", status_code=201)
 async def create_game():
-    players = [AutoPlayer(i) for i in range(3)]
+    players: Sequence[Player] = [AutoPlayer(i) for i in range(3)]
+    players = list(players)
     players.append(HumanPlayer(_HUMAN_PLAYER_INDEX, ws=None))
     game = Game(players=players)
     game_id = registry.create(game)
@@ -169,25 +170,26 @@ async def websocket_game(websocket: WebSocket, game_id: str):
 
 
 def _parse_action(
-    game: Game, action_type: str, raw: dict
+    game: Game, action_type: str, raw: dict[str, str | int | bool | None | list[str] | list[dict[str, str]]]
 ) -> BidAction | PlayAction | StirAction | SkipStirAction | DiscardAction | NextRoundAction:
     """Parse a WebSocket JSON message into a PlayerAction."""
     if action_type == "bid":
-        card_ids = _extract_card_ids(raw.get("cards", []))
+        card_ids = _extract_card_ids(_get_cards_list(raw))
         resolved = game.resolve_cards(_HUMAN_PLAYER_INDEX, card_ids)
         return BidAction(cards=resolved, count=len(resolved))
     elif action_type == "stir":
-        if raw.get("pass", False):
+        pass_val = raw.get("pass", False)
+        if isinstance(pass_val, bool) and pass_val:
             return SkipStirAction()
-        card_ids = _extract_card_ids(raw.get("cards", []))
+        card_ids = _extract_card_ids(_get_cards_list(raw))
         resolved = game.resolve_cards(_HUMAN_PLAYER_INDEX, card_ids)
         return StirAction(cards=resolved)
     elif action_type == "discard":
-        card_ids = _extract_card_ids(raw.get("cards", []))
+        card_ids = _extract_card_ids(_get_cards_list(raw))
         resolved = game.resolve_cards(_HUMAN_PLAYER_INDEX, card_ids)
         return DiscardAction(cards=resolved)
     elif action_type == "play":
-        card_ids = _extract_card_ids(raw.get("cards", []))
+        card_ids = _extract_card_ids(_get_cards_list(raw))
         resolved = game.resolve_cards(_HUMAN_PLAYER_INDEX, card_ids)
         return PlayAction(cards=resolved)
     elif action_type == "next_round":
@@ -196,32 +198,45 @@ def _parse_action(
         raise ValueError(f"unknown action type: {action_type}")
 
 
-def _extract_card_ids(cards: list) -> list[str]:
+def _get_cards_list(raw: dict[str, str | int | bool | None | list[str] | list[dict[str, str]]]) -> Sequence[str | dict[str, str]]:
+    """Extract the 'cards' field from a WS message.
+
+    Returns [] if the field is missing or not a list.
+    """
+    val = raw.get("cards")
+    if isinstance(val, list):
+        return val
+    return []
+
+
+def _extract_card_ids(cards: Sequence[str | dict[str, str]]) -> list[str]:
     """Extract card ID strings from WS message cards.
 
     Cards may be plain strings or dicts with an "id" key.
     """
-    ids = []
+    ids: list[str] = []
     for c in cards:
         if isinstance(c, str):
             ids.append(c)
-        elif isinstance(c, dict):
-            if "id" not in c:
-                raise ValueError(f"Invalid card format: missing 'id' field in {c}")
-            ids.append(c["id"])
         else:
-            raise ValueError(f"Invalid card format: {c}")
+            # c is dict[str, str] (the only other option in the union)
+            id_raw = c.get("id")
+            if id_raw is not None:
+                ids.append(id_raw)
+            else:
+                raise ValueError(f"Invalid card format: missing 'id' in {c}")
+    return ids
     return ids
 
 
 # ---- Static files ----
 
-_static_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static"))
+static_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static"))
 
 
 @app.get("/")
 async def index():
-    html_path = os.path.join(_static_dir, "index.html")
+    html_path = os.path.join(static_dir, "index.html")
     if os.path.isfile(html_path):
         return FileResponse(html_path)
     return Response(status_code=404, content="Frontend not built. Run: deno task build")
@@ -230,13 +245,13 @@ async def index():
 @app.get("/{path:path}")
 async def serve_static(path: str):
     """Serve static files from static/ directory. Falls back to index.html for unknown paths."""
-    file_path = os.path.normpath(os.path.join(_static_dir, path))
-    if not file_path.startswith(_static_dir + os.sep) and file_path != _static_dir:
+    file_path = os.path.normpath(os.path.join(static_dir, path))
+    if not file_path.startswith(static_dir + os.sep) and file_path != static_dir:
         return Response(status_code=403, content="Forbidden")
     if os.path.isfile(file_path):
         return FileResponse(file_path)
     # Fallback to index.html for SPA routing
-    html_path = os.path.join(_static_dir, "index.html")
+    html_path = os.path.join(static_dir, "index.html")
     if os.path.isfile(html_path):
         return FileResponse(html_path)
     return Response(status_code=404, content="Not found")

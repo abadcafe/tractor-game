@@ -4,6 +4,8 @@ The declarer picks up the 8 bottom cards, then discards 8 cards from their
 combined hand. The discarded cards become the new bottom cards used for scoring.
 """
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict
 
 from server.sm.card_model import Card
@@ -37,7 +39,7 @@ class ExchangeState(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    phase: str  # "PICKED_UP" | "COMPLETE"
+    phase: Literal["PICKED_UP", "COMPLETE"]
     hand_after_pickup: list[Card]
     count: int
     declarer_player: int

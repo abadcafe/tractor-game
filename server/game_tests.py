@@ -12,8 +12,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from server.game import Game, StateSnapshot
-from server.player import AutoPlayer, BidAction, PlayAction, NextRoundAction, StirAction, SkipStirAction, DiscardAction
+from server.actions import BidAction, NextRoundAction, PlayAction, SkipStirAction
+from server.game import Game
+from server.player import AutoPlayer, GameView
+from server.sm.result import Ok
+from server.snapshot import StateSnapshot
 
 
 def _create_game_with_auto_players():
@@ -86,14 +89,15 @@ async def test_snapshot_returns_player_hand():
 
 
 def test_snapshot_raises_before_run():
-    """snapshot() must raise RuntimeError when called before run().
+    """snapshot() must raise when called before run().
 
     Before run(), _round_state is None, so snapshot() cannot build a
     valid StateSnapshot. Rather than returning a partial/empty snapshot
-    that could mislead callers, it raises an explicit error.
+    that could mislead callers, it raises an error (AssertionError via
+    assert guard).
     """
     game = _create_game_with_auto_players()
-    with pytest.raises(RuntimeError, match="Game not started"):
+    with pytest.raises(AssertionError, match="snapshot\\(\\) called before run"):
         game.snapshot(for_player=0)
 
 
@@ -292,7 +296,7 @@ async def test_act_skip_stir_during_stirring():
     action = SkipStirAction()
     assert isinstance(action, SkipStirAction)
     # Verify it is NOT a StirAction -- Game.act() must dispatch differently
-    from server.player import StirAction
+    from server.actions import StirAction
     assert not isinstance(action, StirAction)
 
 
@@ -385,7 +389,7 @@ async def test_set_on_game_over_callback_fires_on_game_over():
     game.set_on_game_over(callback)
 
     # Run the game with patched sm functions
-    with patch.object(gm, "start_game", return_value=in_round_state):
+    with patch.object(gm, "start_game", return_value=Ok(in_round_state)):
         with patch.object(rm, "create_round", return_value=complete_round):
             await game.run()
             # Cancel the dealing loop via public interface
@@ -398,7 +402,7 @@ async def test_set_on_game_over_callback_fires_on_game_over():
     # Patch get_round_result to return our mock_result so act() can pass
     # it to game_sm.process_round_result.
     with patch.object(rm, "get_round_result", return_value=mock_result):
-        with patch.object(gm, "process_round_result", return_value=game_over_state):
+        with patch.object(gm, "process_round_result", return_value=Ok(game_over_state)):
             # COMPLETE phase now requires all 4 players to confirm
             for p in range(4):
                 await game.act(player_index=p, action=NextRoundAction())
@@ -470,10 +474,10 @@ async def test_snapshot_to_dict_json_serializable():
     assert "trump_rank" in result
     assert "current_player" in result
     # legal_actions must be a list of lists (card lists, not PlayAction dicts)
-    assert isinstance(result["legal_actions"], list)
-    if len(result["legal_actions"]) > 0:
-        legal_entry = result["legal_actions"][0]
-        assert isinstance(legal_entry, list)  # list of card dicts
+    legal_actions_raw = result["legal_actions"]
+    if len(legal_actions_raw) > 0:
+        legal_entry = legal_actions_raw[0]
+        # list of card dicts
         if len(legal_entry) > 0:
             assert "id" in legal_entry[0]
             assert "type" not in legal_entry[0]
@@ -493,8 +497,9 @@ async def test_snapshot_to_dict_card_format():
     snap = game.snapshot(for_player=0)
     result = snap.to_dict()
     # If player has cards, verify the format
-    if len(result["player_hand"]) > 0:
-        card = result["player_hand"][0]
+    player_hand_raw = result["player_hand"]
+    if len(player_hand_raw) > 0:
+        card = player_hand_raw[0]
         assert isinstance(card, dict)
         assert "id" in card
         assert "suit" in card
@@ -555,7 +560,7 @@ async def test_resolve_cards_raises_on_unknown_id():
 
 @pytest.mark.asyncio
 async def test_bid_during_deal_bid_does_not_push_state_to_all():
-    """BidAction during DEAL_BID must NOT call _push_state_to_all().
+    """BidAction during DEAL_BID must NOT trigger an extra _push_state_to_all.
 
     Regression test for Bug 1: when a bid triggered _push_state_to_all(),
     each AutoPlayer.on_state() would create_task(bid) → game.act() →
@@ -565,29 +570,76 @@ async def test_bid_during_deal_bid_does_not_push_state_to_all():
     The fix: bid during DEAL_BID does not push state at all — the
     dealing loop pushes to all players every 0.5s anyway, so the next
     tick carries the updated bid_winner.
+
+    Setup: 3 CountingPlayers + 1 TestHumanPlayer that bids when it
+    gets a trump-rank card.  Each CountingPlayer records how many
+    times on_state is called.  One dealing_loop cycle = 1 push =
+    4 on_state calls.  If the bid triggered an extra push, every
+    player's count would be 4 higher than expected.
     """
-    game = _create_game_with_auto_players()
+    import random as _random
+    from server.player import Player
+
+    class CountingPlayer(Player):
+        """Player that counts on_state invocations."""
+        def __init__(self, index: int) -> None:
+            super().__init__(index)
+            self.state_count = 0
+
+        async def on_state(self, game: object) -> None:
+            self.state_count += 1
+
+    class TestHumanPlayer(Player):
+        """Simulates a human who bids as soon as they see a trump-rank card."""
+        def __init__(self, index: int) -> None:
+            super().__init__(index)
+            self.bid_done = asyncio.Event()
+            self.state_count = 0
+
+        async def on_state(self, game: GameView) -> None:
+            self.state_count += 1
+            if self.bid_done.is_set():
+                return
+            snapshot = game.snapshot(self.index)
+            if snapshot.phase != "DEAL_BID":
+                return
+            trump_cards = [c for c in snapshot.player_hand if c.rank == snapshot.trump_rank]
+            if not trump_cards:
+                return
+            action = BidAction(cards=trump_cards[:1], count=1)
+            await game.act(self.index, action)
+            self.bid_done.set()
+
+    # Fixed seed so the shuffle is deterministic: player 0 receives a
+    # trump-rank card on the 17th deal (after dealing has been running
+    # for a while, not the very first card).  Restored after the test.
+    _prev_state = _random.getstate()
+    _random.seed(16)
+
+    human = TestHumanPlayer(index=0)
+    counters = [CountingPlayer(index=1), CountingPlayer(index=2), CountingPlayer(index=3)]
+    players: list[Player] = [human, *counters]
+    game = Game(players=players, deal_delay=0.05)
+
     await game.run()
-    snap = game.snapshot(for_player=0)
 
-    if snap.phase != "DEAL_BID" or len(snap.player_hand) == 0:
-        await game.cancel()
-        pytest.skip("Game not in DEAL_BID or no cards to bid with")
-
-    # Find a trump rank card to bid with
-    trump_cards = [c for c in snap.player_hand if c.rank == snap.trump_rank]
-    if not trump_cards:
-        await game.cancel()
-        pytest.skip("No trump rank cards in hand to bid with")
-
-    action = BidAction(cards=trump_cards[:1], count=1)
-
-    with patch.object(game, "_push_state_to_all", wraps=game._push_state_to_all) as mock_push:
-        await game.act(player_index=0, action=action)
-        # _push_state_to_all must NOT have been called
-        mock_push.assert_not_called()
+    # Wait for the human player to see a trump-rank card and bid.
+    # 100 cards × 0.05s = 5s max; with seed(16) player 0 gets one
+    # on the 17th deal (~0.85s).
+    await asyncio.wait_for(human.bid_done.wait(), timeout=6.0)
 
     await game.cancel()
+
+    assert human.bid_done.is_set()
+    # All 4 players should have the same on_state count (each push
+    # calls on_state on all 4 players).  If the bid triggered an
+    # extra _push_state_to_all, all counts would be 4 higher.
+    # Verify they're equal — the dealing_loop pushes uniformly.
+    all_counts = [human.state_count] + [c.state_count for c in counters]
+    assert len(set(all_counts)) == 1, \
+        f"Uneven on_state counts {all_counts}; bid may have triggered an extra push"
+
+    _random.setstate(_prev_state)
 
 
 # ---- Bug 2 regression: snapshot must contain player_hand_counts ----
@@ -640,9 +692,9 @@ async def test_snapshot_to_dict_contains_all_required_fields():
         assert field in result, f"Missing required field: {field}"
 
     # player_hand_counts specifically: must be a list of 4 ints
-    assert isinstance(result["player_hand_counts"], list)
-    assert len(result["player_hand_counts"]) == 4
-    for count in result["player_hand_counts"]:
+    hand_counts = result["player_hand_counts"]
+    assert len(hand_counts) == 4
+    for count in hand_counts:
         assert isinstance(count, int)
 
     await game.cancel()
@@ -678,10 +730,10 @@ async def test_snapshot_legal_actions_to_dict_format():
     await game.run()
     snap = game.snapshot(for_player=0)
     d = snap.to_dict()
-    if snap.phase == "PLAYING" and len(d.get("legal_actions", [])) > 0:
-        entry = d["legal_actions"][0]
+    legal_actions_val = d["legal_actions"]
+    if snap.phase == "PLAYING" and len(legal_actions_val) > 0:
+        entry = legal_actions_val[0]
         # Entry is a list of card dicts, not a dict with 'type' key
-        assert isinstance(entry, list)
         if len(entry) > 0:
             assert "id" in entry[0]  # card dict format
             assert "type" not in entry[0]  # no PlayAction wrapper
@@ -697,5 +749,5 @@ async def test_snapshot_completed_trick_no_lead_type():
     await game.run()
     snap = game.snapshot(for_player=0)
     d = snap.to_dict()
-    for trick in d.get("trick_history", []):
+    for trick in d["trick_history"]:
         assert "lead_type" not in trick

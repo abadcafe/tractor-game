@@ -35,7 +35,7 @@ class RoundResult(BaseModel):
     bottom_card_bonus: int
 
 
-def compute_ambush_multiplier(
+def _compute_ambush_multiplier(
     last_trick: CompletedTrick,
     trump_suit: Suit | None,
     trump_rank: Rank,
@@ -124,7 +124,7 @@ def calculate_score(
 
     # Compute ambush bonus
     if is_ambush:
-        multiplier = compute_ambush_multiplier(last_trick, trump_suit, trump_rank)
+        multiplier = _compute_ambush_multiplier(last_trick, trump_suit, trump_rank)
         bottom_card_bonus = bottom_base * multiplier
     else:
         bottom_card_bonus = 0

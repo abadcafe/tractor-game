@@ -1,23 +1,37 @@
 """Player abstraction for the Tractor game.
 
 Defines the Player ABC, AutoPlayer (random AI), HumanPlayer (WebSocket-driven),
-and player-facing action dataclasses (BidAction, StirAction, PlayAction, etc.).
+and the GameView Protocol that describes the Game interface players rely on.
 
-Game.act() dispatches these player action types to the appropriate sm
-state machine operations.
+Game.act() dispatches player action types (from server.actions) to the
+appropriate sm state machine operations.
 """
+
+from __future__ import annotations
 
 import asyncio
 import logging
 import random
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Any
+from typing import Protocol
+
+from fastapi import WebSocket
+
+from server.actions import (
+    BidAction,
+    DiscardAction,
+    NextRoundAction,
+    PlayAction,
+    SkipStirAction,
+    StirAction,
+)
+from server.sm.card_model import Card, Suit
+from server.snapshot import StateSnapshot
 
 logger = logging.getLogger(__name__)
 
 
-def _log_task_exception(task: asyncio.Task) -> None:
+def _log_task_exception(task: asyncio.Task[None]) -> None:
     """Log exceptions from fire-and-forget create_task calls."""
     if task.cancelled():
         return
@@ -26,50 +40,26 @@ def _log_task_exception(task: asyncio.Task) -> None:
         logger.exception("Unhandled exception in player action task: %s", exc)
 
 
-# ---- PlayerAction types ----
+# ---- GameView Protocol (DIP: defined at the consumer, not the implementer) ----
 
 
-@dataclass
-class BidAction:
-    """Cards the player reveals during bidding."""
+class GameView(Protocol):
+    """Protocol describing the Game interface that Player subclasses rely on.
 
-    cards: list
-    count: int
+    Players call game.snapshot(index) to read state and
+    game.act(index, action) to submit actions. No other
+    Game methods are used from on_state() or its helpers.
 
+    Game structurally satisfies this Protocol; no explicit
+    inheritance declaration is needed.
+    """
 
-@dataclass
-class StirAction:
-    """Pair of cards to stir with (change trump suit)."""
-
-    cards: list
-
-
-@dataclass
-class SkipStirAction:
-    """Pass during stirring."""
-
-    pass
-
-
-@dataclass
-class DiscardAction:
-    """Cards to discard for the bottom pile."""
-
-    cards: list
-
-
-@dataclass
-class PlayAction:
-    """Cards to play in the current trick."""
-
-    cards: list
-
-
-@dataclass
-class NextRoundAction:
-    """Signal to proceed to the next round."""
-
-    pass
+    def snapshot(self, for_player: int) -> StateSnapshot: ...
+    async def act(
+        self,
+        player_index: int,
+        action: BidAction | StirAction | SkipStirAction | DiscardAction | PlayAction | NextRoundAction,
+    ) -> None: ...
 
 
 # ---- Player ABC ----
@@ -88,13 +78,14 @@ class Player(ABC):
         self.index = index
 
     @abstractmethod
-    async def on_state(self, game: Any) -> None:
+    async def on_state(self, game: GameView) -> None:
         """Called by Game when it pushes state to this player.
 
         Args:
-            game: The Game instance. Call game.snapshot(self.index) to
-                  get the player's view of the state, and
-                  game.act(self.index, action) to submit an action.
+            game: A GameView providing snapshot() and act().
+                  Call game.snapshot(self.index) to get the player's
+                  view of the state, and game.act(self.index, action)
+                  to submit an action.
         """
 
     async def send_error(self, message: str) -> None:
@@ -120,7 +111,7 @@ class AutoPlayer(Player):
         super().__init__(index)
         self._action_count = 0
 
-    async def on_state(self, game: Any) -> None:
+    async def on_state(self, game: GameView) -> None:
         snapshot = game.snapshot(self.index)
 
         if snapshot.phase == "DEAL_BID":
@@ -134,7 +125,7 @@ class AutoPlayer(Player):
         elif snapshot.phase == "COMPLETE" and snapshot.awaiting_action == "next_round":
             await self._handle_next_round(snapshot, game)
 
-    async def _handle_deal_bid(self, snapshot: Any, game: Any) -> None:
+    async def _handle_deal_bid(self, snapshot: StateSnapshot, game: GameView) -> None:
         """Bid during DEAL_BID phase if we have a competitive bid.
 
         Only bids if: (a) no bid_winner yet, or (b) we can beat the
@@ -150,8 +141,8 @@ class AutoPlayer(Player):
             return
 
         # Group trump-rank cards by suit
-        suit_groups: dict[Any, list] = {}
-        jokers: list = []
+        suit_groups: dict[Suit, list[Card]] = {}
+        jokers: list[Card] = []
         for c in hand:
             if getattr(c, "rank", None) != trump_rank and not getattr(c, "is_joker", False):
                 continue
@@ -161,9 +152,8 @@ class AutoPlayer(Player):
                 suit_groups.setdefault(c.suit, []).append(c)
 
         # Best possible bid: prefer joker pair > trump-rank pair > trump-rank single
-        best_cards: list = []
+        best_cards: list[Card] = []
         best_count = 0
-        best_suit = None
         best_kind = ""  # "joker" or "trump_rank"
 
         # Check joker pairs (requires 2 of same rank)
@@ -180,21 +170,19 @@ class AutoPlayer(Player):
 
         # Check trump-rank pairs (any suit)
         if not best_cards:
-            for suit, cards in suit_groups.items():
+            for cards in suit_groups.values():
                 if len(cards) >= 2:
                     best_cards = cards[:2]
                     best_count = 2
-                    best_suit = suit
                     best_kind = "trump_rank"
                     break
 
         # Fall back to single trump-rank card
         if not best_cards:
-            for suit, cards in suit_groups.items():
+            for cards in suit_groups.values():
                 if cards:
                     best_cards = [cards[0]]
                     best_count = 1
-                    best_suit = suit
                     best_kind = "trump_rank"
                     break
 
@@ -224,7 +212,7 @@ class AutoPlayer(Player):
         task = asyncio.create_task(game.act(self.index, action))
         task.add_done_callback(_log_task_exception)
 
-    async def _handle_stir(self, snapshot: Any, game: Any) -> None:
+    async def _handle_stir(self, snapshot: StateSnapshot, game: GameView) -> None:
         """Act during STIRRING phase."""
         if snapshot.current_player != self.index:
             return
@@ -234,7 +222,7 @@ class AutoPlayer(Player):
         # Find pairs of trump rank cards that can beat current trump
         trump_cards = [c for c in hand if getattr(c, "rank", None) == trump_rank]
         if len(trump_cards) >= 2 and random.random() < 0.5:
-            suit_groups: dict[Any, list] = {}
+            suit_groups: dict[Suit, list[Card]] = {}
             for c in trump_cards:
                 suit_groups.setdefault(c.suit, []).append(c)
             valid_pair = None
@@ -254,17 +242,13 @@ class AutoPlayer(Player):
         task = asyncio.create_task(game.act(self.index, action))
         task.add_done_callback(_log_task_exception)
 
-    async def _handle_discard(self, snapshot: Any, game: Any) -> None:
+    async def _handle_discard(self, snapshot: StateSnapshot, game: GameView) -> None:
         """Randomly discard cards during EXCHANGE phase."""
         if snapshot.current_player != self.index:
             return
         hand = snapshot.player_hand
-        # exchange_state is a dict in the snapshot; extract count
         exc = snapshot.exchange_state
-        if exc is not None:
-            count = exc.get("count", 8) if isinstance(exc, dict) else getattr(exc, "count", 8)
-        else:
-            count = 8
+        count = exc.count if exc is not None else 8
         if len(hand) >= count and count > 0:
             cards = random.sample(hand, count)
         elif len(hand) > 0:
@@ -275,7 +259,7 @@ class AutoPlayer(Player):
         task = asyncio.create_task(game.act(self.index, action))
         task.add_done_callback(_log_task_exception)
 
-    async def _handle_play(self, snapshot: Any, game: Any) -> None:
+    async def _handle_play(self, snapshot: StateSnapshot, game: GameView) -> None:
         """Pick a random legal play."""
         if snapshot.current_player != self.index:
             return
@@ -292,7 +276,7 @@ class AutoPlayer(Player):
         task = asyncio.create_task(game.act(self.index, action))
         task.add_done_callback(_log_task_exception)
 
-    async def _handle_next_round(self, snapshot: Any, game: Any) -> None:
+    async def _handle_next_round(self, snapshot: StateSnapshot, game: GameView) -> None:
         """Submit NextRoundAction."""
         if snapshot.current_player != self.index:
             return
@@ -307,11 +291,11 @@ class AutoPlayer(Player):
 class HumanPlayer(Player):
     """Human player that communicates via WebSocket."""
 
-    def __init__(self, index: int, ws: Any = None) -> None:
+    def __init__(self, index: int, ws: WebSocket | None = None) -> None:
         super().__init__(index)
         self._ws = ws
 
-    async def on_state(self, game: Any) -> None:
+    async def on_state(self, game: GameView) -> None:
         """Push state to the human player via WebSocket."""
         if self._ws is None:
             return
@@ -322,7 +306,7 @@ class HumanPlayer(Player):
             "state": snapshot.to_dict(),
         })
 
-    def set_ws(self, ws: Any) -> None:
+    def set_ws(self, ws: WebSocket | None) -> None:
         """Replace the WebSocket reference."""
         self._ws = ws
 

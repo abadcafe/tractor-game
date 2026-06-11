@@ -1,160 +1,40 @@
-"""Game aggregate root for Tractor game.
+"""Game aggregate root for the Tractor game.
 
 Wraps sm state machines, manages 4 Player instances, drives the dealing loop,
 and provides act(), run(), snapshot(), is_over(), get_phase(), set_on_game_over(),
 get_player(), cancel(), and resolve_cards() interfaces.
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
-from dataclasses import dataclass
+from collections.abc import Sequence
 from typing import Callable
 
-from server.sm import game_sm, round_sm, play_rules
-from server.sm.card_model import Card, Suit, Rank
+from server.actions import (
+    BidAction,
+    DiscardAction,
+    NextRoundAction,
+    PlayAction,
+    SkipStirAction,
+    StirAction,
+)
+from server.player import Player
+from server.sm import game_sm, play_rules, round_sm
+from server.sm.card_model import Card
 from server.sm.result import Ok, Rejected
 from server.sm.types import BidEvent
-from server.player import Player, BidAction, StirAction, SkipStirAction, DiscardAction, PlayAction, NextRoundAction
+from server.snapshot import (
+    ExchangeStateSnapshot,
+    ScoringSnapshot,
+    StateSnapshot,
+    StirringStateSnapshot,
+    TrickSnapshot,
+    TrickSlotSnapshot,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _card_to_dict(card: Card) -> dict:
-    """Convert a Card Pydantic model to a JSON-serializable dict.
-
-    Returns {"id": card.id, "suit": card.suit.value, "rank": card.rank.value}.
-    Omits internal sm fields (is_joker, is_big_joker, points, deck) per spec.
-    """
-    return {
-        "id": card.id,
-        "suit": card.suit.value,
-        "rank": card.rank.value,
-    }
-
-
-@dataclass
-class StateSnapshot:
-    """A player-facing snapshot of the current game state.
-
-    Contains all fields from spec section 3.3. The to_dict() method
-    serializes to JSON format matching spec section 5.5.
-    """
-
-    phase: str
-    player_hand: list
-    player_hand_counts: list[int]
-    bottom_cards: list
-    trump_suit: Suit | None
-    trump_rank: Rank
-    declarer_team: int | None
-    declarer_player: int | None
-    current_player: int
-    defender_points: int
-    trick: dict | None
-    trick_history: list
-    legal_actions: list
-    awaiting_action: str | None
-    scoring: dict | None
-    winning_team: int | None
-    team0_level: Rank
-    team1_level: Rank
-    bid_events: list
-    bid_winner: dict | None
-    stirring_state: dict | None
-    exchange_state: dict | None
-    next_round_confirmed: list[int]
-
-    def to_dict(self) -> dict:
-        """Convert to a JSON-serializable dict matching spec section 5.5.
-
-        Cards are serialized as {"id", "suit", "rank"}.
-        Enums are serialized as their string values.
-        legal_actions entries are serialized as lists of card-dict lists.
-        """
-        return {
-            "phase": self.phase,
-            "player_hand": [_card_to_dict(c) for c in self.player_hand],
-            "player_hand_counts": self.player_hand_counts,
-            "bottom_cards": [_card_to_dict(c) for c in self.bottom_cards],
-            "trump_suit": self.trump_suit.value if self.trump_suit is not None else None,
-            "trump_rank": self.trump_rank.value,
-            "declarer_team": self.declarer_team,
-            "declarer_player": self.declarer_player,
-            "current_player": self.current_player,
-            "defender_points": self.defender_points,
-            "trick": self._serialize_trick(self.trick),
-            "trick_history": [_serialize_completed_trick(t) for t in self.trick_history],
-            "legal_actions": [
-                [_card_to_dict(c) for c in entry]
-                for entry in self.legal_actions
-            ],
-            "awaiting_action": self.awaiting_action,
-            "scoring": self.scoring,
-            "winning_team": self.winning_team,
-            "team0_level": self.team0_level.value,
-            "team1_level": self.team1_level.value,
-            "bid_events": [_serialize_bid_event(e) for e in self.bid_events],
-            "bid_winner": _serialize_bid_event(self.bid_winner) if self.bid_winner is not None else None,
-            "stirring_state": self.stirring_state,
-            "exchange_state": self.exchange_state,
-            "next_round_confirmed": self.next_round_confirmed,
-        }
-
-    def _serialize_trick(self, trick: dict | None) -> dict | None:
-        """Serialize the trick dict, converting cards within to dict format."""
-        if trick is None:
-            return None
-        return _serialize_dict_trick(trick)
-
-
-def _serialize_bid_event(event: BidEvent) -> dict:
-    """Serialize a BidEvent to a JSON-serializable dict."""
-    return {
-        "player": event.player,
-        "cards": [_card_to_dict(c) for c in event.cards],
-        "kind": event.kind,
-        "suit": event.suit.value if event.suit is not None else None,
-        "joker_type": event.joker_type,
-        "count": event.count,
-    }
-
-
-def _serialize_dict_trick(trick: dict) -> dict:
-    """Serialize a dict-formatted trick/CompletedTrick, converting cards to dict format.
-
-    Shared helper for _serialize_trick and _serialize_completed_trick
-    to avoid duplicating the dict-format handling logic.
-    """
-    result = dict(trick)
-    # Remove stale lead_type key if present (no longer in CompletedTrick)
-    result.pop("lead_type", None)
-    if "slots" in result:
-        result["slots"] = [
-            {
-                "player": slot.get("player") if isinstance(slot, dict) else getattr(slot, "player", None),
-                "cards": [_card_to_dict(c) for c in (slot.get("cards", []) if isinstance(slot, dict) else getattr(slot, "cards", []))],
-            }
-            for slot in result["slots"]
-        ]
-    return result
-
-
-def _serialize_completed_trick(trick) -> dict:
-    """Serialize a CompletedTrick to a JSON-serializable dict."""
-    if isinstance(trick, dict):
-        return _serialize_dict_trick(trick)
-    return {
-        "lead_player": trick.lead_player,
-        "slots": [
-            {
-                "player": slot.player,
-                "cards": [_card_to_dict(c) for c in slot.cards],
-            }
-            for slot in trick.slots
-        ],
-        "winner": trick.winner,
-        "points": trick.points,
-    }
 
 
 class Game:
@@ -164,23 +44,29 @@ class Game:
     the public API for the server layer.
     """
 
-    def __init__(self, players: list[Player]) -> None:
+    def __init__(self, players: Sequence[Player], *, deal_delay: float = 0.5) -> None:
         self._game_state = game_sm.create_game()
         self._round_state: round_sm.RoundState | None = None
-        self._players = players
-        self._dealing_task: asyncio.Task | None = None
+        self._players = list(players)
+        self._dealing_task: asyncio.Task[None] | None = None
         self._on_game_over: Callable[['Game'], None] | None = None
         self._cancelled: bool = False
         self._next_round_confirmed: set[int] = set()
+        self._deal_delay = deal_delay
 
     async def run(self) -> None:
         """Start the game: transition to IN_ROUND, create round, start dealing loop.
 
         Raises RuntimeError if called more than once.
+        Raises RuntimeError if game_sm.start_game rejects (should never happen).
         """
         if self._round_state is not None:
             raise RuntimeError("Game already started; run() can only be called once")
-        self._game_state = game_sm.start_game(self._game_state)
+        match game_sm.start_game(self._game_state):
+            case Ok(value=new_gs):
+                self._game_state = new_gs
+            case Rejected(reason=reason):
+                raise RuntimeError(f"game_sm.start_game rejected: {reason}")
         self._round_state = round_sm.create_round(round_sm.RoundInput(
             declarer_team=self._game_state.declarer_team,
             trump_rank=self._game_state.team0_level,  # trump rank starts at team0_level
@@ -199,12 +85,12 @@ class Game:
         message to the acting player via WebSocket, then still pushes state
         so the game never deadlocks.
 
-        Raises ValueError only for absolute programming errors (e.g. player
-        index out of range).  All runtime action rejections are communicated
-        through the error channel instead of exceptions.
+        All runtime action rejections are communicated through the error
+        channel instead of exceptions.  Programming errors (e.g. player
+        index out of range) propagate as IndexError from the underlying list.
         """
-        if player_index < 0 or player_index >= len(self._players):
-            raise ValueError(f"Player index {player_index} out of range (0-{len(self._players) - 1})")
+        rs = self._round_state
+        assert rs is not None, "act() called before run()"
         phase = self.get_phase()
         logger.debug("Game.act: player=%d action=%s phase=%s", player_index, type(action).__name__, phase)
 
@@ -213,44 +99,40 @@ class Game:
 
         if phase == "DEAL_BID" and isinstance(action, BidAction):
             bid_event = self._convert_bid_action(player_index, action)
-            old_winner = (
-                self._round_state.deal_bid_state.bid_winner
-                if self._round_state.deal_bid_state is not None
-                else None
-            )
-            self._round_state = round_sm.reveal(self._round_state, bid_event)
-            new_winner = (
-                self._round_state.deal_bid_state.bid_winner
-                if self._round_state.deal_bid_state is not None
-                else None
-            )
-            if new_winner is old_winner:
-                error_msg = "叫牌无效：牌张不符合规则或优先级不足"
+            match round_sm.reveal(rs, bid_event):
+                case Ok(value=new_state):
+                    rs = new_state
+                case Rejected(reason=reason):
+                    error_msg = reason
             # Dealing loop already pushes state every 0.5s; avoid extra push
             # here to prevent AutoPlayer bid cascades.
             should_push = False
 
         elif phase == "STIRRING" and isinstance(action, SkipStirAction):
-            self._round_state = round_sm.pass_stir(self._round_state)
+            match round_sm.pass_stir(rs):
+                case Ok(value=new_state):
+                    rs = new_state
+                case Rejected(reason=reason):
+                    error_msg = reason
 
         elif phase == "STIRRING" and isinstance(action, StirAction):
-            match round_sm.stir(self._round_state, action.cards):
+            match round_sm.stir(rs, action.cards):
                 case Ok(value=new_state):
-                    self._round_state = new_state
+                    rs = new_state
                 case Rejected(reason=reason):
                     error_msg = reason
 
         elif phase == "EXCHANGE" and isinstance(action, DiscardAction):
-            match round_sm.discard(self._round_state, action.cards):
+            match round_sm.discard(rs, action.cards):
                 case Ok(value=new_state):
-                    self._round_state = new_state
+                    rs = new_state
                 case Rejected(reason=reason):
                     error_msg = reason
 
         elif phase == "PLAYING" and isinstance(action, PlayAction):
-            match round_sm.play(self._round_state, player_index, action.cards):
+            match round_sm.play(rs, player_index, action.cards):
                 case Ok(value=new_state):
-                    self._round_state = new_state
+                    rs = new_state
                 case Rejected(reason=reason):
                     error_msg = reason
 
@@ -260,21 +142,26 @@ class Game:
             if len(self._next_round_confirmed) == 4:
                 # All 4 players confirmed: proceed to next round
                 self._next_round_confirmed.clear()
-                round_result = round_sm.get_round_result(self._round_state)
+                round_result = round_sm.get_round_result(rs)
                 if round_result is None:
                     raise ValueError(
                         "Round result is None in COMPLETE phase; this indicates an sm layer bug"
                     )
-                self._game_state = game_sm.process_round_result(self._game_state, round_result)
+                match game_sm.process_round_result(self._game_state, round_result):
+                    case Ok(value=new_gs):
+                        self._game_state = new_gs
+                    case Rejected(reason=reason):
+                        error_msg = f"处理回合结果失败：{reason}"
 
-                if self._game_state.phase == "GAME_OVER":
+                if error_msg is None and self._game_state.phase == "GAME_OVER":
+                    self._round_state = rs
                     await self._push_state_to_all()
                     if self._on_game_over is not None:
                         self._on_game_over(self)
                     return
                 else:
                     self._cancelled = False
-                    self._round_state = round_sm.create_round(round_sm.RoundInput(
+                    rs = round_sm.create_round(round_sm.RoundInput(
                         declarer_team=self._game_state.declarer_team,
                         trump_rank=self._game_state.team0_level,
                         last_declarer_player=self._game_state.last_declarer_player,
@@ -287,6 +174,8 @@ class Game:
         else:
             error_msg = f"无效的操作：{type(action).__name__} 不能在 {phase} 阶段使用"
 
+        self._round_state = rs
+
         if error_msg:
             await self._send_error_to_player(player_index, error_msg)
 
@@ -296,15 +185,10 @@ class Game:
     def snapshot(self, for_player: int) -> StateSnapshot:
         """Build a StateSnapshot for the given player.
 
-        Raises RuntimeError if called before run().
-        Raises ValueError if for_player is out of range.
+        Raises IndexError if for_player is out of range.
         """
-        if for_player < 0 or for_player >= len(self._players):
-            raise ValueError(f"Player index {for_player} out of range (0-{len(self._players) - 1})")
-        if self._round_state is None:
-            raise RuntimeError("Game not started")
-
         rs = self._round_state
+        assert rs is not None, "snapshot() called before run()"
         gs = self._game_state
 
         # player_hand
@@ -327,7 +211,7 @@ class Game:
             current_player = rs.declarer_player if rs.declarer_player is not None else 0
 
         # legal_actions
-        legal_actions: list = []
+        legal_actions: list[list[Card]] = []
         can_act_in_playing = False  # whether current player can act in PLAYING
         if rs.phase == "PLAYING" and rs.trick_state is not None:
             is_leading = rs.trick_state.phase == "LEADING"
@@ -344,7 +228,7 @@ class Game:
                     # else: lead player hasn't played yet, followers must wait
             if can_act_in_playing:
                 # Compute other_hands: all cards not in current player's hand
-                other_hands: list = []
+                other_hands: list[Card] = []
                 for i in range(4):
                     if i != for_player:
                         other_hands.extend(rs.players_hand[i])
@@ -372,51 +256,48 @@ class Game:
             awaiting_action = "next_round"
 
         # trick
-        trick = None
+        trick: TrickSnapshot | None = None
         if rs.phase == "PLAYING" and rs.trick_state is not None:
             ts = rs.trick_state
-            trick = {
-                "lead_player": ts.lead_player,
-                "slots": [
-                    {"player": slot.player, "cards": slot.cards}
-                    for slot in ts.slots
-                ],
-                "current_player": ts.cur,
-            }
+            trick = TrickSnapshot(
+                lead_player=ts.lead_player,
+                slots=[TrickSlotSnapshot(player=slot.player, cards=slot.cards) for slot in ts.slots],
+                current_player=ts.cur,
+            )
 
         # bid_events and bid_winner
-        bid_events = []
-        bid_winner = None
+        bid_events: list[BidEvent] = []
+        bid_winner: BidEvent | None = None
         if rs.deal_bid_state is not None:
             bid_events = list(rs.deal_bid_state.bid_events)
             bid_winner = rs.deal_bid_state.bid_winner
 
         # stirring_state
-        stirring_state_dict = None
+        stirring_state_snap: StirringStateSnapshot | None = None
         if rs.stirring_state is not None and rs.phase == "STIRRING":
-            stirring_state_dict = {
-                "phase": rs.stirring_state.phase,
-                "trump_suit": rs.stirring_state.trump_suit.value if rs.stirring_state.trump_suit is not None else None,
-                "current_player": rs.stirring_state.current_player,
-            }
+            stirring_state_snap = StirringStateSnapshot(
+                phase=rs.stirring_state.phase,
+                trump_suit=rs.stirring_state.trump_suit,
+                current_player=rs.stirring_state.current_player,
+            )
 
         # exchange_state
-        exchange_state_dict = None
+        exchange_state_snap: ExchangeStateSnapshot | None = None
         if rs.exchange_state is not None and rs.phase == "EXCHANGE":
-            exchange_state_dict = {
-                "phase": rs.exchange_state.phase,
-                "declarer_player": rs.exchange_state.declarer_player,
-                "count": rs.exchange_state.count,
-            }
+            exchange_state_snap = ExchangeStateSnapshot(
+                phase=rs.exchange_state.phase,
+                declarer_player=rs.exchange_state.declarer_player,
+                count=rs.exchange_state.count,
+            )
 
         # scoring
-        scoring_dict = None
+        scoring_snap: ScoringSnapshot | None = None
         if rs.result is not None:
-            scoring_dict = {
-                "declarer_team": rs.declarer_team,
-                "defender_points": rs.defender_points,
-                "bottom_cards": [_card_to_dict(c) for c in rs.bottom_cards],
-            }
+            scoring_snap = ScoringSnapshot(
+                declarer_team=rs.declarer_team,
+                defender_points=rs.defender_points,
+                bottom_cards=list(rs.bottom_cards),
+            )
 
         return StateSnapshot(
             phase=self.get_phase(),
@@ -433,14 +314,14 @@ class Game:
             trick_history=list(rs.trick_history),
             legal_actions=legal_actions,
             awaiting_action=awaiting_action,
-            scoring=scoring_dict,
+            scoring=scoring_snap,
             winning_team=gs.winning_team,
             team0_level=rs.team0_level,
             team1_level=rs.team1_level,
             bid_events=bid_events,
             bid_winner=bid_winner,
-            stirring_state=stirring_state_dict,
-            exchange_state=exchange_state_dict,
+            stirring_state=stirring_state_snap,
+            exchange_state=exchange_state_snap,
             next_round_confirmed=sorted(self._next_round_confirmed),
         )
 
@@ -466,10 +347,8 @@ class Game:
     def get_player(self, index: int) -> Player:
         """Return the Player at the given index.
 
-        Raises ValueError if the index is out of range.
+        Raises IndexError if the index is out of range.
         """
-        if index < 0 or index >= len(self._players):
-            raise ValueError(f"Player index {index} out of range (0-{len(self._players) - 1})")
         return self._players[index]
 
     async def cancel(self) -> None:
@@ -486,17 +365,14 @@ class Game:
         """Resolve card ID strings to Card objects from the player's hand.
 
         Raises ValueError if any card_id is not found in the player's hand.
-        Raises ValueError if player_index is out of range.
+        Raises IndexError if player_index is out of range.
         """
-        if player_index < 0 or player_index >= len(self._players):
-            raise ValueError(f"Player index {player_index} out of range (0-{len(self._players) - 1})")
-        if self._round_state is None:
-            raise RuntimeError("Game not started")
-
-        hand = self._round_state.players_hand[player_index]
+        rs = self._round_state
+        assert rs is not None, "resolve_cards() called before run()"
+        hand = rs.players_hand[player_index]
         card_map = {c.id: c for c in hand}
 
-        result = []
+        result: list[Card] = []
         for card_id in card_ids:
             if card_id not in card_map:
                 raise ValueError(f"Card {card_id} not in hand of player {player_index}")
@@ -519,13 +395,18 @@ class Game:
                 if self._round_state.deal_bid_state is None:
                     break
 
-                self._round_state = round_sm.deal_next_card(self._round_state)
+                match round_sm.deal_next_card(self._round_state):
+                    case Ok(value=new_rs):
+                        self._round_state = new_rs
+                    case Rejected(reason=reason):
+                        logger.warning("deal_next_card rejected: %s", reason)
+                        break
                 await self._push_state_to_all()
 
                 if self._round_state.phase != "DEAL_BID":
                     break
 
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(self._deal_delay)
         except Exception:
             logger.exception("Dealing loop failed with unexpected exception")
 

@@ -39,7 +39,7 @@ class TestCardModel:
             is_joker=False, is_big_joker=False, points=0, deck=1,
         )
         with pytest.raises(Exception):
-            card.points = 5  # type: ignore[misc]
+            setattr(card, "points", 5)
 
     def test_card_joker_validation_big_joker_requires_is_joker(self) -> None:
         """is_big_joker=True requires is_joker=True."""

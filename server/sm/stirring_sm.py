@@ -12,11 +12,14 @@ Rules:
 - Declarer and team never change during stirring.
 """
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict
 
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.comparator import bid_value
 from server.sm.constants import next_player_ccw
+from server.sm.result import Ok, Rejected, StateResult
 from server.sm.types import StirAction
 
 
@@ -54,7 +57,7 @@ class StirringState(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    phase: str  # "WAITING" | "COMPLETE"
+    phase: Literal["WAITING", "COMPLETE"]
     trump_suit: Suit | None
     trump_rank: Rank
     declarer_player: int
@@ -62,6 +65,7 @@ class StirringState(BaseModel):
     pass_set: frozenset[int]
     actions: tuple[StirAction, ...]
     last_stir_player: int | None = None
+    current_priority: int = 0
 
 
 # ---- Operations ----
@@ -71,7 +75,17 @@ def create_stirring(input: StirInput) -> StirringState:
     """Create initial stirring state.
 
     Starts with current_player = CCW_next(declarer_player).
+    current_priority is set to bid_value of the current trump pair,
+    or 0 for empty trump (so any pair can stir).
     """
+    if input.trump_suit is not None:
+        initial_priority = bid_value(
+            _make_trump_pair(input.trump_suit, input.trump_rank),
+            input.trump_rank,
+        )
+    else:
+        initial_priority = 0
+
     return StirringState(
         phase="WAITING",
         trump_suit=input.trump_suit,
@@ -80,23 +94,24 @@ def create_stirring(input: StirInput) -> StirringState:
         current_player=next_player_ccw(input.declarer_player),
         pass_set=frozenset(),
         actions=(),
+        current_priority=initial_priority,
     )
 
 
-def pass_stir(state: StirringState, player: int) -> StirringState:
+def pass_stir(state: StirringState, player: int) -> StateResult[StirringState]:
     """Player passes. Add to pass_set and advance current_player.
 
     If all 4 players have passed, phase becomes COMPLETE.
-    Rejects if player is not the current player.
+    Returns Rejected if player is not the current player.
     """
     if player != state.current_player:
-        return state
+        return Rejected("不是你的回合")
 
     new_pass_set = state.pass_set | {player}
     new_action = StirAction(player=player, kind="pass", new_suit=None)
 
     if len(new_pass_set) == 4:
-        return StirringState(
+        return Ok(StirringState(
             phase="COMPLETE",
             trump_suit=state.trump_suit,
             trump_rank=state.trump_rank,
@@ -105,9 +120,10 @@ def pass_stir(state: StirringState, player: int) -> StirringState:
             pass_set=new_pass_set,
             actions=state.actions + (new_action,),
             last_stir_player=state.last_stir_player,
-        )
+            current_priority=state.current_priority,
+        ))
 
-    return StirringState(
+    return Ok(StirringState(
         phase="WAITING",
         trump_suit=state.trump_suit,
         trump_rank=state.trump_rank,
@@ -116,12 +132,13 @@ def pass_stir(state: StirringState, player: int) -> StirringState:
         pass_set=new_pass_set,
         actions=state.actions + (new_action,),
         last_stir_player=state.last_stir_player,
-    )
+        current_priority=state.current_priority,
+    ))
 
 
 def stir(
     state: StirringState, player: int, cards: list[Card]
-) -> StirringState:
+) -> StateResult[StirringState]:
     """Attempt to stir (change trump suit) with a pair of cards.
 
     Validation:
@@ -131,70 +148,46 @@ def stir(
     4. Cards must be trump rank or jokers.
     5. Priority must be higher than current trump suit priority.
 
-    If valid: update trump_suit, reset pass_set, advance current_player.
-    If invalid: state unchanged.
+    If valid: returns Ok(new_state) with updated trump_suit, reset pass_set.
+    If invalid: returns Rejected(reason) with a specific reason.
     """
     # 1. Wrong player
     if player != state.current_player:
-        return state
+        return Rejected("不是你的回合")
 
     # 1b. Cannot stir one's own trump (prevents infinite stir loops)
     if state.last_stir_player == player:
-        return state
+        return Rejected("不能连续反主")
 
     # 2. Must be exactly 2 cards
     if len(cards) != 2:
-        return state
+        return Rejected("反主必须出对子")
 
     # 3. Must be a valid pair
     # Joker pair: both jokers of same type
     if cards[0].is_joker and cards[1].is_joker:
         if cards[0].rank != cards[1].rank:
-            return state  # Different joker types, not a valid pair
+            return Rejected("两种王不能配对")
         # Valid joker pair
         new_suit: Suit | None = None  # Joker pair → 无主
     else:
         # Non-joker: both must be trump rank, same suit
         if cards[0].is_joker or cards[1].is_joker:
-            return state  # Mixed joker + non-joker
+            return Rejected("王和普通牌不能配对")
         if cards[0].rank != state.trump_rank or cards[1].rank != state.trump_rank:
-            return state  # Not trump rank cards
+            return Rejected("牌不是主牌等级")
         if cards[0].suit != cards[1].suit:
-            return state  # Different suits
+            return Rejected("对子必须同花色")
         new_suit = cards[0].suit
 
-    # 4. Priority check
+    # 4. Priority check (unified for all cases, including empty trump + joker)
     new_priority = bid_value(cards, state.trump_rank)
-
-    if state.trump_suit is None:
-        # 空主: any trump-rank pair is accepted
-        # But joker pair on empty trump → stays None (no effective change)
-        if cards[0].is_joker and cards[1].is_joker:
-            # Joker pair on 空主: record action but trump stays None
-            new_action = StirAction(player=player, kind="stir", new_suit=None)
-            return StirringState(
-                phase="WAITING",
-                trump_suit=None,
-                trump_rank=state.trump_rank,
-                declarer_player=state.declarer_player,
-                current_player=next_player_ccw(state.current_player),
-                pass_set=frozenset(),
-                actions=state.actions + (new_action,),
-                last_stir_player=player,
-            )
-        # Non-joker pair on 空主: always accepted
-    else:
-        # Non-empty trump: priority must be higher
-        current_priority = bid_value(
-            _make_trump_pair(state.trump_suit, state.trump_rank),
-            state.trump_rank,
-        )
-        if new_priority <= current_priority:
-            return state  # Priority too low
+    if new_priority <= state.current_priority:
+        return Rejected("优先级不足，不能反主")
 
     # 5. Valid stir: update state
     new_action = StirAction(player=player, kind="stir", new_suit=new_suit)
-    return StirringState(
+    return Ok(StirringState(
         phase="WAITING",
         trump_suit=new_suit,
         trump_rank=state.trump_rank,
@@ -203,7 +196,8 @@ def stir(
         pass_set=frozenset(),
         actions=state.actions + (new_action,),
         last_stir_player=player,
-    )
+        current_priority=new_priority,
+    ))
 
 
 def get_stir_result(state: StirringState) -> StirResult:

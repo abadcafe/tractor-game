@@ -13,6 +13,13 @@ from server.sm.round_sm import (
 from server.sm.result import Ok, Rejected
 
 
+def _deal(state: RoundState) -> RoundState:
+    """Unwrap deal_next_card result, asserting Ok."""
+    result = deal_next_card(state)
+    assert isinstance(result, Ok), f"deal_next_card rejected: {result.reason}"
+    return result.value
+
+
 def _play_first_legal(state: RoundState) -> RoundState:
     """Play the first legal play for the current player in the trick.
 
@@ -57,7 +64,7 @@ def _deal_all_cards(state: RoundState) -> RoundState:
     while state.phase == "DEAL_BID" and state.deal_bid_state is not None:
         if state.deal_bid_state.phase != "DEALING":
             break
-        state = deal_next_card(state)
+        state = _deal(state)
     return state
 
 
@@ -73,7 +80,7 @@ def _complete_deal_bid_with_reveal(state: RoundState) -> RoundState:
     for _ in range(20):
         if state.deal_bid_state is None or state.deal_bid_state.phase != "DEALING":
             break
-        state = deal_next_card(state)
+        state = _deal(state)
 
     # Find a trump rank card in any hand and reveal it
     if state.deal_bid_state is not None and state.deal_bid_state.phase == "DEALING":
@@ -85,7 +92,9 @@ def _complete_deal_bid_with_reveal(state: RoundState) -> RoundState:
                     player=p, cards=[trump_cards[0]], kind="trump_rank",
                     suit=trump_cards[0].suit, joker_type=None, count=1,
                 )
-                state = reveal(state, event)
+                result = reveal(state, event)
+                if isinstance(result, Ok):
+                    state = result.value
                 break
 
     # Deal remaining cards
@@ -98,7 +107,9 @@ def _complete_stirring_all_pass(state: RoundState) -> RoundState:
     for _ in range(4):
         if state.phase != "STIRRING":
             break
-        state = pass_stir(state)
+        result = pass_stir(state)
+        assert isinstance(result, Ok), f"pass_stir rejected: {result.reason}"
+        state = result.value
     return state
 
 
@@ -151,7 +162,7 @@ class TestDealBidPhase:
         assert state.phase == "DEAL_BID"
         assert state.deal_bid_state is not None
         initial_cursor = state.deal_bid_state.deal_cursor
-        state = deal_next_card(state)
+        state = _deal(state)
         assert state.deal_bid_state is not None
         assert state.deal_bid_state.deal_cursor == initial_cursor + 1
 
@@ -164,7 +175,7 @@ class TestDealBidPhase:
         ))
         # Deal some cards first
         for _ in range(20):
-            state = deal_next_card(state)
+            state = _deal(state)
 
         # Find a trump rank card and reveal
         assert state.deal_bid_state is not None
@@ -178,7 +189,9 @@ class TestDealBidPhase:
                 )
                 assert state.deal_bid_state is not None
                 old_events = len(state.deal_bid_state.bid_events)
-                state = reveal(state, event)
+                result = reveal(state, event)
+                assert isinstance(result, Ok)
+                state = result.value
                 assert state.deal_bid_state is not None
                 assert len(state.deal_bid_state.bid_events) > old_events
                 break
@@ -220,7 +233,9 @@ class TestStirringPhase:
         ))
         state = _complete_deal_bid_no_bid(state)
         assert state.phase == "STIRRING"
-        state = pass_stir(state)
+        result = pass_stir(state)
+        assert isinstance(result, Ok)
+        state = result.value
         assert state.stirring_state is not None
         assert len(state.stirring_state.pass_set) == 1
 
@@ -296,7 +311,7 @@ class TestStirringPhase:
         if hand:
             result = stir(state, cards=[hand[0]])
             assert isinstance(result, Rejected)
-            assert "反主无效" in result.reason
+            assert "对子" in result.reason
 
     def test_stirring_to_exchange(self) -> None:
         """After all players pass stirring, round enters EXCHANGE."""
@@ -355,7 +370,9 @@ class TestStirringPhase:
         for _ in range(3):
             if state.phase != "STIRRING":
                 break
-            state = pass_stir(state)
+            result = pass_stir(state)
+            assert isinstance(result, Ok), f"pass_stir rejected: {result.reason}"
+            state = result.value
 
         assert state.phase == "STIRRING"
         assert state.stirring_state is not None
@@ -556,7 +573,7 @@ class TestRoundDeclarer:
         ))
         # Deal some cards
         for _ in range(20):
-            state = deal_next_card(state)
+            state = _deal(state)
         # Find trump rank card in team 0 player's hand (players 0, 3)
         assert state.deal_bid_state is not None
         for p in [0, 3]:
@@ -567,7 +584,9 @@ class TestRoundDeclarer:
                     player=p, cards=[trump_cards[0]], kind="trump_rank",
                     suit=trump_cards[0].suit, joker_type=None, count=1,
                 )
-                state = reveal(state, event)
+                result = reveal(state, event)
+                assert isinstance(result, Ok)
+                state = result.value
                 break
         state = _deal_all_cards(state)
         assert state.phase == "STIRRING"
@@ -586,7 +605,7 @@ class TestRoundDeclarer:
         ))
         # Deal some cards
         for _ in range(20):
-            state = deal_next_card(state)
+            state = _deal(state)
         # Find trump rank card in team 1 player's hand (players 1, 2)
         assert state.deal_bid_state is not None
         for p in [1, 2]:
@@ -597,7 +616,9 @@ class TestRoundDeclarer:
                     player=p, cards=[trump_cards[0]], kind="trump_rank",
                     suit=trump_cards[0].suit, joker_type=None, count=1,
                 )
-                state = reveal(state, event)
+                result = reveal(state, event)
+                assert isinstance(result, Ok)
+                state = result.value
                 break
         state = _deal_all_cards(state)
         assert state.phase == "STIRRING"

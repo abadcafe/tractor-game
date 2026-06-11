@@ -1,8 +1,8 @@
-"""Tests for sm.exchange module."""
+"""Tests for sm.exchange_sm module."""
 from typing import Literal
 
 from server.sm.card_model import Card, Suit, Rank
-from server.sm.exchange import (
+from server.sm.exchange_sm import (
     ExchangeInput, ExchangeResult,
     create_exchange, discard,
 )
@@ -32,7 +32,7 @@ def _make_hand(count: int, offset: int = 0) -> list[Card]:
         card_in_deck = idx % suits_per_deck
         suit = suits[card_in_deck % 4]
         rank = ranks[card_in_deck // 4 % len(ranks)]
-        cards.append(_card(suit, rank, deck_idx + 1))  # type: ignore[reportArgumentType]
+        cards.append(_card(suit, rank, 1 if deck_idx == 0 else 2))
     return cards
 
 

@@ -10,6 +10,8 @@ the controllable clock injected via GameRegistry(clock=...) or the public API.
 """
 
 import asyncio
+from collections.abc import AsyncGenerator, Generator
+from typing import Literal
 
 import pytest
 import httpx
@@ -17,11 +19,11 @@ from starlette.testclient import TestClient
 
 from server.server import app, registry
 from server.game_registry import GameRegistry
-from server.player import NextRoundAction
+from server.actions import NextRoundAction
 
 
 @pytest.fixture(autouse=True)
-def clean_registry():
+def clean_registry() -> Generator[None, None, None]:
     """Reset the global registry before each test.
 
     Uses public API only: delete() for each game obtained from list_games().
@@ -36,7 +38,7 @@ def clean_registry():
 
 
 @pytest.fixture
-async def client():
+async def client() -> AsyncGenerator[httpx.AsyncClient, None]:
     """Async test client using httpx with ASGI transport for REST tests."""
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -44,20 +46,20 @@ async def client():
 
 
 @pytest.fixture
-def sync_client():
+def sync_client() -> Generator[TestClient, None, None]:
     """Synchronous test client using Starlette TestClient for WebSocket tests."""
     with TestClient(app) as c:
         yield c
 
 
-async def _create_game(client):
+async def _create_game(client: httpx.AsyncClient) -> str:
     """Helper: create a game and return the game_id."""
     resp = await client.post("/api/game")
     assert resp.status_code == 201
     return resp.json()["game_id"]
 
 
-def _create_game_sync(sync_client):
+def _create_game_sync(sync_client: TestClient) -> str:
     """Helper: create a game synchronously and return the game_id."""
     resp = sync_client.post("/api/game")
     assert resp.status_code == 201
@@ -67,7 +69,7 @@ def _create_game_sync(sync_client):
 # ---- Full Flow ----
 
 
-def test_full_game_flow(sync_client):
+def test_full_game_flow(sync_client: TestClient) -> None:
     """Test creating a game, connecting, and verifying initial state."""
     game_id = _create_game_sync(sync_client)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
@@ -79,7 +81,7 @@ def test_full_game_flow(sync_client):
         assert "trump_rank" in state
 
 
-def test_reconnect_mid_game(sync_client):
+def test_reconnect_mid_game(sync_client: TestClient) -> None:
     """Test disconnecting and reconnecting to a game."""
     game_id = _create_game_sync(sync_client)
     # First connection
@@ -94,7 +96,7 @@ def test_reconnect_mid_game(sync_client):
 
 
 @pytest.mark.asyncio
-async def test_concurrent_games(client):
+async def test_concurrent_games(client: httpx.AsyncClient) -> None:
     """Test that multiple games can exist simultaneously."""
     game_id_1 = await _create_game(client)
     game_id_2 = await _create_game(client)
@@ -108,7 +110,7 @@ async def test_concurrent_games(client):
 
 
 @pytest.mark.asyncio
-async def test_cleanup_expired_games(client):
+async def test_cleanup_expired_games(client: httpx.AsyncClient) -> None:
     """Test that expired games are cleaned up.
 
     Uses a fresh GameRegistry with a controllable clock instead of
@@ -116,7 +118,7 @@ async def test_cleanup_expired_games(client):
     """
     clock_calls = [0]
 
-    def fake_clock():
+    def fake_clock() -> float:
         clock_calls[0] += 1
         return float(clock_calls[0] * 100)
 
@@ -133,7 +135,7 @@ async def test_cleanup_expired_games(client):
     assert test_registry.get(game_id) is None
 
 
-def test_invalid_action_returns_error(sync_client):
+def test_invalid_action_returns_error(sync_client: TestClient) -> None:
     """Test that invalid actions through WebSocket return error messages.
 
     Sends a "play" action with a fake card ID during the dealing phase.
@@ -143,7 +145,7 @@ def test_invalid_action_returns_error(sync_client):
     """
     game_id = _create_game_sync(sync_client)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
-        data = ws.receive_json()
+        ws.receive_json()
         # Try to play cards during dealing phase (should be invalid)
         ws.send_json({"type": "play", "cards": ["fake_card_id"]})
         # Server should send back an error response
@@ -153,18 +155,18 @@ def test_invalid_action_returns_error(sync_client):
         assert len(resp["message"]) > 0
 
 
-def test_delete_game_disconnects_ws(sync_client):
+def test_delete_game_disconnects_ws(sync_client: TestClient) -> None:
     """Test that deleting a game while connected closes cleanly."""
     game_id = _create_game_sync(sync_client)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
-        data = ws.receive_json()
+        ws.receive_json()
     # Delete after disconnect is fine
     resp = sync_client.delete(f"/api/game/{game_id}")
     assert resp.status_code == 200
 
 
 @pytest.mark.asyncio
-async def test_list_games_shows_phase(client):
+async def test_list_games_shows_phase(client: httpx.AsyncClient) -> None:
     """Test that listing games includes phase information."""
     game_id = await _create_game(client)
     resp = await client.get("/api/game")
@@ -178,7 +180,7 @@ async def test_list_games_shows_phase(client):
 
 
 @pytest.mark.asyncio
-async def test_game_auto_completion(client):
+async def test_game_auto_completion(client: httpx.AsyncClient) -> None:
     """Test that a game with 4 AutoPlayers can auto-complete through the full pipeline.
 
     This test verifies that the dealing loop makes progress by checking that
@@ -191,7 +193,7 @@ async def test_game_auto_completion(client):
     assert game is not None
 
     # Initial phase should be DEAL_BID (or a round-level phase)
-    initial_phase = game.get_phase()
+    _initial_phase = game.get_phase()
 
     # Wait for dealing to make progress (3 cards at 0.75s each = ~2.25s)
     await asyncio.sleep(3)
@@ -213,7 +215,7 @@ async def test_game_auto_completion(client):
 
 
 @pytest.mark.asyncio
-async def test_game_over_via_auto_players(client):
+async def test_game_over_via_auto_players(client: httpx.AsyncClient) -> None:
     """Test that a game with auto players starts and progresses through phases.
 
     Verifies that the game is created with 4 AutoPlayers (3 Auto + 1 Human)
@@ -229,7 +231,7 @@ async def test_game_over_via_auto_players(client):
 
 
 @pytest.mark.asyncio
-async def test_game_over_removes_from_registry(client):
+async def test_game_over_removes_from_registry(client: httpx.AsyncClient) -> None:
     """Test that the on_game_over callback mechanism works end-to-end.
 
     Creates a Game directly with mocked sm functions to force it through
@@ -290,14 +292,14 @@ async def test_game_over_removes_from_registry(client):
     game_id = test_registry.create(game)
 
     # Set the on_game_over callback that records invocation AND removes from registry
-    def on_game_over(g):
+    def on_game_over(g: Game) -> None:
         callback_called[0] = True
         test_registry.delete(game_id)
 
     game.set_on_game_over(on_game_over)
 
     # Start the game so _round_state is set to the COMPLETE mock
-    with patch.object(gm, "start_game", return_value=in_round_state):
+    with patch.object(gm, "start_game", return_value=Ok(in_round_state)):
         with patch.object(rm, "create_round", return_value=complete_round):
             await game.run()
             await game.cancel()
@@ -306,9 +308,11 @@ async def test_game_over_removes_from_registry(client):
     assert test_registry.get(game_id) is not None
 
     # Now trigger GAME_OVER via act() with NextRoundAction using patched sm
-    with patch.object(gm, "process_round_result", return_value=game_over_state):
+    # All 4 players must confirm to trigger the next round
+    with patch.object(gm, "process_round_result", return_value=Ok(game_over_state)):
         with patch.object(rm, "get_round_result", return_value=mock_result):
-            await game.act(player_index=0, action=NextRoundAction())
+            for p in range(4):
+                await game.act(player_index=p, action=NextRoundAction())
 
     # Verify the callback was actually called (not just conditionally checked)
     assert callback_called[0], "on_game_over callback was not invoked"
@@ -321,7 +325,8 @@ async def test_game_over_removes_from_registry(client):
 
 
 from server.sm.card_model import Card as SmCard, Suit as SmSuit, Rank as SmRank, POINTS_MAP
-from server.sm.trick import create_trick, play as trick_play, TrickInput
+from server.sm.trick_sm import create_trick, play as trick_play, TrickInput, TrickState
+from server.sm.result import Ok, Rejected
 from server.sm.scoring import calculate_score
 from server.sm.types import CompletedTrick, CompletedTrickSlot
 from server.sm.play_rules import (
@@ -330,7 +335,7 @@ from server.sm.play_rules import (
 )
 
 
-def _card(suit: SmSuit, rank: SmRank, deck: int = 1) -> SmCard:
+def _card(suit: SmSuit, rank: SmRank, deck: Literal[1, 2] = 1) -> SmCard:
     return SmCard(
         id=f"D{deck}-{suit.value}-{rank.value}",
         suit=suit, rank=rank,
@@ -338,6 +343,16 @@ def _card(suit: SmSuit, rank: SmRank, deck: int = 1) -> SmCard:
         is_big_joker=(rank == SmRank.BIG_JOKER),
         points=POINTS_MAP.get(rank, 0), deck=deck,
     )
+
+
+def _play_unwrap(state: TrickState, player: int, cards: list[SmCard]) -> TrickState:
+    """Call trick_play and unwrap the Ok result, raising on Rejected."""
+    result = trick_play(state, player=player, cards=cards)
+    match result:
+        case Ok(value=new_state):
+            return new_state
+        case Rejected(reason=reason):
+            raise AssertionError(f"trick_play rejected: {reason}")
 
 
 class TestE2ETractorFlow:
@@ -372,10 +387,10 @@ class TestE2ETractorFlow:
             trump_suit=SmSuit.SPADES, trump_rank=SmRank.TWO,
             defender_points=0, declarer_team=0,
         ))
-        state = trick_play(state, player=0, cards=hands[0])
-        state = trick_play(state, player=1, cards=hands[1])
-        state = trick_play(state, player=3, cards=hands[3])
-        state = trick_play(state, player=2, cards=hands[2])
+        state = _play_unwrap(state, player=0, cards=hands[0])
+        state = _play_unwrap(state, player=1, cards=hands[1])
+        state = _play_unwrap(state, player=3, cards=hands[3])
+        state = _play_unwrap(state, player=2, cards=hands[2])
         result = state.result
         assert result is not None
         assert result.winner == 3  # h9-9-10-10 wins (highest tractor)
@@ -412,10 +427,10 @@ class TestE2ETractorFlow:
             defender_points=0, declarer_team=0,
         ))
         # CCW order: 0 -> 1 -> 3 -> 2
-        state = trick_play(state, player=0, cards=hands[0])
-        state = trick_play(state, player=1, cards=hands[1])
-        state = trick_play(state, player=3, cards=hands[3])
-        state = trick_play(state, player=2, cards=hands[2])
+        state = _play_unwrap(state, player=0, cards=hands[0])
+        state = _play_unwrap(state, player=1, cards=hands[1])
+        state = _play_unwrap(state, player=3, cards=hands[3])
+        state = _play_unwrap(state, player=2, cards=hands[2])
         result = state.result
         assert result is not None
         assert result.winner == 2  # trump tractor wins
@@ -444,10 +459,10 @@ class TestE2EThrowFlow:
             trump_suit=SmSuit.CLUBS, trump_rank=SmRank.TWO,
             defender_points=0, declarer_team=0,
         ))
-        state = trick_play(state, player=0, cards=hands[0])
-        state = trick_play(state, player=1, cards=hands[1])
-        state = trick_play(state, player=3, cards=hands[3])
-        state = trick_play(state, player=2, cards=hands[2])
+        state = _play_unwrap(state, player=0, cards=hands[0])
+        state = _play_unwrap(state, player=1, cards=hands[1])
+        state = _play_unwrap(state, player=3, cards=hands[3])
+        state = _play_unwrap(state, player=2, cards=hands[2])
         result = state.result
         assert result is not None
         assert result.winner == 0  # throw wins (trump is clubs, followers play hearts/diamonds)
@@ -548,18 +563,17 @@ class TestE2EComparePlaysNew:
 
 
 @pytest.mark.asyncio
-async def test_full_game_flow_completes_without_resource_explosion():
+async def test_full_game_flow_completes_without_resource_explosion() -> None:
     """A game with 4 AutoPlayers must complete without CPU/memory explosion.
 
-    Regression test for Bug 1: AutoPlayer on_state() → create_task(bid)
-    → game.act() → _push_state_to_all() → on_state() → … exponential
+    Regression test for Bug 1: AutoPlayer on_state() -> create_task(bid)
+    -> game.act() -> _push_state_to_all() -> on_state() -> ... exponential
     task cascade consumed 96.9% CPU and 8.8 GB RAM.
 
     This test creates a game with 4 AutoPlayers and lets them drive
     it through at least one full round. After running, the game must
     have progressed and not be stuck in an infinite task cascade.
     """
-    import os
     from server.game import Game
     from server.player import AutoPlayer
     from unittest.mock import patch
@@ -572,7 +586,7 @@ async def test_full_game_flow_completes_without_resource_explosion():
     # replacing it with a 1ms sleep makes the test practical.
     original_sleep = asyncio.sleep
 
-    async def fast_sleep(delay: float):
+    async def fast_sleep(delay: float) -> None:
         if delay >= 0.1:
             # Only speed up long sleeps (dealing loop), not short waits
             await original_sleep(0.001)
@@ -582,7 +596,7 @@ async def test_full_game_flow_completes_without_resource_explosion():
     with patch.object(asyncio, 'sleep', side_effect=fast_sleep):
         await game.run()
 
-        # Let the game auto-progress — with fast sleep, dealing
+        # Let the game auto-progress -- with fast sleep, dealing
         # completes in ~0.1s and AI plays complete quickly
         await original_sleep(3)
 

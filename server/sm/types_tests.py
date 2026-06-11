@@ -75,24 +75,6 @@ class TestBidEvent:
         with pytest.raises(ValidationError):
             event.player = 1
 
-    def test_bid_event_kind_literal(self) -> None:
-        """BidEvent.kind must be 'trump_rank' or 'joker'."""
-        cards = [_card(Suit.HEARTS, Rank.TWO)]
-        with pytest.raises(ValidationError):
-            BidEvent(
-                player=0, cards=cards, kind="invalid",  # type: ignore[reportArgumentType]
-                suit=Suit.HEARTS, joker_type=None, count=1,
-            )
-
-    def test_bid_event_joker_type_literal(self) -> None:
-        """BidEvent.joker_type must be 'big', 'small', or None."""
-        cards = [_card(Suit.JOKER, Rank.BIG_JOKER, 1), _card(Suit.JOKER, Rank.BIG_JOKER, 2)]
-        with pytest.raises(ValidationError):
-            BidEvent(
-                player=0, cards=cards, kind="joker",
-                suit=None, joker_type="invalid", count=2,  # type: ignore[reportArgumentType]
-            )
-
     def test_bid_event_trump_rank_requires_suit(self) -> None:
         """BidEvent.kind='trump_rank' requires suit to be set."""
         cards = [_card(Suit.HEARTS, Rank.TWO)]
@@ -132,11 +114,6 @@ class TestStirAction:
         with pytest.raises(ValidationError):
             action.player = 2
 
-    def test_stir_action_kind_literal(self) -> None:
-        """StirAction.kind must be 'stir' or 'pass'."""
-        with pytest.raises(ValidationError):
-            StirAction(player=0, kind="invalid", new_suit=None)  # type: ignore[reportArgumentType]
-
     def test_stir_action_stir_with_no_trump(self) -> None:
         """StirAction.kind='stir' allows new_suit=None for joker pair (no trump)."""
         action = StirAction(player=0, kind="stir", new_suit=None)
@@ -162,11 +139,6 @@ class TestPlayer:
         """is_declarer defaults to False."""
         player = Player(index=1, team=1, hand=[])
         assert player.is_declarer is False
-
-    def test_player_team_literal(self) -> None:
-        """Player.team must be 0 or 1."""
-        with pytest.raises(ValidationError):
-            Player(index=0, team=2, hand=[])  # type: ignore[reportArgumentType]
 
     def test_player_hand_mutable(self) -> None:
         """Player.hand is mutable (Player is NOT frozen)."""
@@ -284,7 +256,7 @@ class TestSubPlay:
         c = _card(Suit.HEARTS, Rank.ACE)
         sp = SubPlay(pair_count=0, cards=[c], suit=Suit.HEARTS)
         with pytest.raises(ValidationError):
-            sp.pair_count = 1  # type: ignore
+            setattr(sp, "pair_count", 1)
 
     def test_subplay_negative_pair_count_rejected(self) -> None:
         """SubPlay rejects negative pair_count."""

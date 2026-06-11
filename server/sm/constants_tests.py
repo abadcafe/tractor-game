@@ -118,7 +118,7 @@ class TestImmutability:
         from dataclasses import FrozenInstanceError
         st = SCORE_THRESHOLDS[0]
         try:
-            st.max_points = 999  # type: ignore[misc]
+            setattr(st, "max_points", 999)
             raise AssertionError("Should have raised FrozenInstanceError")
         except FrozenInstanceError:
             pass

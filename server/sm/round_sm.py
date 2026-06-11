@@ -20,10 +20,10 @@ from server.sm.constants import (
     BOTTOM_CARD_COUNT,
     get_team_index,
 )
-from server.sm import deal_bid as db
-from server.sm import stirring as stir_mod
-from server.sm import exchange as exc
-from server.sm import trick as trick_mod
+from server.sm import deal_bid_sm as db
+from server.sm import stirring_sm as stir_mod
+from server.sm import exchange_sm as exc
+from server.sm import trick_sm as trick_mod
 from server.sm import scoring
 from server.sm import play_rules
 from server.sm.result import Ok, Rejected, StateResult
@@ -49,7 +49,7 @@ class RoundInput(BaseModel):
 class RoundState(BaseModel):
     """Internal state of the round state machine."""
 
-    model_config = ConfigDict(frozen=False)
+    model_config = ConfigDict(frozen=True)
 
     phase: Literal["DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING", "SCORING", "COMPLETE"]
     declarer_team: int | None
@@ -115,71 +115,84 @@ def create_round(input: RoundInput) -> RoundState:
     )
 
 
-def deal_next_card(state: RoundState) -> RoundState:
+def deal_next_card(state: RoundState) -> StateResult[RoundState]:
     """Deal the next card during DEAL_BID phase.
 
     Delegates to deal_bid.deal_next_card. After dealing, syncs players_hand.
     If deal-bid is complete (COMPLETE or NO_BID), transitions to STIRRING.
+
+    Returns Ok(new_state) on success, Rejected(reason) on invalid state.
     """
     if state.phase != "DEAL_BID":
-        raise ValueError(
-            f"Cannot deal_next_card in phase {state.phase}; expected DEAL_BID"
+        return Rejected(
+            f"发牌只能在发牌阶段进行，当前阶段：{state.phase}"
         )
     if state.deal_bid_state is None:
-        raise ValueError("deal_bid_state is None")
+        return Rejected("发牌状态异常")
 
-    new_db = db.deal_next_card(state.deal_bid_state)
-    new_state = state.model_copy(update={
-        "deal_bid_state": new_db,
-        "players_hand": [list(h) for h in new_db.players_hand],
-    })
+    match db.deal_next_card(state.deal_bid_state):
+        case Ok(value=new_db):
+            new_state = state.model_copy(update={
+                "deal_bid_state": new_db,
+                "players_hand": [list(h) for h in new_db.players_hand],
+            })
 
-    # Check if deal-bid is complete
-    if new_db.phase in ("COMPLETE", "NO_BID"):
-        return _transition_to_stirring(new_state, new_db)
+            # Check if deal-bid is complete
+            if new_db.phase in ("COMPLETE", "NO_BID"):
+                return Ok(_transition_to_stirring(new_state, new_db))
 
-    return new_state
+            return Ok(new_state)
+        case Rejected(reason=reason):
+            return Rejected(reason)
 
 
-def reveal(state: RoundState, event: BidEvent) -> RoundState:
+def reveal(state: RoundState, event: BidEvent) -> StateResult[RoundState]:
     """Reveal (bid) a card during DEAL_BID phase.
 
     Delegates to deal_bid.reveal.
+
+    Returns Ok(new_state) on success, Rejected(reason) on invalid input.
     """
     if state.phase != "DEAL_BID":
-        raise ValueError(
-            f"Cannot reveal in phase {state.phase}; expected DEAL_BID"
+        return Rejected(
+            f"叫牌只能在发牌阶段进行，当前阶段：{state.phase}"
         )
     if state.deal_bid_state is None:
-        raise ValueError("deal_bid_state is None")
+        return Rejected("叫牌状态异常")
 
-    new_db = db.reveal(state.deal_bid_state, event)
-    return state.model_copy(update={"deal_bid_state": new_db})
+    match db.reveal(state.deal_bid_state, event):
+        case Ok(value=new_db):
+            return Ok(state.model_copy(update={"deal_bid_state": new_db}))
+        case Rejected(reason=reason):
+            return Rejected(reason)
 
 
-def pass_stir(state: RoundState) -> RoundState:
+def pass_stir(state: RoundState) -> StateResult[RoundState]:
     """Pass during STIRRING phase.
 
     Delegates to stirring.pass_stir. If stirring completes, transitions to EXCHANGE.
+
+    Returns Ok(new_state) on success, Rejected(reason) on invalid input.
     """
     if state.phase != "STIRRING":
-        raise ValueError(
-            f"Cannot pass_stir in phase {state.phase}; expected STIRRING"
+        return Rejected(
+            f"不能在 {state.phase} 阶段跳过反主"
         )
     if state.stirring_state is None:
-        raise ValueError("stirring_state is None")
+        return Rejected("反主状态异常")
 
     cur = state.stirring_state.current_player
-    new_ss = stir_mod.pass_stir(state.stirring_state, cur)
-
-    if new_ss.phase == "COMPLETE":
-        new_state = state.model_copy(update={
-            "stirring_state": new_ss,
-            "trump_suit": new_ss.trump_suit,
-        })
-        return _transition_to_exchange(new_state)
-
-    return state.model_copy(update={"stirring_state": new_ss})
+    match stir_mod.pass_stir(state.stirring_state, cur):
+        case Ok(value=new_ss):
+            if new_ss.phase == "COMPLETE":
+                new_state = state.model_copy(update={
+                    "stirring_state": new_ss,
+                    "trump_suit": new_ss.trump_suit,
+                })
+                return Ok(_transition_to_exchange(new_state))
+            return Ok(state.model_copy(update={"stirring_state": new_ss}))
+        case Rejected(reason=reason):
+            return Rejected(reason)
 
 
 def stir(state: RoundState, cards: list[Card]) -> StateResult[RoundState]:
@@ -208,21 +221,15 @@ def stir(state: RoundState, cards: list[Card]) -> StateResult[RoundState]:
                 f"牌 {card.id} 不在玩家 {cur} 的手牌中"
             )
 
-    old_ss = state.stirring_state
-    new_ss = stir_mod.stir(state.stirring_state, cur, cards)
-
-    # Detect rejection: if the stirring module returned the state unchanged
-    # (trump_suit and actions both unchanged), the stir was invalid.
-    if (new_ss.trump_suit == old_ss.trump_suit
-            and len(new_ss.actions) == len(old_ss.actions)):
-        return Rejected("反主无效：牌张不符合规则或优先级不足")
-
-    new_state = state.model_copy(update={
-        "stirring_state": new_ss,
-        "trump_suit": new_ss.trump_suit,
-    })
-
-    return Ok(new_state)
+    match stir_mod.stir(state.stirring_state, cur, cards):
+        case Ok(value=new_ss):
+            new_state = state.model_copy(update={
+                "stirring_state": new_ss,
+                "trump_suit": new_ss.trump_suit,
+            })
+            return Ok(new_state)
+        case Rejected(reason=reason):
+            return Rejected(reason)
 
 
 def discard(state: RoundState, cards: list[Card]) -> StateResult[RoundState]:
