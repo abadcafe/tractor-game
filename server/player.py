@@ -259,8 +259,6 @@ class AutoPlayer(Player):
 
     async def _handle_next_round(self, snapshot: StateSnapshot, game: GameView) -> None:
         """Submit NextRoundAction."""
-        if snapshot.current_player != self.index:
-            return
         action = NextRoundAction()
         task = asyncio.create_task(game.act(self.index, action))
         task.add_done_callback(_log_task_exception)

@@ -234,8 +234,8 @@ async def test_auto_player_next_round():
 
 
 @pytest.mark.asyncio
-async def test_auto_player_ignores_wrong_player_next_round():
-    """AutoPlayer does not submit NextRoundAction when current_player != self.index."""
+async def test_auto_player_submits_next_round_even_when_not_current():
+    """AutoPlayer submits NextRoundAction regardless of current_player in COMPLETE phase."""
     snap = _make_snapshot(
         phase="COMPLETE",
         awaiting_action="next_round",
@@ -245,7 +245,7 @@ async def test_auto_player_ignores_wrong_player_next_round():
     player = AutoPlayer(index=0)
     await player.on_state(game)
     await asyncio.sleep(0.05)
-    game.act.assert_not_awaited()
+    game.act.assert_awaited()
 
 
 @pytest.mark.asyncio
