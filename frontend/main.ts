@@ -116,6 +116,24 @@ function main() {
     stateManager,
     (snapshot, containerEl, interactionMode) => {
       currentInteractionMode = interactionMode;
+
+      // Validate selection against new state: clear if cards left hand or selection is illegal
+      if (selectedCardIds.size > 0) {
+        const handIds = new Set(snapshot.player_hand.map((c) => c.id));
+        const allInHand = [...selectedCardIds].every((id) => handIds.has(id));
+        if (!allInHand) {
+          // Some selected cards are no longer in hand
+          selectedCardIds.clear();
+        } else if (snapshot.phase === "PLAYING" && snapshot.legal_actions.length > 0) {
+          const selectedCards = snapshot.player_hand.filter((c) => selectedCardIds.has(c.id));
+          const matched = validatePlay(selectedCards, snapshot.legal_actions);
+          if (!matched) {
+            // Selection is no longer a legal play
+            selectedCardIds.clear();
+          }
+        }
+      }
+
       render(snapshot, containerEl, interactionMode, callbacks, selectedCardIds);
     },
     container,

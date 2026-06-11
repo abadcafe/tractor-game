@@ -60,7 +60,7 @@ def start_game(state: GameState) -> StateResult[GameState]:
     """
     if state.phase != "IDLE":
         return Rejected(
-            f"Cannot start game in phase {state.phase}; expected IDLE"
+            f"不能在 {state.phase} 阶段开始游戏，需要 IDLE 阶段"
         )
     return Ok(state.model_copy(update={
         "phase": "IN_ROUND",
@@ -81,7 +81,7 @@ def process_round_result(state: GameState, result: RoundResult) -> StateResult[G
     """
     if state.phase != "IN_ROUND":
         return Rejected(
-            f"Cannot process round result in phase {state.phase}; expected IN_ROUND"
+            f"不能在 {state.phase} 阶段处理回合结果，需要 IN_ROUND 阶段"
         )
 
     new_team0 = result.team0_new_level

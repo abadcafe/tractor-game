@@ -21,11 +21,10 @@
 - **状态机操作**（stir/play/discard/exchange）返回 `StateResult[T] = Ok[T] | Rejected`
 - 绝不通过异常控制正常业务流（异常只用于代码 bug 哨兵）
 - **测试状态机的代码**：用 `assert isinstance(result, Ok)` / `assert isinstance(result, Rejected)` 替代 `pytest.raises`
-- `game.act()` 永远在最后执行 `_push_state_to_all()`，任何路径都不能跳过
 
 ### 4. 代码修改后必须立即验证
 
-- 修改任何 `.py` 文件后，运行 `pyright <path>` 确认无任何警告和错误，包括测试文件
+- 修改任何 `.py` 文件（包括测试文件），必须运行 `pyright` 确认无任何警告和错误
 
 ## 项目技术栈
 

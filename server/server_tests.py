@@ -271,12 +271,13 @@ def test_ws_connect_game_over_receives_state_and_closes(sync_client: TestClient,
             pass
 
 
-def test_ws_connect_already_connected_rejected(sync_client: TestClient, clean_registry: None) -> None:
+def test_ws_connect_takeover_closes_old_connection(sync_client: TestClient, clean_registry: None) -> None:
     """When a game already has an active WebSocket connection, a second
-    connection should be rejected with close code 4096.
+    connection should take over: the old connection is closed and the new
+    one is accepted.
 
-    Per spec section 5.3: "已有活跃连接: 拒绝新连接 (4096), 提示'game already
-    connected'". The server checks HumanPlayer.is_connected() to detect this.
+    This ensures reconnection works after network glitches — the client
+    can reconnect without hitting a 4096 rejection.
     """
     from server.server import registry
 
@@ -294,15 +295,13 @@ def test_ws_connect_already_connected_rejected(sync_client: TestClient, clean_re
         assert data1["type"] == "state"
         assert human_player_raw.is_connected()
 
-        # Second connection while first is active should be rejected
-        try:
-            with sync_client.websocket_connect(f"/game/{game_id}") as ws2:
-                ws2.receive_json()
-            # If we get here, the connection was accepted, which is wrong
-            assert False, "Second connection should have been rejected"
-        except Exception:
-            # Expected: second connection is rejected
-            pass
+        # Second connection should take over (old connection closed, new accepted)
+        with sync_client.websocket_connect(f"/game/{game_id}") as ws2:
+            data2 = ws2.receive_json()
+            assert _is_dict(data2)
+            assert data2["type"] == "state"
+            # New connection is now the active one
+            assert human_player_raw.is_connected()
 
 
 # ---- WebSocket: Actions with response verification ----

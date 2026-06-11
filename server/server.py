@@ -110,9 +110,11 @@ async def websocket_game(websocket: WebSocket, game_id: str):
 
     human_player = game.get_player(_HUMAN_PLAYER_INDEX)
 
+    # Connection takeover: if an old connection exists, close it first.
+    # The old connection's finally block uses clear_ws_if_current(old_ws),
+    # so it won't clear the new connection we're about to set up.
     if human_player.is_connected():
-        await websocket.close(code=4096, reason="game already connected")
-        return
+        await human_player.close_ws()
 
     if game.is_over():
         human_player.set_ws(websocket)
@@ -122,7 +124,7 @@ async def websocket_game(websocket: WebSocket, game_id: str):
         except Exception:
             pass
         finally:
-            human_player.set_ws(None)
+            human_player.clear_ws_if_current(websocket)
             try:
                 await websocket.close()
             except Exception:
@@ -134,7 +136,7 @@ async def websocket_game(websocket: WebSocket, game_id: str):
         await websocket.accept()
         await human_player.on_state(game)
     except Exception:
-        human_player.set_ws(None)
+        human_player.clear_ws_if_current(websocket)
         return
 
     try:
@@ -166,7 +168,7 @@ async def websocket_game(websocket: WebSocket, game_id: str):
     except WebSocketDisconnect:
         pass
     finally:
-        human_player.set_ws(None)
+        human_player.clear_ws_if_current(websocket)
 
 
 def _parse_action(

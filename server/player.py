@@ -26,6 +26,7 @@ from server.actions import (
     StirAction,
 )
 from server.sm.card_model import Card, Suit
+from server.sm.comparator import bid_value
 from server.snapshot import StateSnapshot
 
 logger = logging.getLogger(__name__)
@@ -129,8 +130,7 @@ class AutoPlayer(Player):
         """Bid during DEAL_BID phase if we have a competitive bid.
 
         Only bids if: (a) no bid_winner yet, or (b) we can beat the
-        current winner.  Prefers pairs over singles to avoid the noise
-        of guaranteed-losing single-card bids after a pair has won.
+        current winner's priority.  Prefers pairs over singles.
         A 50% random factor prevents always-bidding determinism.
         """
         hand = snapshot.player_hand
@@ -153,28 +153,20 @@ class AutoPlayer(Player):
 
         # Best possible bid: prefer joker pair > trump-rank pair > trump-rank single
         best_cards: list[Card] = []
-        best_count = 0
-        best_kind = ""  # "joker" or "trump_rank"
 
         # Check joker pairs (requires 2 of same rank)
         sj = [c for c in jokers if getattr(c, "rank", None) == "SJ"]
         bj = [c for c in jokers if getattr(c, "rank", None) == "BJ"]
         if len(bj) >= 2:
             best_cards = bj[:2]
-            best_count = 2
-            best_kind = "joker"
         elif len(sj) >= 2:
             best_cards = sj[:2]
-            best_count = 2
-            best_kind = "joker"
 
         # Check trump-rank pairs (any suit)
         if not best_cards:
             for cards in suit_groups.values():
                 if len(cards) >= 2:
                     best_cards = cards[:2]
-                    best_count = 2
-                    best_kind = "trump_rank"
                     break
 
         # Fall back to single trump-rank card
@@ -182,33 +174,22 @@ class AutoPlayer(Player):
             for cards in suit_groups.values():
                 if cards:
                     best_cards = [cards[0]]
-                    best_count = 1
-                    best_kind = "trump_rank"
                     break
 
         if not best_cards:
             return
 
-        # Check if existing bid_winner would block us
+        # Check if existing bid_winner has higher or equal priority
+        from server.sm.card_model import Rank
+        trump_rank_enum = Rank(trump_rank)
+        best_priority = bid_value(best_cards, trump_rank_enum)
         bid_winner = snapshot.bid_winner
         if bid_winner is not None:
-            winner_count = getattr(bid_winner, "count", 0)
-            winner_kind = getattr(bid_winner, "kind", "")
-            # Joker pair always beats trump-rank pair; same-kind needs higher count
-            if winner_kind == "joker" and best_kind != "joker":
-                return  # can't beat joker pair with trump-rank
-            if winner_kind == "joker" and best_kind == "joker":
-                # Both joker pairs: must be bigger joker
-                winner_joker = getattr(bid_winner, "joker_type", "")
-                if winner_joker == "big":
-                    return  # big joker pair is unbeatable
-                # winner has small joker, we need big joker
-                if len(bj) < 2:
-                    return
-            if winner_count >= best_count and winner_kind == best_kind:
-                return  # same kind, count not higher
+            winner_priority = bid_value(bid_winner.cards, trump_rank_enum)
+            if best_priority <= winner_priority:
+                return  # can't beat current winner
 
-        action = BidAction(cards=best_cards, count=best_count)
+        action = BidAction(cards=best_cards, count=len(best_cards))
         task = asyncio.create_task(game.act(self.index, action))
         task.add_done_callback(_log_task_exception)
 
@@ -309,6 +290,15 @@ class HumanPlayer(Player):
     def set_ws(self, ws: WebSocket | None) -> None:
         """Replace the WebSocket reference."""
         self._ws = ws
+
+    def clear_ws_if_current(self, ws: WebSocket) -> None:
+        """Clear the WebSocket reference only if it still points to the given instance.
+
+        Used in finally blocks to avoid clearing a connection that has already
+        been replaced by a new one (connection takeover).
+        """
+        if self._ws is ws:
+            self._ws = None
 
     def is_connected(self) -> bool:
         """Return True if this player has an active WebSocket connection."""
