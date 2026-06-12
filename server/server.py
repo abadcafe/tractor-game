@@ -24,6 +24,7 @@ from server.actions import (
 from server.game import Game
 from server.game_registry import GameRegistry
 from server.player import AutoPlayer, HumanPlayer, Player
+from server.sm.result import Ok, Rejected, StateResult
 
 logger = logging.getLogger(__name__)
 
@@ -88,10 +89,7 @@ async def delete_game(game_id: str):
     if game is not None:
         human = game.get_player(_HUMAN_PLAYER_INDEX)
         if human.is_connected():
-            try:
-                await human.on_state(game)
-            except Exception as e:
-                logger.debug("Failed to push final state before delete: %s", e)
+            await human.on_state(game)
             await human.close_ws()
         await game.cancel()
     registry.delete(game_id)
@@ -117,87 +115,95 @@ async def websocket_game(websocket: WebSocket, game_id: str):
         await human_player.close_ws()
 
     if game.is_over():
-        human_player.set_ws(websocket)
-        try:
-            await websocket.accept()
-            await human_player.on_state(game)
-        except Exception:
-            pass
-        finally:
-            human_player.clear_ws_if_current(websocket)
-            try:
-                await websocket.close()
-            except Exception:
-                pass
-        return
-
-    human_player.set_ws(websocket)
-    try:
         await websocket.accept()
-        await human_player.on_state(game)
-    except Exception:
-        human_player.clear_ws_if_current(websocket)
+        snapshot = game.snapshot(_HUMAN_PLAYER_INDEX)
+        try:
+            await websocket.send_json({
+                "type": "state",
+                "awaiting": snapshot.awaiting_action,
+                "state": snapshot.to_dict(),
+            })
+        except (WebSocketDisconnect, OSError):
+            logger.debug("Failed to send final state in game-over branch (WS disconnected)", exc_info=True)
+            return
+        try:
+            await websocket.close()
+        except (WebSocketDisconnect, OSError):
+            logger.debug("Failed to close WS in game-over branch (already disconnected)", exc_info=True)
         return
 
-    try:
-        while True:
+    await websocket.accept()
+    human_player.set_ws(websocket)
+    await human_player.on_state(game)
+
+    while True:
+        try:
             raw = await websocket.receive_json()
-            action_type = raw.get("type")
+        except (WebSocketDisconnect, OSError):
+            logger.debug("WS receive loop ended (client disconnected)")
+            break
+        action_type = raw.get("type")
 
-            try:
-                action = _parse_action(game, action_type, raw)
-                await game.act(_HUMAN_PLAYER_INDEX, action)
+        parse_result = _parse_action(game, action_type, raw)
+        if isinstance(parse_result, Rejected):
+            await websocket.send_json({
+                "type": "error",
+                "message": parse_result.reason,
+            })
+            continue
 
-                if game.is_over():
-                    try:
-                        await human_player.on_state(game)
-                    except Exception:
-                        pass
-                    break
-            except ValueError as e:
-                await websocket.send_json({
-                    "type": "error",
-                    "message": str(e),
-                })
-            except Exception as e:
-                logger.exception("Error processing WS action")
-                await websocket.send_json({
-                    "type": "error",
-                    "message": str(e),
-                })
-    except WebSocketDisconnect:
-        pass
-    finally:
-        human_player.clear_ws_if_current(websocket)
+        await game.act(_HUMAN_PLAYER_INDEX, parse_result.value)
+
+        if game.is_over():
+            await human_player.on_state(game)
+            break
+
+    human_player.clear_ws_if_current(websocket)
 
 
 def _parse_action(
     game: Game, action_type: str, raw: dict[str, str | int | bool | None | list[str] | list[dict[str, str]]]
-) -> BidAction | PlayAction | StirAction | SkipStirAction | DiscardAction | NextRoundAction:
+) -> StateResult[BidAction | PlayAction | StirAction | SkipStirAction | DiscardAction | NextRoundAction]:
     """Parse a WebSocket JSON message into a PlayerAction."""
     if action_type == "bid":
-        card_ids = _extract_card_ids(_get_cards_list(raw))
-        resolved = game.resolve_cards(_HUMAN_PLAYER_INDEX, card_ids)
-        return BidAction(cards=resolved, count=len(resolved))
+        card_ids_result = _extract_card_ids(_get_cards_list(raw))
+        if isinstance(card_ids_result, Rejected):
+            return card_ids_result
+        resolved_result = game.resolve_cards(_HUMAN_PLAYER_INDEX, card_ids_result.value)
+        if isinstance(resolved_result, Rejected):
+            return resolved_result
+        return Ok(value=BidAction(cards=resolved_result.value, count=len(resolved_result.value)))
     elif action_type == "stir":
         pass_val = raw.get("pass", False)
         if isinstance(pass_val, bool) and pass_val:
-            return SkipStirAction()
-        card_ids = _extract_card_ids(_get_cards_list(raw))
-        resolved = game.resolve_cards(_HUMAN_PLAYER_INDEX, card_ids)
-        return StirAction(cards=resolved)
+            return Ok(value=SkipStirAction())
+        card_ids_result = _extract_card_ids(_get_cards_list(raw))
+        if isinstance(card_ids_result, Rejected):
+            return card_ids_result
+        resolved_result = game.resolve_cards(_HUMAN_PLAYER_INDEX, card_ids_result.value)
+        if isinstance(resolved_result, Rejected):
+            return resolved_result
+        return Ok(value=StirAction(cards=resolved_result.value))
     elif action_type == "discard":
-        card_ids = _extract_card_ids(_get_cards_list(raw))
-        resolved = game.resolve_cards(_HUMAN_PLAYER_INDEX, card_ids)
-        return DiscardAction(cards=resolved)
+        card_ids_result = _extract_card_ids(_get_cards_list(raw))
+        if isinstance(card_ids_result, Rejected):
+            return card_ids_result
+        resolved_result = game.resolve_cards(_HUMAN_PLAYER_INDEX, card_ids_result.value)
+        if isinstance(resolved_result, Rejected):
+            return resolved_result
+        return Ok(value=DiscardAction(cards=resolved_result.value))
     elif action_type == "play":
-        card_ids = _extract_card_ids(_get_cards_list(raw))
-        resolved = game.resolve_cards(_HUMAN_PLAYER_INDEX, card_ids)
-        return PlayAction(cards=resolved)
+        card_ids_result = _extract_card_ids(_get_cards_list(raw))
+        if isinstance(card_ids_result, Rejected):
+            return card_ids_result
+        resolved_result = game.resolve_cards(_HUMAN_PLAYER_INDEX, card_ids_result.value)
+        if isinstance(resolved_result, Rejected):
+            return resolved_result
+        return Ok(value=PlayAction(cards=resolved_result.value))
     elif action_type == "next_round":
-        return NextRoundAction()
+        return Ok(value=NextRoundAction())
     else:
-        raise ValueError(f"unknown action type: {action_type}")
+        return Rejected(reason=f"unknown action type: {action_type}")
 
 
 def _get_cards_list(raw: dict[str, str | int | bool | None | list[str] | list[dict[str, str]]]) -> Sequence[str | dict[str, str]]:
@@ -211,10 +217,11 @@ def _get_cards_list(raw: dict[str, str | int | bool | None | list[str] | list[di
     return []
 
 
-def _extract_card_ids(cards: Sequence[str | dict[str, str]]) -> list[str]:
+def _extract_card_ids(cards: Sequence[str | dict[str, str]]) -> StateResult[list[str]]:
     """Extract card ID strings from WS message cards.
 
     Cards may be plain strings or dicts with an "id" key.
+    Returns Rejected if any card dict is missing the 'id' key.
     """
     ids: list[str] = []
     for c in cards:
@@ -226,9 +233,8 @@ def _extract_card_ids(cards: Sequence[str | dict[str, str]]) -> list[str]:
             if id_raw is not None:
                 ids.append(id_raw)
             else:
-                raise ValueError(f"Invalid card format: missing 'id' in {c}")
-    return ids
-    return ids
+                return Rejected(reason=f"Invalid card format: missing 'id' in {c}")
+    return Ok(value=ids)
 
 
 # ---- Static files ----

@@ -15,7 +15,7 @@ import pytest
 from server.actions import BidAction, NextRoundAction, PlayAction, SkipStirAction
 from server.game import Game
 from server.player import AutoPlayer, GameView
-from server.sm.result import Ok
+from server.sm.result import Ok, Rejected
 from server.snapshot import StateSnapshot
 
 
@@ -519,7 +519,7 @@ async def test_snapshot_to_dict_card_format():
 
 @pytest.mark.asyncio
 async def test_resolve_cards_returns_matching_cards():
-    """Game.resolve_cards() returns Card objects matching the given IDs
+    """Game.resolve_cards() returns Ok with Card objects matching the given IDs
     from the specified player's hand.
 
     This is needed because human players send card IDs via WebSocket,
@@ -532,9 +532,9 @@ async def test_resolve_cards_returns_matching_cards():
     snap = game.snapshot(for_player=0)
     if len(snap.player_hand) > 0:
         card_ids = [c.id for c in snap.player_hand[:2]]
-        resolved = game.resolve_cards(player_index=0, card_ids=card_ids)
-        assert len(resolved) == len(card_ids)
-        for original, resolved_card in zip(card_ids, resolved):
+        result = game.resolve_cards(player_index=0, card_ids=card_ids)
+        assert isinstance(result, Ok)
+        for original, resolved_card in zip(card_ids, result.value):
             assert resolved_card.id == original
             # Must be a Card Pydantic model (not a string or dict)
             from server.sm.card_model import Card
@@ -542,8 +542,8 @@ async def test_resolve_cards_returns_matching_cards():
 
 
 @pytest.mark.asyncio
-async def test_resolve_cards_raises_on_unknown_id():
-    """Game.resolve_cards() raises ValueError if any card_id is not found
+async def test_resolve_cards_rejects_on_unknown_id():
+    """Game.resolve_cards() returns Rejected if any card_id is not found
     in the player's hand.
 
     This prevents human players from submitting cards they don't hold,
@@ -551,8 +551,8 @@ async def test_resolve_cards_raises_on_unknown_id():
     """
     game = _create_game_with_auto_players()
     await game.run()
-    with pytest.raises(ValueError):
-        game.resolve_cards(player_index=0, card_ids=["NONEXISTENT-CARD-ID"])
+    result = game.resolve_cards(player_index=0, card_ids=["NONEXISTENT-CARD-ID"])
+    assert isinstance(result, Rejected)
 
 
 # ---- Bug 1 regression: bid must not trigger _push_state_to_all cascade ----

@@ -15,7 +15,7 @@ import random
 from abc import ABC, abstractmethod
 from typing import Protocol
 
-from fastapi import WebSocket
+from fastapi import WebSocket, WebSocketDisconnect
 
 from server.actions import (
     BidAction,
@@ -30,15 +30,6 @@ from server.sm.comparator import bid_value
 from server.snapshot import StateSnapshot
 
 logger = logging.getLogger(__name__)
-
-
-def _log_task_exception(task: asyncio.Task[None]) -> None:
-    """Log exceptions from fire-and-forget create_task calls."""
-    if task.cancelled():
-        return
-    exc = task.exception()
-    if exc is not None:
-        logger.exception("Unhandled exception in player action task: %s", exc)
 
 
 # ---- GameView Protocol (DIP: defined at the consumer, not the implementer) ----
@@ -190,8 +181,7 @@ class AutoPlayer(Player):
                 return  # can't beat current winner
 
         action = BidAction(cards=best_cards, count=len(best_cards))
-        task = asyncio.create_task(game.act(self.index, action))
-        task.add_done_callback(_log_task_exception)
+        asyncio.create_task(game.act(self.index, action))
 
     async def _handle_stir(self, snapshot: StateSnapshot, game: GameView) -> None:
         """Act during STIRRING phase."""
@@ -220,8 +210,7 @@ class AutoPlayer(Player):
                 action = SkipStirAction()
         else:
             action = SkipStirAction()
-        task = asyncio.create_task(game.act(self.index, action))
-        task.add_done_callback(_log_task_exception)
+        asyncio.create_task(game.act(self.index, action))
 
     async def _handle_discard(self, snapshot: StateSnapshot, game: GameView) -> None:
         """Randomly discard cards during EXCHANGE phase."""
@@ -237,8 +226,7 @@ class AutoPlayer(Player):
         else:
             return
         action = DiscardAction(cards=cards)
-        task = asyncio.create_task(game.act(self.index, action))
-        task.add_done_callback(_log_task_exception)
+        asyncio.create_task(game.act(self.index, action))
 
     async def _handle_play(self, snapshot: StateSnapshot, game: GameView) -> None:
         """Pick a random legal play."""
@@ -254,14 +242,12 @@ class AutoPlayer(Player):
         self._action_count += 1
         if self._action_count % 50 == 0:
             logger.info("AutoPlayer %d: action #%d in PLAYING", self.index, self._action_count)
-        task = asyncio.create_task(game.act(self.index, action))
-        task.add_done_callback(_log_task_exception)
+        asyncio.create_task(game.act(self.index, action))
 
     async def _handle_next_round(self, snapshot: StateSnapshot, game: GameView) -> None:
         """Submit NextRoundAction."""
         action = NextRoundAction()
-        task = asyncio.create_task(game.act(self.index, action))
-        task.add_done_callback(_log_task_exception)
+        asyncio.create_task(game.act(self.index, action))
 
 
 # ---- HumanPlayer ----
@@ -275,15 +261,25 @@ class HumanPlayer(Player):
         self._ws = ws
 
     async def on_state(self, game: GameView) -> None:
-        """Push state to the human player via WebSocket."""
+        """Push state to the human player via WebSocket.
+
+        Catches any exception from send_json (e.g. WebSocket disconnected,
+        websockets library AssertionError) to prevent a broken connection
+        from crashing the entire _push_state_to_all() chain or the
+        dealing loop. The human player will receive fresh state when
+        they reconnect.
+        """
         if self._ws is None:
             return
         snapshot = game.snapshot(self.index)
-        await self._ws.send_json({
-            "type": "state",
-            "awaiting": snapshot.awaiting_action,
-            "state": snapshot.to_dict(),
-        })
+        try:
+            await self._ws.send_json({
+                "type": "state",
+                "awaiting": snapshot.awaiting_action,
+                "state": snapshot.to_dict(),
+            })
+        except (WebSocketDisconnect, OSError):
+            logger.debug("Failed to push state to human player %d (WS likely disconnected)", self.index, exc_info=True)
 
     def set_ws(self, ws: WebSocket | None) -> None:
         """Replace the WebSocket reference."""
@@ -303,13 +299,20 @@ class HumanPlayer(Player):
         return self._ws is not None
 
     async def send_error(self, message: str) -> None:
-        """Send an error message to the human player via WebSocket."""
+        """Send an error message to the human player via WebSocket.
+
+        Catches any exception from send_json for the same reason as
+        on_state(): a broken connection must not crash the game engine.
+        """
         if self._ws is None:
             return
-        await self._ws.send_json({
-            "type": "error",
-            "message": message,
-        })
+        try:
+            await self._ws.send_json({
+                "type": "error",
+                "message": message,
+            })
+        except (WebSocketDisconnect, OSError):
+            logger.debug("Failed to send error to human player %d (WS likely disconnected)", self.index, exc_info=True)
 
     async def close_ws(self) -> None:
         """Close the WebSocket connection if active, then clear the reference."""
@@ -318,5 +321,5 @@ class HumanPlayer(Player):
             self._ws = None
             try:
                 await ws.close()
-            except Exception:
-                pass
+            except (WebSocketDisconnect, OSError):
+                logger.debug("Failed to close WS for player %d (already disconnected)", self.index, exc_info=True)

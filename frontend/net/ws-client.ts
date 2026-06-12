@@ -84,12 +84,14 @@ export class WsClient {
       });
 
       ws.addEventListener("message", (event) => {
+        let msg: ServerMessage;
         try {
-          const msg: ServerMessage = JSON.parse(event.data as string);
-          this._messageHandler?.(msg);
+          msg = JSON.parse(event.data as string);
         } catch {
           console.warn("[WsClient] Malformed message ignored:", event.data);
+          return;
         }
+        this._messageHandler?.(msg);
       });
 
       ws.addEventListener("close", () => {

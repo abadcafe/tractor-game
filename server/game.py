@@ -98,10 +98,13 @@ class Game:
         should_push = True
 
         if phase == "DEAL_BID" and isinstance(action, BidAction):
-            bid_event = self._convert_bid_action(player_index, action)
-            match round_sm.reveal(rs, bid_event):
-                case Ok(value=new_state):
-                    rs = new_state
+            match self._convert_bid_action(player_index, action):
+                case Ok(value=bid_event):
+                    match round_sm.reveal(rs, bid_event):
+                        case Ok(value=new_state):
+                            rs = new_state
+                        case Rejected(reason=reason):
+                            error_msg = reason
                 case Rejected(reason=reason):
                     error_msg = reason
             # Dealing loop already pushes state every 0.5s; avoid extra push
@@ -143,10 +146,7 @@ class Game:
                 # All 4 players confirmed: proceed to next round
                 self._next_round_confirmed.clear()
                 round_result = round_sm.get_round_result(rs)
-                if round_result is None:
-                    raise ValueError(
-                        "Round result is None in COMPLETE phase; this indicates an sm layer bug"
-                    )
+                assert round_result is not None, "Round result is None in COMPLETE phase; this indicates an sm layer bug"
                 match game_sm.process_round_result(self._game_state, round_result):
                     case Ok(value=new_gs):
                         self._game_state = new_gs
@@ -316,8 +316,8 @@ class Game:
             awaiting_action=awaiting_action,
             scoring=scoring_snap,
             winning_team=gs.winning_team,
-            team0_level=rs.team0_level,
-            team1_level=rs.team1_level,
+            team0_level=gs.team0_level,
+            team1_level=gs.team1_level,
             bid_events=bid_events,
             bid_winner=bid_winner,
             stirring_state=stirring_state_snap,
@@ -361,11 +361,11 @@ class Game:
             except asyncio.CancelledError:
                 pass
 
-    def resolve_cards(self, player_index: int, card_ids: list[str]) -> list[Card]:
+    def resolve_cards(self, player_index: int, card_ids: list[str]) -> Ok[list[Card]] | Rejected:
         """Resolve card ID strings to Card objects from the player's hand.
 
-        Raises ValueError if any card_id is not found in the player's hand.
-        Raises IndexError if player_index is out of range.
+        Returns Rejected if any card_id is not found in the player's hand.
+        Raises IndexError if player_index is out of range (programming error).
         """
         rs = self._round_state
         assert rs is not None, "resolve_cards() called before run()"
@@ -375,9 +375,9 @@ class Game:
         result: list[Card] = []
         for card_id in card_ids:
             if card_id not in card_map:
-                raise ValueError(f"Card {card_id} not in hand of player {player_index}")
+                return Rejected(reason=f"Card {card_id} not in hand of player {player_index}")
             result.append(card_map[card_id])
-        return result
+        return Ok(value=result)
 
     async def _dealing_loop(self) -> None:
         """Background coroutine that deals cards one at a time.
@@ -385,38 +385,40 @@ class Game:
         Checks _cancelled at the start of each iteration.
         Sleeps 0.75s between deals. Pushes state to all players after each deal.
         When dealing completes, transitions to STIRRING automatically via sm.
+
+        _push_state_to_all() is resilient to individual player failures,
+        so a disconnected human player will not crash this loop.
+        Any unexpected exception indicates a programming bug and will crash
+        the task rather than silently leaving the game in a stuck state.
         """
-        try:
-            while not self._cancelled:
-                if self._round_state is None:
-                    break
-                if self._round_state.phase != "DEAL_BID":
-                    break
-                if self._round_state.deal_bid_state is None:
-                    break
+        while not self._cancelled:
+            if self._round_state is None:
+                break
+            if self._round_state.phase != "DEAL_BID":
+                break
+            if self._round_state.deal_bid_state is None:
+                break
 
-                match round_sm.deal_next_card(self._round_state):
-                    case Ok(value=new_rs):
-                        self._round_state = new_rs
-                    case Rejected(reason=reason):
-                        logger.warning("deal_next_card rejected: %s", reason)
-                        break
-                await self._push_state_to_all()
-
-                if self._round_state.phase != "DEAL_BID":
+            match round_sm.deal_next_card(self._round_state):
+                case Ok(value=new_rs):
+                    self._round_state = new_rs
+                case Rejected(reason=reason):
+                    logger.warning("deal_next_card rejected: %s", reason)
                     break
+            await self._push_state_to_all()
 
-                await asyncio.sleep(self._deal_delay)
-        except Exception:
-            logger.exception("Dealing loop failed with unexpected exception")
+            if self._round_state.phase != "DEAL_BID":
+                break
 
-    def _convert_bid_action(self, player_index: int, action: BidAction) -> BidEvent:
+            await asyncio.sleep(self._deal_delay)
+
+    def _convert_bid_action(self, player_index: int, action: BidAction) -> Ok[BidEvent] | Rejected:
         """Convert a player BidAction to an sm BidEvent."""
         cards = action.cards
         if not cards:
-            raise ValueError("BidAction requires at least one card")
+            return Rejected(reason="BidAction requires at least one card")
         # Determine kind, suit, joker_type from the cards
-        if cards and cards[0].is_joker:
+        if cards[0].is_joker:
             kind = "joker"
             joker_type = "big" if cards[0].is_big_joker else "small"
             suit = None
@@ -425,14 +427,14 @@ class Game:
             suit = cards[0].suit
             joker_type = None
 
-        return BidEvent(
+        return Ok(value=BidEvent(
             player=player_index,
             cards=cards,
             kind=kind,
             suit=suit,
             joker_type=joker_type,
             count=action.count,
-        )
+        ))
 
     async def _send_error_to_player(self, player_index: int, message: str) -> None:
         """Send an error message to a specific player."""
