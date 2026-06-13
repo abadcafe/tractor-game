@@ -276,13 +276,15 @@ class HumanPlayer(Player):
             return
         snapshot = game.snapshot(self.index)
         try:
-            await self._ws.send_json({
+            msg: dict[str, object] = {
                 "type": "state",
                 "seq": seq,
                 "awaiting": snapshot.awaiting_action,
                 "state": snapshot.to_dict(),
-                "error": error,
-            })
+            }
+            if error is not None:
+                msg["error"] = error
+            await self._ws.send_json(msg)
         except (WebSocketDisconnect, OSError):
             logger.debug("Failed to push state to human player %d (WS likely disconnected)", self.index, exc_info=True)
 

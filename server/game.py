@@ -449,10 +449,6 @@ class Game:
             count=action.count,
         ))
 
-    async def _send_error_to_player(self, player_index: int, message: str) -> None:
-        """Send an error message to a specific player."""
-        await self._players[player_index].send_error(message)
-
     async def _push_state_to_all(self) -> None:
         """Push state to all players."""
         self._seq += 1
