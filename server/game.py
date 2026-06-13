@@ -246,7 +246,9 @@ class Game:
 
         # awaiting_action
         awaiting_action = None
-        if rs.phase == "STIRRING":
+        if gs.phase == "GAME_OVER":
+            awaiting_action = None
+        elif rs.phase == "STIRRING":
             awaiting_action = "stir"
         elif rs.phase == "EXCHANGE":
             awaiting_action = "discard"
@@ -296,6 +298,8 @@ class Game:
             scoring_snap = ScoringSnapshot(
                 declarer_team=rs.declarer_team,
                 defender_points=rs.defender_points,
+                total_defender_points=rs.result.total_defender_points,
+                bottom_card_bonus=rs.result.bottom_card_bonus,
                 bottom_cards=list(rs.bottom_cards),
             )
 

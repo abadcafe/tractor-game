@@ -120,9 +120,18 @@ export function renderHandView(
 
   // Build a set of legal card IDs for highlighting
   const legalCardIds = new Set<string>();
-  for (const cards of snapshot.legal_actions) {
-    for (const card of cards) {
-      legalCardIds.add(card.id);
+  if (interactionMode === "bid" || interactionMode === "stir") {
+    // In bid/stir mode, highlight all trump-rank cards and jokers as selectable
+    for (const card of snapshot.player_hand) {
+      if (isTrumpRank(card, snapshot.trump_rank) || card.suit === "joker") {
+        legalCardIds.add(card.id);
+      }
+    }
+  } else {
+    for (const cards of snapshot.legal_actions) {
+      for (const card of cards) {
+        legalCardIds.add(card.id);
+      }
     }
   }
 
@@ -170,6 +179,7 @@ export function renderHandView(
     }
     handView.appendChild(button);
   }
+  // bid/stir: cards are clickable in hand view; action buttons are in bidding-dialog
   // null interactionMode: no buttons (spectator)
 
   return handView;

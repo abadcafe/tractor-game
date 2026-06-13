@@ -658,3 +658,93 @@ class TestPlayResolveNewComparison:
         state = result.value
         result = _get_result(state)
         assert result.winner == 1  # trump pair wins
+
+
+# ---- Tractor ranking ----
+
+
+def _play_unwrap(state: TrickState, player: int, cards: list[Card]) -> TrickState:
+    """Call play and unwrap the Ok result, raising on Rejected."""
+    result = play(state, player=player, cards=cards)
+    assert isinstance(result, Ok), f"play rejected: {result.reason}"
+    return result.value
+
+
+class TestTractorRanking:
+    def test_resolve_tractor_ranking(self) -> None:
+        """Four tractors at different ranks: highest tractor wins."""
+        # CCW order: 0 -> 1 -> 3 -> 2
+        hands = [
+            [_card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
+             _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2)],
+            [_card(Suit.HEARTS, Rank.FIVE, 1), _card(Suit.HEARTS, Rank.FIVE, 2),
+             _card(Suit.HEARTS, Rank.SIX, 1), _card(Suit.HEARTS, Rank.SIX, 2)],
+            [_card(Suit.HEARTS, Rank.SEVEN, 1), _card(Suit.HEARTS, Rank.SEVEN, 2),
+             _card(Suit.HEARTS, Rank.EIGHT, 1), _card(Suit.HEARTS, Rank.EIGHT, 2)],
+            [_card(Suit.HEARTS, Rank.NINE, 1), _card(Suit.HEARTS, Rank.NINE, 2),
+             _card(Suit.HEARTS, Rank.TEN, 1), _card(Suit.HEARTS, Rank.TEN, 2)],
+        ]
+        state = create_trick(TrickInput(
+            lead_player=0, hands=hands,
+            trump_suit=Suit.SPADES, trump_rank=Rank.TWO,
+            defender_points=0, declarer_team=0,
+        ))
+        state = _play_unwrap(state, player=0, cards=hands[0])
+        state = _play_unwrap(state, player=1, cards=hands[1])
+        state = _play_unwrap(state, player=3, cards=hands[3])
+        state = _play_unwrap(state, player=2, cards=hands[2])
+        result = _get_result(state)
+        assert result.winner == 3  # h9-9-10-10 wins (highest tractor)
+
+    def test_resolve_trump_tractor_beats_non_trump_tractor(self) -> None:
+        """Trump tractor beats non-trump tractor of same level."""
+        hands = [
+            [_card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
+             _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2)],
+            [_card(Suit.HEARTS, Rank.FIVE, 1), _card(Suit.HEARTS, Rank.FIVE, 2),
+             _card(Suit.HEARTS, Rank.SIX, 1), _card(Suit.HEARTS, Rank.SIX, 2)],
+            [_card(Suit.SPADES, Rank.THREE, 1), _card(Suit.SPADES, Rank.THREE, 2),
+             _card(Suit.SPADES, Rank.FOUR, 1), _card(Suit.SPADES, Rank.FOUR, 2)],
+            [_card(Suit.HEARTS, Rank.SEVEN, 1), _card(Suit.HEARTS, Rank.SEVEN, 2),
+             _card(Suit.HEARTS, Rank.EIGHT, 1), _card(Suit.HEARTS, Rank.EIGHT, 2)],
+        ]
+        state = create_trick(TrickInput(
+            lead_player=0, hands=hands,
+            trump_suit=Suit.SPADES, trump_rank=Rank.TWO,
+            defender_points=0, declarer_team=0,
+        ))
+        # CCW order: 0 -> 1 -> 3 -> 2
+        state = _play_unwrap(state, player=0, cards=hands[0])
+        state = _play_unwrap(state, player=1, cards=hands[1])
+        state = _play_unwrap(state, player=3, cards=hands[3])
+        state = _play_unwrap(state, player=2, cards=hands[2])
+        result = _get_result(state)
+        assert result.winner == 2  # trump tractor wins
+
+
+# ---- Throw through trick resolution ----
+
+
+class TestThrowResolution:
+    def test_throw_lead_through_trick_resolution(self) -> None:
+        """Throw with all biggest sub-plays wins the trick."""
+        # Player 0 leads throw: spA + spK (both biggest spade singles)
+        # Other players have no spade cards and no trump cards
+        # Trump is clubs, so hearts/diamonds are non-trump
+        hands = [
+            [_card(Suit.SPADES, Rank.ACE), _card(Suit.SPADES, Rank.KING)],
+            [_card(Suit.HEARTS, Rank.THREE), _card(Suit.HEARTS, Rank.FOUR)],
+            [_card(Suit.HEARTS, Rank.FIVE), _card(Suit.HEARTS, Rank.SIX)],
+            [_card(Suit.DIAMONDS, Rank.SEVEN), _card(Suit.DIAMONDS, Rank.EIGHT)],
+        ]
+        state = create_trick(TrickInput(
+            lead_player=0, hands=hands,
+            trump_suit=Suit.CLUBS, trump_rank=Rank.TWO,
+            defender_points=0, declarer_team=0,
+        ))
+        state = _play_unwrap(state, player=0, cards=hands[0])
+        state = _play_unwrap(state, player=1, cards=hands[1])
+        state = _play_unwrap(state, player=3, cards=hands[3])
+        state = _play_unwrap(state, player=2, cards=hands[2])
+        result = _get_result(state)
+        assert result.winner == 0  # throw wins

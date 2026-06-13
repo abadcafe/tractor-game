@@ -55,3 +55,27 @@ export function validateBidCards(
     (c) => isJoker(c) || isTrumpRank(c, trumpRank),
   );
 }
+
+/**
+ * Validate that selected cards form a valid stir (反主) combination:
+ * must be exactly 2 cards that are either a joker pair (same rank) or
+ * a trump-rank pair (same suit and same rank).
+ */
+export function validateStirCards(
+  selectedCards: Card[],
+  trumpRank: string,
+): boolean {
+  if (selectedCards.length !== 2) {
+    return false;
+  }
+  const [a, b] = selectedCards;
+  // Joker pair: both jokers of the same type (SJ+SJ or BJ+BJ)
+  if (isJoker(a) && isJoker(b) && a.rank === b.rank) {
+    return true;
+  }
+  // Trump-rank pair: same suit and same rank
+  if (isTrumpRank(a, trumpRank) && isTrumpRank(b, trumpRank) && a.suit === b.suit && a.rank === b.rank) {
+    return true;
+  }
+  return false;
+}

@@ -1004,3 +1004,20 @@ class TestGetLegalPlays:
         hand = [_card(Suit.HEARTS, Rank.ACE)]
         plays = get_legal_plays(hand, False, None, Suit.SPADES, Rank.TWO, [])
         assert plays == []
+
+
+# ---- Sub-level comparison edge case ----
+
+
+class TestSubLevelComparison:
+    def test_compare_plays_lower_rank_pair_beats_higher_rank_single(self) -> None:
+        """Pair (level 2) beats single (level 1) even when pair has lower rank.
+
+        h3 pair (rank 3) vs hA single (rank A): pair wins because level 2 > level 1.
+        The existing test_compare_plays_pair_beats_single uses hA pair vs hK single,
+        which doesn't actually test the edge case (pair has higher rank too).
+        """
+        a = [_card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2)]
+        b = [_card(Suit.HEARTS, Rank.ACE)]
+        result = compare_plays(a, b, Suit.HEARTS, Suit.SPADES, Rank.TWO)
+        assert result > 0  # pair wins despite lower rank

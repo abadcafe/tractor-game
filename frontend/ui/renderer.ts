@@ -52,17 +52,18 @@ export function render(
         callbacks?.onBid,
         callbacks?.onStir,
         callbacks?.onPass,
+        selectedCardIds,
       ),
     );
   }
 
-  // Conditionally render scoring overlay for next_round or COMPLETE phase
-  if (interactionMode === "next_round" || snapshot.phase === "COMPLETE") {
+  // Conditionally render scoring overlay for COMPLETE phase (not GAME_OVER — that has its own overlay)
+  if (snapshot.phase === "COMPLETE") {
     container.appendChild(
       renderScoringOverlay(
         snapshot,
         interactionMode,
-        callbacks?.onAction
+        interactionMode === "next_round" && callbacks?.onAction
           ? () => callbacks.onAction("next_round")
           : undefined,
       ),

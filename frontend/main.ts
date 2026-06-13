@@ -4,7 +4,7 @@ import { createGame } from "./net/rest-client.ts";
 import { WsClient } from "./net/ws-client.ts";
 import { GameLoop } from "./engine/game-loop.ts";
 import { render } from "./ui/renderer.ts";
-import { validatePlay, validateDiscard, validateBidCards } from "./engine/input-validator.ts";
+import { validatePlay, validateDiscard, validateBidCards, validateStirCards } from "./engine/input-validator.ts";
 import { showErrorToast } from "./ui/error-toast.ts";
 
 function main() {
@@ -88,12 +88,12 @@ function main() {
       const snap = stateManager.get();
       if (!snap) return;
       const selectedCards = snap.player_hand.filter((c) => cardIds.includes(c.id));
-      if (validateBidCards(selectedCards, snap.trump_rank)) {
+      if (validateStirCards(selectedCards, snap.trump_rank)) {
         wsClient.send({ type: "stir", cards: cardIds });
         selectedCardIds.clear();
         reRender();
       } else {
-        showErrorToast("反主牌张无效", container);
+        showErrorToast("反主必须出对子", container);
       }
     },
 
@@ -137,6 +137,7 @@ function main() {
       render(snapshot, containerEl, interactionMode, callbacks, selectedCardIds);
     },
     container,
+    wsClient,
   );
 
   // Register message handler BEFORE connecting (per spec: first state msg arrives immediately)
@@ -146,6 +147,10 @@ function main() {
 
   wsClient.onDisconnect(() => {
     console.log("WebSocket disconnected");
+  });
+
+  wsClient.onReconnectFail(() => {
+    showErrorToast("连接已断开，请刷新页面重试", container);
   });
 
   // Start game flow

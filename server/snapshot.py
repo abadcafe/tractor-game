@@ -53,6 +53,8 @@ class ScoringSnapshot:
 
     declarer_team: int | None
     defender_points: int
+    total_defender_points: int
+    bottom_card_bonus: int
     bottom_cards: list[Card]
 
 
@@ -132,6 +134,8 @@ class StateSnapshot:
             scoring_dict = {
                 "declarer_team": self.scoring.declarer_team,
                 "defender_points": self.scoring.defender_points,
+                "total_defender_points": self.scoring.total_defender_points,
+                "bottom_card_bonus": self.scoring.bottom_card_bonus,
                 "bottom_cards": [_card_to_dict(c) for c in self.scoring.bottom_cards],
             }
 
@@ -254,6 +258,8 @@ class ScoringDict(TypedDict):
 
     declarer_team: int | None
     defender_points: int
+    total_defender_points: int
+    bottom_card_bonus: int
     bottom_cards: list[CardDict]
 
 

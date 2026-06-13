@@ -76,6 +76,8 @@ export interface StateSnapshot {
   scoring: {
     declarer_team: number;
     defender_points: number;
+    total_defender_points: number;
+    bottom_card_bonus: number;
     bottom_cards: Card[];
   } | null;
 
@@ -94,8 +96,8 @@ export type ServerMessage =
 /** Client -> Server WebSocket action. */
 export type ClientAction =
   | { type: "bid"; cards: string[] }
-  | { type: "stir"; cards: string[] }
-  | { type: "stir"; pass: true }
+  | { type: "stir"; cards: string[]; pass?: false }
+  | { type: "stir"; cards?: undefined; pass: true }
   | { type: "discard"; cards: string[] }
   | { type: "play"; cards: string[] }
   | { type: "next_round" };

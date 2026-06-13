@@ -142,9 +142,16 @@ export function renderBiddingDialog(
   onBid?: (cardIds: string[]) => void,
   onStir?: (cardIds: string[]) => void,
   onPass?: () => void,
+  selectedCardIds?: Set<string>,
 ): HTMLElement {
   const container = document.createElement("div");
   container.classList.add("bidding-dialog");
+
+  // Get user-selected cards (from hand click)
+  const selectedIds = selectedCardIds ? [...selectedCardIds] : [];
+  const selectedCards = selectedIds
+    .map((id) => snapshot.player_hand.find((c) => c.id === id))
+    .filter((c): c is Card => c !== undefined);
 
   if (snapshot.phase === "DEAL_BID") {
     // Title
@@ -153,31 +160,41 @@ export function renderBiddingDialog(
     title.textContent = "叫牌中";
     container.appendChild(title);
 
+    // Hint
+    const hint = document.createElement("div");
+    hint.classList.add("bidding-dialog-hint");
+    hint.textContent = "点击手牌选择叫牌牌张";
+    container.appendChild(hint);
+
     // Bid button (only when interactionMode is "bid")
     if (interactionMode === "bid") {
       const bidButton = document.createElement("button");
       bidButton.textContent = "叫牌";
-      const bidCardIds = selectBidCards(snapshot.player_hand, snapshot.trump_rank);
-      if (!bidCardIds) {
+
+      // Validate user selection
+      if (selectedCards.length === 0) {
         bidButton.disabled = true;
-        bidButton.title = "无可叫主牌";
-      } else if (snapshot.bid_winner) {
-        const bestCards = bidCardIds.map(
-          (id) => snapshot.player_hand.find((c) => c.id === id)!,
-        );
-        const bestPriority = computeBidPriority(bestCards, snapshot.trump_rank);
-        const winnerPriority = computeBidPriority(
-          snapshot.bid_winner.cards,
-          snapshot.trump_rank,
-        );
-        if (bestPriority <= winnerPriority) {
+        bidButton.title = "请先选择要叫的牌";
+      } else {
+        const priority = computeBidPriority(selectedCards, snapshot.trump_rank);
+        if (priority === 0) {
           bidButton.disabled = true;
-          bidButton.title = "优先级不足，无法超过当前叫牌";
+          bidButton.title = "选择的牌不构成有效叫牌";
+        } else if (snapshot.bid_winner) {
+          const winnerPriority = computeBidPriority(
+            snapshot.bid_winner.cards,
+            snapshot.trump_rank,
+          );
+          if (priority <= winnerPriority) {
+            bidButton.disabled = true;
+            bidButton.title = "优先级不足，无法超过当前叫牌";
+          }
         }
       }
+
       bidButton.addEventListener("click", () => {
-        if (onBid && bidCardIds && !bidButton.disabled) {
-          onBid(bidCardIds);
+        if (onBid && !bidButton.disabled && selectedIds.length > 0) {
+          onBid(selectedIds);
         }
       });
       container.appendChild(bidButton);
@@ -189,19 +206,37 @@ export function renderBiddingDialog(
     title.textContent = "反主中";
     container.appendChild(title);
 
+    // Hint
+    const hint = document.createElement("div");
+    hint.classList.add("bidding-dialog-hint");
+    hint.textContent = "点击手牌选择对子反主";
+    container.appendChild(hint);
+
     // Action buttons (only when interactionMode is "stir")
     if (interactionMode === "stir") {
       // Stir button
       const stirButton = document.createElement("button");
       stirButton.textContent = "反主";
-      const stirCardIds = selectStirCards(snapshot.player_hand, snapshot.trump_rank);
-      if (!stirCardIds) {
+
+      // Validate user selection: must be a valid pair
+      if (selectedCards.length === 0) {
         stirButton.disabled = true;
-        stirButton.title = "无对子主牌可反";
+        stirButton.title = "请先选择要反主的对子";
+      } else if (selectedCards.length !== 2) {
+        stirButton.disabled = true;
+        stirButton.title = "反主必须选择2张牌";
+      } else {
+        const priority = computeBidPriority(selectedCards, snapshot.trump_rank);
+        if (priority < 200) {
+          // priority < 200 means not a pair (pair = count*100 + suit_rank, count=2 so >= 200)
+          stirButton.disabled = true;
+          stirButton.title = "反主必须用对子";
+        }
       }
+
       stirButton.addEventListener("click", () => {
-        if (onStir && stirCardIds) {
-          onStir(stirCardIds);
+        if (onStir && !stirButton.disabled && selectedIds.length > 0) {
+          onStir(selectedIds);
         }
       });
       container.appendChild(stirButton);

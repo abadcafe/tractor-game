@@ -351,3 +351,152 @@ class TestEdgeCases:
         assert state.phase == "GAME_OVER"
         assert state.declarer_team is None
         assert state.last_declarer_player is None
+
+
+# ---- Integration tests with real round_sm ----
+
+
+from server.sm.round_sm import (
+    create_round, deal_next_card as rn_deal,
+    pass_stir as rn_pass, discard as rn_discard,
+    play as rn_play, is_round_complete, get_round_result, RoundInput, RoundState,
+)
+from server.sm.play_rules import get_legal_plays
+
+
+def _unwrap_round(result: Ok[RoundState] | Rejected) -> RoundState:
+    """Unwrap a StateResult[RoundState], asserting Ok."""
+    assert isinstance(result, Ok), f"Expected Ok, got Rejected: {result.reason}"
+    return result.value
+
+
+def _play_first_legal(round_state: RoundState) -> RoundState:
+    """Play the first legal play for the current player in the trick."""
+    trick = round_state.trick_state
+    assert trick is not None
+    cur = trick.cur
+    hand = trick.hands[cur]
+    if not hand:
+        return round_state
+
+    is_leading = trick.phase == "LEADING"
+    if is_leading:
+        lead_cards = None
+    else:
+        lead_slot = trick.slots[trick.lead_player]
+        assert lead_slot is not None
+        lead_cards = lead_slot.cards
+
+    legal_plays = get_legal_plays(
+        hand=hand,
+        is_leading=is_leading,
+        lead_cards=lead_cards,
+        trump_suit=round_state.trump_suit,
+        trump_rank=round_state.trump_rank,
+        other_hands=[],
+    )
+    assert len(legal_plays) > 0, f"No legal plays for player {cur}"
+    return _unwrap_round(rn_play(round_state, player_index=cur, cards=legal_plays[0]))
+
+
+def _complete_round_no_bid(round_state: RoundState) -> RoundState:
+    """Drive a round through all phases with no bids, all pass stirring."""
+    while round_state.phase == "DEAL_BID":
+        if round_state.deal_bid_state is None or round_state.deal_bid_state.phase != "DEALING":
+            break
+        round_state = _unwrap_round(rn_deal(round_state))
+
+    for _ in range(4):
+        if round_state.phase != "STIRRING":
+            break
+        round_state = _unwrap_round(rn_pass(round_state))
+
+    if round_state.phase == "EXCHANGE" and round_state.exchange_state is not None:
+        discards = round_state.exchange_state.hand_after_pickup[:round_state.exchange_state.count]
+        round_state = _unwrap_round(rn_discard(round_state, discards))
+
+    prev_history_len = 0
+    max_iterations = 30
+    for _ in range(max_iterations):
+        if round_state.phase != "PLAYING":
+            break
+        trick = round_state.trick_state
+        if trick is None:
+            break
+        for _ in range(4):
+            if trick.phase == "RESOLVED":
+                break
+            round_state = _play_first_legal(round_state)
+            trick = round_state.trick_state
+            if trick is None:
+                break
+        if len(round_state.trick_history) == prev_history_len:
+            break
+        prev_history_len = len(round_state.trick_history)
+
+    return round_state
+
+
+class TestMultipleRoundsWithRealRoundSm:
+    def test_multiple_rounds_with_real_round_sm(self) -> None:
+        """Drive multiple rounds through the game state machine using real round results."""
+        game = create_game()
+        result = start_game(game)
+        assert isinstance(result, Ok)
+        game = result.value
+
+        for _ in range(6):
+            if game.phase == "GAME_OVER":
+                break
+
+            round_state = create_round(RoundInput(
+                declarer_team=game.declarer_team,
+                trump_rank=game.team0_level if (game.declarer_team or 0) == 0 else game.team1_level,
+                last_declarer_player=game.last_declarer_player,
+                team0_level=game.team0_level,
+                team1_level=game.team1_level,
+            ))
+            round_state = _complete_round_no_bid(round_state)
+
+            if is_round_complete(round_state):
+                round_result = get_round_result(round_state)
+                assert round_result is not None
+                result = process_round_result(game, round_result)
+                assert isinstance(result, Ok)
+                game = result.value
+            else:
+                break
+
+        assert game.phase in ("IN_ROUND", "GAME_OVER")
+
+    def test_full_game_with_real_round_sm(self) -> None:
+        """Fast game: use real RoundResults from completed rounds to drive game_sm."""
+        game = create_game()
+        result = start_game(game)
+        assert isinstance(result, Ok)
+        game = result.value
+
+        max_rounds = 20
+        for _ in range(max_rounds):
+            if game.phase == "GAME_OVER":
+                break
+
+            round_state = create_round(RoundInput(
+                declarer_team=game.declarer_team,
+                trump_rank=game.team0_level if (game.declarer_team or 0) == 0 else game.team1_level,
+                last_declarer_player=game.last_declarer_player,
+                team0_level=game.team0_level,
+                team1_level=game.team1_level,
+            ))
+            round_state = _complete_round_no_bid(round_state)
+
+            if is_round_complete(round_state):
+                round_result = get_round_result(round_state)
+                assert round_result is not None
+                result = process_round_result(game, round_result)
+                assert isinstance(result, Ok)
+                game = result.value
+            else:
+                break
+
+        assert game.phase in ("IN_ROUND", "GAME_OVER")

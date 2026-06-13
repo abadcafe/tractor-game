@@ -2,7 +2,7 @@
 
 ## 类型系统铁律（不可违反）
 
-目标：像 Rust 一样强类型，编译期捕获所有类型错误
+目标：所有语言都要像 Rust 一样强类型，编译期捕获所有类型错误
 
 ### 1. Python：100% 类型注解，pyright strict 零错误
 
@@ -35,3 +35,7 @@
 - **Frontend**: TypeScript, 原生 DOM（无框架）
 - **Game Logic**: 纯函数状态机（SM），不可变状态模式
 - **Testing**: pytest, pytest-asyncio
+
+## 启动游戏
+
+- 启动服务器时必须加 `--ws websockets-sansio` 参数，例如：`uvicorn app:app --ws websockets-sansio`
