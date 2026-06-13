@@ -1,6 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { WsClient } from "../net/ws-client.ts";
-import type { ServerMessage, ClientAction } from "../core/types.ts";
+import type { ServerMessage, ClientAction } from "../core/protocol.ts";
 
 function makeStateMessage(): ServerMessage {
   return {
@@ -289,37 +289,6 @@ Deno.test("test_reconnect_respects_max_retries", async () => {
 
   client.disconnect();
   await server.shutdown();
-});
-
-Deno.test("test_set_ws_host", async () => {
-  let requestedPath = "";
-  const server = Deno.serve({ port: 0 }, (req) => {
-    const upgrade = req.headers.get("upgrade") || "";
-    if (upgrade.toLowerCase() === "websocket") {
-      requestedPath = new URL(req.url).pathname;
-      const { socket, response } = Deno.upgradeWebSocket(req);
-      socket.addEventListener("open", () => {
-        socket.send(JSON.stringify(makeStateMessage()));
-      });
-      return response;
-    }
-    return new Response("Not Found", { status: 404 });
-  });
-
-  const addr = server.addr;
-  const port = typeof addr === "object" && "port" in addr ? addr.port : 0;
-  const client = new WsClient();
-  client.onMessage(() => {});
-  client.setWsHost(`ws://localhost:${port}`);
-
-  // connect without wsHost parameter - should use the one set via setWsHost
-  await client.connect("game-xyz");
-  await waitFor(() => requestedPath !== "");
-
-  assertEquals(requestedPath, "/game/game-xyz");
-
-  await server.shutdown();
-  client.disconnect();
 });
 
 Deno.test("test_connect_rejects_without_ws_host", async () => {

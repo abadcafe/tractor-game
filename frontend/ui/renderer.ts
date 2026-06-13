@@ -1,4 +1,6 @@
-import type { StateSnapshot, InteractionMode, ActionCallbacks } from "../core/types.ts";
+import type { StateSnapshot } from "../core/types.ts";
+import type { InteractionMode } from "../engine/types.ts";
+import type { RenderContext } from "./types.ts";
 import { renderGameTable } from "./components/game-table.ts";
 import { renderHandView } from "./components/hand-view.ts";
 import { renderScoreboard } from "./components/scoreboard.ts";
@@ -15,15 +17,13 @@ import { renderGameOverOverlay } from "./components/game-over-overlay.ts";
  * @param snapshot - current game state snapshot
  * @param container - DOM element to render into
  * @param interactionMode - current interaction mode from GameLoop
- * @param callbacks - optional action callbacks for user interactions
- * @param selectedCardIds - optional set of currently selected card IDs
+ * @param ctx - optional render context (callbacks + selected card IDs)
  */
 export function render(
   snapshot: StateSnapshot,
   container: Element,
   interactionMode: InteractionMode,
-  callbacks?: ActionCallbacks,
-  selectedCardIds?: Set<string>,
+  ctx?: RenderContext,
 ): void {
   // Clear the container
   container.innerHTML = "";
@@ -35,9 +35,10 @@ export function render(
     renderHandView(
       snapshot,
       interactionMode,
-      selectedCardIds,
-      callbacks?.onCardClick,
-      callbacks?.onAction,
+      ctx?.selectedCardIds,
+      ctx?.legalCardIds,
+      ctx?.callbacks?.onCardClick,
+      ctx?.callbacks?.onAction,
     ),
   );
 
@@ -49,10 +50,12 @@ export function render(
       renderBiddingDialog(
         snapshot,
         interactionMode,
-        callbacks?.onBid,
-        callbacks?.onStir,
-        callbacks?.onPass,
-        selectedCardIds,
+        ctx?.callbacks?.onBid,
+        ctx?.callbacks?.onStir,
+        ctx?.callbacks?.onPass,
+        ctx?.selectedCardIds,
+        ctx?.bidButtonState,
+        ctx?.stirButtonState,
       ),
     );
   }
@@ -63,9 +66,10 @@ export function render(
       renderScoringOverlay(
         snapshot,
         interactionMode,
-        interactionMode === "next_round" && callbacks?.onAction
-          ? () => callbacks.onAction("next_round")
+        interactionMode === "next_round" && ctx?.callbacks?.onAction
+          ? () => ctx!.callbacks!.onAction("next_round")
           : undefined,
+        ctx?.levelChange,
       ),
     );
   }
@@ -73,7 +77,7 @@ export function render(
   // Conditionally render game over overlay
   if (snapshot.phase === "GAME_OVER") {
     container.appendChild(
-      renderGameOverOverlay(snapshot, callbacks?.onNewGame),
+      renderGameOverOverlay(snapshot, ctx?.callbacks?.onNewGame),
     );
   }
 }

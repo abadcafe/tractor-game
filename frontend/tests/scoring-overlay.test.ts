@@ -1,7 +1,8 @@
 import { assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { DOMParser } from "jsr:@b-fuze/deno-dom@0.1.56";
 import { renderScoringOverlay } from "../ui/components/scoring-overlay.ts";
-import type { StateSnapshot, InteractionMode } from "../core/types.ts";
+import type { StateSnapshot } from "../core/types.ts";
+import type { InteractionMode } from "../engine/types.ts";
 
 const doc = new DOMParser().parseFromString(
   `<html><body><div id="app"></div></body></html>`,
@@ -32,6 +33,8 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     scoring: {
       declarer_team: 0,
       defender_points: 30,
+      total_defender_points: 30,
+      bottom_card_bonus: 0,
       bottom_cards: [],
     },
     winning_team: null,

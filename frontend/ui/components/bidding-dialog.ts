@@ -1,125 +1,6 @@
-import type { StateSnapshot, InteractionMode, BidEvent, Card } from "../../core/types.ts";
-import { cardDisplay, suitSymbol, isTrumpRank, isJoker } from "../../core/card.ts";
-
-const SUIT_PRIORITY = ["spades", "hearts", "clubs", "diamonds"];
-
-/** Suit rank values matching server-side bid_value ordering. */
-const SUIT_RANK: Record<string, number> = {
-  diamonds: 0,
-  clubs: 1,
-  hearts: 2,
-  spades: 3,
-};
-
-const JOKER_RANK: Record<string, number> = {
-  SJ: 4,
-  BJ: 5,
-};
-
-/** Compute bid priority matching server-side bid_value logic.
- *  Value = count * 100 + card_rank (higher = stronger bid).
- *  Returns 0 for invalid bids (single joker, mixed, etc.).
- */
-function computeBidPriority(cards: Card[], trumpRank: string): number {
-  if (cards.length === 0) return 0;
-
-  // All cards must be trump rank or jokers
-  const allValid = cards.every(
-    (c) => c.rank === trumpRank || c.rank === "SJ" || c.rank === "BJ",
-  );
-  if (!allValid) return 0;
-
-  const count = cards.length;
-
-  // Single joker is invalid
-  if (count === 1 && (cards[0].rank === "SJ" || cards[0].rank === "BJ")) {
-    return 0;
-  }
-
-  // Pair of jokers
-  if (count === 2 && cards.every((c) => c.rank === "SJ" || c.rank === "BJ")) {
-    if (cards[0].rank !== cards[1].rank) return 0;
-    return count * 100 + (JOKER_RANK[cards[0].rank] ?? 0);
-  }
-
-  // All must be same suit (no mixed joker + rank)
-  if (cards.some((c) => c.rank === "SJ" || c.rank === "BJ")) return 0;
-  const suits = new Set(cards.map((c) => c.suit));
-  if (suits.size !== 1) return 0;
-
-  const suit = cards[0].suit;
-  return count * 100 + (SUIT_RANK[suit] ?? 0);
-}
-
-const SUIT_CN: Record<string, string> = {
-  spades: "黑桃",
-  hearts: "红桃",
-  clubs: "梅花",
-  diamonds: "方块",
-};
-
-/** Pick the strongest valid bid (single or pair) from the hand.
- *  Returns null if no valid bid exists.
- */
-function selectBidCards(hand: StateSnapshot["player_hand"], trumpRank: string): string[] | null {
-  const jokers = hand.filter(isJoker);
-  const bigJokers = jokers.filter((c) => c.rank === "BJ");
-  const smallJokers = jokers.filter((c) => c.rank === "SJ");
-
-  // Joker pair is the strongest bid
-  if (bigJokers.length >= 2) return bigJokers.slice(0, 2).map((c) => c.id);
-  if (smallJokers.length >= 2) return smallJokers.slice(0, 2).map((c) => c.id);
-
-  const trumpCards = hand.filter((c) => isTrumpRank(c, trumpRank));
-  const bySuit: Record<string, typeof trumpCards> = {};
-  for (const c of trumpCards) {
-    bySuit[c.suit] = bySuit[c.suit] || [];
-    bySuit[c.suit].push(c);
-  }
-
-  // Prefer a pair over a single
-  for (const suit of SUIT_PRIORITY) {
-    if (bySuit[suit]?.length >= 2) {
-      return bySuit[suit].slice(0, 2).map((c) => c.id);
-    }
-  }
-
-  // Fallback to a single card
-  for (const suit of SUIT_PRIORITY) {
-    if (bySuit[suit]?.length >= 1) {
-      return [bySuit[suit][0].id];
-    }
-  }
-
-  return null;
-}
-
-/** Pick the strongest valid stir (must be a pair) from the hand.
- *  Returns null if no pair exists.
- */
-function selectStirCards(hand: StateSnapshot["player_hand"], trumpRank: string): string[] | null {
-  const jokers = hand.filter(isJoker);
-  const bigJokers = jokers.filter((c) => c.rank === "BJ");
-  const smallJokers = jokers.filter((c) => c.rank === "SJ");
-
-  if (bigJokers.length >= 2) return bigJokers.slice(0, 2).map((c) => c.id);
-  if (smallJokers.length >= 2) return smallJokers.slice(0, 2).map((c) => c.id);
-
-  const trumpCards = hand.filter((c) => isTrumpRank(c, trumpRank));
-  const bySuit: Record<string, typeof trumpCards> = {};
-  for (const c of trumpCards) {
-    bySuit[c.suit] = bySuit[c.suit] || [];
-    bySuit[c.suit].push(c);
-  }
-
-  for (const suit of SUIT_PRIORITY) {
-    if (bySuit[suit]?.length >= 2) {
-      return bySuit[suit].slice(0, 2).map((c) => c.id);
-    }
-  }
-
-  return null;
-}
+import type { StateSnapshot, BidEvent } from "../../core/types.ts";
+import type { InteractionMode, BidButtonState } from "../../engine/types.ts";
+import { suitSymbol, suitDisplayName } from "../../core/card.ts";
 
 /**
  * Render the bidding/stirring dialog.
@@ -135,6 +16,9 @@ function selectStirCards(hand: StateSnapshot["player_hand"], trumpRank: string):
  * @param onBid - callback when bid button clicked, receives trump rank card IDs
  * @param onStir - callback when stir button clicked, receives trump rank card IDs
  * @param onPass - callback when pass button clicked
+ * @param selectedCardIds - set of currently selected card IDs
+ * @param bidButtonState - pre-computed button state (disabled + title) from engine layer
+ * @param stirButtonState - pre-computed button state (disabled + title) from engine layer
  */
 export function renderBiddingDialog(
   snapshot: StateSnapshot,
@@ -143,15 +27,14 @@ export function renderBiddingDialog(
   onStir?: (cardIds: string[]) => void,
   onPass?: () => void,
   selectedCardIds?: Set<string>,
+  bidButtonState?: BidButtonState,
+  stirButtonState?: BidButtonState,
 ): HTMLElement {
   const container = document.createElement("div");
   container.classList.add("bidding-dialog");
 
-  // Get user-selected cards (from hand click)
+  // Get user-selected card IDs
   const selectedIds = selectedCardIds ? [...selectedCardIds] : [];
-  const selectedCards = selectedIds
-    .map((id) => snapshot.player_hand.find((c) => c.id === id))
-    .filter((c): c is Card => c !== undefined);
 
   if (snapshot.phase === "DEAL_BID") {
     // Title
@@ -171,25 +54,10 @@ export function renderBiddingDialog(
       const bidButton = document.createElement("button");
       bidButton.textContent = "叫牌";
 
-      // Validate user selection
-      if (selectedCards.length === 0) {
-        bidButton.disabled = true;
-        bidButton.title = "请先选择要叫的牌";
-      } else {
-        const priority = computeBidPriority(selectedCards, snapshot.trump_rank);
-        if (priority === 0) {
-          bidButton.disabled = true;
-          bidButton.title = "选择的牌不构成有效叫牌";
-        } else if (snapshot.bid_winner) {
-          const winnerPriority = computeBidPriority(
-            snapshot.bid_winner.cards,
-            snapshot.trump_rank,
-          );
-          if (priority <= winnerPriority) {
-            bidButton.disabled = true;
-            bidButton.title = "优先级不足，无法超过当前叫牌";
-          }
-        }
+      // Use pre-computed button state from engine layer
+      if (bidButtonState) {
+        bidButton.disabled = bidButtonState.disabled;
+        if (bidButtonState.title) bidButton.title = bidButtonState.title;
       }
 
       bidButton.addEventListener("click", () => {
@@ -218,20 +86,10 @@ export function renderBiddingDialog(
       const stirButton = document.createElement("button");
       stirButton.textContent = "反主";
 
-      // Validate user selection: must be a valid pair
-      if (selectedCards.length === 0) {
-        stirButton.disabled = true;
-        stirButton.title = "请先选择要反主的对子";
-      } else if (selectedCards.length !== 2) {
-        stirButton.disabled = true;
-        stirButton.title = "反主必须选择2张牌";
-      } else {
-        const priority = computeBidPriority(selectedCards, snapshot.trump_rank);
-        if (priority < 200) {
-          // priority < 200 means not a pair (pair = count*100 + suit_rank, count=2 so >= 200)
-          stirButton.disabled = true;
-          stirButton.title = "反主必须用对子";
-        }
+      // Use pre-computed button state from engine layer
+      if (stirButtonState) {
+        stirButton.disabled = stirButtonState.disabled;
+        if (stirButtonState.title) stirButton.title = stirButtonState.title;
       }
 
       stirButton.addEventListener("click", () => {
@@ -281,7 +139,7 @@ function _compactCard(c: { suit: string; rank: string }): string {
 function formatBidEvent(event: BidEvent): string {
   const cardsStr = event.cards.map(_compactCard).join(" ");
   if (event.kind === "trump_rank" && event.suit) {
-    return `玩家${event.player}: ${cardsStr} (${SUIT_CN[event.suit] ?? event.suit}主)`;
+    return `玩家${event.player}: ${cardsStr} (${suitDisplayName(event.suit)}主)`;
   }
   if (event.kind === "joker" && event.joker_type) {
     return `玩家${event.player}: ${cardsStr} (${event.joker_type === "big" ? "大" : "小"}王)`;

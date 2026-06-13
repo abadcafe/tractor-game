@@ -1,6 +1,8 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { GameLoop } from "../engine/game-loop.ts";
-import type { StateSnapshot, ServerMessage, InteractionMode } from "../core/types.ts";
+import type { StateSnapshot } from "../core/types.ts";
+import type { ServerMessage } from "../core/protocol.ts";
+import type { InteractionMode } from "../engine/types.ts";
 import { StateManager } from "../core/state.ts";
 
 function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
@@ -65,7 +67,7 @@ Deno.test("test_handleMessage_deal_bid_shows_bidding", () => {
   lastRenderedSnapshot = null;
   lastInteractionMode = null;
   const stateManager = new StateManager();
-  const loop = new GameLoop(stateManager, mockRender, mockContainer);
+  const loop = new GameLoop(stateManager, mockRender, mockContainer, 3);
   const msg = makeStateMsg({ phase: "DEAL_BID", awaiting_action: null }, null);
   loop.handleMessage(msg);
   assertEquals(lastRenderedSnapshot !== null, true);
@@ -77,7 +79,7 @@ Deno.test("test_handleMessage_stirring_human", () => {
   lastRenderedSnapshot = null;
   lastInteractionMode = null;
   const stateManager = new StateManager();
-  const loop = new GameLoop(stateManager, mockRender, mockContainer);
+  const loop = new GameLoop(stateManager, mockRender, mockContainer, 3);
   const msg = makeStateMsg({
     phase: "STIRRING",
     awaiting_action: "stir",
@@ -92,7 +94,7 @@ Deno.test("test_handleMessage_stirring_not_human", () => {
   lastRenderedSnapshot = null;
   lastInteractionMode = null;
   const stateManager = new StateManager();
-  const loop = new GameLoop(stateManager, mockRender, mockContainer);
+  const loop = new GameLoop(stateManager, mockRender, mockContainer, 3);
   const msg = makeStateMsg({
     phase: "STIRRING",
     awaiting_action: "stir",
@@ -107,7 +109,7 @@ Deno.test("test_handleMessage_exchange_human", () => {
   lastRenderedSnapshot = null;
   lastInteractionMode = null;
   const stateManager = new StateManager();
-  const loop = new GameLoop(stateManager, mockRender, mockContainer);
+  const loop = new GameLoop(stateManager, mockRender, mockContainer, 3);
   const msg = makeStateMsg({
     phase: "EXCHANGE",
     awaiting_action: "discard",
@@ -122,7 +124,7 @@ Deno.test("test_handleMessage_playing_human", () => {
   lastRenderedSnapshot = null;
   lastInteractionMode = null;
   const stateManager = new StateManager();
-  const loop = new GameLoop(stateManager, mockRender, mockContainer);
+  const loop = new GameLoop(stateManager, mockRender, mockContainer, 3);
   const msg = makeStateMsg({
     phase: "PLAYING",
     awaiting_action: "play",
@@ -136,7 +138,7 @@ Deno.test("test_handleMessage_playing_not_human", () => {
   lastRenderedSnapshot = null;
   lastInteractionMode = null;
   const stateManager = new StateManager();
-  const loop = new GameLoop(stateManager, mockRender, mockContainer);
+  const loop = new GameLoop(stateManager, mockRender, mockContainer, 3);
   const msg = makeStateMsg({
     phase: "PLAYING",
     awaiting_action: "play",
@@ -150,12 +152,12 @@ Deno.test("test_handleMessage_complete_human", () => {
   lastRenderedSnapshot = null;
   lastInteractionMode = null;
   const stateManager = new StateManager();
-  const loop = new GameLoop(stateManager, mockRender, mockContainer);
+  const loop = new GameLoop(stateManager, mockRender, mockContainer, 3);
   const msg = makeStateMsg({
     phase: "COMPLETE",
     awaiting_action: "next_round",
     current_player: 3,
-    scoring: { declarer_team: 0, defender_points: 30, bottom_cards: [] },
+    scoring: { declarer_team: 0, defender_points: 30, total_defender_points: 30, bottom_card_bonus: 0, bottom_cards: [] },
   }, "next_round");
   loop.handleMessage(msg);
   assertEquals(lastInteractionMode, "next_round");
@@ -165,7 +167,7 @@ Deno.test("test_handleMessage_game_over", () => {
   lastRenderedSnapshot = null;
   lastInteractionMode = null;
   const stateManager = new StateManager();
-  const loop = new GameLoop(stateManager, mockRender, mockContainer);
+  const loop = new GameLoop(stateManager, mockRender, mockContainer, 3);
   const msg = makeStateMsg({
     phase: "GAME_OVER",
     winning_team: 0,
@@ -173,29 +175,36 @@ Deno.test("test_handleMessage_game_over", () => {
   }, null);
   loop.handleMessage(msg);
   assertEquals(lastRenderedSnapshot!.phase, "GAME_OVER");
-  assertEquals(lastInteractionMode, null);
+  assertEquals(lastInteractionMode, "next_round");
 });
 
 Deno.test("test_handleMessage_error_does_not_update_state", () => {
   lastRenderedSnapshot = null;
   lastInteractionMode = null;
   appendedElements = [];
+  let errorReceived: string | null = null;
   const stateManager = new StateManager();
-  const loop = new GameLoop(stateManager, mockRender, mockContainer);
+  const loop = new GameLoop(
+    stateManager,
+    mockRender,
+    mockContainer,
+    3,
+    undefined,
+    (message) => { errorReceived = message; },
+  );
   const msg: ServerMessage = { type: "error", message: "something went wrong" };
   loop.handleMessage(msg);
   // Error messages should not update state or re-render
   assertEquals(lastRenderedSnapshot, null);
-  // showErrorToast should have been called (appended a toast element)
-  assertEquals(appendedElements.length, 1);
-  assertEquals(appendedElements[0].textContent, "something went wrong");
+  // onError callback should have been called
+  assertEquals(errorReceived, "something went wrong");
 });
 
 Deno.test("test_handleMessage_updates_state_manager", () => {
   lastRenderedSnapshot = null;
   lastInteractionMode = null;
   const stateManager = new StateManager();
-  const loop = new GameLoop(stateManager, mockRender, mockContainer);
+  const loop = new GameLoop(stateManager, mockRender, mockContainer, 3);
   const snap = makeSnapshot({ phase: "PLAYING" });
   const msg: ServerMessage = { type: "state", awaiting: "play", state: snap };
   loop.handleMessage(msg);
@@ -207,7 +216,7 @@ Deno.test("test_handleMessage_error_stores_error_message", () => {
   lastInteractionMode = null;
   appendedElements = [];
   const stateManager = new StateManager();
-  const loop = new GameLoop(stateManager, mockRender, mockContainer);
+  const loop = new GameLoop(stateManager, mockRender, mockContainer, 3);
   assertEquals(loop.getLastError(), null);
   const msg: ServerMessage = { type: "error", message: "something went wrong" };
   loop.handleMessage(msg);
@@ -218,7 +227,7 @@ Deno.test("test_handleMessage_unknown_awaiting_returns_null", () => {
   lastRenderedSnapshot = null;
   lastInteractionMode = null;
   const stateManager = new StateManager();
-  const loop = new GameLoop(stateManager, mockRender, mockContainer);
+  const loop = new GameLoop(stateManager, mockRender, mockContainer, 3);
   const msg = makeStateMsg({
     phase: "PLAYING",
     awaiting_action: "unknown_action",

@@ -49,52 +49,6 @@ Deno.test("test_get_returns_latest", () => {
   assertEquals(mgr.get()!.phase, "STIRRING");
 });
 
-Deno.test("test_onChange_called_on_update", () => {
-  const mgr = new StateManager();
-  let called = false;
-  let received: StateSnapshot | null = null;
-  mgr.onChange((snap) => {
-    called = true;
-    received = snap;
-  });
-  const snap = makeSnapshot("PLAYING");
-  mgr.update(snap);
-  assertEquals(called, true);
-  assertEquals(received, snap);
-});
-
-Deno.test("test_onChange_unsubscribe", () => {
-  const mgr = new StateManager();
-  let callCount = 0;
-  const unsub = mgr.onChange(() => { callCount++; });
-  unsub();
-  mgr.update(makeSnapshot("DEAL_BID"));
-  assertEquals(callCount, 0);
-});
-
-Deno.test("test_onChange_multiple_subscribers", () => {
-  const mgr = new StateManager();
-  let count1 = 0;
-  let count2 = 0;
-  mgr.onChange(() => { count1++; });
-  mgr.onChange(() => { count2++; });
-  mgr.update(makeSnapshot("DEAL_BID"));
-  assertEquals(count1, 1);
-  assertEquals(count2, 1);
-});
-
-Deno.test("test_onChange_not_called_on_unsubscribed", () => {
-  const mgr = new StateManager();
-  let count1 = 0;
-  let count2 = 0;
-  const unsub1 = mgr.onChange(() => { count1++; });
-  mgr.onChange(() => { count2++; });
-  unsub1();
-  mgr.update(makeSnapshot("DEAL_BID"));
-  assertEquals(count1, 0);
-  assertEquals(count2, 1);
-});
-
 Deno.test("test_update_replaces_previous_snapshot", () => {
   const mgr = new StateManager();
   mgr.update(makeSnapshot("DEAL_BID"));

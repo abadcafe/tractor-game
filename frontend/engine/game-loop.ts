@@ -1,8 +1,13 @@
-import type { StateSnapshot, ServerMessage, InteractionMode } from "../core/types.ts";
+import type { StateSnapshot } from "../core/types.ts";
+import type { ServerMessage } from "../core/protocol.ts";
+import type { InteractionMode } from "./types.ts";
 import type { StateManager } from "../core/state.ts";
-import type { WsClient } from "../net/ws-client.ts";
-import { HUMAN_PLAYER_INDEX } from "../config.ts";
-import { showErrorToast } from "../ui/error-toast.ts";
+
+/** Error handler callback type. */
+type ErrorHandler = (message: string) => void;
+
+/** Reconnecting state provider callback type. */
+type ReconnectingProvider = () => boolean;
 
 /**
  * Core game loop orchestrator.
@@ -13,19 +18,25 @@ export class GameLoop {
   private stateManager: StateManager;
   private renderFn: (snapshot: StateSnapshot, container: Element, interactionMode: InteractionMode) => void;
   private container: Element;
-  private wsClient: WsClient;
+  private isReconnecting: ReconnectingProvider;
+  private onError: ErrorHandler | null;
+  private humanPlayerIndex: number;
   private lastError: string | null = null;
 
   constructor(
     stateManager: StateManager,
     renderFn: (snapshot: StateSnapshot, container: Element, interactionMode: InteractionMode) => void,
     container: Element,
-    wsClient: WsClient,
+    humanPlayerIndex: number,
+    isReconnecting?: ReconnectingProvider,
+    onError?: ErrorHandler,
   ) {
     this.stateManager = stateManager;
     this.renderFn = renderFn;
     this.container = container;
-    this.wsClient = wsClient;
+    this.humanPlayerIndex = humanPlayerIndex;
+    this.isReconnecting = isReconnecting ?? (() => false);
+    this.onError = onError ?? null;
   }
 
   /**
@@ -36,7 +47,7 @@ export class GameLoop {
   handleMessage(msg: ServerMessage): void {
     if (msg.type === "error") {
       this.lastError = msg.message;
-      showErrorToast(msg.message, this.container);
+      this.onError?.(msg.message);
       return;
     }
 
@@ -67,7 +78,7 @@ export class GameLoop {
    */
   private computeInteractionMode(state: StateSnapshot, awaiting: string | null): InteractionMode {
     // Disable all interaction while reconnecting
-    if (this.wsClient.isReconnecting) {
+    if (this.isReconnecting()) {
       return null;
     }
 
@@ -83,7 +94,7 @@ export class GameLoop {
       return "next_round";
     }
 
-    if (awaiting !== null && state.current_player === HUMAN_PLAYER_INDEX) {
+    if (awaiting !== null && state.current_player === this.humanPlayerIndex) {
       switch (awaiting) {
         case "stir":
           return "stir";

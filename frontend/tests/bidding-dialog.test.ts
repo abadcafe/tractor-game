@@ -1,7 +1,8 @@
 import { assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { DOMParser } from "jsr:@b-fuze/deno-dom@0.1.56";
 import { renderBiddingDialog } from "../ui/components/bidding-dialog.ts";
-import type { StateSnapshot, InteractionMode } from "../core/types.ts";
+import type { StateSnapshot } from "../core/types.ts";
+import type { InteractionMode, BidButtonState } from "../engine/types.ts";
 
 const doc = new DOMParser().parseFromString(
   `<html><body><div id="app"></div></body></html>`,
@@ -111,12 +112,12 @@ Deno.test("test_renderBiddingDialog_bid_callback", () => {
   const snap = makeSnapshot({ phase: "DEAL_BID" });
   let bidCardIds: string[] | null = null;
   const onBid = (cardIds: string[]) => { bidCardIds = cardIds; };
-  const el = renderBiddingDialog(snap, "bid", onBid);
+  const selectedCardIds = new Set(["D1-spades-2"]);
+  const el = renderBiddingDialog(snap, "bid", onBid, undefined, undefined, selectedCardIds);
   // In DEAL_BID, there should be a bid button
   const bidButton = Array.from(el.querySelectorAll("button")).find((b) => b.textContent === "叫牌");
   assertNotEquals(bidButton, undefined);
-  // Clicking the bid button should call onBid with the currently selected trump rank cards
-  // (In the component, the bid button triggers onBid with the player's trump rank cards)
+  // Clicking the bid button should call onBid with the selected cards
   bidButton!.dispatchEvent(new Event("click", { bubbles: true }));
   assertNotEquals(bidCardIds, null);
 });
@@ -128,12 +129,13 @@ Deno.test("test_renderBiddingDialog_stir_callback", () => {
     stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3 },
     player_hand: [
       { id: "D1-spades-2", suit: "spades", rank: "2" },
-      { id: "D1-hearts-2", suit: "hearts", rank: "2" },
+      { id: "D2-spades-2", suit: "spades", rank: "2" },
     ],
   });
   let stirCardIds: string[] | null = null;
   const onStir = (cardIds: string[]) => { stirCardIds = cardIds; };
-  const el = renderBiddingDialog(snap, "stir", undefined, onStir);
+  const selectedCardIds = new Set(["D1-spades-2", "D2-spades-2"]);
+  const el = renderBiddingDialog(snap, "stir", undefined, onStir, undefined, selectedCardIds);
   // In STIRRING, there should be a "反主" button that calls onStir
   const stirButton = Array.from(el.querySelectorAll("button")).find((b) => b.textContent === "反主");
   assertNotEquals(stirButton, undefined);
@@ -156,12 +158,13 @@ Deno.test("test_renderBiddingDialog_empty_hand_bid", () => {
   const snap = makeSnapshot({ phase: "DEAL_BID", player_hand: [] });
   let bidCardIds: string[] | null = null;
   const onBid = (cardIds: string[]) => { bidCardIds = cardIds; };
-  const el = renderBiddingDialog(snap, "bid", onBid);
+  const selectedCardIds = new Set<string>();
+  const bidButtonState: BidButtonState = { disabled: true, title: "请先选择要叫的牌" };
+  const el = renderBiddingDialog(snap, "bid", onBid, undefined, undefined, selectedCardIds, bidButtonState);
   const bidButton = Array.from(el.querySelectorAll("button")).find((b) => b.textContent === "叫牌");
   assertNotEquals(bidButton, undefined);
-  bidButton!.dispatchEvent(new Event("click", { bubbles: true }));
-  assertNotEquals(bidCardIds, null);
-  assertEquals(bidCardIds!.length, 0);
+  // Button should be disabled because no cards are selected
+  assertEquals(bidButton!.disabled, true);
 });
 
 Deno.test("test_renderBiddingDialog_multiple_bid_events", () => {

@@ -45,7 +45,8 @@ Deno.test("test_renderGameOverOverlay_shows_winner", () => {
   const winnerEl = el.querySelector(".winner-text");
   assertNotEquals(winnerEl, null);
   const text = winnerEl?.textContent ?? "";
-  assertEquals(text.includes("队伍0获胜!"), true);
+  // Team 0 is human team, so it shows "🏆 我们赢了!"
+  assertEquals(text.includes("🏆 我们赢了!"), true);
 });
 
 Deno.test("test_renderGameOverOverlay_team1_wins", () => {

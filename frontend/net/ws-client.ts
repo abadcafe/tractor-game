@@ -1,4 +1,4 @@
-import type { ServerMessage, ClientAction } from "../core/types.ts";
+import type { ServerMessage, ClientAction } from "../core/protocol.ts";
 import { WS_PATH } from "../config.ts";
 
 /**
@@ -33,7 +33,7 @@ export class WsClient {
   }
 
   /** Set the WebSocket host URL (e.g. "ws://localhost:8080"). */
-  setWsHost(host: string): void {
+  private setWsHost(host: string): void {
     this._wsHost = host;
   }
 

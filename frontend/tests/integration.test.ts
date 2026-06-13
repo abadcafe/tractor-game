@@ -4,7 +4,10 @@ import { StateManager } from "../core/state.ts";
 import { GameLoop } from "../engine/game-loop.ts";
 import { validatePlay, validateBidCards } from "../engine/input-validator.ts";
 import { render } from "../ui/renderer.ts";
-import type { StateSnapshot, ServerMessage, InteractionMode, ClientAction, ActionCallbacks } from "../core/types.ts";
+import type { StateSnapshot } from "../core/types.ts";
+import type { ServerMessage, ClientAction } from "../core/protocol.ts";
+import type { InteractionMode, GameAction } from "../engine/types.ts";
+import type { ActionCallbacks, RenderContext } from "../ui/types.ts";
 import { HUMAN_PLAYER_INDEX } from "../config.ts";
 
 // deno-dom's Element is not structurally compatible with the DOM Element type
@@ -55,28 +58,22 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
 // Track rendered state
 let lastRenderedMode: InteractionMode = null;
 let lastRenderedSnapshot: StateSnapshot | null = null;
-let lastRenderedCallbacks: ActionCallbacks | undefined = undefined;
-let lastRenderedSelectedIds: Set<string> | undefined = undefined;
+let lastRenderedCtx: RenderContext | undefined = undefined;
 
 function resetTrackingState(): void {
   lastRenderedMode = null;
   lastRenderedSnapshot = null;
-  lastRenderedCallbacks = undefined;
-  lastRenderedSelectedIds = undefined;
+  lastRenderedCtx = undefined;
 }
 
 function trackingRender(
   snapshot: StateSnapshot,
   container: Element,
   interactionMode: InteractionMode,
-  callbacks?: ActionCallbacks,
-  selectedCardIds?: Set<string>,
 ): void {
   lastRenderedMode = interactionMode;
   lastRenderedSnapshot = snapshot;
-  lastRenderedCallbacks = callbacks;
-  lastRenderedSelectedIds = selectedCardIds;
-  render(snapshot, container, interactionMode, callbacks, selectedCardIds);
+  render(snapshot, container, interactionMode, lastRenderedCtx);
 }
 
 Deno.test("test_integration_ws_to_render", () => {
@@ -84,7 +81,7 @@ Deno.test("test_integration_ws_to_render", () => {
   resetTrackingState();
   const container = freshContainer();
   const stateManager = new StateManager();
-  const gameLoop = new GameLoop(stateManager, trackingRender, container);
+  const gameLoop = new GameLoop(stateManager, trackingRender, container, 3);
 
   // Simulate WS message for PLAYING phase with human turn
   const msg: ServerMessage = {
@@ -121,7 +118,7 @@ Deno.test("test_integration_play_action", () => {
       if (selectedCardIds.has(cardId)) selectedCardIds.delete(cardId);
       else selectedCardIds.add(cardId);
     },
-    onAction: (action: string) => {
+    onAction: (action: GameAction) => {
       if (action === "play") {
         const selectedCards = snap.player_hand.filter((c) => selectedCardIds.has(c.id));
         const matchedCards = validatePlay(selectedCards, snap.legal_actions);
@@ -136,12 +133,12 @@ Deno.test("test_integration_play_action", () => {
     onNewGame: () => {},
   };
 
-  render(snap, container, "play", callbacks, selectedCardIds);
+  render(snap, container, "play", { callbacks, selectedCardIds, legalCardIds: new Set() });
 
   // Step 2: User selects a card by clicking the legal card (hearts-5)
-  // Note: cards are sorted by suit then rank, so we find the specific card by text content
+  // Note: cards are sorted by trump rank first, so spades-2 comes before hearts-5
   const allCards = container.querySelectorAll(".hand-view .card");
-  const card = Array.from(allCards).find((c) => c.textContent?.includes("♥5")) as unknown as HTMLElement;
+  const card = Array.from(allCards).find((c) => c.textContent?.includes("♥")) as unknown as HTMLElement;
   assertNotEquals(card, undefined);
   card.dispatchEvent(new Event("click", { bubbles: true })); // triggers onCardClick -> adds to selectedCardIds
 
@@ -181,7 +178,7 @@ Deno.test("test_integration_bid_action", () => {
     onNewGame: () => {},
   };
 
-  render(snap, container, "bid", callbacks);
+  render(snap, container, "bid", { callbacks, selectedCardIds: new Set(), legalCardIds: new Set() });
 
   // Step 2: Verify bidding dialog is shown
   const bidEl = container.querySelector(".bidding-dialog");
@@ -225,7 +222,7 @@ Deno.test("test_integration_stir_action", () => {
     onNewGame: () => {},
   };
 
-  render(snap, container, "stir", callbacks);
+  render(snap, container, "stir", { callbacks, selectedCardIds: new Set(), legalCardIds: new Set() });
 
   // Step 2: Verify bidding dialog is shown in stir mode
   const bidEl = container.querySelector(".bidding-dialog");
@@ -248,7 +245,15 @@ Deno.test("test_integration_error_message", () => {
   resetTrackingState();
   const container = freshContainer();
   const stateManager = new StateManager();
-  const gameLoop = new GameLoop(stateManager, trackingRender, container);
+  let errorReceived: string | null = null;
+  const gameLoop = new GameLoop(
+    stateManager,
+    trackingRender,
+    container,
+    3,
+    undefined,
+    (message) => { errorReceived = message; },
+  );
 
   // First, establish a state
   const stateMsg: ServerMessage = {
@@ -267,10 +272,8 @@ Deno.test("test_integration_error_message", () => {
   // Verify: state was NOT updated
   assertEquals(stateManager.get(), stateBefore);
 
-  // Verify: error toast was displayed
-  const toast = container.querySelector(".error-toast");
-  assertNotEquals(toast, null);
-  assertEquals(toast!.textContent, "无效的出牌");
+  // Verify: error callback was called
+  assertEquals(errorReceived, "无效的出牌");
 });
 
 Deno.test("test_integration_stir_not_human_ignored", () => {
@@ -278,7 +281,7 @@ Deno.test("test_integration_stir_not_human_ignored", () => {
   resetTrackingState();
   const container = freshContainer();
   const stateManager = new StateManager();
-  const gameLoop = new GameLoop(stateManager, trackingRender, container);
+  const gameLoop = new GameLoop(stateManager, trackingRender, container, 3);
 
   // STIRRING phase, but NOT human's turn
   const msg: ServerMessage = {
@@ -297,7 +300,7 @@ Deno.test("test_integration_stir_not_human_ignored", () => {
   assertEquals(lastRenderedMode, null);
 
   // Verify: no interactive buttons in the rendered output
-  render(stateManager.get()!, container, null);
+  render(stateManager.get()!, container, null, undefined);
   // In spectator mode, hand-view should have no buttons
   const handEl = container.querySelector(".hand-view");
   if (handEl) {
@@ -324,10 +327,10 @@ Deno.test("test_integration_card_selection_persists_across_renders", () => {
   };
 
   // First render -- no cards selected
-  render(snap, container, "play", callbacks, selectedCardIds);
+  render(snap, container, "play", { callbacks, selectedCardIds, legalCardIds: new Set() });
   let cards = container.querySelectorAll(".hand-view .card");
-  // Cards are sorted by suit then rank: clubs-3, hearts-5, spades-2
-  const hearts5Card = Array.from(cards).find((c) => c.textContent?.includes("♥5"))!;
+  // Cards are sorted by trump rank first: spades-2 (trump rank), hearts-5 (trump suit), clubs-3
+  const hearts5Card = Array.from(cards).find((c) => c.textContent?.includes("♥"))!;
   assertEquals(hearts5Card.classList.contains("selected"), false);
 
   // Simulate clicking hearts-5 card
@@ -335,11 +338,11 @@ Deno.test("test_integration_card_selection_persists_across_renders", () => {
   assertEquals(selectedCardIds.has("D1-hearts-5"), true);
 
   // Re-render with same selectedCardIds -- selection should persist
-  render(snap, container, "play", callbacks, selectedCardIds);
+  render(snap, container, "play", { callbacks, selectedCardIds, legalCardIds: new Set() });
   cards = container.querySelectorAll(".hand-view .card");
   const selectedCard = Array.from(cards).find((c) => c.classList.contains("selected"));
   assertNotEquals(selectedCard, undefined);
-  assertEquals(selectedCard!.textContent?.includes("♥5"), true);
+  assertEquals(selectedCard!.textContent?.includes("♥"), true);
   // Verify only one card is selected
   const allSelected = Array.from(cards).filter((c) => c.classList.contains("selected"));
   assertEquals(allSelected.length, 1);
@@ -354,6 +357,8 @@ Deno.test("test_integration_callback_triggers_send", () => {
     scoring: {
       declarer_team: 0,
       defender_points: 30,
+      total_defender_points: 30,
+      bottom_card_bonus: 0,
       bottom_cards: [],
     },
   });
@@ -363,7 +368,7 @@ Deno.test("test_integration_callback_triggers_send", () => {
 
   const callbacks: ActionCallbacks = {
     onCardClick: () => {},
-    onAction: (action: string) => {
+    onAction: (action: GameAction) => {
       if (action === "next_round") mockSend({ type: "next_round" });
     },
     onBid: () => {},
@@ -372,7 +377,7 @@ Deno.test("test_integration_callback_triggers_send", () => {
     onNewGame: () => {},
   };
 
-  render(snap, container, "next_round", callbacks);
+  render(snap, container, "next_round", { callbacks, selectedCardIds: new Set(), legalCardIds: new Set() });
 
   // Click the "next round" button
   const nextButton = Array.from(container.querySelectorAll(".scoring-overlay button"))

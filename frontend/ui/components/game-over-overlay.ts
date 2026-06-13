@@ -1,5 +1,6 @@
 import type { StateSnapshot } from "../../core/types.ts";
 import { el } from "../dom.ts";
+import { HUMAN_TEAM } from "../../config.ts";
 
 /**
  * Render a game-over overlay showing the winning team, final levels, and a "新游戏" button.
@@ -14,8 +15,7 @@ export function renderGameOverOverlay(
 ): HTMLElement {
   const overlay = el("div", { class: "game-over-overlay" });
 
-  const humanTeam = 0; // Player 3 (South) is always Team 0
-  const humanWon = snapshot.winning_team === humanTeam;
+  const humanWon = snapshot.winning_team === HUMAN_TEAM;
 
   const winnerText = humanWon
     ? "🏆 我们赢了!"

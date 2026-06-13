@@ -1,6 +1,6 @@
-import { assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { DOMParser } from "jsr:@b-fuze/deno-dom@0.1.56";
-import { $, $$, el } from "../ui/dom.ts";
+import { el } from "../ui/dom.ts";
 
 // Set up a global document for testing
 const doc = new DOMParser().parseFromString(
@@ -9,33 +9,6 @@ const doc = new DOMParser().parseFromString(
 );
 // @ts-ignore test setup
 globalThis.document = doc;
-
-Deno.test("test_$_finds_element", () => {
-  const result = $<HTMLSpanElement>(".item");
-  assertNotEquals(result, null);
-  assertEquals(result!.textContent, "a");
-});
-
-Deno.test("test_$_returns_null_when_not_found", () => {
-  const result = $<HTMLDivElement>(".nonexistent");
-  assertEquals(result, null);
-});
-
-Deno.test("test_$_with_parent", () => {
-  const parent = $<HTMLDivElement>("#root");
-  const result = $<HTMLSpanElement>(".item", parent!);
-  assertNotEquals(result, null);
-});
-
-Deno.test("test_$$_finds_multiple", () => {
-  const results = $$<HTMLSpanElement>(".item");
-  assertEquals(results.length, 2);
-});
-
-Deno.test("test_$$_returns_empty_when_not_found", () => {
-  const results = $$<HTMLSpanElement>(".nonexistent");
-  assertEquals(results.length, 0);
-});
 
 Deno.test("test_el_creates_element", () => {
   const div = el("div");

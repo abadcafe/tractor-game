@@ -1,7 +1,9 @@
 import { assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { DOMParser } from "jsr:@b-fuze/deno-dom@0.1.56";
 import { render } from "../ui/renderer.ts";
-import type { StateSnapshot, InteractionMode, ActionCallbacks } from "../core/types.ts";
+import type { StateSnapshot } from "../core/types.ts";
+import type { InteractionMode, GameAction } from "../engine/types.ts";
+import type { ActionCallbacks } from "../ui/types.ts";
 
 function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
   return {
@@ -94,6 +96,8 @@ Deno.test("test_render_complete_phase", () => {
     scoring: {
       declarer_team: 0,
       defender_points: 30,
+      total_defender_points: 30,
+      bottom_card_bonus: 0,
       bottom_cards: [],
     },
   });
@@ -170,18 +174,18 @@ Deno.test("test_render_hand_view_receives_callbacks", () => {
   let actionFired: string | null = null;
   const callbacks: ActionCallbacks = {
     onCardClick: (cardId: string) => { clickedCardId = cardId; },
-    onAction: (action: string) => { actionFired = action; },
+    onAction: (action: GameAction) => { actionFired = action; },
     onBid: () => {},
     onStir: () => {},
     onPass: () => {},
     onNewGame: () => {},
   };
-  render(snap, container, "play", callbacks);
-  // Click a card in hand-view
+  render(snap, container, "play", { callbacks, selectedCardIds: new Set(), legalCardIds: new Set() });
+  // Click a card in hand-view (first card after sorting: spades-2 is trump rank, comes first)
   const card = container.querySelector(".hand-view .card") as HTMLElement;
   assertNotEquals(card, null);
   card.dispatchEvent(new Event("click", { bubbles: true }));
-  assertEquals(clickedCardId, "D1-hearts-5");
+  assertEquals(clickedCardId, "D1-spades-2");
   // Click the play button
   const buttons = container.querySelectorAll(".hand-view button");
   const playButton = Array.from(buttons).find((b) => b.textContent === "出牌");
@@ -207,7 +211,7 @@ Deno.test("test_render_bidding_dialog_receives_callbacks", () => {
     onPass: () => { passCalled = true; },
     onNewGame: () => {},
   };
-  render(snap, container, "bid", callbacks);
+  render(snap, container, "bid", { callbacks, selectedCardIds: new Set(), legalCardIds: new Set() });
   // In bid mode, there should be a bid button
   const bidEl = container.querySelector(".bidding-dialog");
   assertNotEquals(bidEl, null);
@@ -222,19 +226,21 @@ Deno.test("test_render_scoring_overlay_receives_callback", () => {
     scoring: {
       declarer_team: 0,
       defender_points: 30,
+      total_defender_points: 30,
+      bottom_card_bonus: 0,
       bottom_cards: [],
     },
   });
   let nextRoundCalled = false;
   const callbacks: ActionCallbacks = {
     onCardClick: () => {},
-    onAction: (action: string) => { if (action === "next_round") nextRoundCalled = true; },
+    onAction: (action: GameAction) => { if (action === "next_round") nextRoundCalled = true; },
     onBid: () => {},
     onStir: () => {},
     onPass: () => {},
     onNewGame: () => {},
   };
-  render(snap, container, "next_round", callbacks);
+  render(snap, container, "next_round", { callbacks, selectedCardIds: new Set(), legalCardIds: new Set() });
   const buttons = container.querySelectorAll(".scoring-overlay button");
   const nextButton = Array.from(buttons).find((b) => b.textContent === "下一轮");
   assertNotEquals(nextButton, undefined);
@@ -259,7 +265,7 @@ Deno.test("test_render_game_over_receives_callback", () => {
     onPass: () => {},
     onNewGame: () => { newGameCalled = true; },
   };
-  render(snap, container, null, callbacks);
+  render(snap, container, null, { callbacks, selectedCardIds: new Set(), legalCardIds: new Set() });
   const buttons = container.querySelectorAll(".game-over-overlay button");
   const newGameButton = Array.from(buttons).find((b) => b.textContent === "新游戏");
   assertNotEquals(newGameButton, undefined);
@@ -271,10 +277,9 @@ Deno.test("test_render_selected_cards_highlighted", () => {
   const container = freshContainer();
   const snap = makeSnapshot();
   const selectedCardIds = new Set(["D1-hearts-5"]);
-  render(snap, container, "play", undefined, selectedCardIds);
+  render(snap, container, "play", { selectedCardIds, legalCardIds: new Set() });
   const cards = container.querySelectorAll(".hand-view .card");
-  // First card (hearts-5) should have .selected class
-  assertEquals(cards[0].classList.contains("selected"), true);
-  // Second card (spades-2) should not
-  assertEquals(cards[1].classList.contains("selected"), false);
+  // After sorting: spades-2 (trump rank) is first, hearts-5 (trump suit) is second
+  assertEquals(cards[0].classList.contains("selected"), false);
+  assertEquals(cards[1].classList.contains("selected"), true);
 });

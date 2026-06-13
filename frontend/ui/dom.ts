@@ -1,29 +1,4 @@
 /**
- * DOM utility functions for query and element creation.
- */
-
-/**
- * Query a single element by CSS selector.
- * Returns null if not found.
- */
-export function $<T extends Element = Element>(
-  selector: string,
-  parent?: ParentNode | null,
-): T | null {
-  return ((parent ?? document) as ParentNode).querySelector(selector) as T | null;
-}
-
-/**
- * Query all matching elements by CSS selector.
- */
-export function $$<T extends Element = Element>(
-  selector: string,
-  parent?: ParentNode | null,
-): NodeListOf<T> {
-  return ((parent ?? document) as ParentNode).querySelectorAll(selector) as NodeListOf<T>;
-}
-
-/**
  * Create an HTML element with optional attributes and children.
  */
 export function el(

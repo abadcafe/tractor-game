@@ -1,21 +1,8 @@
-/**
- * Default duration (ms) before a toast auto-removes.
- * Exported so tests can override it.
- */
-export let TOAST_DURATION_MS = 3000;
+/** Default duration (ms) before a toast auto-removes. */
+const TOAST_DURATION_MS = 3000;
 
-/**
- * Maximum number of visible toasts at once.
- * Excess toasts are removed (oldest first).
- */
-export const MAX_VISIBLE_TOASTS = 3;
-
-/**
- * Override the toast duration (useful for testing).
- */
-export function setToastDuration(ms: number): void {
-  TOAST_DURATION_MS = ms;
-}
+/** Maximum number of visible toasts at once. Excess toasts are removed (oldest first). */
+const MAX_VISIBLE_TOASTS = 3;
 
 /**
  * Display a transient error message as a toast notification.

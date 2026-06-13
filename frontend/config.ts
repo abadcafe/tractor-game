@@ -5,6 +5,7 @@ export type SeatInfo = {
 };
 
 export const HUMAN_PLAYER_INDEX = 3;
+export const HUMAN_TEAM = 0;
 
 export const SEAT_MAP: Record<number, SeatInfo> = {
   0: { label: "同伴", position: "北", team: 0 },

@@ -1,11 +1,26 @@
 import { StateManager } from "./core/state.ts";
-import type { ServerMessage, InteractionMode, ActionCallbacks } from "./core/types.ts";
+import type { ServerMessage, ClientAction } from "./core/protocol.ts";
+import type { InteractionMode, GameAction } from "./engine/types.ts";
+import type { ActionCallbacks, RenderContext } from "./ui/types.ts";
 import { createGame } from "./net/rest-client.ts";
 import { WsClient } from "./net/ws-client.ts";
 import { GameLoop } from "./engine/game-loop.ts";
 import { render } from "./ui/renderer.ts";
-import { validatePlay, validateDiscard, validateBidCards, validateStirCards } from "./engine/input-validator.ts";
 import { showErrorToast } from "./ui/error-toast.ts";
+import { HUMAN_PLAYER_INDEX } from "./config.ts";
+import {
+  handlePlayAction,
+  handleDiscardAction,
+  handleBidAction,
+  handleStirAction,
+} from "./engine/action-handler.ts";
+import {
+  computeBidButtonState,
+  computeStirButtonState,
+  computeLevelChangeInfo,
+  computeLegalCardIds,
+  isSelectionStillLegal,
+} from "./engine/ui-state-computer.ts";
 
 function main() {
   const containerEl = document.querySelector("#app");
@@ -22,85 +37,84 @@ function main() {
   const selectedCardIds = new Set<string>();
   let currentInteractionMode: InteractionMode = null;
 
-  // Re-render helper: reads current state and renders with current callbacks/selections
+  // Shared render context
+  const renderCtx: RenderContext = { selectedCardIds, legalCardIds: new Set() };
+
+  /** Pre-compute all UI state and render. */
+  function precomputeAndRender(snap: typeof stateManager.get extends () => infer R ? R extends null ? never : R : never) {
+    renderCtx.legalCardIds = computeLegalCardIds(snap, currentInteractionMode);
+    renderCtx.bidButtonState = computeBidButtonState(snap, selectedCardIds);
+    renderCtx.stirButtonState = computeStirButtonState(snap, selectedCardIds);
+    renderCtx.levelChange = snap.scoring
+      ? computeLevelChangeInfo(snap.scoring.total_defender_points)
+      : undefined;
+    render(snap, container, currentInteractionMode, renderCtx);
+  }
+
+  /** Re-render from current state (for selection changes). */
   function reRender() {
     const snap = stateManager.get();
-    if (snap) {
-      render(snap, container, currentInteractionMode, callbacks, selectedCardIds);
+    if (snap) precomputeAndRender(snap);
+  }
+
+  /** Send action, clear selection, re-render. */
+  function sendAndClear(action: ClientAction) {
+    wsClient.send(action);
+    selectedCardIds.clear();
+    reRender();
+  }
+
+  /** Handle a validated action result. */
+  function handleResult(result: { success: boolean; action?: ClientAction; error?: string }) {
+    if (result.success && result.action) {
+      sendAndClear(result.action);
+    } else if (result.error) {
+      showErrorToast(result.error, container);
     }
   }
 
   // Action callbacks -- close over selectedCardIds, wsClient, stateManager
   const callbacks: ActionCallbacks = {
     onCardClick(cardId: string) {
-      // Toggle selection
       if (selectedCardIds.has(cardId)) {
         selectedCardIds.delete(cardId);
       } else {
         selectedCardIds.add(cardId);
       }
-      // Re-render to show updated selection
       reRender();
     },
 
-    onAction(action: string) {
+    onAction(action: GameAction) {
       const snap = stateManager.get();
       if (!snap) return;
 
-      if (action === "play") {
-        const selectedCards = snap.player_hand.filter((c) => selectedCardIds.has(c.id));
-        const matchedCards = validatePlay(selectedCards, snap.legal_actions);
-        if (matchedCards) {
-          wsClient.send({ type: "play", cards: matchedCards.map((c) => c.id) });
-          selectedCardIds.clear();
-        } else {
-          showErrorToast("无效的出牌组合", container);
-        }
-      } else if (action === "discard") {
-        const selectedCards = snap.player_hand.filter((c) => selectedCardIds.has(c.id));
-        const count = snap.exchange_state?.count ?? 0;
-        if (validateDiscard(selectedCards, count)) {
-          wsClient.send({ type: "discard", cards: selectedCards.map((c) => c.id) });
-          selectedCardIds.clear();
-        } else {
-          showErrorToast(`请选择 ${count} 张牌弃掉`, container);
-        }
-      } else if (action === "next_round") {
-        wsClient.send({ type: "next_round" });
-        selectedCardIds.clear();
+      switch (action) {
+        case "play":
+          handleResult(handlePlayAction(snap, selectedCardIds));
+          break;
+        case "discard":
+          handleResult(handleDiscardAction(snap, selectedCardIds));
+          break;
+        case "next_round":
+          sendAndClear({ type: "next_round" });
+          break;
       }
     },
 
     onBid(cardIds: string[]) {
       const snap = stateManager.get();
       if (!snap) return;
-      const selectedCards = snap.player_hand.filter((c) => cardIds.includes(c.id));
-      if (validateBidCards(selectedCards, snap.trump_rank)) {
-        wsClient.send({ type: "bid", cards: cardIds });
-        selectedCardIds.clear();
-        reRender();
-      } else {
-        showErrorToast("叫牌牌张无效", container);
-      }
+      handleResult(handleBidAction(snap, cardIds));
     },
 
     onStir(cardIds: string[]) {
       const snap = stateManager.get();
       if (!snap) return;
-      const selectedCards = snap.player_hand.filter((c) => cardIds.includes(c.id));
-      if (validateStirCards(selectedCards, snap.trump_rank)) {
-        wsClient.send({ type: "stir", cards: cardIds });
-        selectedCardIds.clear();
-        reRender();
-      } else {
-        showErrorToast("反主必须出对子", container);
-      }
+      handleResult(handleStirAction(snap, cardIds));
     },
 
     onPass() {
-      wsClient.send({ type: "stir", pass: true });
-      selectedCardIds.clear();
-      reRender();
+      sendAndClear({ type: "stir", pass: true });
     },
 
     onNewGame() {
@@ -110,34 +124,22 @@ function main() {
       startNewGame();
     },
   };
+  renderCtx.callbacks = callbacks;
 
   // GameLoop with renderFn that injects callbacks + selectedCardIds
   const gameLoop = new GameLoop(
     stateManager,
     (snapshot, containerEl, interactionMode) => {
       currentInteractionMode = interactionMode;
-
-      // Validate selection against new state: clear if cards left hand or selection is illegal
-      if (selectedCardIds.size > 0) {
-        const handIds = new Set(snapshot.player_hand.map((c) => c.id));
-        const allInHand = [...selectedCardIds].every((id) => handIds.has(id));
-        if (!allInHand) {
-          // Some selected cards are no longer in hand
-          selectedCardIds.clear();
-        } else if (snapshot.phase === "PLAYING" && snapshot.legal_actions.length > 0) {
-          const selectedCards = snapshot.player_hand.filter((c) => selectedCardIds.has(c.id));
-          const matched = validatePlay(selectedCards, snapshot.legal_actions);
-          if (!matched) {
-            // Selection is no longer a legal play
-            selectedCardIds.clear();
-          }
-        }
+      if (!isSelectionStillLegal(snapshot, selectedCardIds)) {
+        selectedCardIds.clear();
       }
-
-      render(snapshot, containerEl, interactionMode, callbacks, selectedCardIds);
+      precomputeAndRender(snapshot);
     },
     container,
-    wsClient,
+    HUMAN_PLAYER_INDEX,
+    () => wsClient.isReconnecting,
+    (message) => showErrorToast(message, container),
   );
 
   // Register message handler BEFORE connecting (per spec: first state msg arrives immediately)
@@ -156,7 +158,7 @@ function main() {
   // Start game flow
   async function startNewGame() {
     try {
-      wsClient.disconnect(); // Cancel any pending reconnection timers from previous game
+      wsClient.disconnect();
       const gameId = await createGame();
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const host = window.location.host;
