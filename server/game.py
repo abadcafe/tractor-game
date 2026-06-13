@@ -17,6 +17,7 @@ from server.actions import (
     DiscardAction,
     NextRoundAction,
     PlayAction,
+    SkipBidAction,
     SkipStirAction,
     StirAction,
 )
@@ -53,6 +54,12 @@ class Game:
         self._cancelled: bool = False
         self._next_round_confirmed: set[int] = set()
         self._deal_delay = deal_delay
+        self._seq: int = 0
+
+    @property
+    def current_seq(self) -> int:
+        """Current state sequence number (for server.py seq validation)."""
+        return self._seq
 
     async def run(self) -> None:
         """Start the game: transition to IN_ROUND, create round, start dealing loop.
@@ -77,7 +84,7 @@ class Game:
         self._cancelled = False
         self._dealing_task = asyncio.create_task(self._dealing_loop())
 
-    async def act(self, player_index: int, action: BidAction | PlayAction | StirAction | SkipStirAction | DiscardAction | NextRoundAction) -> None:
+    async def act(self, player_index: int, action: BidAction | SkipBidAction | PlayAction | StirAction | SkipStirAction | DiscardAction | NextRoundAction) -> None:
         """Unified action entry point. Dispatches based on current phase and action type.
 
         After applying the action, pushes state to all players.
@@ -177,9 +184,11 @@ class Game:
         self._round_state = rs
 
         if error_msg:
-            await self._send_error_to_player(player_index, error_msg)
+            for i in range(len(self._players)):
+                err = error_msg if i == player_index else None
+                await self._players[i].on_state(self, seq=self._seq, error=err)
 
-        if should_push:
+        if should_push and not error_msg:
             await self._push_state_to_all()
 
     def snapshot(self, for_player: int) -> StateSnapshot:
@@ -446,5 +455,6 @@ class Game:
 
     async def _push_state_to_all(self) -> None:
         """Push state to all players."""
+        self._seq += 1
         for i in range(len(self._players)):
-            await self._players[i].on_state(self)
+            await self._players[i].on_state(self, seq=self._seq, error=None)

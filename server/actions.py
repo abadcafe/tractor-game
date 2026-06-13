@@ -32,6 +32,13 @@ class SkipStirAction:
 
 
 @dataclass
+class SkipBidAction:
+    """Action to skip/pass during DEAL_BID phase."""
+
+    pass
+
+
+@dataclass
 class DiscardAction:
     """Cards to discard for the bottom pile."""
 

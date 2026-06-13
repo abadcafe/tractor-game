@@ -22,6 +22,7 @@ from server.actions import (
     DiscardAction,
     NextRoundAction,
     PlayAction,
+    SkipBidAction,
     SkipStirAction,
     StirAction,
 )
@@ -50,7 +51,7 @@ class GameView(Protocol):
     async def act(
         self,
         player_index: int,
-        action: BidAction | StirAction | SkipStirAction | DiscardAction | PlayAction | NextRoundAction,
+        action: BidAction | SkipBidAction | StirAction | SkipStirAction | DiscardAction | PlayAction | NextRoundAction,
     ) -> None: ...
 
 
@@ -70,7 +71,7 @@ class Player(ABC):
         self.index = index
 
     @abstractmethod
-    async def on_state(self, game: GameView) -> None:
+    async def on_state(self, game: GameView, *, seq: int = 0, error: str | None = None) -> None:
         """Called by Game when it pushes state to this player.
 
         Args:
@@ -78,6 +79,8 @@ class Player(ABC):
                   Call game.snapshot(self.index) to get the player's
                   view of the state, and game.act(self.index, action)
                   to submit an action.
+            seq: State sequence number for this push.
+            error: Error message to include (only for the acting player).
         """
 
     async def send_error(self, message: str) -> None:
@@ -103,7 +106,7 @@ class AutoPlayer(Player):
         super().__init__(index)
         self._action_count = 0
 
-    async def on_state(self, game: GameView) -> None:
+    async def on_state(self, game: GameView, *, seq: int = 0, error: str | None = None) -> None:
         snapshot = game.snapshot(self.index)
 
         if snapshot.phase == "DEAL_BID":
@@ -260,7 +263,7 @@ class HumanPlayer(Player):
         super().__init__(index)
         self._ws = ws
 
-    async def on_state(self, game: GameView) -> None:
+    async def on_state(self, game: GameView, *, seq: int = 0, error: str | None = None) -> None:
         """Push state to the human player via WebSocket.
 
         Catches any exception from send_json (e.g. WebSocket disconnected,
@@ -275,8 +278,10 @@ class HumanPlayer(Player):
         try:
             await self._ws.send_json({
                 "type": "state",
+                "seq": seq,
                 "awaiting": snapshot.awaiting_action,
                 "state": snapshot.to_dict(),
+                "error": error,
             })
         except (WebSocketDisconnect, OSError):
             logger.debug("Failed to push state to human player %d (WS likely disconnected)", self.index, exc_info=True)
@@ -299,20 +304,11 @@ class HumanPlayer(Player):
         return self._ws is not None
 
     async def send_error(self, message: str) -> None:
-        """Send an error message to the human player via WebSocket.
+        """No-op: errors are now merged into state messages.
 
-        Catches any exception from send_json for the same reason as
-        on_state(): a broken connection must not crash the game engine.
+        Kept for GameView Protocol compatibility.
         """
-        if self._ws is None:
-            return
-        try:
-            await self._ws.send_json({
-                "type": "error",
-                "message": message,
-            })
-        except (WebSocketDisconnect, OSError):
-            logger.debug("Failed to send error to human player %d (WS likely disconnected)", self.index, exc_info=True)
+        pass
 
     async def close_ws(self) -> None:
         """Close the WebSocket connection if active, then clear the reference."""

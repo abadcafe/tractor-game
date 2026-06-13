@@ -18,6 +18,7 @@ from server.actions import (
     DiscardAction,
     NextRoundAction,
     PlayAction,
+    SkipBidAction,
     SkipStirAction,
     StirAction,
 )
@@ -89,7 +90,7 @@ async def delete_game(game_id: str):
     if game is not None:
         human = game.get_player(_HUMAN_PLAYER_INDEX)
         if human.is_connected():
-            await human.on_state(game)
+            await human.on_state(game, seq=game.current_seq)
             await human.close_ws()
         await game.cancel()
     registry.delete(game_id)
@@ -120,6 +121,7 @@ async def websocket_game(websocket: WebSocket, game_id: str):
         try:
             await websocket.send_json({
                 "type": "state",
+                "seq": game.current_seq,
                 "awaiting": snapshot.awaiting_action,
                 "state": snapshot.to_dict(),
             })
@@ -134,7 +136,6 @@ async def websocket_game(websocket: WebSocket, game_id: str):
 
     await websocket.accept()
     human_player.set_ws(websocket)
-    await human_player.on_state(game)
 
     while True:
         try:
@@ -143,19 +144,42 @@ async def websocket_game(websocket: WebSocket, game_id: str):
             logger.debug("WS receive loop ended (client disconnected)")
             break
         action_type = raw.get("type")
+        seq = raw.get("seq", 0)
+
+        # Seq validation: if seq doesn't match current state, push state with error
+        if seq != game.current_seq:
+            snapshot = game.snapshot(_HUMAN_PLAYER_INDEX)
+            try:
+                await websocket.send_json({
+                    "type": "state",
+                    "seq": game.current_seq,
+                    "awaiting": snapshot.awaiting_action,
+                    "state": snapshot.to_dict(),
+                    "error": f"seq mismatch: expected {game.current_seq}, got {seq}",
+                })
+            except (WebSocketDisconnect, OSError):
+                break
+            continue
 
         parse_result = _parse_action(game, action_type, raw)
         if isinstance(parse_result, Rejected):
-            await websocket.send_json({
-                "type": "error",
-                "message": parse_result.reason,
-            })
+            snapshot = game.snapshot(_HUMAN_PLAYER_INDEX)
+            try:
+                await websocket.send_json({
+                    "type": "state",
+                    "seq": game.current_seq,
+                    "awaiting": snapshot.awaiting_action,
+                    "state": snapshot.to_dict(),
+                    "error": parse_result.reason,
+                })
+            except (WebSocketDisconnect, OSError):
+                break
             continue
 
         await game.act(_HUMAN_PLAYER_INDEX, parse_result.value)
 
         if game.is_over():
-            await human_player.on_state(game)
+            await human_player.on_state(game, seq=game.current_seq)
             break
 
     human_player.clear_ws_if_current(websocket)
@@ -163,9 +187,12 @@ async def websocket_game(websocket: WebSocket, game_id: str):
 
 def _parse_action(
     game: Game, action_type: str, raw: dict[str, str | int | bool | None | list[str] | list[dict[str, str]]]
-) -> StateResult[BidAction | PlayAction | StirAction | SkipStirAction | DiscardAction | NextRoundAction]:
+) -> StateResult[BidAction | SkipBidAction | PlayAction | StirAction | SkipStirAction | DiscardAction | NextRoundAction]:
     """Parse a WebSocket JSON message into a PlayerAction."""
     if action_type == "bid":
+        pass_val = raw.get("pass", False)
+        if isinstance(pass_val, bool) and pass_val:
+            return Ok(value=SkipBidAction())
         card_ids_result = _extract_card_ids(_get_cards_list(raw))
         if isinstance(card_ids_result, Rejected):
             return card_ids_result

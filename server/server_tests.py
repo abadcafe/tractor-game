@@ -163,10 +163,7 @@ def test_delete_game_with_active_ws(sync_client: TestClient, clean_registry: Non
 
     The server should return 200 with {"ok": true} even when a WebSocket
     is connected. We use a background thread to call DELETE while the WS
-    is open. Note: WebSocketTestSession.receive_json() does not support
-    a timeout parameter, so we cannot reliably wait for a final state
-    push before the server closes the connection. The key assertion is
-    that DELETE returns 200 and the game is removed.
+    is open. The key assertion is that DELETE returns 200 and the game is removed.
     """
     import threading
     from server.server import registry
@@ -180,6 +177,8 @@ def test_delete_game_with_active_ws(sync_client: TestClient, clean_registry: Non
         result["status_code"] = resp.status_code
 
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        # Get initial state via seq=0 (no auto-push on connect)
+        ws.send_json({"type": "next_round", "seq": 0})
         initial = ws.receive_json()
         assert _is_dict(initial)
         assert initial["type"] == "state"
@@ -198,15 +197,14 @@ def test_delete_game_with_active_ws(sync_client: TestClient, clean_registry: Non
 
 def test_human_player_index_is_3(sync_client: TestClient, clean_registry: None) -> None:
     """The human player is always at index 3 (convention: last player).
-    Verify by connecting via WebSocket and confirming state messages are received,
-    which implicitly proves a HumanPlayer is at that index.
+    Verify by connecting via WebSocket, sending seq=0, and confirming
+    a state message is received.
     """
     create_resp = sync_client.post("/api/game")
     assert create_resp.status_code == 201
     game_id = _game_id_from(create_resp)
-    # Connect via WebSocket -- if a HumanPlayer is at index 3,
-    # the connection should succeed and receive a state message.
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        ws.send_json({"type": "next_round", "seq": 0})
         data = ws.receive_json()
         assert _is_dict(data)
         assert data["type"] == "state"
@@ -219,10 +217,12 @@ def test_human_player_index_is_3(sync_client: TestClient, clean_registry: None) 
 
 
 def test_ws_connect_receives_state(sync_client: TestClient, clean_registry: None) -> None:
-    """Connecting to a game via WebSocket should receive a state message."""
+    """Connecting to a game via WebSocket and sending seq=0 should receive a state message."""
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        # Client must send seq=0 to get initial state (no auto-push on connect)
+        ws.send_json({"type": "next_round", "seq": 0})
         data = ws.receive_json()
         assert _is_dict(data)
         assert data["type"] == "state"
@@ -275,9 +275,6 @@ def test_ws_connect_takeover_closes_old_connection(sync_client: TestClient, clea
     """When a game already has an active WebSocket connection, a second
     connection should take over: the old connection is closed and the new
     one is accepted.
-
-    This ensures reconnection works after network glitches — the client
-    can reconnect without hitting a 4096 rejection.
     """
     from server.server import registry
 
@@ -290,6 +287,7 @@ def test_ws_connect_takeover_closes_old_connection(sync_client: TestClient, clea
 
     # First connection
     with sync_client.websocket_connect(f"/game/{game_id}") as ws1:
+        ws1.send_json({"type": "next_round", "seq": 0})
         data1 = ws1.receive_json()
         assert _is_dict(data1)
         assert data1["type"] == "state"
@@ -297,6 +295,7 @@ def test_ws_connect_takeover_closes_old_connection(sync_client: TestClient, clea
 
         # Second connection should take over (old connection closed, new accepted)
         with sync_client.websocket_connect(f"/game/{game_id}") as ws2:
+            ws2.send_json({"type": "next_round", "seq": 0})
             data2 = ws2.receive_json()
             assert _is_dict(data2)
             assert data2["type"] == "state"
@@ -311,49 +310,39 @@ def test_ws_connect_takeover_closes_old_connection(sync_client: TestClient, clea
 
 
 def test_ws_bid_action_receives_response(sync_client: TestClient, clean_registry: None) -> None:
-    """Sending a bid action via WebSocket should produce a response from the server.
-
-    The bid will likely be invalid (empty cards during a non-DEAL_BID phase or
-    with cards not in hand), so the server should either:
-    - Send a state update (if the bid was accepted), or
-    - Send an error message (if the bid was rejected).
-    Either way, the server must respond -- it must not silently drop the message.
-    """
+    """Sending a bid action via WebSocket should produce a response from the server."""
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        ws.send_json({"type": "next_round", "seq": 0})
         initial = ws.receive_json()
         assert _is_dict(initial)
         assert initial["type"] == "state"
-        ws.send_json({"type": "bid", "cards": []})
+        seq = initial["seq"]
+        ws.send_json({"type": "bid", "cards": [], "seq": seq})
         response: dict[str, object] | None = None
         try:
             raw = ws.receive_json()
             assert _is_dict(raw)
             response = raw
         except Exception:
-            # If no response within timeout, the server may have processed
-            # the bid asynchronously without sending an immediate response
-            # (e.g., the bid was silently rejected by sm).
-            # This is acceptable for invalid bids during wrong phase.
             pass
         if response is not None:
-            # Server must respond with either "state" or "error"
-            assert response["type"] in ("state", "error")
+            # Server responds with "state" type (error is a field, not a separate type)
+            assert response["type"] == "state"
 
 
 def test_ws_play_action_receives_response(sync_client: TestClient, clean_registry: None) -> None:
-    """Sending a play action via WebSocket should produce a response.
-
-    An invalid play (empty cards) should trigger an error response.
-    """
+    """Sending a play action via WebSocket should produce a response."""
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        ws.send_json({"type": "next_round", "seq": 0})
         initial = ws.receive_json()
         assert _is_dict(initial)
         assert initial["type"] == "state"
-        ws.send_json({"type": "play", "cards": []})
+        seq = initial["seq"]
+        ws.send_json({"type": "play", "cards": [], "seq": seq})
         response: dict[str, object] | None = None
         try:
             raw = ws.receive_json()
@@ -362,21 +351,20 @@ def test_ws_play_action_receives_response(sync_client: TestClient, clean_registr
         except Exception:
             pass
         if response is not None:
-            assert response["type"] in ("state", "error")
+            assert response["type"] == "state"
 
 
 def test_ws_next_round_action_receives_response(sync_client: TestClient, clean_registry: None) -> None:
-    """Sending a next_round action should produce a response.
-
-    NextRound during a non-COMPLETE phase should trigger an error.
-    """
+    """Sending a next_round action should produce a response."""
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        ws.send_json({"type": "next_round", "seq": 0})
         initial = ws.receive_json()
         assert _is_dict(initial)
         assert initial["type"] == "state"
-        ws.send_json({"type": "next_round"})
+        seq = initial["seq"]
+        ws.send_json({"type": "next_round", "seq": seq})
         response: dict[str, object] | None = None
         try:
             raw = ws.receive_json()
@@ -385,7 +373,7 @@ def test_ws_next_round_action_receives_response(sync_client: TestClient, clean_r
         except Exception:
             pass
         if response is not None:
-            assert response["type"] in ("state", "error")
+            assert response["type"] == "state"
 
 
 def test_ws_stir_action_receives_response(sync_client: TestClient, clean_registry: None) -> None:
@@ -393,10 +381,12 @@ def test_ws_stir_action_receives_response(sync_client: TestClient, clean_registr
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        ws.send_json({"type": "next_round", "seq": 0})
         initial = ws.receive_json()
         assert _is_dict(initial)
         assert initial["type"] == "state"
-        ws.send_json({"type": "stir", "cards": [], "pass": False})
+        seq = initial["seq"]
+        ws.send_json({"type": "stir", "cards": [], "pass": False, "seq": seq})
         response: dict[str, object] | None = None
         try:
             raw = ws.receive_json()
@@ -405,7 +395,7 @@ def test_ws_stir_action_receives_response(sync_client: TestClient, clean_registr
         except Exception:
             pass
         if response is not None:
-            assert response["type"] in ("state", "error")
+            assert response["type"] == "state"
 
 
 def test_ws_discard_action_receives_response(sync_client: TestClient, clean_registry: None) -> None:
@@ -413,10 +403,12 @@ def test_ws_discard_action_receives_response(sync_client: TestClient, clean_regi
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        ws.send_json({"type": "next_round", "seq": 0})
         initial = ws.receive_json()
         assert _is_dict(initial)
         assert initial["type"] == "state"
-        ws.send_json({"type": "discard", "cards": []})
+        seq = initial["seq"]
+        ws.send_json({"type": "discard", "cards": [], "seq": seq})
         response: dict[str, object] | None = None
         try:
             raw = ws.receive_json()
@@ -425,25 +417,29 @@ def test_ws_discard_action_receives_response(sync_client: TestClient, clean_regi
         except Exception:
             pass
         if response is not None:
-            assert response["type"] in ("state", "error")
+            assert response["type"] == "state"
 
 
 # ---- WebSocket: Error Handling ----
 
 
 def test_ws_invalid_action_returns_error(sync_client: TestClient, clean_registry: None) -> None:
-    """Sending an action with an unknown type should return an error message.
+    """Sending an action with an unknown type should return a state message with error field.
 
-    The server must respond with {"type": "error", "message": ...} rather
+    The server must respond with {"type": "state", "error": ...} rather
     than silently dropping the message or crashing.
     """
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        # Get initial state first
+        ws.send_json({"type": "next_round", "seq": 0})
         initial = ws.receive_json()
         assert _is_dict(initial)
         assert initial["type"] == "state"
-        ws.send_json({"type": "unknown_action", "data": "value"})
+        seq = initial["seq"]
+
+        ws.send_json({"type": "unknown_action", "data": "value", "seq": seq})
         response: dict[str, object] | None = None
         try:
             raw = ws.receive_json()
@@ -454,8 +450,9 @@ def test_ws_invalid_action_returns_error(sync_client: TestClient, clean_registry
             # that's also acceptable (connection close = rejection).
             pass
         if response is not None:
-            assert response["type"] == "error"
-            assert "message" in response
+            # Error is now merged into state message
+            assert response["type"] == "state"
+            assert response.get("error") is not None
 
 
 # ---- Reconnect ----
@@ -467,13 +464,125 @@ def test_reconnect_replaces_ws(sync_client: TestClient, clean_registry: None) ->
     game_id = _game_id_from(create_resp)
     # First connection
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        ws.send_json({"type": "next_round", "seq": 0})
         data = ws.receive_json()
         assert _is_dict(data)
     # Second connection (reconnect)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        ws.send_json({"type": "next_round", "seq": 0})
         raw = ws.receive_json()
         assert _is_dict(raw)
         assert raw["type"] == "state"
+
+
+# ---- WebSocket: Seq Protocol ----
+
+
+def test_seq_in_state_message(sync_client: TestClient, clean_registry: None) -> None:
+    """State messages must include a 'seq' field starting from 1."""
+    create_resp = sync_client.post("/api/game")
+    game_id = _game_id_from(create_resp)
+    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        # Send action with seq=0 to get initial state
+        ws.send_json({"type": "next_round", "seq": 0})
+        data = ws.receive_json()
+        assert _is_dict(data)
+        assert data["type"] == "state"
+        assert "seq" in data
+        assert isinstance(data["seq"], int)
+        assert data["seq"] >= 1
+
+
+def test_seq_mismatch_returns_state_with_error(sync_client: TestClient, clean_registry: None) -> None:
+    """When action seq doesn't match current state seq, server returns current state with error."""
+    create_resp = sync_client.post("/api/game")
+    game_id = _game_id_from(create_resp)
+    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        # Get initial state (seq=0 always mismatches)
+        ws.send_json({"type": "next_round", "seq": 0})
+        data = ws.receive_json()
+        assert _is_dict(data)
+        assert data["type"] == "state"
+        current_seq = data["seq"]
+        assert isinstance(current_seq, int)
+        assert current_seq >= 1
+
+        # Send action with wrong seq (use a value far from current to avoid
+        # flakiness from the background dealing loop advancing _seq)
+        ws.send_json({"type": "next_round", "seq": 99999})
+        data = ws.receive_json()
+        assert _is_dict(data)
+        assert data["type"] == "state"
+        assert data.get("error") is not None
+        # The server's seq may have advanced due to the dealing loop,
+        # but it must be >= the previously observed seq
+        assert isinstance(data["seq"], int)
+        assert data["seq"] >= current_seq
+
+
+def test_error_merged_into_state(sync_client: TestClient, clean_registry: None) -> None:
+    """Invalid actions return error as a field in the state message, not as a separate message.
+
+    Tests with an invalid action that the server rejects regardless of seq.
+    The error field appears alongside the state in a single message.
+    """
+    create_resp = sync_client.post("/api/game")
+    game_id = _game_id_from(create_resp)
+    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        # Get initial state
+        ws.send_json({"type": "next_round", "seq": 0})
+        data = ws.receive_json()
+        assert _is_dict(data)
+        assert data["type"] == "state"
+        seq = data["seq"]
+
+        # Send invalid action (unknown action type) with current seq.
+        # This is rejected by _parse_action regardless of phase, so it
+        # reliably produces an error without being affected by the
+        # dealing loop advancing _seq between our receive and send.
+        ws.send_json({"type": "nonexistent_action_xyz", "seq": seq})
+        data = ws.receive_json()
+        assert _is_dict(data)
+        assert data["type"] == "state"
+        assert data.get("error") is not None
+        error_val = data["error"]
+        assert isinstance(error_val, str)
+        assert len(error_val) > 0
+        # State should still be valid
+        assert "state" in data
+        # Seq may have advanced from dealing loop, but must be >= our last seen seq
+        assert isinstance(data["seq"], int) and isinstance(seq, int)
+        assert data["seq"] >= seq
+
+
+def test_bid_pass_parsed_correctly(sync_client: TestClient, clean_registry: None) -> None:
+    """Sending a bid pass message (type=bid, pass=true) should be parsed
+    without crashing during DEAL_BID phase. The server parses it as
+    SkipBidAction via _parse_action(), but since SkipBidAction is not
+    handled in act() yet (Task 002), it falls through to the error branch.
+    This test verifies the parsing works (no crash) and the server responds
+    with a state message (not a disconnect or raw error).
+    """
+    create_resp = sync_client.post("/api/game")
+    game_id = _game_id_from(create_resp)
+    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        # Get initial state
+        ws.send_json({"type": "next_round", "seq": 0})
+        data = ws.receive_json()
+        assert _is_dict(data)
+        assert data["type"] == "state"
+        seq = data["seq"]
+
+        # Send bid pass with correct seq
+        ws.send_json({"type": "bid", "pass": True, "seq": seq})
+        data = ws.receive_json()
+        assert _is_dict(data)
+        assert data["type"] == "state"
+        # SkipBidAction not handled in act() yet -> falls through to error branch
+        assert data.get("error") is not None
+        # Seq should NOT have advanced due to our action (action was rejected),
+        # but may have advanced from dealing loop. We verify our action didn't
+        # cause a state change by checking that error is present.
 
 
 # ---- Static file serving ----

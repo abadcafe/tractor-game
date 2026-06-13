@@ -586,7 +586,7 @@ async def test_bid_during_deal_bid_does_not_push_state_to_all():
             super().__init__(index)
             self.state_count = 0
 
-        async def on_state(self, game: object) -> None:
+        async def on_state(self, game: object, *, seq: int = 0, error: str | None = None) -> None:
             self.state_count += 1
 
     class TestHumanPlayer(Player):
@@ -596,7 +596,7 @@ async def test_bid_during_deal_bid_does_not_push_state_to_all():
             self.bid_done = asyncio.Event()
             self.state_count = 0
 
-        async def on_state(self, game: GameView) -> None:
+        async def on_state(self, game: GameView, *, seq: int = 0, error: str | None = None) -> None:
             self.state_count += 1
             if self.bid_done.is_set():
                 return
