@@ -184,9 +184,20 @@ class Game:
         self._round_state = rs
 
         if error_msg:
-            for i in range(len(self._players)):
-                err = error_msg if i == player_index else None
-                await self._players[i].on_state(self, seq=self._seq, error=err)
+            if should_push:
+                # Non-DEAL_BID error: push state with error to all players.
+                # This replaces both the old _send_error_to_player() and the
+                # normal _push_state_to_all(), delivering error + state in one message.
+                for i in range(len(self._players)):
+                    err = error_msg if i == player_index else None
+                    await self._players[i].on_state(self, seq=self._seq, error=err)
+            else:
+                # DEAL_BID error: only push to the acting player.
+                # Pushing to AutoPlayers here would trigger _handle_deal_bid(),
+                # potentially causing action retry cascades. The dealing loop
+                # already pushes state to all players every 0.5s, so AutoPlayers
+                # will see the current state on the next dealing loop tick.
+                await self._players[player_index].on_state(self, seq=self._seq, error=error_msg)
 
         if should_push and not error_msg:
             await self._push_state_to_all()

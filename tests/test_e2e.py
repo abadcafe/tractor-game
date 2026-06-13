@@ -68,6 +68,8 @@ def test_full_game_flow(sync_client: TestClient) -> None:
     """Test creating a game, connecting, and verifying initial state."""
     game_id = _create_game_sync(sync_client)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        # Client must send seq=0 to get initial state (no auto-push on connect)
+        ws.send_json({"type": "next_round", "seq": 0})
         data = ws.receive_json()
         assert data["type"] == "state"
         state = data["state"]
@@ -81,10 +83,12 @@ def test_reconnect_mid_game(sync_client: TestClient) -> None:
     game_id = _create_game_sync(sync_client)
     # First connection
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        ws.send_json({"type": "next_round", "seq": 0})
         data1 = ws.receive_json()
         assert data1["type"] == "state"
     # Reconnect
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        ws.send_json({"type": "next_round", "seq": 0})
         data2 = ws.receive_json()
         assert data2["type"] == "state"
         assert "phase" in data2["state"]
@@ -105,29 +109,31 @@ async def test_concurrent_games(client: httpx.AsyncClient) -> None:
 
 
 def test_invalid_action_returns_error(sync_client: TestClient) -> None:
-    """Test that invalid actions through WebSocket return error messages.
+    """Test that invalid actions through WebSocket return error in state message.
 
-    Sends a "play" action with a fake card ID during the dealing phase.
-    The server's _parse_action calls game.resolve_cards() which raises
-    ValueError for unknown card IDs. The server catches this and returns
-    {"type": "error", "message": ...}. We assert on the error response.
+    Sends an unknown action type. The server's _parse_action rejects it
+    and returns a state message with an "error" field.
     """
     game_id = _create_game_sync(sync_client)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
-        ws.receive_json()
-        # Try to play cards during dealing phase (should be invalid)
-        ws.send_json({"type": "play", "cards": ["fake_card_id"]})
-        # Server should send back an error response
+        # Get initial state via seq=0
+        ws.send_json({"type": "next_round", "seq": 0})
+        initial = ws.receive_json()
+        assert initial["type"] == "state"
+        seq = initial["seq"]
+        # Send unknown action with current seq
+        ws.send_json({"type": "unknown_action_xyz", "seq": seq})
+        # Server returns error as a field in the state message
         resp = ws.receive_json()
-        assert resp["type"] == "error"
-        assert "message" in resp
-        assert len(resp["message"]) > 0
+        assert resp["type"] == "state"
+        assert resp.get("error") is not None
 
 
 def test_delete_game_disconnects_ws(sync_client: TestClient) -> None:
     """Test that deleting a game while connected closes cleanly."""
     game_id = _create_game_sync(sync_client)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        ws.send_json({"type": "next_round", "seq": 0})
         ws.receive_json()
     # Delete after disconnect is fine
     resp = sync_client.delete(f"/api/game/{game_id}")
