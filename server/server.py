@@ -146,13 +146,9 @@ async def websocket_game(websocket: WebSocket, game_id: str):
         seq = raw.get("seq", 0)
 
         # Seq validation: if seq doesn't match current state, push state with error.
-        # NOTE: There is an inherent TOCTOU race with the dealing loop — between
-        # this seq check and the game.act() call below, the dealing loop may
-        # advance _seq via _push_state_to_all(). This means a client with a seq
-        # that was valid at validation time could still produce an action applied
-        # after the state has already moved forward. The seq check protects
-        # against obviously stale clients but does not guarantee atomicity.
-        # This is an acceptable trade-off for an async state machine without locking.
+        # NOTE: In sync round-robin mode, seq changes are driven by player
+        # actions (act() calls), not background tasks. The seq check protects
+        # against stale clients that submit actions based on outdated state.
         if seq != game.current_seq:
             snapshot = game.snapshot(_HUMAN_PLAYER_INDEX)
             try:

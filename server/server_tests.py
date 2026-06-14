@@ -507,15 +507,13 @@ def test_seq_mismatch_returns_state_with_error(sync_client: TestClient, clean_re
         assert isinstance(current_seq, int)
         assert current_seq >= 1
 
-        # Send action with wrong seq (use a value far from current to avoid
-        # flakiness from the background dealing loop advancing _seq)
+        # Send action with wrong seq (use a value far from current)
         ws.send_json({"type": "next_round", "seq": 99999})
         data = ws.receive_json()
         assert _is_dict(data)
         assert data["type"] == "state"
         assert data.get("error") is not None
-        # The server's seq may have advanced due to the dealing loop,
-        # but it must be >= the previously observed seq
+        # Seq must be >= the previously observed seq
         assert isinstance(data["seq"], int)
         assert data["seq"] >= current_seq
 
@@ -538,8 +536,7 @@ def test_error_merged_into_state(sync_client: TestClient, clean_registry: None) 
 
         # Send invalid action (unknown action type) with current seq.
         # This is rejected by _parse_action regardless of phase, so it
-        # reliably produces an error without being affected by the
-        # dealing loop advancing _seq between our receive and send.
+        # reliably produces an error.
         ws.send_json({"type": "nonexistent_action_xyz", "seq": seq})
         data = ws.receive_json()
         assert _is_dict(data)
@@ -550,7 +547,7 @@ def test_error_merged_into_state(sync_client: TestClient, clean_registry: None) 
         assert len(error_val) > 0
         # State should still be valid
         assert "state" in data
-        # Seq may have advanced from dealing loop, but must be >= our last seen seq
+        # Seq must be >= our last seen seq
         assert isinstance(data["seq"], int) and isinstance(seq, int)
         assert data["seq"] >= seq
 

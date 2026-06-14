@@ -277,9 +277,8 @@ class HumanPlayer(Player):
 
         Catches any exception from send_json (e.g. WebSocket disconnected,
         websockets library AssertionError) to prevent a broken connection
-        from crashing the entire _push_state_to_all() chain or the
-        dealing loop. The human player will receive fresh state when
-        they reconnect.
+        from crashing the entire _push_state_to_all() chain. The human
+        player will receive fresh state when they reconnect.
         """
         if self._ws is None:
             return
