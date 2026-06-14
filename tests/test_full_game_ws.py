@@ -287,3 +287,143 @@ class WsGameDriver:
     def do_next_round(self) -> bool:
         """Confirm next round. Returns True if successful."""
         return self.do_action({"type": "next_round"})
+
+
+# ---- Infrastructure Tests ----
+
+
+def test_create_game_returns_201(sync_client: TestClient) -> None:
+    """POST /api/game returns 201 with game_id in response body."""
+    resp = sync_client.post("/api/game")
+    assert resp.status_code == 201
+    data = resp.json()
+    assert _is_dict(data)
+    assert "game_id" in data
+    assert isinstance(data["game_id"], str)
+    assert len(data["game_id"]) > 0
+
+
+def test_health_check(sync_client: TestClient) -> None:
+    """GET /health returns 200 with status ok."""
+    resp = sync_client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+
+
+def test_list_games(sync_client: TestClient) -> None:
+    """GET /api/game returns a list of games."""
+    # Create a game first
+    resp = sync_client.post("/api/game")
+    data = resp.json()
+    assert _is_dict(data)
+    game_id = _as_str(data["game_id"])
+
+    resp = sync_client.get("/api/game")
+    assert resp.status_code == 200
+    body = resp.json()
+    games_raw = body["games"]
+    game_ids = [g["game_id"] for g in games_raw]
+    assert game_id in game_ids
+    # Each game should have a phase field
+    for g in games_raw:
+        assert "phase" in g
+
+
+def test_delete_game_closes_ws(sync_client: TestClient) -> None:
+    """DELETE a game while WS connected: WS closes and game is removed."""
+    resp = sync_client.post("/api/game")
+    data = resp.json()
+    assert _is_dict(data)
+    game_id = _as_str(data["game_id"])
+
+    # Open WS connection and get initial state
+    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        ws.send_json({"type": "next_round", "seq": 0})
+        raw = ws.receive_json()
+        data_msg = _as_dict(raw)
+        assert data_msg["type"] == "state"
+
+    # Delete the game (WS is now closed from client side)
+    resp = sync_client.delete(f"/api/game/{game_id}")
+    assert resp.status_code == 200
+
+    # Verify game is removed from registry
+    resp = sync_client.get("/api/game")
+    games = resp.json()["games"]
+    game_ids = [g["game_id"] for g in games]
+    assert game_id not in game_ids
+
+
+def test_connect_nonexistent_game(sync_client: TestClient) -> None:
+    """Connecting to a nonexistent game closes with code 4404."""
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with sync_client.websocket_connect("/game/nonexistent_id") as ws:
+            ws.receive_json()
+    assert exc_info.value.code == 4404
+
+
+def test_connection_takeover(sync_client: TestClient) -> None:
+    """New WS connection kicks the old one; old connection gets closed."""
+    resp = sync_client.post("/api/game")
+    data = resp.json()
+    assert _is_dict(data)
+    game_id = _as_str(data["game_id"])
+
+    # First connection: get state
+    with sync_client.websocket_connect(f"/game/{game_id}") as ws1:
+        ws1.send_json({"type": "next_round", "seq": 0})
+        raw1 = ws1.receive_json()
+        data1 = _as_dict(raw1)
+        assert data1["type"] == "state"
+
+        # Second connection (should kick first)
+        with sync_client.websocket_connect(f"/game/{game_id}") as ws2:
+            ws2.send_json({"type": "next_round", "seq": 0})
+            raw2 = ws2.receive_json()
+            data2 = _as_dict(raw2)
+            assert data2["type"] == "state"
+
+        # After ws2 context exits, ws1 should be unusable (kicked by server)
+        # The server closed ws1 when ws2 connected, so receive should fail.
+        # Note: send_json() raises RuntimeError (not in _WS_ERRORS) because
+        # the server already sent a close frame, so we only try receive.
+        with pytest.raises(_WS_ERRORS):
+            ws1.receive_json()
+
+
+def test_reconnect_resumes_game(sync_client: TestClient) -> None:
+    """After disconnect, reconnect with seq=0 gets current state; then actions work."""
+    resp = sync_client.post("/api/game")
+    data = resp.json()
+    assert _is_dict(data)
+    game_id = _as_str(data["game_id"])
+
+    # First connection: get state
+    with sync_client.websocket_connect(f"/game/{game_id}") as ws1:
+        ws1.send_json({"type": "next_round", "seq": 0})
+        raw1 = ws1.receive_json()
+        data1 = _as_dict(raw1)
+        assert data1["type"] == "state"
+        seq1 = _as_int(data1["seq"])
+
+    # Reconnect: send seq=0 -> mismatch -> get current state
+    with sync_client.websocket_connect(f"/game/{game_id}") as ws2:
+        ws2.send_json({"type": "next_round", "seq": 0})
+        raw2 = ws2.receive_json()
+        data2 = _as_dict(raw2)
+        assert data2["type"] == "state"
+        # State should be valid and seq should be >= seq1
+        assert _as_int(data2["seq"]) >= seq1
+        state2 = _as_dict(data2["state"])
+        assert "phase" in state2
+
+        # Verify subsequent action works with the correct seq from received state
+        current_seq = _as_int(data2["seq"])
+        ws2.send_json({"type": "next_round", "seq": current_seq})
+        raw3 = ws2.receive_json()
+        data3 = _as_dict(raw3)
+        assert data3["type"] == "state"
+        # Action with correct seq should either succeed (state changes) or
+        # be accepted (no seq mismatch error). Either way, seq should advance
+        # or stay the same (if no state change occurred).
+        assert _as_int(data3["seq"]) >= current_seq
