@@ -8,6 +8,7 @@ get_phase(), set_on_game_over(), get_player(), and resolve_cards() interfaces.
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from collections.abc import Sequence
 from typing import Callable
 
@@ -275,7 +276,6 @@ class Game:
         current_priority = stirring_state.current_priority
 
         # Group trump-rank cards by suit
-        from collections import defaultdict
         by_suit: dict[Suit, list[Card]] = defaultdict(list)
         small_jokers: list[Card] = []
         big_jokers: list[Card] = []
