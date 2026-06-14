@@ -1191,3 +1191,181 @@ async def test_stirring_state_snapshot_has_declarer_player() -> None:
     assert stirring_dict is not None
     assert "declarer_player" in stirring_dict
     assert stirring_dict["declarer_player"] == snap.stirring_state.declarer_player
+
+
+# ---- Task 003: COMPLETE Phase Awaiting Conditional ----
+
+
+@pytest.mark.asyncio
+async def test_complete_awaiting_unconfirmed_player() -> None:
+    """In COMPLETE phase, unconfirmed players have awaiting_action='next_round'.
+
+    Uses MagicMock to create a COMPLETE-phase RoundState and patches
+    round_sm.create_round to inject it, then verifies snapshot behavior
+    through the public Game.snapshot() interface. Does NOT access any
+    private fields (_round_state, _next_round_confirmed, etc.).
+    """
+    from server.sm import game_sm as gm, round_sm as rm
+    from server.sm.card_model import Rank
+    from server.sm.scoring import RoundResult
+
+    in_round_state = gm.GameState(
+        phase="IN_ROUND", team0_level=Rank.TWO, team1_level=Rank.TWO,
+        declarer_team=0, last_declarer_player=0, winning_team=None, round_number=1,
+    )
+    complete_round = MagicMock()
+    complete_round.phase = "COMPLETE"
+    complete_round.players_hand = [[] for _ in range(4)]
+    complete_round.declarer_player = 0
+    complete_round.bottom_cards = []
+    complete_round.trump_suit = None
+    complete_round.trump_rank = Rank.TWO
+    complete_round.declarer_team = 0
+    complete_round.defender_points = 0
+    complete_round.trick_state = None
+    complete_round.trick_history = []
+    complete_round.stirring_state = None
+    complete_round.exchange_state = None
+    complete_round.deal_bid_state = None
+    complete_round.result = MagicMock(spec=RoundResult)
+    complete_round.result.total_defender_points = 10
+    complete_round.result.bottom_card_bonus = 0
+
+    players = _make_players()
+    with patch.object(gm, "create_game", return_value=in_round_state):
+        game = Game(players=players)
+
+    with patch.object(gm, "start_game", return_value=Ok(in_round_state)):
+        with patch.object(rm, "create_round", return_value=complete_round):
+            await game.run()
+
+    # Player 0 has NOT confirmed (no NextRoundAction sent)
+    snap = game.snapshot(0)
+    assert snap.awaiting_action == "next_round", (
+        f"Unconfirmed player should have awaiting_action='next_round', got {snap.awaiting_action}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_complete_awaiting_confirmed_player() -> None:
+    """In COMPLETE phase, confirmed players have awaiting_action=None.
+
+    Uses MagicMock and public Game.act(player, NextRoundAction()) to confirm
+    player 0, then verifies snapshot behavior. Does NOT access any private fields.
+    """
+    from server.sm import game_sm as gm, round_sm as rm
+    from server.sm.card_model import Rank
+    from server.sm.scoring import RoundResult
+
+    in_round_state = gm.GameState(
+        phase="IN_ROUND", team0_level=Rank.TWO, team1_level=Rank.TWO,
+        declarer_team=0, last_declarer_player=0, winning_team=None, round_number=1,
+    )
+    complete_round = MagicMock()
+    complete_round.phase = "COMPLETE"
+    complete_round.players_hand = [[] for _ in range(4)]
+    complete_round.declarer_player = 0
+    complete_round.bottom_cards = []
+    complete_round.trump_suit = None
+    complete_round.trump_rank = Rank.TWO
+    complete_round.declarer_team = 0
+    complete_round.defender_points = 0
+    complete_round.trick_state = None
+    complete_round.trick_history = []
+    complete_round.stirring_state = None
+    complete_round.exchange_state = None
+    complete_round.deal_bid_state = None
+    complete_round.result = MagicMock(spec=RoundResult)
+    complete_round.result.total_defender_points = 10
+    complete_round.result.bottom_card_bonus = 0
+
+    players = _make_players()
+    with patch.object(gm, "create_game", return_value=in_round_state):
+        game = Game(players=players)
+
+    with patch.object(gm, "start_game", return_value=Ok(in_round_state)):
+        with patch.object(rm, "create_round", return_value=complete_round):
+            await game.run()
+
+    # Confirm player 0 via public interface
+    await game.act(player_index=0, action=NextRoundAction())
+
+    # Player 0 confirmed -> awaiting_action=None
+    snap0 = game.snapshot(0)
+    assert snap0.awaiting_action is None, (
+        f"Confirmed player should have awaiting_action=None, got {snap0.awaiting_action}"
+    )
+    # Player 1 NOT confirmed -> awaiting_action="next_round"
+    snap1 = game.snapshot(1)
+    assert snap1.awaiting_action == "next_round", (
+        f"Unconfirmed player should have awaiting_action='next_round', got {snap1.awaiting_action}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_complete_awaiting_after_all_confirm() -> None:
+    """After all 4 players confirm, awaiting_action=None for all.
+
+    Uses MagicMock and public Game.act(player, NextRoundAction()) for all 4
+    players, then verifies snapshot behavior. Does NOT access any private fields.
+    """
+    from server.sm import game_sm as gm, round_sm as rm
+    from server.sm.card_model import Rank
+    from server.sm.scoring import RoundResult
+
+    in_round_state = gm.GameState(
+        phase="IN_ROUND", team0_level=Rank.TWO, team1_level=Rank.TWO,
+        declarer_team=0, last_declarer_player=0, winning_team=None, round_number=1,
+    )
+    complete_round = MagicMock()
+    complete_round.phase = "COMPLETE"
+    complete_round.players_hand = [[] for _ in range(4)]
+    complete_round.declarer_player = 0
+    complete_round.bottom_cards = []
+    complete_round.trump_suit = None
+    complete_round.trump_rank = Rank.TWO
+    complete_round.declarer_team = 0
+    complete_round.defender_points = 0
+    complete_round.trick_state = None
+    complete_round.trick_history = []
+    complete_round.stirring_state = None
+    complete_round.exchange_state = None
+    complete_round.deal_bid_state = None
+    complete_round.result = MagicMock(spec=RoundResult)
+    complete_round.result.total_defender_points = 10
+    complete_round.result.bottom_card_bonus = 0
+
+    players = _make_players()
+    with patch.object(gm, "create_game", return_value=in_round_state):
+        game = Game(players=players)
+
+    with patch.object(gm, "start_game", return_value=Ok(in_round_state)):
+        with patch.object(rm, "create_round", return_value=complete_round):
+            await game.run()
+
+    # Confirm players 0-2 (they see awaiting_action=None)
+    for p in range(3):
+        await game.act(player_index=p, action=NextRoundAction())
+
+    # Confirm player 3 -- this triggers the "all 4 confirmed" branch which
+    # calls process_round_result. Patch it to return GAME_OVER so the game
+    # transitions cleanly and awaiting_action becomes None for all.
+    game_over_state = gm.GameState(
+        phase="GAME_OVER", team0_level=Rank.TWO, team1_level=Rank.TWO,
+        declarer_team=0, last_declarer_player=0, winning_team=0, round_number=2,
+    )
+    mock_result = MagicMock(spec=RoundResult)
+    mock_result.team0_new_level = Rank.TWO
+    mock_result.team1_new_level = Rank.TWO
+    mock_result.next_declarer_team = 0
+    mock_result.next_declarer_player = 0
+    with patch.object(rm, "get_round_result", return_value=mock_result):
+        with patch.object(gm, "process_round_result", return_value=Ok(game_over_state)):
+            await game.act(player_index=3, action=NextRoundAction())
+
+    # All players should have awaiting_action=None
+    for i in range(4):
+        snap = game.snapshot(i)
+        assert snap.awaiting_action is None, (
+            f"Player {i}: expected awaiting_action=None after all confirmed, got {snap.awaiting_action}"
+        )

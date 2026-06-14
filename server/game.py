@@ -333,7 +333,10 @@ class Game:
         elif rs.phase == "PLAYING" and can_act_in_playing:
             awaiting_action = "play"
         elif rs.phase == "COMPLETE":
-            awaiting_action = "next_round"
+            if for_player not in self._next_round_confirmed:
+                awaiting_action = "next_round"
+            else:
+                awaiting_action = None
 
         # trick
         trick: TrickSnapshot | None = None
