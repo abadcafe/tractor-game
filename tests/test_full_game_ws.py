@@ -14,9 +14,20 @@ from collections.abc import Generator
 from typing import TypeGuard
 
 import pytest
+from anyio import BrokenResourceError, ClosedResourceError, EndOfStream
 from starlette.testclient import TestClient, WebSocketTestSession
+from starlette.websockets import WebSocketDisconnect
 
 from server.server import app
+
+# Connection-related exceptions from third-party libraries (normal flow control).
+# Programming errors (AssertionError, TypeError, etc.) must NOT be caught here.
+_WS_ERRORS: tuple[type[Exception], ...] = (
+    WebSocketDisconnect,
+    ClosedResourceError,
+    BrokenResourceError,
+    EndOfStream,
+)
 
 
 # ---- Type-guard helpers for JSON narrowing ----
@@ -121,7 +132,7 @@ class WsGameDriver:
         if self._ws is not None:
             try:
                 self._ws.close()
-            except Exception:
+            except _WS_ERRORS:
                 pass
             self._ws = None
 
@@ -135,7 +146,7 @@ class WsGameDriver:
         if self._ws is not None:
             try:
                 self._ws.close()
-            except Exception:
+            except _WS_ERRORS:
                 pass
             self._ws = None
 
@@ -182,7 +193,7 @@ class WsGameDriver:
                 if msg.get("type") == "state":
                     self._current_seq = _as_int(msg["seq"])
                 return msg
-            except Exception:
+            except _WS_ERRORS:
                 if attempt == 0:
                     self._ws = None
                     continue
@@ -215,7 +226,7 @@ class WsGameDriver:
                         return False
                     return True
                 return False
-            except Exception:
+            except _WS_ERRORS:
                 if attempt == 0:
                     self._ws = None
                     continue  # Retry once after reconnect
