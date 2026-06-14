@@ -44,13 +44,12 @@ class Game:
     the public API for the server layer.
     """
 
-    def __init__(self, players: Sequence[Player], *, deal_delay: float = 0.5) -> None:
+    def __init__(self, players: Sequence[Player]) -> None:
         self._game_state = game_sm.create_game()
         self._round_state: round_sm.RoundState | None = None
         self._players = list(players)
         self._on_game_over: Callable[['Game'], None] | None = None
         self._next_round_confirmed: set[int] = set()
-        self._deal_delay = deal_delay
         self._seq: int = 0
         self._bid_turn: int = 0
         self._bid_tick_progress: int = 0
@@ -59,6 +58,26 @@ class Game:
     def current_seq(self) -> int:
         """Current state sequence number (for server.py seq validation)."""
         return self._seq
+
+    def _execute_deal_tick(self, rs: round_sm.RoundState) -> round_sm.RoundState:
+        """Execute one deal tick: deal 1 card to each of the 4 players.
+
+        Calls round_sm.deal_next_card up to 4 times, checking after each
+        call whether the phase has changed away from DEAL_BID. Returns
+        the updated RoundState.
+        """
+        for _ in range(4):
+            if rs.phase != "DEAL_BID":
+                break
+            match round_sm.deal_next_card(rs):
+                case Ok(value=new_rs):
+                    rs = new_rs
+                    if rs.phase != "DEAL_BID":
+                        break
+                case Rejected(reason=reason):
+                    logger.warning("deal_next_card rejected: %s", reason)
+                    break
+        return rs
 
     async def run(self) -> None:
         """Start the game: transition to IN_ROUND, create round, execute first deal tick.
@@ -85,17 +104,7 @@ class Game:
 
         # Execute first deal tick: deal 1 card to each of the 4 players
         rs = self._round_state
-        for _ in range(4):
-            if rs.phase != "DEAL_BID":
-                break
-            match round_sm.deal_next_card(rs):
-                case Ok(value=new_rs):
-                    rs = new_rs
-                    if rs.phase != "DEAL_BID":
-                        break
-                case Rejected(reason=reason):
-                    logger.warning("deal_next_card rejected in run(): %s", reason)
-                    break
+        rs = self._execute_deal_tick(rs)
         self._round_state = rs
 
         await self._push_state_to_all()
@@ -120,25 +129,31 @@ class Game:
         error_msg: str | None = None
 
         if phase == "DEAL_BID" and isinstance(action, BidAction):
-            match self._convert_bid_action(player_index, action):
-                case Ok(value=bid_event):
-                    match round_sm.reveal(rs, bid_event):
-                        case Ok(value=new_state):
-                            rs = new_state
-                        case Rejected(reason=reason):
-                            error_msg = reason
-                case Rejected(reason=reason):
-                    error_msg = reason
+            if player_index != self._bid_turn:
+                error_msg = f"不是你的叫牌回合（当前叫牌者：{self._bid_turn}）"
+            else:
+                match self._convert_bid_action(player_index, action):
+                    case Ok(value=bid_event):
+                        match round_sm.reveal(rs, bid_event):
+                            case Ok(value=new_state):
+                                rs = new_state
+                            case Rejected(reason=reason):
+                                error_msg = reason
+                    case Rejected(reason=reason):
+                        error_msg = reason
 
-            if error_msg is None:
-                # Advance bid turn after successful bid
-                self._bid_tick_progress += 1
-                rs = self._process_bid_tick_progress(rs)
+                if error_msg is None:
+                    # Advance bid turn after successful bid
+                    self._bid_tick_progress += 1
+                    rs = self._process_bid_tick_progress(rs)
 
         elif phase == "DEAL_BID" and isinstance(action, SkipBidAction):
-            # Skip bid: advance turn without bidding
-            self._bid_tick_progress += 1
-            rs = self._process_bid_tick_progress(rs)
+            if player_index != self._bid_turn:
+                error_msg = f"不是你的叫牌回合（当前叫牌者：{self._bid_turn}）"
+            else:
+                # Skip bid: advance turn without bidding
+                self._bid_tick_progress += 1
+                rs = self._process_bid_tick_progress(rs)
 
         elif phase == "STIRRING" and isinstance(action, SkipStirAction):
             match round_sm.pass_stir(rs):
@@ -199,17 +214,7 @@ class Game:
                     # Execute first deal tick for new round
                     self._bid_turn = 0
                     self._bid_tick_progress = 0
-                    for _ in range(4):
-                        if rs.phase != "DEAL_BID":
-                            break
-                        match round_sm.deal_next_card(rs):
-                            case Ok(value=new_rs):
-                                rs = new_rs
-                                if rs.phase != "DEAL_BID":
-                                    break
-                            case Rejected(reason=reason):
-                                logger.warning("deal_next_card rejected in next round: %s", reason)
-                                break
+                    rs = self._execute_deal_tick(rs)
 
         else:
             error_msg = f"无效的操作：{type(action).__name__} 不能在 {phase} 阶段使用"
@@ -245,17 +250,7 @@ class Game:
         self._bid_tick_progress = 0
         self._bid_turn = (self._bid_turn + 1) % 4
 
-        for _ in range(4):
-            if rs.phase != "DEAL_BID":
-                break
-            match round_sm.deal_next_card(rs):
-                case Ok(value=new_rs):
-                    rs = new_rs
-                    if rs.phase != "DEAL_BID":
-                        break
-                case Rejected(reason=reason):
-                    logger.warning("deal_next_card rejected in act(): %s", reason)
-                    break
+        rs = self._execute_deal_tick(rs)
 
         return rs
 

@@ -194,8 +194,9 @@ async def test_snapshot_stirring_state():
     game = _create_game_with_auto_players()
     await game.run()
     snap = game.snapshot(for_player=0)
+    from server.snapshot import StirringStateSnapshot
     # stirring_state may be None outside of STIRRING phase
-    assert snap.stirring_state is None or isinstance(snap.stirring_state, dict)
+    assert snap.stirring_state is None or isinstance(snap.stirring_state, StirringStateSnapshot)
 
 
 @pytest.mark.asyncio
@@ -203,7 +204,8 @@ async def test_snapshot_exchange_state():
     game = _create_game_with_auto_players()
     await game.run()
     snap = game.snapshot(for_player=0)
-    assert snap.exchange_state is None or isinstance(snap.exchange_state, dict)
+    from server.snapshot import ExchangeStateSnapshot
+    assert snap.exchange_state is None or isinstance(snap.exchange_state, ExchangeStateSnapshot)
 
 
 @pytest.mark.asyncio
@@ -212,7 +214,8 @@ async def test_snapshot_scoring_in_complete():
     game = _create_game_with_auto_players()
     await game.run()
     snap = game.snapshot(for_player=0)
-    assert snap.scoring is None or isinstance(snap.scoring, dict)
+    from server.snapshot import ScoringSnapshot
+    assert snap.scoring is None or isinstance(snap.scoring, ScoringSnapshot)
 
 
 # ---- is_over() ----
@@ -546,7 +549,7 @@ async def test_bid_during_deal_bid_pushes_state_uniformly():
             self.state_count += 1
 
     counters = [CountingPlayer(index=i) for i in range(4)]
-    game = Game(players=counters, deal_delay=0)
+    game = Game(players=counters)
     await game.run()
 
     # After run(), initial state push happened (1 push = 4 on_state calls)
@@ -611,6 +614,7 @@ async def test_snapshot_to_dict_contains_all_required_fields():
         "bid_winner",
         "stirring_state",
         "exchange_state",
+        "next_round_confirmed",
     ]
 
     for field in required_fields:
@@ -740,29 +744,40 @@ async def test_full_game_flow_completes_without_resource_explosion():
     -> game.act() -> _push_state_to_all() -> on_state() -> ... exponential
     task cascade consumed 96.9% CPU and 8.8 GB RAM.
 
-    In sync round-robin mode, the game is action-driven. AutoPlayers
-    drive the game forward through SkipBidAction during DEAL_BID.
-    This test verifies the game progresses without getting stuck.
+    In sync round-robin mode, the game is action-driven. This test drives
+    the game through DEAL_BID using explicit SkipBidAction calls (consistent
+    with the new sync model) and verifies the game progresses without
+    getting stuck.
     """
+    from server.actions import SkipBidAction
     game = _create_game_with_auto_players()
     await game.run()
 
-    # Let AutoPlayers drive the game forward for a while
-    await asyncio.sleep(3)
+    # Drive through DEAL_BID using explicit SkipBidAction calls
+    max_steps = 500
+    for _ in range(max_steps):
+        phase = game.get_phase()
+        if phase != "DEAL_BID":
+            break
+        bid_found = False
+        for i in range(4):
+            snap = game.snapshot(i)
+            if snap.awaiting_action == "bid":
+                await game.act(i, SkipBidAction())
+                bid_found = True
+                break
+        if not bid_found:
+            await asyncio.sleep(0.01)
 
     phase = game.get_phase()
-    # After 3s with AutoPlayers, the game should have progressed
     assert phase in (
         "DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING",
         "COMPLETE", "GAME_OVER",
     ), f"Game stuck in unexpected phase: {phase}"
 
     # Snapshot must still be valid (no cascading error state)
-    try:
-        snap = game.snapshot(for_player=0)
-        assert isinstance(snap.player_hand, list)
-    except RuntimeError:
-        pass
+    snap = game.snapshot(for_player=0)
+    assert isinstance(snap.player_hand, list)
 
 
 # ---- Game over removes from registry ----
@@ -873,7 +888,7 @@ async def test_deal_bid_sync_round_robin() -> None:
     """
     from server.actions import SkipBidAction
     players = _make_players()
-    game = Game(players=players, deal_delay=0)
+    game = Game(players=players)
     await game.run()
 
     # After run(), should be in DEAL_BID with first deal tick done
@@ -918,7 +933,7 @@ async def test_deal_bid_sync_round_robin() -> None:
 async def test_bid_legal_actions_in_snapshot() -> None:
     """Snapshot includes bid_legal_actions during DEAL_BID phase for the current bidder."""
     players = _make_players()
-    game = Game(players=players, deal_delay=0)
+    game = Game(players=players)
     await game.run()
 
     # Find the player who has awaiting_action='bid'
@@ -1004,7 +1019,7 @@ def test_get_bid_legal_actions_singles_and_pairs() -> None:
 async def test_awaiting_bid_for_current_bidder() -> None:
     """awaiting_action is 'bid' for the player whose turn it is to bid."""
     players = _make_players()
-    game = Game(players=players, deal_delay=0)
+    game = Game(players=players)
     await game.run()
 
     # Find which player has awaiting_action="bid"
@@ -1021,7 +1036,7 @@ async def test_awaiting_bid_for_current_bidder() -> None:
 async def test_awaiting_null_for_non_current_bidder() -> None:
     """awaiting_action is null for players whose turn it is NOT to bid."""
     players = _make_players()
-    game = Game(players=players, deal_delay=0)
+    game = Game(players=players)
     await game.run()
 
     # Find which player has awaiting_action="bid"
@@ -1053,7 +1068,7 @@ async def test_deal_bid_no_background_delay() -> None:
     """
     from server.actions import SkipBidAction
     players = _make_players()
-    game = Game(players=players, deal_delay=0)
+    game = Game(players=players)
     await game.run()
 
     # Find the current bidder
@@ -1093,7 +1108,7 @@ async def test_skip_bid_action_advances_turn() -> None:
     """
     from server.actions import SkipBidAction
     players = _make_players()
-    game = Game(players=players, deal_delay=0)
+    game = Game(players=players)
     await game.run()
 
     # Get to a state where we can bid
@@ -1142,23 +1157,28 @@ async def test_stirring_state_snapshot_has_declarer_player() -> None:
     """
     from server.actions import SkipBidAction
     players = _make_players()
-    game = Game(players=players, deal_delay=0)
+    game = Game(players=players)
     await game.run()
 
     # Drive through DEAL_BID to reach STIRRING
-    max_attempts = 200
+    max_attempts = 500
     for _ in range(max_attempts):
         snap = game.snapshot(for_player=0)
-        if snap.phase == "STIRRING":
+        if snap.phase != "DEAL_BID":
             break
-        if snap.awaiting_action == "bid":
-            await game.act(0, SkipBidAction())
-        else:
+        # Find the current bidder and skip
+        bid_found = False
+        for i in range(4):
+            s = game.snapshot(i)
+            if s.awaiting_action == "bid":
+                await game.act(i, SkipBidAction())
+                bid_found = True
+                break
+        if not bid_found:
             await asyncio.sleep(0.01)
 
     snap = game.snapshot(for_player=0)
-    if snap.phase != "STIRRING":
-        pytest.skip("Could not reach STIRRING phase")
+    assert snap.phase == "STIRRING", f"Expected STIRRING phase, got {snap.phase}"
 
     assert snap.stirring_state is not None
     assert snap.stirring_state.declarer_player is not None

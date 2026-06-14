@@ -134,6 +134,7 @@ class AutoPlayer(Player):
         In sync round-robin mode, must send SkipBidAction when choosing
         not to bid so the turn advances.
         """
+        from server.sm.card_model import Rank
         hand = snapshot.player_hand
         trump_rank = snapshot.trump_rank
 
@@ -146,9 +147,9 @@ class AutoPlayer(Player):
         suit_groups: dict[Suit, list[Card]] = {}
         jokers: list[Card] = []
         for c in hand:
-            if getattr(c, "rank", None) != trump_rank and not getattr(c, "is_joker", False):
+            if c.rank != trump_rank and not c.is_joker:
                 continue
-            if getattr(c, "is_joker", False):
+            if c.is_joker:
                 jokers.append(c)
             else:
                 suit_groups.setdefault(c.suit, []).append(c)
@@ -157,8 +158,8 @@ class AutoPlayer(Player):
         best_cards: list[Card] = []
 
         # Check joker pairs (requires 2 of same rank)
-        sj = [c for c in jokers if getattr(c, "rank", None) == "SJ"]
-        bj = [c for c in jokers if getattr(c, "rank", None) == "BJ"]
+        sj = [c for c in jokers if c.rank == Rank.SMALL_JOKER]
+        bj = [c for c in jokers if c.rank == Rank.BIG_JOKER]
         if len(bj) >= 2:
             best_cards = bj[:2]
         elif len(sj) >= 2:
@@ -183,7 +184,6 @@ class AutoPlayer(Player):
             return
 
         # Check if existing bid_winner has higher or equal priority
-        from server.sm.card_model import Rank
         trump_rank_enum = Rank(trump_rank)
         best_priority = bid_value(best_cards, trump_rank_enum)
         bid_winner = snapshot.bid_winner
@@ -204,7 +204,7 @@ class AutoPlayer(Player):
         trump_rank = snapshot.trump_rank
         current_trump_suit = snapshot.trump_suit
         # Find pairs of trump rank cards that can beat current trump
-        trump_cards = [c for c in hand if getattr(c, "rank", None) == trump_rank]
+        trump_cards = [c for c in hand if c.rank == trump_rank]
         if len(trump_cards) >= 2 and random.random() < 0.5:
             suit_groups: dict[Suit, list[Card]] = {}
             for c in trump_cards:
