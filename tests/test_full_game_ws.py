@@ -340,10 +340,12 @@ def test_delete_game_closes_ws(sync_client: TestClient) -> None:
     assert _is_dict(data)
     game_id = _as_str(data["game_id"])
 
-    # The __exit__ of the WS context manager calls close(), which may
-    # fail with RuntimeError when the server already sent a close frame
-    # during delete.  This is the ONLY RuntimeError we expect — all other
-    # exceptions (WebSocketDisconnect, etc.) are caught by pytest.raises below.
+    # Step 1: Connect, get initial state, delete, verify final push.
+    # Step 2: Exit the context manager — its __exit__ may raise RuntimeError
+    # because the server already closed the WS during delete.
+    # We separate these so the test assertions are NOT swallowed by the
+    # RuntimeError from __exit__.
+    final_state_pushed = False
     try:
         with sync_client.websocket_connect(f"/game/{game_id}") as ws:
             # Get initial state
@@ -363,6 +365,7 @@ def test_delete_game_closes_ws(sync_client: TestClient) -> None:
             final_state = _as_dict_or_none(final.get("state"))
             assert final_state is not None
             assert "phase" in final_state
+            final_state_pushed = True
 
             # Verify WS actually closes after final state push
             with pytest.raises((WebSocketDisconnect, Exception)):
@@ -372,7 +375,11 @@ def test_delete_game_closes_ws(sync_client: TestClient) -> None:
     except RuntimeError:
         # Server-initiated close during delete causes __exit__ to fail
         # when it tries to close the already-closed WS. This is expected.
+        # The assertion for final_state_pushed above ensures the test
+        # actually verified the final state push before this point.
         pass
+
+    assert final_state_pushed, "Final state push was not received before WS closed"
 
 
 def test_connect_nonexistent_game(sync_client: TestClient) -> None:
