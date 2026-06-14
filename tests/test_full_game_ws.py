@@ -136,7 +136,7 @@ class WsGameDriver:
     def __init__(self, sync_client: TestClient) -> None:
         self._client = sync_client
         self._ws: WebSocketTestSession | None = None
-        self._ws_cm: object | None = None  # context manager for websocket_connect
+        self._ws_cm: WebSocketTestSession | None = None  # context manager for websocket_connect
         self._current_seq: int = 0
         self.last_error: str | None = None
         self._game_id: str | None = None
