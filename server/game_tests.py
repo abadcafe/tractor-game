@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from server.actions import BidAction, NextRoundAction, PlayAction, SkipStirAction
+from server.actions import BidAction, DiscardAction, NextRoundAction, PlayAction, SkipBidAction, SkipStirAction
 from server.game import Game
 from server.player import AutoPlayer
 from server.sm.card_model import Rank, Suit
@@ -1577,3 +1577,109 @@ async def test_stirring_state_has_legal_actions() -> None:
             f"Player {i} (non-current): expected empty legal_actions, "
             f"got {s.stirring_state.legal_actions}"
         )
+
+
+# ---- Task 005: Bug 4 — Pass player_index to STIRRING/EXCHANGE act() ----
+
+
+@pytest.mark.asyncio
+async def test_act_stir_rejects_non_current_player() -> None:
+    """SkipStirAction from a non-current player should be rejected."""
+    players = [AutoPlayer(index=i) for i in range(4)]
+    game = Game(players=players)
+    await game.run()
+
+    # Drive to STIRRING phase
+    max_attempts = 200
+    for _ in range(max_attempts):
+        snap = game.snapshot(for_player=0)
+        if snap.phase == "STIRRING":
+            break
+        if snap.awaiting_action == "bid":
+            if snap.bid_legal_actions:
+                cards = snap.bid_legal_actions[0]
+                await game.act(0, BidAction(cards=cards, count=len(cards)))
+            else:
+                await game.act(0, SkipBidAction())
+        else:
+            await asyncio.sleep(0.01)
+
+    snap = game.snapshot(for_player=0)
+    if snap.phase != "STIRRING":
+        pytest.skip("Could not reach STIRRING phase")
+
+    # Find the current player (the one with awaiting_action='stir')
+    current = None
+    for i in range(4):
+        s = game.snapshot(for_player=i)
+        if s.awaiting_action == "stir":
+            current = i
+            break
+    assert current is not None
+
+    # Pick a different player
+    other = (current + 1) % 4
+
+    # The other player tries to skip stir -- should be rejected
+    # (error is sent via send_error, not raised)
+    await game.act(other, SkipStirAction())
+
+    # The current player should still have awaiting_action='stir'
+    snap_after = game.snapshot(for_player=current)
+    assert snap_after.awaiting_action == "stir", (
+        f"Current player should still have awaiting_action='stir', got {snap_after.awaiting_action}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_act_discard_rejects_non_declarer() -> None:
+    """DiscardAction from a non-declarer should be rejected."""
+    players = [AutoPlayer(index=i) for i in range(4)]
+    game = Game(players=players)
+    await game.run()
+
+    # Drive to EXCHANGE phase
+    max_attempts = 500
+    for _ in range(max_attempts):
+        snap = game.snapshot(for_player=0)
+        if snap.phase == "EXCHANGE":
+            break
+        if snap.awaiting_action == "bid":
+            if snap.bid_legal_actions:
+                cards = snap.bid_legal_actions[0]
+                await game.act(0, BidAction(cards=cards, count=len(cards)))
+            else:
+                await game.act(0, SkipBidAction())
+        elif snap.awaiting_action == "stir":
+            await game.act(0, SkipStirAction())
+        else:
+            await asyncio.sleep(0.01)
+
+    snap = game.snapshot(for_player=0)
+    if snap.phase != "EXCHANGE":
+        pytest.skip("Could not reach EXCHANGE phase")
+
+    # Find the declarer (the one with awaiting_action='discard')
+    declarer = None
+    for i in range(4):
+        s = game.snapshot(for_player=i)
+        if s.awaiting_action == "discard":
+            declarer = i
+            break
+    assert declarer is not None
+
+    # Pick a different player
+    other = (declarer + 1) % 4
+
+    # The other player tries to discard -- should be rejected
+    snap_other = game.snapshot(for_player=other)
+    hand = snap_other.player_hand
+    if hand:
+        # Use a card from the other player's hand directly (no Card.from_id needed)
+        await game.act(other, DiscardAction(cards=[hand[0]]))
+
+    # The declarer should still have awaiting_action='discard'
+    snap_after = game.snapshot(for_player=declarer)
+    assert snap_after.awaiting_action == "discard", (
+        f"Declarer should still have awaiting_action='discard', got {snap_after.awaiting_action}"
+    )

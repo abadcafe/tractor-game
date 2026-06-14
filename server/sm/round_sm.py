@@ -167,7 +167,7 @@ def reveal(state: RoundState, event: BidEvent) -> StateResult[RoundState]:
             return Rejected(reason)
 
 
-def pass_stir(state: RoundState) -> StateResult[RoundState]:
+def pass_stir(state: RoundState, player_index: int) -> StateResult[RoundState]:
     """Pass during STIRRING phase.
 
     Delegates to stirring.pass_stir. If stirring completes, transitions to EXCHANGE.
@@ -182,6 +182,10 @@ def pass_stir(state: RoundState) -> StateResult[RoundState]:
         return Rejected("反主状态异常")
 
     cur = state.stirring_state.current_player
+    if player_index != cur:
+        return Rejected(
+            f"不是你的回合，当前是玩家 {cur} 的回合"
+        )
     match stir_mod.pass_stir(state.stirring_state, cur):
         case Ok(value=new_ss):
             if new_ss.phase == "COMPLETE":
@@ -195,7 +199,7 @@ def pass_stir(state: RoundState) -> StateResult[RoundState]:
             return Rejected(reason)
 
 
-def stir(state: RoundState, cards: list[Card]) -> StateResult[RoundState]:
+def stir(state: RoundState, player_index: int, cards: list[Card]) -> StateResult[RoundState]:
     """Stir (change trump suit) during STIRRING phase.
 
     Validates cards are in the current player's hand, then delegates
@@ -211,6 +215,10 @@ def stir(state: RoundState, cards: list[Card]) -> StateResult[RoundState]:
         return Rejected("反主状态异常")
 
     cur = state.stirring_state.current_player
+    if player_index != cur:
+        return Rejected(
+            f"不是你的回合，当前是玩家 {cur} 的回合"
+        )
     hand = state.players_hand[cur]
 
     # Validate cards are in player's hand
@@ -232,7 +240,7 @@ def stir(state: RoundState, cards: list[Card]) -> StateResult[RoundState]:
             return Rejected(reason)
 
 
-def discard(state: RoundState, cards: list[Card]) -> StateResult[RoundState]:
+def discard(state: RoundState, player_index: int, cards: list[Card]) -> StateResult[RoundState]:
     """Discard bottom cards during EXCHANGE phase.
 
     Delegates to exchange.discard. If exchange completes, transitions to PLAYING.
@@ -245,6 +253,12 @@ def discard(state: RoundState, cards: list[Card]) -> StateResult[RoundState]:
         )
     if state.exchange_state is None:
         return Rejected("换底牌状态异常")
+
+    declarer = state.exchange_state.declarer_player
+    if player_index != declarer:
+        return Rejected(
+            f"只有庄家可以埋牌，当前庄家是玩家 {declarer}"
+        )
 
     match exc.discard(state.exchange_state, cards):
         case Ok(value=new_exc):

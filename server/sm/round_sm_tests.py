@@ -107,7 +107,8 @@ def _complete_stirring_all_pass(state: RoundState) -> RoundState:
     for _ in range(4):
         if state.phase != "STIRRING":
             break
-        result = pass_stir(state)
+        cur = state.stirring_state.current_player if state.stirring_state is not None else 0
+        result = pass_stir(state, player_index=cur)
         assert isinstance(result, Ok), f"pass_stir rejected: {result.reason}"
         state = result.value
     return state
@@ -118,7 +119,7 @@ def _complete_exchange(state: RoundState) -> RoundState:
     if state.exchange_state is None:
         return state
     discarded = state.exchange_state.hand_after_pickup[:state.exchange_state.count]
-    result = discard(state, discarded)
+    result = discard(state, player_index=state.exchange_state.declarer_player, cards=discarded)
     assert isinstance(result, Ok), f"discard rejected: {result.reason if hasattr(result, 'reason') else result}"
     return result.value
 
@@ -233,7 +234,8 @@ class TestStirringPhase:
         ))
         state = _complete_deal_bid_no_bid(state)
         assert state.phase == "STIRRING"
-        result = pass_stir(state)
+        assert state.stirring_state is not None
+        result = pass_stir(state, player_index=state.stirring_state.current_player)
         assert isinstance(result, Ok)
         state = result.value
         assert state.stirring_state is not None
@@ -269,7 +271,7 @@ class TestStirringPhase:
             f"Hand: {[c.id for c in hand]}"
         )
         pair = [c for c in hand if c.rank == state.trump_rank and not c.is_joker and c.suit == target_suit][:2]
-        result = stir(state, cards=pair)
+        result = stir(state, player_index=cur, cards=pair)
         assert isinstance(result, Ok)
         state = result.value
         assert state.trump_suit == target_suit
@@ -283,6 +285,7 @@ class TestStirringPhase:
         ))
         state = _complete_deal_bid_no_bid(state)
         assert state.phase == "STIRRING"
+        assert state.stirring_state is not None
         # Fabricate cards that are NOT in the current player's hand
         fake_cards = [
             Card(id="D1-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
@@ -290,7 +293,7 @@ class TestStirringPhase:
             Card(id="D2-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
                  is_joker=False, is_big_joker=False, points=0, deck=2),
         ]
-        result = stir(state, cards=fake_cards)
+        result = stir(state, player_index=state.stirring_state.current_player, cards=fake_cards)
         assert isinstance(result, Rejected)
         assert "不在" in result.reason and "手牌中" in result.reason
 
@@ -309,7 +312,7 @@ class TestStirringPhase:
         # A single card is in the player's hand but the stirring module
         # requires exactly 2 cards (a pair), so it will reject the play.
         if hand:
-            result = stir(state, cards=[hand[0]])
+            result = stir(state, player_index=cur, cards=[hand[0]])
             assert isinstance(result, Rejected)
             assert "对子" in result.reason
 
@@ -360,7 +363,7 @@ class TestStirringPhase:
                 if c.rank == state.trump_rank and not c.is_joker and c.suit == target_suit][:2]
 
         # First stir succeeds
-        result = stir(state, cards=pair)
+        result = stir(state, player_index=cur, cards=pair)
         assert isinstance(result, Ok)
         state = result.value
         assert state.stirring_state is not None
@@ -370,7 +373,8 @@ class TestStirringPhase:
         for _ in range(3):
             if state.phase != "STIRRING":
                 break
-            result = pass_stir(state)
+            assert state.stirring_state is not None
+            result = pass_stir(state, player_index=state.stirring_state.current_player)
             assert isinstance(result, Ok), f"pass_stir rejected: {result.reason}"
             state = result.value
 
@@ -379,7 +383,7 @@ class TestStirringPhase:
         assert state.stirring_state.current_player == cur
 
         # Second stir from the same player is rejected
-        result = stir(state, cards=pair)
+        result = stir(state, player_index=cur, cards=pair)
         assert isinstance(result, Rejected)
 
 
@@ -669,7 +673,7 @@ class TestRoundValidation:
             Card(id="D2-diamonds-2", suit=Suit.DIAMONDS, rank=Rank.TWO,
                  is_joker=False, is_big_joker=False, points=0, deck=2),
         ]
-        result = stir(state, cards=cards)
+        result = stir(state, player_index=0, cards=cards)
         assert isinstance(result, Rejected)
         assert "不能" in result.reason
 
@@ -722,3 +726,98 @@ class TestRoundFullFlow:
             assert result is not None
             assert result.next_declarer_team in (0, 1)
             assert result.next_declarer_player in (0, 1, 2, 3)
+
+
+class TestPlayerIdentityValidation:
+    """Bug 4 regression: pass_stir, stir, and discard must reject wrong player_index."""
+
+    def test_pass_stir_rejects_wrong_player(self) -> None:
+        """pass_stir rejects when player_index doesn't match current_player."""
+        state = create_round(RoundInput(
+            declarer_team=None, trump_rank=Rank.TWO,
+            last_declarer_player=None,
+            team0_level=Rank.TWO, team1_level=Rank.TWO,
+        ))
+        state = _complete_deal_bid_no_bid(state)
+        assert state.phase == "STIRRING"
+        assert state.stirring_state is not None
+        cur = state.stirring_state.current_player
+        wrong_player = (cur + 1) % 4
+        result = pass_stir(state, player_index=wrong_player)
+        assert isinstance(result, Rejected)
+        assert "不是你的回合" in result.reason
+
+    def test_stir_rejects_wrong_player(self) -> None:
+        """stir rejects when player_index doesn't match current_player."""
+        state = create_round(RoundInput(
+            declarer_team=None, trump_rank=Rank.TWO,
+            last_declarer_player=None,
+            team0_level=Rank.TWO, team1_level=Rank.TWO,
+        ))
+        state = _complete_deal_bid_no_bid(state)
+        assert state.phase == "STIRRING"
+        assert state.stirring_state is not None
+        cur = state.stirring_state.current_player
+        wrong_player = (cur + 1) % 4
+        # Use any cards; the player identity check happens before card validation
+        fake_cards = [
+            Card(id="D1-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
+                 is_joker=False, is_big_joker=False, points=0, deck=1),
+            Card(id="D2-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
+                 is_joker=False, is_big_joker=False, points=0, deck=2),
+        ]
+        result = stir(state, player_index=wrong_player, cards=fake_cards)
+        assert isinstance(result, Rejected)
+        assert "不是你的回合" in result.reason
+
+    def test_discard_rejects_wrong_player(self) -> None:
+        """discard rejects when player_index doesn't match declarer_player."""
+        state = create_round(RoundInput(
+            declarer_team=None, trump_rank=Rank.TWO,
+            last_declarer_player=None,
+            team0_level=Rank.TWO, team1_level=Rank.TWO,
+        ))
+        state = _complete_deal_bid_no_bid(state)
+        state = _complete_stirring_all_pass(state)
+        assert state.phase == "EXCHANGE"
+        assert state.exchange_state is not None
+        declarer = state.exchange_state.declarer_player
+        wrong_player = (declarer + 1) % 4
+        # Use any cards; the player identity check happens before card validation
+        fake_cards = [
+            Card(id="D1-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
+                 is_joker=False, is_big_joker=False, points=0, deck=1),
+        ]
+        result = discard(state, player_index=wrong_player, cards=fake_cards)
+        assert isinstance(result, Rejected)
+        assert "只有庄家可以埋牌" in result.reason
+
+    def test_pass_stir_accepts_correct_player(self) -> None:
+        """pass_stir succeeds when player_index matches current_player."""
+        state = create_round(RoundInput(
+            declarer_team=None, trump_rank=Rank.TWO,
+            last_declarer_player=None,
+            team0_level=Rank.TWO, team1_level=Rank.TWO,
+        ))
+        state = _complete_deal_bid_no_bid(state)
+        assert state.phase == "STIRRING"
+        assert state.stirring_state is not None
+        cur = state.stirring_state.current_player
+        result = pass_stir(state, player_index=cur)
+        assert isinstance(result, Ok)
+
+    def test_discard_accepts_correct_player(self) -> None:
+        """discard succeeds when player_index matches declarer_player."""
+        state = create_round(RoundInput(
+            declarer_team=None, trump_rank=Rank.TWO,
+            last_declarer_player=None,
+            team0_level=Rank.TWO, team1_level=Rank.TWO,
+        ))
+        state = _complete_deal_bid_no_bid(state)
+        state = _complete_stirring_all_pass(state)
+        assert state.phase == "EXCHANGE"
+        assert state.exchange_state is not None
+        declarer = state.exchange_state.declarer_player
+        discarded = state.exchange_state.hand_after_pickup[:state.exchange_state.count]
+        result = discard(state, player_index=declarer, cards=discarded)
+        assert isinstance(result, Ok)

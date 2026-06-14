@@ -158,21 +158,21 @@ class Game:
                 rs = self._process_bid_tick_progress(rs)
 
         elif phase == "STIRRING" and isinstance(action, SkipStirAction):
-            match round_sm.pass_stir(rs):
+            match round_sm.pass_stir(rs, player_index):
                 case Ok(value=new_state):
                     rs = new_state
                 case Rejected(reason=reason):
                     error_msg = reason
 
         elif phase == "STIRRING" and isinstance(action, StirAction):
-            match round_sm.stir(rs, action.cards):
+            match round_sm.stir(rs, player_index, action.cards):
                 case Ok(value=new_state):
                     rs = new_state
                 case Rejected(reason=reason):
                     error_msg = reason
 
         elif phase == "EXCHANGE" and isinstance(action, DiscardAction):
-            match round_sm.discard(rs, action.cards):
+            match round_sm.discard(rs, player_index, action.cards):
                 case Ok(value=new_state):
                     rs = new_state
                 case Rejected(reason=reason):

@@ -409,11 +409,12 @@ def _complete_round_no_bid(round_state: RoundState) -> RoundState:
     for _ in range(4):
         if round_state.phase != "STIRRING":
             break
-        round_state = _unwrap_round(rn_pass(round_state))
+        cur = round_state.stirring_state.current_player if round_state.stirring_state is not None else 0
+        round_state = _unwrap_round(rn_pass(round_state, player_index=cur))
 
     if round_state.phase == "EXCHANGE" and round_state.exchange_state is not None:
         discards = round_state.exchange_state.hand_after_pickup[:round_state.exchange_state.count]
-        round_state = _unwrap_round(rn_discard(round_state, discards))
+        round_state = _unwrap_round(rn_discard(round_state, player_index=round_state.exchange_state.declarer_player, cards=discards))
 
     prev_history_len = 0
     max_iterations = 30
