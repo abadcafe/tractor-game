@@ -129,13 +129,13 @@ def get_bid_legal_actions(hand: list[Card], trump_rank: Rank) -> list[list[Card]
     """Compute legal bid options from a player's hand.
 
     Returns list of bid options where each option is 1 card (single) or
-    2 cards (pair). Singles are individual trump-rank cards or single jokers
-    (though single jokers cannot actually bid, they are listed for UI display).
+    2 cards (pair). Singles are individual trump-rank cards (one per suit).
     Pairs are two trump-rank cards of the same suit or two jokers of same type.
-    Non-trump-rank cards are excluded.
+    Non-trump-rank cards and single jokers are excluded (single jokers have
+    bid_value 0 and cannot be used to bid).
 
     Only includes options that have a non-zero bid_value:
-    - Singles: trump-rank cards (not jokers — single joker has bid_value 0)
+    - Singles: trump-rank cards (one per suit group; not jokers)
     - Pairs: two trump-rank cards of the same suit, or two jokers of same type
     """
     # Group trump-rank and joker cards

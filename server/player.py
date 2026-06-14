@@ -184,11 +184,10 @@ class AutoPlayer(Player):
             return
 
         # Check if existing bid_winner has higher or equal priority
-        trump_rank_enum = Rank(trump_rank)
-        best_priority = bid_value(best_cards, trump_rank_enum)
+        best_priority = bid_value(best_cards, trump_rank)
         bid_winner = snapshot.bid_winner
         if bid_winner is not None:
-            winner_priority = bid_value(bid_winner.cards, trump_rank_enum)
+            winner_priority = bid_value(bid_winner.cards, trump_rank)
             if best_priority <= winner_priority:
                 asyncio.create_task(game.act(self.index, SkipBidAction()))
                 return  # can't beat current winner
