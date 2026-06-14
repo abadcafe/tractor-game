@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from server.actions import BidAction, NextRoundAction, PlayAction, SkipStirAction
+from server.actions import BidAction, DiscardAction, NextRoundAction, PlayAction, SkipBidAction, SkipStirAction
 from server.game import Game
 from server.player import AutoPlayer
 from server.sm.result import Ok, Rejected
@@ -1311,3 +1311,210 @@ async def test_complete_awaiting_multiple_confirmed() -> None:
         f"Player 3: unconfirmed player should have awaiting_action='next_round', "
         f"got {snap3.awaiting_action}"
     )
+
+
+# ---- Task 004: Bug 3 — Awaiting Conditional for PLAYING/STIRRING/EXCHANGE ----
+
+
+@pytest.mark.asyncio
+async def test_stirring_awaiting_for_current_player() -> None:
+    """In STIRRING phase, only the current player has awaiting_action='stir'."""
+    players = [AutoPlayer(index=i) for i in range(4)]
+    game = Game(players=players)
+    await game.run()
+
+    # Drive to STIRRING phase by completing DEAL_BID
+    # Keep calling act with bid/pass until phase changes
+    max_attempts = 200
+    for _ in range(max_attempts):
+        snap = game.snapshot(for_player=0)
+        if snap.phase == "STIRRING":
+            break
+        if snap.awaiting_action == "bid":
+            # Bid or pass for player 0
+            if snap.bid_legal_actions:
+                cards = snap.bid_legal_actions[0]
+                await game.act(0, BidAction(cards=cards, count=len(cards)))
+            else:
+                await game.act(0, SkipBidAction())
+        else:
+            # AutoPlayer acts automatically; wait a tick
+            await asyncio.sleep(0.01)
+
+    snap = game.snapshot(for_player=0)
+    if snap.phase != "STIRRING":
+        pytest.skip("Could not reach STIRRING phase")
+
+    # Find the current player from stirring_state
+    # The snapshot exposes current_player indirectly via which player has awaiting
+    stirring_awaiting: int | None = None
+    for i in range(4):
+        s = game.snapshot(for_player=i)
+        if s.awaiting_action == "stir":
+            stirring_awaiting = i
+            break
+
+    assert stirring_awaiting is not None, "No player has awaiting_action='stir'"
+
+    # All other players must have awaiting_action=None
+    for i in range(4):
+        s = game.snapshot(for_player=i)
+        if i == stirring_awaiting:
+            assert s.awaiting_action == "stir"
+        else:
+            assert s.awaiting_action is None, (
+                f"Player {i}: expected awaiting_action=None, got {s.awaiting_action}"
+            )
+
+
+@pytest.mark.asyncio
+async def test_exchange_awaiting_for_declarer() -> None:
+    """In EXCHANGE phase, only the declarer has awaiting_action='discard'."""
+    players = [AutoPlayer(index=i) for i in range(4)]
+    game = Game(players=players)
+    await game.run()
+
+    # Drive through DEAL_BID and STIRRING to reach EXCHANGE
+    max_attempts = 500
+    for _ in range(max_attempts):
+        snap = game.snapshot(for_player=0)
+        if snap.phase == "EXCHANGE":
+            break
+        if snap.awaiting_action == "bid":
+            if snap.bid_legal_actions:
+                cards = snap.bid_legal_actions[0]
+                await game.act(0, BidAction(cards=cards, count=len(cards)))
+            else:
+                await game.act(0, SkipBidAction())
+        elif snap.awaiting_action == "stir":
+            await game.act(0, SkipStirAction())
+        else:
+            await asyncio.sleep(0.01)
+
+    snap = game.snapshot(for_player=0)
+    if snap.phase != "EXCHANGE":
+        pytest.skip("Could not reach EXCHANGE phase")
+
+    # Find which player has awaiting_action='discard'
+    discard_awaiting: int | None = None
+    for i in range(4):
+        s = game.snapshot(for_player=i)
+        if s.awaiting_action == "discard":
+            discard_awaiting = i
+            break
+
+    assert discard_awaiting is not None, "No player has awaiting_action='discard'"
+
+    # All other players must have awaiting_action=None
+    for i in range(4):
+        s = game.snapshot(for_player=i)
+        if i == discard_awaiting:
+            assert s.awaiting_action == "discard"
+        else:
+            assert s.awaiting_action is None, (
+                f"Player {i}: expected awaiting_action=None, got {s.awaiting_action}"
+            )
+
+
+@pytest.mark.asyncio
+async def test_playing_awaiting_for_trick_cur() -> None:
+    """In PLAYING phase, only the current trick player has awaiting_action='play'."""
+    players = [AutoPlayer(index=i) for i in range(4)]
+    game = Game(players=players)
+    await game.run()
+
+    # Drive through all pre-PLAYING phases
+    max_attempts = 1000
+    for _ in range(max_attempts):
+        snap = game.snapshot(for_player=0)
+        if snap.phase == "PLAYING":
+            break
+        if snap.awaiting_action == "bid":
+            if snap.bid_legal_actions:
+                cards = snap.bid_legal_actions[0]
+                await game.act(0, BidAction(cards=cards, count=len(cards)))
+            else:
+                await game.act(0, SkipBidAction())
+        elif snap.awaiting_action == "stir":
+            await game.act(0, SkipStirAction())
+        elif snap.awaiting_action == "discard":
+            # Discard last N cards from hand
+            exchange = snap.exchange_state
+            count = exchange.count if exchange else 8
+            hand = snap.player_hand
+            discard_cards = hand[-count:]
+            await game.act(0, DiscardAction(cards=discard_cards))
+        else:
+            await asyncio.sleep(0.01)
+
+    snap = game.snapshot(for_player=0)
+    if snap.phase != "PLAYING":
+        pytest.skip("Could not reach PLAYING phase")
+
+    # Find which player has awaiting_action='play'
+    play_awaiting: int | None = None
+    for i in range(4):
+        s = game.snapshot(for_player=i)
+        if s.awaiting_action == "play":
+            play_awaiting = i
+            break
+
+    assert play_awaiting is not None, "No player has awaiting_action='play'"
+
+    # All other players must have awaiting_action=None
+    for i in range(4):
+        s = game.snapshot(for_player=i)
+        if i == play_awaiting:
+            assert s.awaiting_action == "play"
+        else:
+            assert s.awaiting_action is None, (
+                f"Player {i}: expected awaiting_action=None, got {s.awaiting_action}"
+            )
+
+
+@pytest.mark.asyncio
+async def test_stirring_state_has_legal_actions() -> None:
+    """StirringStateSnapshot includes legal_actions during STIRRING phase.
+
+    The legal_actions field lists valid stir options (pairs of trump-rank
+    cards or joker pairs with priority exceeding current trump). This allows
+    clients to determine which stir actions are legal without duplicating
+    the server's validation logic.
+    """
+    players = [AutoPlayer(index=i) for i in range(4)]
+    game = Game(players=players)
+    await game.run()
+
+    # Drive to STIRRING phase
+    max_attempts = 200
+    for _ in range(max_attempts):
+        snap = game.snapshot(for_player=0)
+        if snap.phase == "STIRRING":
+            break
+        if snap.awaiting_action == "bid":
+            if snap.bid_legal_actions:
+                cards = snap.bid_legal_actions[0]
+                await game.act(0, BidAction(cards=cards, count=len(cards)))
+            else:
+                await game.act(0, SkipBidAction())
+        else:
+            await asyncio.sleep(0.01)
+
+    snap = game.snapshot(for_player=0)
+    if snap.phase != "STIRRING":
+        pytest.skip("Could not reach STIRRING phase")
+
+    assert snap.stirring_state is not None
+    assert isinstance(snap.stirring_state.legal_actions, list)
+    # Each entry should be a list of 2 cards (stir requires pairs)
+    for entry in snap.stirring_state.legal_actions:
+        assert isinstance(entry, list)
+        # Legal stir is always a pair (2 cards)
+        assert len(entry) == 2, f"Each stir option must be a pair, got {len(entry)} cards"
+
+    # Verify to_dict() serialization
+    d = snap.to_dict()
+    stirring_dict = d["stirring_state"]
+    assert stirring_dict is not None
+    assert "legal_actions" in stirring_dict
+    assert isinstance(stirring_dict["legal_actions"], list)

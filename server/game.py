@@ -21,8 +21,9 @@ from server.actions import (
     StirAction,
 )
 from server.player import Player
-from server.sm import deal_bid_sm, game_sm, play_rules, round_sm
-from server.sm.card_model import Card
+from server.sm import deal_bid_sm, game_sm, play_rules, round_sm, stirring_sm
+from server.sm.comparator import bid_value
+from server.sm.card_model import Card, Rank, Suit
 from server.sm.result import Ok, Rejected
 from server.sm.types import BidEvent
 from server.snapshot import (
@@ -254,6 +255,63 @@ class Game:
 
         return rs
 
+    @staticmethod
+    def _get_legal_stir_actions(
+        hand: list[Card],
+        stirring_state: stirring_sm.StirringState,
+        player_index: int,
+    ) -> list[list[Card]]:
+        """Compute legal stir actions for a player's hand.
+
+        Returns pairs of trump-rank cards or joker pairs that have priority
+        exceeding the current trump. Returns empty list if the player is
+        stirring_state.last_stir_player (can't stir own trump).
+        """
+        # Can't stir own trump
+        if stirring_state.last_stir_player == player_index:
+            return []
+
+        trump_rank = stirring_state.trump_rank
+        current_priority = stirring_state.current_priority
+
+        # Group trump-rank cards by suit
+        from collections import defaultdict
+        by_suit: dict[Suit, list[Card]] = defaultdict(list)
+        small_jokers: list[Card] = []
+        big_jokers: list[Card] = []
+
+        for c in hand:
+            if c.is_joker:
+                if c.rank == Rank.SMALL_JOKER:
+                    small_jokers.append(c)
+                else:
+                    big_jokers.append(c)
+            elif c.rank == trump_rank:
+                by_suit[c.suit].append(c)
+
+        result: list[list[Card]] = []
+
+        # Same-suit trump-rank pairs
+        for suit_cards in by_suit.values():
+            if len(suit_cards) >= 2:
+                pair = [suit_cards[0], suit_cards[1]]
+                if bid_value(pair, trump_rank) > current_priority:
+                    result.append(pair)
+
+        # Small joker pair
+        if len(small_jokers) >= 2:
+            pair = [small_jokers[0], small_jokers[1]]
+            if bid_value(pair, trump_rank) > current_priority:
+                result.append(pair)
+
+        # Big joker pair
+        if len(big_jokers) >= 2:
+            pair = [big_jokers[0], big_jokers[1]]
+            if bid_value(pair, trump_rank) > current_priority:
+                result.append(pair)
+
+        return result
+
     def snapshot(self, for_player: int) -> StateSnapshot:
         """Build a StateSnapshot for the given player.
 
@@ -326,11 +384,11 @@ class Game:
                 awaiting_action = "bid"
             else:
                 awaiting_action = None
-        elif rs.phase == "STIRRING":
+        elif rs.phase == "STIRRING" and for_player == current_player:
             awaiting_action = "stir"
-        elif rs.phase == "EXCHANGE":
+        elif rs.phase == "EXCHANGE" and for_player == current_player:
             awaiting_action = "discard"
-        elif rs.phase == "PLAYING" and can_act_in_playing:
+        elif rs.phase == "PLAYING" and can_act_in_playing and for_player == current_player:
             awaiting_action = "play"
         elif rs.phase == "COMPLETE":
             if for_player not in self._next_round_confirmed:
@@ -363,11 +421,18 @@ class Game:
         # stirring_state
         stirring_state_snap: StirringStateSnapshot | None = None
         if rs.stirring_state is not None and rs.phase == "STIRRING":
+            # Compute legal stir actions for the current player only
+            stir_legal_actions: list[list[Card]] = []
+            if for_player == current_player:
+                stir_legal_actions = self._get_legal_stir_actions(
+                    player_hand, rs.stirring_state, for_player,
+                )
             stirring_state_snap = StirringStateSnapshot(
                 phase=rs.stirring_state.phase,
                 trump_suit=rs.stirring_state.trump_suit,
                 current_player=rs.stirring_state.current_player,
                 declarer_player=rs.stirring_state.declarer_player,
+                legal_actions=stir_legal_actions,
             )
 
         # exchange_state

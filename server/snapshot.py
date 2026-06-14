@@ -66,6 +66,7 @@ class StirringStateSnapshot:
     trump_suit: Suit | None
     current_player: int
     declarer_player: int
+    legal_actions: list[list[Card]]
 
 
 @dataclass
@@ -148,6 +149,10 @@ class StateSnapshot:
                 "trump_suit": self.stirring_state.trump_suit.value if self.stirring_state.trump_suit is not None else None,
                 "current_player": self.stirring_state.current_player,
                 "declarer_player": self.stirring_state.declarer_player,
+                "legal_actions": [
+                    [_card_to_dict(c) for c in entry]
+                    for entry in self.stirring_state.legal_actions
+                ],
             }
 
         exchange_dict: ExchangeStateDict | None = None
@@ -278,6 +283,7 @@ class StirringStateDict(TypedDict):
     trump_suit: str | None
     current_player: int
     declarer_player: int
+    legal_actions: list[list[CardDict]]
 
 
 class ExchangeStateDict(TypedDict):
