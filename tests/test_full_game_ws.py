@@ -320,37 +320,56 @@ def test_list_games(sync_client: TestClient) -> None:
 
     resp = sync_client.get("/api/game")
     assert resp.status_code == 200
-    body = resp.json()
-    games_raw = body["games"]
-    game_ids = [g["game_id"] for g in games_raw]
+    resp_data = resp.json()
+    # Don't narrow resp_data with _is_dict — it would make resp_data["games"]
+    # return `object` (non-iterable in pyright strict). Keep resp_data as Any
+    # so list iteration works with proper type narrowing on each element.
+    game_ids = [_as_str(g["game_id"]) for g in resp_data["games"]]
     assert game_id in game_ids
     # Each game should have a phase field
-    for g in games_raw:
+    for g in resp_data["games"]:
         assert "phase" in g
 
 
 def test_delete_game_closes_ws(sync_client: TestClient) -> None:
-    """DELETE a game while WS connected: WS closes and game is removed."""
+    """DELETE a game while WS connected: receive final state push, then WS closes."""
     resp = sync_client.post("/api/game")
     data = resp.json()
     assert _is_dict(data)
     game_id = _as_str(data["game_id"])
 
-    # Open WS connection and get initial state
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
-        ws.send_json({"type": "next_round", "seq": 0})
-        raw = ws.receive_json()
-        data_msg = _as_dict(raw)
-        assert data_msg["type"] == "state"
+    # The __exit__ of the WS context manager calls close(), which may
+    # fail with RuntimeError when the server already sent a close frame
+    # during delete.  We catch that from the context manager's __exit__.
+    try:
+        with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+            # Get initial state
+            ws.send_json({"type": "next_round", "seq": 0})
+            raw = ws.receive_json()
+            data_msg = _as_dict(raw)
+            assert data_msg["type"] == "state"
 
-    # Delete the game (WS is now closed from client side)
-    resp = sync_client.delete(f"/api/game/{game_id}")
-    assert resp.status_code == 200
+            # Delete the game (while WS is still connected)
+            resp = sync_client.delete(f"/api/game/{game_id}")
+            assert resp.status_code == 200
+
+            # Should receive a final state push before close
+            final_raw = ws.receive_json()
+            final = _as_dict(final_raw)
+            assert final["type"] == "state"
+            final_state = _as_dict_or_none(final.get("state"))
+            assert final_state is not None
+            assert "phase" in final_state
+    except RuntimeError:
+        # Server-initiated close during delete causes __exit__ to fail
+        # when it tries to close the already-closed WS. This is expected.
+        pass
 
     # Verify game is removed from registry
     resp = sync_client.get("/api/game")
-    games = resp.json()["games"]
-    game_ids = [g["game_id"] for g in games]
+    resp_data = resp.json()
+    # Don't narrow resp_data with _is_dict — same reason as test_list_games.
+    game_ids = [g["game_id"] for g in resp_data["games"]]
     assert game_id not in game_ids
 
 
