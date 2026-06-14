@@ -125,6 +125,54 @@ def deal_next_card(state: DealBidState) -> StateResult[DealBidState]:
     }))
 
 
+def get_bid_legal_actions(hand: list[Card], trump_rank: Rank) -> list[list[Card]]:
+    """Compute legal bid options from a player's hand.
+
+    Returns list of bid options where each option is 1 card (single) or
+    2 cards (pair). Singles are individual trump-rank cards or single jokers
+    (though single jokers cannot actually bid, they are listed for UI display).
+    Pairs are two trump-rank cards of the same suit or two jokers of same type.
+    Non-trump-rank cards are excluded.
+
+    Only includes options that have a non-zero bid_value:
+    - Singles: trump-rank cards (not jokers — single joker has bid_value 0)
+    - Pairs: two trump-rank cards of the same suit, or two jokers of same type
+    """
+    # Group trump-rank and joker cards
+    suit_groups: dict[Suit, list[Card]] = {}
+    small_jokers: list[Card] = []
+    big_jokers: list[Card] = []
+
+    for card in hand:
+        if card.is_joker:
+            if card.is_big_joker:
+                big_jokers.append(card)
+            else:
+                small_jokers.append(card)
+        elif card.rank == trump_rank:
+            suit_groups.setdefault(card.suit, []).append(card)
+
+    result: list[list[Card]] = []
+
+    # Add pairs from suit groups (two trump-rank cards of same suit)
+    for _suit, cards in suit_groups.items():
+        if len(cards) >= 2:
+            result.append(cards[:2])
+
+    # Add joker pairs
+    if len(big_jokers) >= 2:
+        result.append(big_jokers[:2])
+    if len(small_jokers) >= 2:
+        result.append(small_jokers[:2])
+
+    # Add singles (trump-rank cards, one per suit group)
+    for _suit, cards in suit_groups.items():
+        # Add first card as single (if no pair was added, or always add singles)
+        result.append([cards[0]])
+
+    return result
+
+
 def reveal(state: DealBidState, event: BidEvent) -> StateResult[DealBidState]:
     """Process a reveal (bid) event from a player.
 

@@ -65,6 +65,7 @@ class StirringStateSnapshot:
     phase: str
     trump_suit: Suit | None
     current_player: int
+    declarer_player: int
 
 
 @dataclass
@@ -98,6 +99,7 @@ class StateSnapshot:
     trick_history: list[CompletedTrick]
     legal_actions: list[list[Card]]
     awaiting_action: str | None
+    bid_legal_actions: list[list[Card]] | None
     scoring: ScoringSnapshot | None
     winning_team: int | None
     team0_level: Rank
@@ -145,6 +147,7 @@ class StateSnapshot:
                 "phase": self.stirring_state.phase,
                 "trump_suit": self.stirring_state.trump_suit.value if self.stirring_state.trump_suit is not None else None,
                 "current_player": self.stirring_state.current_player,
+                "declarer_player": self.stirring_state.declarer_player,
             }
 
         exchange_dict: ExchangeStateDict | None = None
@@ -187,6 +190,11 @@ class StateSnapshot:
                 for entry in self.legal_actions
             ],
             "awaiting_action": self.awaiting_action,
+            "bid_legal_actions": (
+                [[_card_to_dict(c) for c in entry] for entry in self.bid_legal_actions]
+                if self.bid_legal_actions is not None
+                else None
+            ),
             "scoring": scoring_dict,
             "winning_team": self.winning_team,
             "team0_level": self.team0_level.value,
@@ -269,6 +277,7 @@ class StirringStateDict(TypedDict):
     phase: str
     trump_suit: str | None
     current_player: int
+    declarer_player: int
 
 
 class ExchangeStateDict(TypedDict):
@@ -307,6 +316,7 @@ class SnapshotDict(TypedDict):
     trick_history: list[CompletedTrickDict]
     legal_actions: list[list[CardDict]]
     awaiting_action: str | None
+    bid_legal_actions: list[list[CardDict]] | None
     scoring: ScoringDict | None
     winning_team: int | None
     team0_level: str

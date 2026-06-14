@@ -1,13 +1,12 @@
 """Game aggregate root for the Tractor game.
 
-Wraps sm state machines, manages 4 Player instances, drives the dealing loop,
-and provides act(), run(), snapshot(), is_over(), get_phase(), set_on_game_over(),
-get_player(), cancel(), and resolve_cards() interfaces.
+Wraps sm state machines, manages 4 Player instances, drives the sync
+round-robin bidding, and provides act(), run(), snapshot(), is_over(),
+get_phase(), set_on_game_over(), get_player(), and resolve_cards() interfaces.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Sequence
 from typing import Callable
@@ -22,7 +21,7 @@ from server.actions import (
     StirAction,
 )
 from server.player import Player
-from server.sm import game_sm, play_rules, round_sm
+from server.sm import deal_bid_sm, game_sm, play_rules, round_sm
 from server.sm.card_model import Card
 from server.sm.result import Ok, Rejected
 from server.sm.types import BidEvent
@@ -41,7 +40,7 @@ logger = logging.getLogger(__name__)
 class Game:
     """Aggregate root that orchestrates game lifecycle using sm state machines.
 
-    Manages 4 Player instances, drives the dealing loop, and provides
+    Manages 4 Player instances, drives sync round-robin bidding, and provides
     the public API for the server layer.
     """
 
@@ -49,12 +48,12 @@ class Game:
         self._game_state = game_sm.create_game()
         self._round_state: round_sm.RoundState | None = None
         self._players = list(players)
-        self._dealing_task: asyncio.Task[None] | None = None
         self._on_game_over: Callable[['Game'], None] | None = None
-        self._cancelled: bool = False
         self._next_round_confirmed: set[int] = set()
         self._deal_delay = deal_delay
         self._seq: int = 0
+        self._bid_turn: int = 0
+        self._bid_tick_progress: int = 0
 
     @property
     def current_seq(self) -> int:
@@ -62,7 +61,7 @@ class Game:
         return self._seq
 
     async def run(self) -> None:
-        """Start the game: transition to IN_ROUND, create round, start dealing loop.
+        """Start the game: transition to IN_ROUND, create round, execute first deal tick.
 
         Raises RuntimeError if called more than once.
         Raises RuntimeError if game_sm.start_game rejects (should never happen).
@@ -81,8 +80,25 @@ class Game:
             team0_level=self._game_state.team0_level,
             team1_level=self._game_state.team1_level,
         ))
-        self._cancelled = False
-        self._dealing_task = asyncio.create_task(self._dealing_loop())
+        self._bid_turn = 0
+        self._bid_tick_progress = 0
+
+        # Execute first deal tick: deal 1 card to each of the 4 players
+        rs = self._round_state
+        for _ in range(4):
+            if rs.phase != "DEAL_BID":
+                break
+            match round_sm.deal_next_card(rs):
+                case Ok(value=new_rs):
+                    rs = new_rs
+                    if rs.phase != "DEAL_BID":
+                        break
+                case Rejected(reason=reason):
+                    logger.warning("deal_next_card rejected in run(): %s", reason)
+                    break
+        self._round_state = rs
+
+        await self._push_state_to_all()
 
     async def act(self, player_index: int, action: BidAction | SkipBidAction | PlayAction | StirAction | SkipStirAction | DiscardAction | NextRoundAction) -> None:
         """Unified action entry point. Dispatches based on current phase and action type.
@@ -102,7 +118,6 @@ class Game:
         logger.debug("Game.act: player=%d action=%s phase=%s", player_index, type(action).__name__, phase)
 
         error_msg: str | None = None
-        should_push = True
 
         if phase == "DEAL_BID" and isinstance(action, BidAction):
             match self._convert_bid_action(player_index, action):
@@ -114,9 +129,16 @@ class Game:
                             error_msg = reason
                 case Rejected(reason=reason):
                     error_msg = reason
-            # Dealing loop already pushes state every 0.5s; avoid extra push
-            # here to prevent AutoPlayer bid cascades.
-            should_push = False
+
+            if error_msg is None:
+                # Advance bid turn after successful bid
+                self._bid_tick_progress += 1
+                rs = self._process_bid_tick_progress(rs)
+
+        elif phase == "DEAL_BID" and isinstance(action, SkipBidAction):
+            # Skip bid: advance turn without bidding
+            self._bid_tick_progress += 1
+            rs = self._process_bid_tick_progress(rs)
 
         elif phase == "STIRRING" and isinstance(action, SkipStirAction):
             match round_sm.pass_stir(rs):
@@ -167,7 +189,6 @@ class Game:
                         self._on_game_over(self)
                     return
                 else:
-                    self._cancelled = False
                     rs = round_sm.create_round(round_sm.RoundInput(
                         declarer_team=self._game_state.declarer_team,
                         trump_rank=self._game_state.team0_level,
@@ -175,8 +196,20 @@ class Game:
                         team0_level=self._game_state.team0_level,
                         team1_level=self._game_state.team1_level,
                     ))
-                    # Start a new dealing loop for the next round
-                    self._dealing_task = asyncio.create_task(self._dealing_loop())
+                    # Execute first deal tick for new round
+                    self._bid_turn = 0
+                    self._bid_tick_progress = 0
+                    for _ in range(4):
+                        if rs.phase != "DEAL_BID":
+                            break
+                        match round_sm.deal_next_card(rs):
+                            case Ok(value=new_rs):
+                                rs = new_rs
+                                if rs.phase != "DEAL_BID":
+                                    break
+                            case Rejected(reason=reason):
+                                logger.warning("deal_next_card rejected in next round: %s", reason)
+                                break
 
         else:
             error_msg = f"无效的操作：{type(action).__name__} 不能在 {phase} 阶段使用"
@@ -192,8 +225,39 @@ class Game:
                 err = error_msg if i == player_index else None
                 await self._players[i].on_state(self, seq=self._seq, error=err)
 
-        if should_push and not error_msg:
+        if not error_msg:
             await self._push_state_to_all()
+
+    def _process_bid_tick_progress(self, rs: round_sm.RoundState) -> round_sm.RoundState:
+        """Process bid tick progress after a bid or skip action.
+
+        After each player acts, increments _bid_tick_progress. When all 4
+        players have acted (_bid_tick_progress == 4), executes the next
+        deal tick (deal 1 card to each player) and resets the progress.
+        Returns the updated RoundState.
+        """
+        if self._bid_tick_progress < 4:
+            # Not all players have acted yet; just advance bid turn
+            self._bid_turn = (self._bid_turn + 1) % 4
+            return rs
+
+        # All 4 players have acted this round; execute next deal tick
+        self._bid_tick_progress = 0
+        self._bid_turn = (self._bid_turn + 1) % 4
+
+        for _ in range(4):
+            if rs.phase != "DEAL_BID":
+                break
+            match round_sm.deal_next_card(rs):
+                case Ok(value=new_rs):
+                    rs = new_rs
+                    if rs.phase != "DEAL_BID":
+                        break
+                case Rejected(reason=reason):
+                    logger.warning("deal_next_card rejected in act(): %s", reason)
+                    break
+
+        return rs
 
     def snapshot(self, for_player: int) -> StateSnapshot:
         """Build a StateSnapshot for the given player.
@@ -261,6 +325,12 @@ class Game:
         awaiting_action = None
         if gs.phase == "GAME_OVER":
             awaiting_action = None
+        elif rs.phase == "DEAL_BID":
+            # In sync round-robin mode, only the current bidder sees awaiting_action='bid'
+            if for_player == self._bid_turn:
+                awaiting_action = "bid"
+            else:
+                awaiting_action = None
         elif rs.phase == "STIRRING":
             awaiting_action = "stir"
         elif rs.phase == "EXCHANGE":
@@ -287,6 +357,11 @@ class Game:
             bid_events = list(rs.deal_bid_state.bid_events)
             bid_winner = rs.deal_bid_state.bid_winner
 
+        # bid_legal_actions
+        bid_legal_actions: list[list[Card]] | None = None
+        if rs.phase == "DEAL_BID" and awaiting_action == "bid":
+            bid_legal_actions = deal_bid_sm.get_bid_legal_actions(player_hand, rs.trump_rank)
+
         # stirring_state
         stirring_state_snap: StirringStateSnapshot | None = None
         if rs.stirring_state is not None and rs.phase == "STIRRING":
@@ -294,6 +369,7 @@ class Game:
                 phase=rs.stirring_state.phase,
                 trump_suit=rs.stirring_state.trump_suit,
                 current_player=rs.stirring_state.current_player,
+                declarer_player=rs.stirring_state.declarer_player,
             )
 
         # exchange_state
@@ -331,6 +407,7 @@ class Game:
             trick_history=list(rs.trick_history),
             legal_actions=legal_actions,
             awaiting_action=awaiting_action,
+            bid_legal_actions=bid_legal_actions,
             scoring=scoring_snap,
             winning_team=gs.winning_team,
             team0_level=gs.team0_level,
@@ -368,16 +445,6 @@ class Game:
         """
         return self._players[index]
 
-    async def cancel(self) -> None:
-        """Stop the dealing loop background task."""
-        self._cancelled = True
-        if self._dealing_task is not None and not self._dealing_task.done():
-            self._dealing_task.cancel()
-            try:
-                await self._dealing_task
-            except asyncio.CancelledError:
-                pass
-
     def resolve_cards(self, player_index: int, card_ids: list[str]) -> Ok[list[Card]] | Rejected:
         """Resolve card ID strings to Card objects from the player's hand.
 
@@ -395,39 +462,6 @@ class Game:
                 return Rejected(reason=f"Card {card_id} not in hand of player {player_index}")
             result.append(card_map[card_id])
         return Ok(value=result)
-
-    async def _dealing_loop(self) -> None:
-        """Background coroutine that deals cards one at a time.
-
-        Checks _cancelled at the start of each iteration.
-        Sleeps 0.75s between deals. Pushes state to all players after each deal.
-        When dealing completes, transitions to STIRRING automatically via sm.
-
-        _push_state_to_all() is resilient to individual player failures,
-        so a disconnected human player will not crash this loop.
-        Any unexpected exception indicates a programming bug and will crash
-        the task rather than silently leaving the game in a stuck state.
-        """
-        while not self._cancelled:
-            if self._round_state is None:
-                break
-            if self._round_state.phase != "DEAL_BID":
-                break
-            if self._round_state.deal_bid_state is None:
-                break
-
-            match round_sm.deal_next_card(self._round_state):
-                case Ok(value=new_rs):
-                    self._round_state = new_rs
-                case Rejected(reason=reason):
-                    logger.warning("deal_next_card rejected: %s", reason)
-                    break
-            await self._push_state_to_all()
-
-            if self._round_state.phase != "DEAL_BID":
-                break
-
-            await asyncio.sleep(self._deal_delay)
 
     def _convert_bid_action(self, player_index: int, action: BidAction) -> Ok[BidEvent] | Rejected:
         """Convert a player BidAction to an sm BidEvent."""

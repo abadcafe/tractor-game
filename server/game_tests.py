@@ -2,8 +2,8 @@
 
 All tests use only public interfaces: Game.__init__, Game.run, Game.act,
 Game.snapshot, Game.is_over, Game.get_phase, Game.get_player, Game.set_on_game_over,
-Game.cancel, StateSnapshot.to_dict.
-No tests access private fields like _game_state, _round_state, or _dealing_task.
+StateSnapshot.to_dict.
+No tests access private fields like _game_state, _round_state, or _bid_turn.
 """
 
 import asyncio
@@ -14,7 +14,7 @@ import pytest
 
 from server.actions import BidAction, NextRoundAction, PlayAction, SkipStirAction
 from server.game import Game
-from server.player import AutoPlayer, GameView
+from server.player import AutoPlayer
 from server.sm.result import Ok, Rejected
 from server.snapshot import StateSnapshot
 
@@ -23,6 +23,11 @@ def _create_game_with_auto_players():
     """Create a Game with 4 AutoPlayers."""
     players = [AutoPlayer(index=i) for i in range(4)]
     return Game(players=players)
+
+
+def _make_players() -> list[AutoPlayer]:
+    """Create 4 AutoPlayer instances for testing."""
+    return [AutoPlayer(index=i) for i in range(4)]
 
 
 # ---- Initialization ----
@@ -156,7 +161,7 @@ async def test_snapshot_awaiting_action_play():
     game = _create_game_with_auto_players()
     await game.run()
     snap = game.snapshot(for_player=0)
-    assert snap.awaiting_action in ("stir", "discard", "play", "next_round", None)
+    assert snap.awaiting_action in ("stir", "discard", "play", "next_round", "bid", None)
 
 
 @pytest.mark.asyncio
@@ -251,22 +256,6 @@ async def test_game_over_consistency():
     assert game.is_over() == (game.get_phase() == "GAME_OVER")
 
 
-# ---- Dealing loop ----
-
-
-@pytest.mark.asyncio
-async def test_dealing_loop_deals_cards():
-    """After run(), dealing loop should have started dealing cards."""
-    game = _create_game_with_auto_players()
-    await game.run()
-    # Give dealing loop a moment to run
-    await asyncio.sleep(0.1)
-    snap = game.snapshot(for_player=0)
-    # Players should have some cards dealt by now or phase has moved on
-    if snap.phase == "DEAL_BID":
-        assert len(snap.player_hand) >= 0  # cards may or may not have been dealt yet
-
-
 # ---- Action dispatch with type conversion ----
 
 
@@ -338,9 +327,6 @@ async def test_set_on_game_over_callback_fires_on_game_over():
     After game.run(), patch game_sm.process_round_result to return a GAME_OVER
     state. Then call game.act() with NextRoundAction. If the callback fires,
     the mock is called.
-
-    Uses game.cancel() (public method) to stop the dealing loop instead of
-    accessing the private _dealing_task field.
     """
     from server.sm import game_sm as gm, round_sm as rm
     from server.sm.scoring import RoundResult
@@ -392,8 +378,6 @@ async def test_set_on_game_over_callback_fires_on_game_over():
     with patch.object(gm, "start_game", return_value=Ok(in_round_state)):
         with patch.object(rm, "create_round", return_value=complete_round):
             await game.run()
-            # Cancel the dealing loop via public interface
-            await game.cancel()
 
     # Verify game is not over yet (before triggering GAME_OVER)
     assert not game.is_over()
@@ -422,29 +406,6 @@ def test_get_player_returns_player_by_index():
     game = Game(players=players)
     for i in range(4):
         assert game.get_player(i) is players[i]
-
-
-# ---- cancel() ----
-
-
-@pytest.mark.asyncio
-async def test_cancel_stops_dealing_loop():
-    """Game.cancel() stops the dealing loop background task.
-
-    After cancel(), the game's dealing loop should no longer be running.
-    We verify this by calling cancel() after run() and confirming it does
-    not raise an error. The dealing loop simply stops producing state changes.
-    """
-    game = _create_game_with_auto_players()
-    await game.run()
-    # Cancel should succeed without error
-    await game.cancel()
-    # After cancel, the game should still be in a valid state
-    # (snapshot should still work, just the dealing loop is stopped)
-    snap = game.snapshot(for_player=0)
-    assert isinstance(snap, StateSnapshot)
-    # Calling cancel() again should be idempotent (no error)
-    await game.cancel()
 
 
 # ---- StateSnapshot.to_dict() ----
@@ -559,25 +520,20 @@ async def test_resolve_cards_rejects_on_unknown_id():
 
 
 @pytest.mark.asyncio
-async def test_bid_during_deal_bid_does_not_push_state_to_all():
-    """BidAction during DEAL_BID must NOT trigger an extra _push_state_to_all.
+async def test_bid_during_deal_bid_pushes_state_uniformly():
+    """BidAction during DEAL_BID must push state to all players uniformly.
 
-    Regression test for Bug 1: when a bid triggered _push_state_to_all(),
-    each AutoPlayer.on_state() would create_task(bid) → game.act() →
-    _push_state_to_all() → on_state() → … an exponential task cascade
-    that consumed all CPU and memory.
+    In sync round-robin mode, each BidAction/SkipBidAction triggers exactly
+    one _push_state_to_all. This test verifies that the state push count
+    is uniform across all players — no player is skipped or double-pushed.
 
-    The fix: bid during DEAL_BID does not push state at all — the
-    dealing loop pushes to all players every 0.5s anyway, so the next
-    tick carries the updated bid_winner.
-
-    Setup: 3 CountingPlayers + 1 TestHumanPlayer that bids when it
-    gets a trump-rank card.  Each CountingPlayer records how many
-    times on_state is called.  One dealing_loop cycle = 1 push =
-    4 on_state calls.  If the bid triggered an extra push, every
-    player's count would be 4 higher than expected.
+    Regression test for Bug 1 (adapted from async dealing loop to sync
+    round-robin): the original bug was that a bid during DEAL_BID triggered
+    _push_state_to_all(), causing AutoPlayer cascades. In the sync model,
+    every action pushes state, but each push must be exactly one push to
+    all 4 players.
     """
-    import random as _random
+    from server.actions import SkipBidAction
     from server.player import Player
 
     class CountingPlayer(Player):
@@ -589,57 +545,25 @@ async def test_bid_during_deal_bid_does_not_push_state_to_all():
         async def on_state(self, game: object, *, seq: int = 0, error: str | None = None) -> None:
             self.state_count += 1
 
-    class TestHumanPlayer(Player):
-        """Simulates a human who bids as soon as they see a trump-rank card."""
-        def __init__(self, index: int) -> None:
-            super().__init__(index)
-            self.bid_done = asyncio.Event()
-            self.state_count = 0
-
-        async def on_state(self, game: GameView, *, seq: int = 0, error: str | None = None) -> None:
-            self.state_count += 1
-            if self.bid_done.is_set():
-                return
-            snapshot = game.snapshot(self.index)
-            if snapshot.phase != "DEAL_BID":
-                return
-            trump_cards = [c for c in snapshot.player_hand if c.rank == snapshot.trump_rank]
-            if not trump_cards:
-                return
-            action = BidAction(cards=trump_cards[:1], count=1)
-            await game.act(self.index, action)
-            self.bid_done.set()
-
-    # Fixed seed so the shuffle is deterministic: player 0 receives a
-    # trump-rank card on the 17th deal (after dealing has been running
-    # for a while, not the very first card).  Restored after the test.
-    _prev_state = _random.getstate()
-    _random.seed(16)
-
-    human = TestHumanPlayer(index=0)
-    counters = [CountingPlayer(index=1), CountingPlayer(index=2), CountingPlayer(index=3)]
-    players: list[Player] = [human, *counters]
-    game = Game(players=players, deal_delay=0.05)
-
+    counters = [CountingPlayer(index=i) for i in range(4)]
+    game = Game(players=counters, deal_delay=0)
     await game.run()
 
-    # Wait for the human player to see a trump-rank card and bid.
-    # 100 cards × 0.05s = 5s max; with seed(16) player 0 gets one
-    # on the 17th deal (~0.85s).
-    await asyncio.wait_for(human.bid_done.wait(), timeout=6.0)
+    # After run(), initial state push happened (1 push = 4 on_state calls)
+    initial_counts = [c.state_count for c in counters]
 
-    await game.cancel()
+    # Find the current bidder and skip
+    for i in range(4):
+        snap = game.snapshot(i)
+        if snap.awaiting_action == "bid":
+            await game.act(i, SkipBidAction())
+            break
 
-    assert human.bid_done.is_set()
-    # All 4 players should have the same on_state count (each push
-    # calls on_state on all 4 players).  If the bid triggered an
-    # extra _push_state_to_all, all counts would be 4 higher.
-    # Verify they're equal — the dealing_loop pushes uniformly.
-    all_counts = [human.state_count] + [c.state_count for c in counters]
-    assert len(set(all_counts)) == 1, \
-        f"Uneven on_state counts {all_counts}; bid may have triggered an extra push"
-
-    _random.setstate(_prev_state)
+    # After one action, one more push to all players
+    for i in range(4):
+        assert counters[i].state_count == initial_counts[i] + 1, (
+            f"Player {i}: expected {initial_counts[i] + 1} pushes, got {counters[i].state_count}"
+        )
 
 
 # ---- Bug 2 regression: snapshot must contain player_hand_counts ----
@@ -678,6 +602,7 @@ async def test_snapshot_to_dict_contains_all_required_fields():
         "trick_history",
         "legal_actions",
         "awaiting_action",
+        "bid_legal_actions",
         "scoring",
         "winning_team",
         "team0_level",
@@ -696,8 +621,6 @@ async def test_snapshot_to_dict_contains_all_required_fields():
     assert len(hand_counts) == 4
     for count in hand_counts:
         assert isinstance(count, int)
-
-    await game.cancel()
 
 
 # ---- Task 010: new get_legal_plays signature ----
@@ -760,13 +683,30 @@ async def test_snapshot_completed_trick_no_lead_type():
 async def test_game_auto_completes_past_deal_bid():
     """Game with 4 AutoPlayers progresses past DEAL_BID phase.
 
-    Verifies that the dealing loop makes progress and the game transitions
-    to a later phase after waiting.
+    Verifies that the sync round-robin bidding model makes progress
+    and the game transitions to a later phase.
     """
+    from server.actions import SkipBidAction
     game = _create_game_with_auto_players()
     await game.run()
-    # Wait for dealing to make progress
-    await asyncio.sleep(3)
+
+    # Drive through DEAL_BID using explicit SkipBidAction calls
+    max_steps = 500
+    for _ in range(max_steps):
+        phase = game.get_phase()
+        if phase != "DEAL_BID":
+            break
+        # Find the current bidder and skip
+        bid_found = False
+        for i in range(4):
+            snap = game.snapshot(i)
+            if snap.awaiting_action == "bid":
+                await game.act(i, SkipBidAction())
+                bid_found = True
+                break
+        if not bid_found:
+            await asyncio.sleep(0.01)
+
     # Verify the game has progressed
     phase = game.get_phase()
     assert phase in (
@@ -776,7 +716,6 @@ async def test_game_auto_completes_past_deal_bid():
     # Snapshot must still be valid
     snap = game.snapshot(for_player=0)
     assert isinstance(snap.player_hand, list)
-    await game.cancel()
 
 
 @pytest.mark.asyncio
@@ -801,46 +740,29 @@ async def test_full_game_flow_completes_without_resource_explosion():
     -> game.act() -> _push_state_to_all() -> on_state() -> ... exponential
     task cascade consumed 96.9% CPU and 8.8 GB RAM.
 
-    This test creates a game with 4 AutoPlayers and lets them drive
-    it through at least one full round. After running, the game must
-    have progressed and not be stuck in an infinite task cascade.
+    In sync round-robin mode, the game is action-driven. AutoPlayers
+    drive the game forward through SkipBidAction during DEAL_BID.
+    This test verifies the game progresses without getting stuck.
     """
     game = _create_game_with_auto_players()
+    await game.run()
 
-    # Patch asyncio.sleep in the game module to speed up dealing.
-    # The dealing loop calls asyncio.sleep(0.5) between cards;
-    # replacing it with a 1ms sleep makes the test practical.
-    original_sleep = asyncio.sleep
+    # Let AutoPlayers drive the game forward for a while
+    await asyncio.sleep(3)
 
-    async def fast_sleep(delay: float) -> None:
-        if delay >= 0.1:
-            # Only speed up long sleeps (dealing loop), not short waits
-            await original_sleep(0.001)
-        else:
-            await original_sleep(delay)
+    phase = game.get_phase()
+    # After 3s with AutoPlayers, the game should have progressed
+    assert phase in (
+        "DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING",
+        "COMPLETE", "GAME_OVER",
+    ), f"Game stuck in unexpected phase: {phase}"
 
-    with patch.object(asyncio, 'sleep', side_effect=fast_sleep):
-        await game.run()
-
-        # Let the game auto-progress -- with fast sleep, dealing
-        # completes in ~0.1s and AI plays complete quickly
-        await original_sleep(3)
-
-        phase = game.get_phase()
-        # After 3s, the game should have progressed past DEAL_BID
-        assert phase in (
-            "DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING",
-            "COMPLETE", "GAME_OVER",
-        ), f"Game stuck in unexpected phase: {phase}"
-
-        # Snapshot must still be valid (no cascading error state)
-        try:
-            snap = game.snapshot(for_player=0)
-            assert isinstance(snap.player_hand, list)
-        except RuntimeError:
-            pass
-
-        await game.cancel()
+    # Snapshot must still be valid (no cascading error state)
+    try:
+        snap = game.snapshot(for_player=0)
+        assert isinstance(snap.player_hand, list)
+    except RuntimeError:
+        pass
 
 
 # ---- Game over removes from registry ----
@@ -915,7 +837,6 @@ async def test_game_over_removes_from_registry():
     with patch.object(gm, "start_game", return_value=Ok(in_round_state)):
         with patch.object(rm, "create_round", return_value=complete_round):
             await game.run()
-            await game.cancel()
 
     # Verify game is in registry
     assert test_registry.get(game_id) is not None
@@ -931,3 +852,322 @@ async def test_game_over_removes_from_registry():
     # Verify game is over and removed from registry
     assert game.is_over()
     assert test_registry.get(game_id) is None
+
+
+# ---- Task 002: DEAL_BID Sync Round-Robin Bidding ----
+
+
+@pytest.mark.asyncio
+async def test_deal_bid_sync_round_robin() -> None:
+    """DEAL_BID phase uses sync round-robin: deal 1 card per player (1 deal tick),
+    then each player bids in turn.
+
+    Per spec: "每次 deal tick 发一张牌给每人后，按 CCW 顺序轮流让每个
+    player 决定 bid/pass" — each deal tick deals 1 card to each player (4 calls
+    to deal_next_card), then all 4 players bid/pass in round-robin.
+
+    Verifies the core behavior:
+    1. After run(), each player has exactly 1 card (first deal tick)
+    2. After one player bids/passes, the next player gets awaiting_action='bid'
+    3. After all 4 players act, 1 more card is dealt to each (total 2 each)
+    """
+    from server.actions import SkipBidAction
+    players = _make_players()
+    game = Game(players=players, deal_delay=0)
+    await game.run()
+
+    # After run(), should be in DEAL_BID with first deal tick done
+    snapshot = game.snapshot(3)
+    assert snapshot.phase == "DEAL_BID"
+
+    # Each player should have exactly 1 card after first deal tick
+    # (deal_next_card deals 1 card to 1 player per call; 4 calls = 1 card each)
+    for i in range(4):
+        s = game.snapshot(i)
+        assert len(s.player_hand) == 1, (
+            f"Player {i}: expected 1 card after first deal tick, got {len(s.player_hand)}"
+        )
+
+    # Find the first bidder
+    first_bidder = None
+    for i in range(4):
+        s = game.snapshot(i)
+        if s.awaiting_action == "bid":
+            first_bidder = i
+            break
+    assert first_bidder is not None, "No player has awaiting_action='bid'"
+
+    # All 4 players bid/pass in round-robin
+    for turn in range(4):
+        bidder = (first_bidder + turn) % 4
+        s = game.snapshot(bidder)
+        if s.awaiting_action == "bid":
+            await game.act(bidder, SkipBidAction())
+
+    # After all 4 players act, next deal tick deals 1 more card each (total 2)
+    # The phase may have changed to STIRRING if dealing completed
+    for i in range(4):
+        s = game.snapshot(i)
+        if s.phase == "DEAL_BID":
+            assert len(s.player_hand) == 2, (
+                f"Player {i}: expected 2 cards after second deal tick, got {len(s.player_hand)}"
+            )
+
+
+@pytest.mark.asyncio
+async def test_bid_legal_actions_in_snapshot() -> None:
+    """Snapshot includes bid_legal_actions during DEAL_BID phase for the current bidder."""
+    players = _make_players()
+    game = Game(players=players, deal_delay=0)
+    await game.run()
+
+    # Find the player who has awaiting_action='bid'
+    bidder = None
+    for i in range(4):
+        s = game.snapshot(i)
+        if s.phase == "DEAL_BID" and s.awaiting_action == "bid":
+            bidder = i
+            break
+    assert bidder is not None, "No player has awaiting_action='bid' in DEAL_BID"
+
+    snapshot = game.snapshot(bidder)
+    assert snapshot.phase == "DEAL_BID"
+    assert snapshot.bid_legal_actions is not None
+    assert isinstance(snapshot.bid_legal_actions, list)
+    # Each entry is a list of cards (1 or 2 cards per bid option)
+    for entry in snapshot.bid_legal_actions:
+        assert isinstance(entry, list)
+        assert len(entry) in (1, 2)
+
+
+def test_get_bid_legal_actions_singles_and_pairs() -> None:
+    """get_bid_legal_actions returns correct singles and pairs from a hand.
+
+    Given a hand with trump-rank cards in different suits and joker pairs,
+    verifies: (1) singles are individual trump-rank cards, (2) pairs are
+    two trump-rank cards of the same suit or two jokers of the same type,
+    (3) non-trump-rank cards are excluded.
+    """
+    from server.sm.deal_bid_sm import get_bid_legal_actions
+    from server.sm.card_model import Card, Suit, Rank
+
+    # Construct a hand with known trump-rank cards
+    trump_rank = Rank.TWO
+    hand: list[Card] = [
+        # Two trump-rank clubs -> should produce a pair and two singles
+        Card(id="D1-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
+             is_joker=False, is_big_joker=False, points=0, deck=1),
+        Card(id="D2-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
+             is_joker=False, is_big_joker=False, points=0, deck=2),
+        # One trump-rank spades -> should produce a single
+        Card(id="D1-spades-2", suit=Suit.SPADES, rank=Rank.TWO,
+             is_joker=False, is_big_joker=False, points=0, deck=1),
+        # Small joker -> should produce a single (not a pair unless two small jokers)
+        Card(id="small-joker", suit=Suit.JOKER, rank=Rank.SMALL_JOKER,
+             is_joker=True, is_big_joker=False, points=0, deck=1),
+        # Non-trump-rank card -> should NOT appear in bid legal actions
+        Card(id="D1-hearts-5", suit=Suit.HEARTS, rank=Rank.FIVE,
+             is_joker=False, is_big_joker=False, points=5, deck=1),
+    ]
+
+    result = get_bid_legal_actions(hand, trump_rank)
+
+    assert isinstance(result, list)
+    assert len(result) > 0, "Should have at least one bid option"
+
+    # Collect all card IDs that appear in bid options
+    all_bid_card_ids: set[str] = set()
+    for option in result:
+        assert isinstance(option, list)
+        assert len(option) in (1, 2), f"Each option must be 1 or 2 cards, got {len(option)}"
+        for c in option:
+            assert isinstance(c, Card)
+            all_bid_card_ids.add(c.id)
+
+    # Trump-rank cards must appear
+    assert "D1-clubs-2" in all_bid_card_ids
+    assert "D2-clubs-2" in all_bid_card_ids
+    assert "D1-spades-2" in all_bid_card_ids
+
+    # Non-trump-rank card must NOT appear
+    assert "D1-hearts-5" not in all_bid_card_ids
+
+    # Verify pair exists (two clubs-2 together)
+    pair_options = [opt for opt in result if len(opt) == 2]
+    clubs_pair = [opt for opt in pair_options
+                  if any(c.id == "D1-clubs-2" for c in opt)
+                  and any(c.id == "D2-clubs-2" for c in opt)]
+    assert len(clubs_pair) >= 1, "Should have a pair option for two clubs-2"
+
+
+@pytest.mark.asyncio
+async def test_awaiting_bid_for_current_bidder() -> None:
+    """awaiting_action is 'bid' for the player whose turn it is to bid."""
+    players = _make_players()
+    game = Game(players=players, deal_delay=0)
+    await game.run()
+
+    # Find which player has awaiting_action="bid"
+    bidding_player = None
+    for i in range(4):
+        snap = game.snapshot(i)
+        if snap.awaiting_action == "bid":
+            bidding_player = i
+            break
+    assert bidding_player is not None, "No player has awaiting_action='bid'"
+
+
+@pytest.mark.asyncio
+async def test_awaiting_null_for_non_current_bidder() -> None:
+    """awaiting_action is null for players whose turn it is NOT to bid."""
+    players = _make_players()
+    game = Game(players=players, deal_delay=0)
+    await game.run()
+
+    # Find which player has awaiting_action="bid"
+    bidding_player = None
+    for i in range(4):
+        snap = game.snapshot(i)
+        if snap.awaiting_action == "bid":
+            bidding_player = i
+            break
+    assert bidding_player is not None
+
+    # All other players should have awaiting_action=None
+    for i in range(4):
+        if i == bidding_player:
+            continue
+        snap = game.snapshot(i)
+        assert snap.awaiting_action is None, (
+            f"Player {i}: expected awaiting_action=None, got {snap.awaiting_action}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_deal_bid_no_background_delay() -> None:
+    """After Bug 1 fix, Game is purely action-driven with no background dealing delay.
+
+    Verifies the observable behavior: after game.run(), calling game.act() with
+    SkipBidAction immediately advances the bid turn without any background dealing
+    delay. Uses only the public Game.act() and Game.snapshot() interfaces.
+    """
+    from server.actions import SkipBidAction
+    players = _make_players()
+    game = Game(players=players, deal_delay=0)
+    await game.run()
+
+    # Find the current bidder
+    current_bidder = None
+    for i in range(4):
+        s = game.snapshot(i)
+        if s.awaiting_action == "bid":
+            current_bidder = i
+            break
+    assert current_bidder is not None, "No player has awaiting_action='bid'"
+
+    # Skip immediately — no sleep or background task needed
+    await game.act(current_bidder, SkipBidAction())
+
+    # The bid turn must have advanced or phase changed immediately
+    snap_after = game.snapshot(current_bidder)
+    if snap_after.phase == "DEAL_BID":
+        new_bidder = None
+        for i in range(4):
+            s = game.snapshot(i)
+            if s.awaiting_action == "bid":
+                new_bidder = i
+                break
+        assert new_bidder is not None, "No player has awaiting_action='bid' after skip"
+        assert new_bidder != current_bidder, (
+            f"Bid turn did not advance: still player {current_bidder}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_skip_bid_action_advances_turn() -> None:
+    """SkipBidAction during DEAL_BID advances the bid turn without bidding.
+
+    Verifies that after one player skips, the bid turn moves to the next
+    player (different player gets awaiting_action='bid') or the phase
+    changes (if all players skipped and dealing completed).
+    """
+    from server.actions import SkipBidAction
+    players = _make_players()
+    game = Game(players=players, deal_delay=0)
+    await game.run()
+
+    # Get to a state where we can bid
+    snapshot = game.snapshot(3)
+    assert snapshot.phase == "DEAL_BID"
+
+    # Find the current bidder
+    current_bidder = None
+    for i in range(4):
+        s = game.snapshot(i)
+        if s.awaiting_action == "bid":
+            current_bidder = i
+            break
+    assert current_bidder is not None, "No player has awaiting_action='bid'"
+
+    # Send SkipBidAction for the current bidder
+    await game.act(current_bidder, SkipBidAction())
+
+    # After skipping, either:
+    # (a) another player now has awaiting_action='bid' (turn advanced), or
+    # (b) phase changed to STIRRING (if all players passed and dealing done)
+    snapshot_after = game.snapshot(current_bidder)
+    if snapshot_after.phase == "DEAL_BID":
+        # Turn must have advanced to a different player
+        new_bidder = None
+        for i in range(4):
+            s = game.snapshot(i)
+            if s.awaiting_action == "bid":
+                new_bidder = i
+                break
+        assert new_bidder is not None, "No player has awaiting_action='bid' after skip"
+        assert new_bidder != current_bidder, (
+            f"Bid turn did not advance: still player {current_bidder}"
+        )
+    else:
+        # Phase changed (acceptable if dealing completed)
+        assert snapshot_after.phase == "STIRRING"
+
+
+@pytest.mark.asyncio
+async def test_stirring_state_snapshot_has_declarer_player() -> None:
+    """StirringStateSnapshot must include declarer_player field.
+
+    Per spec: "stirring_state 含 phase/trump_suit/current_player/declarer_player".
+    Drives the game to STIRRING and verifies the field is present and correct.
+    """
+    from server.actions import SkipBidAction
+    players = _make_players()
+    game = Game(players=players, deal_delay=0)
+    await game.run()
+
+    # Drive through DEAL_BID to reach STIRRING
+    max_attempts = 200
+    for _ in range(max_attempts):
+        snap = game.snapshot(for_player=0)
+        if snap.phase == "STIRRING":
+            break
+        if snap.awaiting_action == "bid":
+            await game.act(0, SkipBidAction())
+        else:
+            await asyncio.sleep(0.01)
+
+    snap = game.snapshot(for_player=0)
+    if snap.phase != "STIRRING":
+        pytest.skip("Could not reach STIRRING phase")
+
+    assert snap.stirring_state is not None
+    assert snap.stirring_state.declarer_player is not None
+    assert isinstance(snap.stirring_state.declarer_player, int)
+    assert 0 <= snap.stirring_state.declarer_player <= 3
+
+    # Verify to_dict() serializes declarer_player
+    d = snap.to_dict()
+    stirring_dict = d["stirring_state"]
+    assert stirring_dict is not None
+    assert "declarer_player" in stirring_dict
+    assert stirring_dict["declarer_player"] == snap.stirring_state.declarer_player

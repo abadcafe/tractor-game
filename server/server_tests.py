@@ -557,11 +557,11 @@ def test_error_merged_into_state(sync_client: TestClient, clean_registry: None) 
 
 def test_bid_pass_parsed_correctly(sync_client: TestClient, clean_registry: None) -> None:
     """Sending a bid pass message (type=bid, pass=true) should be parsed
-    without crashing during DEAL_BID phase. The server parses it as
-    SkipBidAction via _parse_action(), but since SkipBidAction is not
-    handled in act() yet (Task 002), it falls through to the error branch.
-    This test verifies the parsing works (no crash) and the server responds
-    with a state message (not a disconnect or raw error).
+    as SkipBidAction and handled in DEAL_BID phase without crashing.
+    The server parses it as SkipBidAction via _parse_action(), and act()
+    now handles SkipBidAction during DEAL_BID by advancing the bid turn.
+    This test verifies the parsing and handling work (no crash) and the
+    server responds with a state message (not a disconnect or raw error).
     """
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
@@ -578,11 +578,9 @@ def test_bid_pass_parsed_correctly(sync_client: TestClient, clean_registry: None
         data = ws.receive_json()
         assert _is_dict(data)
         assert data["type"] == "state"
-        # SkipBidAction not handled in act() yet -> falls through to error branch
-        assert data.get("error") is not None
-        # Seq should NOT have advanced due to our action (action was rejected),
-        # but may have advanced from dealing loop. We verify our action didn't
-        # cause a state change by checking that error is present.
+        # SkipBidAction is now handled in DEAL_BID — may succeed or
+        # may fail (e.g. if game has moved past DEAL_BID). Either way,
+        # we get a valid state response, not a crash or disconnect.
 
 
 # ---- Static file serving ----

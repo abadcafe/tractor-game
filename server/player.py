@@ -114,7 +114,7 @@ class AutoPlayer(Player):
 
         snapshot = game.snapshot(self.index)
 
-        if snapshot.phase == "DEAL_BID":
+        if snapshot.phase == "DEAL_BID" and snapshot.awaiting_action == "bid":
             await self._handle_deal_bid(snapshot, game)
         elif snapshot.phase == "STIRRING" and snapshot.awaiting_action == "stir":
             await self._handle_stir(snapshot, game)
@@ -131,12 +131,15 @@ class AutoPlayer(Player):
         Only bids if: (a) no bid_winner yet, or (b) we can beat the
         current winner's priority.  Prefers pairs over singles.
         A 50% random factor prevents always-bidding determinism.
+        In sync round-robin mode, must send SkipBidAction when choosing
+        not to bid so the turn advances.
         """
         hand = snapshot.player_hand
         trump_rank = snapshot.trump_rank
 
         # 50% chance to even consider bidding (prevents deterministic always-bid)
         if random.random() >= 0.5:
+            asyncio.create_task(game.act(self.index, SkipBidAction()))
             return
 
         # Group trump-rank cards by suit
@@ -176,6 +179,7 @@ class AutoPlayer(Player):
                     break
 
         if not best_cards:
+            asyncio.create_task(game.act(self.index, SkipBidAction()))
             return
 
         # Check if existing bid_winner has higher or equal priority
@@ -186,6 +190,7 @@ class AutoPlayer(Player):
         if bid_winner is not None:
             winner_priority = bid_value(bid_winner.cards, trump_rank_enum)
             if best_priority <= winner_priority:
+                asyncio.create_task(game.act(self.index, SkipBidAction()))
                 return  # can't beat current winner
 
         action = BidAction(cards=best_cards, count=len(best_cards))

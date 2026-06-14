@@ -92,7 +92,6 @@ async def delete_game(game_id: str):
         if human.is_connected():
             await human.on_state(game, seq=game.current_seq)
             await human.close_ws()
-        await game.cancel()
     registry.delete(game_id)
     return {"ok": True}
 

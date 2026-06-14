@@ -38,6 +38,7 @@ def _make_snapshot(
     awaiting_action: str | None = "play",
     current_player: int = 0,
     legal_actions: list[list[Card]] | None = None,
+    bid_legal_actions: list[list[Card]] | None = None,
     trump_rank: Rank = Rank.TWO,
     trump_suit: Suit | None = None,
     player_hand: list[Card] | None = None,
@@ -64,6 +65,7 @@ def _make_snapshot(
         awaiting_action=awaiting_action,
         current_player=current_player,
         legal_actions=legal_actions if legal_actions is not None else [],
+        bid_legal_actions=bid_legal_actions,
         trump_rank=trump_rank,
         trump_suit=trump_suit,
         player_hand=player_hand if player_hand is not None else [],
@@ -301,11 +303,12 @@ async def test_auto_player_stir_pass():
 
 @pytest.mark.asyncio
 async def test_auto_player_bid_during_dealing():
-    """AutoPlayer can bid during DEAL_BID phase if hand has trump rank cards."""
+    """AutoPlayer can bid during DEAL_BID phase if hand has trump rank cards
+    and awaiting_action is 'bid'."""
     trump_card = _card(Suit.HEARTS, Rank.TWO, 1)
     snap = _make_snapshot(
         phase="DEAL_BID",
-        awaiting_action=None,
+        awaiting_action="bid",
         current_player=0,
         player_hand=[trump_card],
         trump_rank=Rank.TWO,
@@ -314,16 +317,16 @@ async def test_auto_player_bid_during_dealing():
     player = AutoPlayer(index=0)
     await player.on_state(game)
     await asyncio.sleep(0.05)
-    # May or may not bid (random), but should not error
+    # May bid or skip (random), but should not error
 
 
 @pytest.mark.asyncio
 async def test_auto_player_ignores_dealing_if_no_trump_rank():
-    """AutoPlayer does not bid during DEAL_BID if hand has no trump rank cards."""
+    """AutoPlayer sends SkipBidAction during DEAL_BID if hand has no trump rank cards."""
     non_trump = _card(Suit.SPADES, Rank.THREE, 1)
     snap = _make_snapshot(
         phase="DEAL_BID",
-        awaiting_action=None,
+        awaiting_action="bid",
         current_player=0,
         player_hand=[non_trump],
         trump_rank=Rank.TWO,
@@ -332,7 +335,11 @@ async def test_auto_player_ignores_dealing_if_no_trump_rank():
     player = AutoPlayer(index=0)
     await player.on_state(game)
     await asyncio.sleep(0.05)
-    game.act.assert_not_awaited()
+    # Should send SkipBidAction (not no action)
+    game.act.assert_awaited()
+    from server.actions import SkipBidAction
+    call_args = game.act.call_args
+    assert isinstance(call_args[0][1], SkipBidAction)
 
 
 # ---- HumanPlayer ----
