@@ -107,6 +107,11 @@ class AutoPlayer(Player):
         self._action_count = 0
 
     async def on_state(self, game: GameView, *, seq: int = 0, error: str | None = None) -> None:
+        # When an error push arrives, the state has NOT changed — skip reacting
+        # to avoid action retry cascades (especially during DEAL_BID).
+        if error is not None:
+            return
+
         snapshot = game.snapshot(self.index)
 
         if snapshot.phase == "DEAL_BID":
