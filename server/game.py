@@ -1,7 +1,7 @@
 """Game aggregate root for the Tractor game.
 
 Wraps sm state machines, manages 4 Player instances, drives the sync
-round-robin bidding, and provides act(), run(), snapshot(),
+round-robin bidding, and provides act(), snapshot(),
 is_over(), get_phase(), set_on_game_over(), get_player(), resolve_cards(),
 and current_seq interfaces.
 
@@ -98,16 +98,6 @@ class Game:
                 await self._push_state_to_all()
             case Rejected(reason=reason):
                 logger.warning("deal_next_card rejected: %s", reason)
-
-    async def run(self) -> None:
-        """Start the game directly, bypassing WAITING confirmation.
-
-        Convenience method for testing: transitions to IN_ROUND, creates
-        the first round, deals, and pushes state.
-
-        Raises RuntimeError if called more than once.
-        """
-        await self._run_and_push()
 
     async def _run_and_push(self) -> None:
         """Start the game after WAITING confirmation: create first round, deal, push.
