@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { HUMAN_PLAYER_INDEX, SEAT_MAP, WS_PATH, API_BASE } from "../config.ts";
+import { SEAT_MAP, WS_PATH, API_BASE } from "../config.ts";
 
 Deno.test("test_ws_path_format", () => {
   assertEquals(WS_PATH("abc123"), "/game/abc123");
@@ -7,10 +7,6 @@ Deno.test("test_ws_path_format", () => {
 
 Deno.test("test_ws_path_different_id", () => {
   assertEquals(WS_PATH("xyz789"), "/game/xyz789");
-});
-
-Deno.test("test_human_player_index", () => {
-  assertEquals(HUMAN_PLAYER_INDEX, 3);
 });
 
 Deno.test("test_seat_map_has_four_entries", () => {

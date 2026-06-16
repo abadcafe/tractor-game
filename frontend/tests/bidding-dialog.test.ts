@@ -22,7 +22,6 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     trump_suit: null,
     declarer_team: null,
     declarer_player: null,
-    current_player: 0,
     defender_points: 0,
     legal_actions: [],
     trick: null,
@@ -53,7 +52,6 @@ Deno.test("test_renderBiddingDialog_deal_bid_phase", () => {
 Deno.test("test_renderBiddingDialog_stirring_human", () => {
   const snap = makeSnapshot({
     phase: "STIRRING",
-    current_player: 3,
     stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3 },
   });
   const el = renderBiddingDialog(snap, "stir");
@@ -65,7 +63,6 @@ Deno.test("test_renderBiddingDialog_stirring_human", () => {
 Deno.test("test_renderBiddingDialog_stirring_not_human", () => {
   const snap = makeSnapshot({
     phase: "STIRRING",
-    current_player: 1,
     stirring_state: { phase: "WAITING", trump_suit: null, current_player: 1 },
   });
   // When interactionMode is null (not human's turn), no action buttons
@@ -94,7 +91,6 @@ Deno.test("test_renderBiddingDialog_bid_events_displayed", () => {
 Deno.test("test_renderBiddingDialog_pass_callback", () => {
   const snap = makeSnapshot({
     phase: "STIRRING",
-    current_player: 3,
     stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3 },
   });
   let passCalled = false;
@@ -125,7 +121,6 @@ Deno.test("test_renderBiddingDialog_bid_callback", () => {
 Deno.test("test_renderBiddingDialog_stir_callback", () => {
   const snap = makeSnapshot({
     phase: "STIRRING",
-    current_player: 3,
     stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3 },
     player_hand: [
       { id: "D1-spades-2", suit: "spades", rank: "2" },

@@ -3,6 +3,10 @@
 Defines the Player ABC, AutoPlayer (random AI), HumanPlayer (WebSocket-driven),
 and the GameView Protocol that describes the Game interface players rely on.
 
+Both Player subclasses are self-contained:
+- AutoPlayer: receives state push → internal decision → game.act(self.index, action)
+- HumanPlayer: receives WS message → internal validation + parsing → game.act(self.index, action)
+
 Game.act() dispatches player action types (from server.actions) to the
 appropriate sm state machine operations.
 """
@@ -13,7 +17,7 @@ import asyncio
 import logging
 import random
 from abc import ABC, abstractmethod
-from typing import Protocol
+from typing import Protocol, TypeGuard
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -28,9 +32,13 @@ from server.actions import (
 )
 from server.sm.card_model import Card, Suit
 from server.sm.comparator import bid_value
+from server.sm.result import Ok, Rejected, StateResult
 from server.snapshot import StateSnapshot
 
 logger = logging.getLogger(__name__)
+
+# Type alias for the action union used in GameView.act()
+PlayerAction = BidAction | SkipBidAction | StirAction | SkipStirAction | DiscardAction | PlayAction | NextRoundAction
 
 
 # ---- GameView Protocol (DIP: defined at the consumer, not the implementer) ----
@@ -40,8 +48,10 @@ class GameView(Protocol):
     """Protocol describing the Game interface that Player subclasses rely on.
 
     Players call game.snapshot(index) to read state and
-    game.act(index, action) to submit actions. No other
-    Game methods are used from on_state() or its helpers.
+    game.act(index, action) to submit actions.
+
+    HumanPlayer additionally uses resolve_cards(), current_seq, and is_over()
+    for its WS protocol handling (seq validation, action parsing, game-over check).
 
     Game structurally satisfies this Protocol; no explicit
     inheritance declaration is needed.
@@ -51,8 +61,12 @@ class GameView(Protocol):
     async def act(
         self,
         player_index: int,
-        action: BidAction | SkipBidAction | StirAction | SkipStirAction | DiscardAction | PlayAction | NextRoundAction,
+        action: PlayerAction,
     ) -> None: ...
+    def resolve_cards(self, player_index: int, card_ids: list[str]) -> Ok[list[Card]] | Rejected: ...
+    @property
+    def current_seq(self) -> int: ...
+    def is_over(self) -> bool: ...
 
 
 # ---- Player ABC ----
@@ -80,15 +94,8 @@ class Player(ABC):
                   view of the state, and game.act(self.index, action)
                   to submit an action.
             seq: State sequence number for this push.
-            error: Error message to include (only for the acting player).
+            error: Error message (unicast to acting player only).
         """
-
-    async def send_error(self, message: str) -> None:
-        """Send an error message to this player.
-
-        AutoPlayer ignores errors; HumanPlayer forwards them via WebSocket.
-        """
-        pass
 
 
 # ---- AutoPlayer ----
@@ -99,7 +106,6 @@ class AutoPlayer(Player):
 
     Uses create_task for actions to avoid blocking the on_state call chain,
     which prevents race conditions when _push_state_to_all iterates over players.
-    A small delay is added before each action to prevent rapid cascading.
     """
 
     def __init__(self, index: int) -> None:
@@ -107,11 +113,8 @@ class AutoPlayer(Player):
         self._action_count = 0
 
     async def on_state(self, game: GameView, *, seq: int = 0, error: str | None = None) -> None:
-        # When an error push arrives, the state has NOT changed — skip reacting
-        # to avoid action retry cascades (especially during DEAL_BID).
-        if error is not None:
-            return
-
+        # Error pushes are now unicast to the acting player only,
+        # so AutoPlayer never receives them. No guard needed.
         snapshot = game.snapshot(self.index)
 
         if snapshot.phase == "DEAL_BID" and snapshot.awaiting_action == "bid":
@@ -122,7 +125,7 @@ class AutoPlayer(Player):
             await self._handle_discard(snapshot, game)
         elif snapshot.phase == "PLAYING" and snapshot.awaiting_action == "play":
             await self._handle_play(snapshot, game)
-        elif snapshot.phase == "COMPLETE" and snapshot.awaiting_action == "next_round":
+        elif snapshot.phase in ("WAITING", "COMPLETE") and snapshot.awaiting_action == "next_round":
             await self._handle_next_round(snapshot, game)
 
     async def _handle_deal_bid(self, snapshot: StateSnapshot, game: GameView) -> None:
@@ -133,8 +136,18 @@ class AutoPlayer(Player):
         A 50% random factor prevents always-bidding determinism.
         In sync round-robin mode, must send SkipBidAction when choosing
         not to bid so the turn advances.
+
+        In subsequent rounds (declarer_team is set), only players on
+        the declarer team may bid — others must skip.
         """
         from server.sm.card_model import Rank
+
+        # In subsequent rounds, non-declarer-team players cannot bid
+        if snapshot.declarer_team is not None:
+            from server.sm.constants import get_team_index
+            if get_team_index(self.index) != snapshot.declarer_team:
+                asyncio.create_task(game.act(self.index, SkipBidAction()))
+                return
         hand = snapshot.player_hand
         trump_rank = snapshot.trump_rank
 
@@ -197,8 +210,6 @@ class AutoPlayer(Player):
 
     async def _handle_stir(self, snapshot: StateSnapshot, game: GameView) -> None:
         """Act during STIRRING phase."""
-        if snapshot.current_player != self.index:
-            return
         hand = snapshot.player_hand
         trump_rank = snapshot.trump_rank
         current_trump_suit = snapshot.trump_suit
@@ -226,8 +237,6 @@ class AutoPlayer(Player):
 
     async def _handle_discard(self, snapshot: StateSnapshot, game: GameView) -> None:
         """Randomly discard cards during EXCHANGE phase."""
-        if snapshot.current_player != self.index:
-            return
         hand = snapshot.player_hand
         exc = snapshot.exchange_state
         count = exc.count if exc is not None else 8
@@ -242,8 +251,6 @@ class AutoPlayer(Player):
 
     async def _handle_play(self, snapshot: StateSnapshot, game: GameView) -> None:
         """Pick a random legal play."""
-        if snapshot.current_player != self.index:
-            return
         legal = snapshot.legal_actions
         if not legal:
             logger.warning("AutoPlayer %d: no legal actions in PLAYING phase!", self.index)
@@ -266,19 +273,24 @@ class AutoPlayer(Player):
 
 
 class HumanPlayer(Player):
-    """Human player that communicates via WebSocket."""
+    """Human player that manages its own WebSocket lifecycle.
 
-    def __init__(self, index: int, ws: WebSocket | None = None) -> None:
+    Self-contained: receives WS messages, validates seq, parses actions,
+    and calls game.act(self.index, action). Server's WS endpoint just
+    delegates to handle_connection(websocket, game).
+    """
+
+    def __init__(self, index: int) -> None:
         super().__init__(index)
-        self._ws = ws
+        self._ws: WebSocket | None = None
 
     async def on_state(self, game: GameView, *, seq: int = 0, error: str | None = None) -> None:
         """Push state to the human player via WebSocket.
 
-        Catches any exception from send_json (e.g. WebSocket disconnected,
-        websockets library AssertionError) to prevent a broken connection
-        from crashing the entire _push_state_to_all() chain. The human
-        player will receive fresh state when they reconnect.
+        Catches any exception from send_json (e.g. WebSocket disconnected)
+        to prevent a broken connection from crashing the entire
+        _push_state_to_all() chain. The human player will receive fresh
+        state when they reconnect.
         """
         if self._ws is None:
             return
@@ -296,11 +308,175 @@ class HumanPlayer(Player):
         except (WebSocketDisconnect, OSError):
             logger.debug("Failed to push state to human player %d (WS likely disconnected)", self.index, exc_info=True)
 
-    def set_ws(self, ws: WebSocket | None) -> None:
-        """Replace the WebSocket reference."""
-        self._ws = ws
+    async def handle_connection(self, websocket: WebSocket, game: GameView) -> None:
+        """Take over the full WS connection lifecycle.
 
-    def clear_ws_if_current(self, ws: WebSocket) -> None:
+        Handles: connection takeover, game-over fast path, accept,
+        receive loop (seq validation + action parsing + game.act),
+        and cleanup.
+
+        Args:
+            websocket: The incoming WebSocket connection.
+            game: The GameView for the game this player belongs to.
+        """
+        # Connection takeover: close old connection if present
+        if self._ws is not None:
+            old_ws = self._ws
+            self._ws = None
+            try:
+                await old_ws.close()
+            except (WebSocketDisconnect, OSError):
+                logger.debug("Failed to close old WS for player %d during takeover", self.index, exc_info=True)
+
+        # Game-over fast path: accept, send final state, close
+        if game.is_over():
+            await websocket.accept()
+            snapshot = game.snapshot(self.index)
+            try:
+                await websocket.send_json({
+                    "type": "state",
+                    "seq": game.current_seq,
+                    "awaiting": snapshot.awaiting_action,
+                    "state": snapshot.to_dict(),
+                })
+            except (WebSocketDisconnect, OSError):
+                logger.debug("Failed to send final state in game-over branch", exc_info=True)
+                return
+            try:
+                await websocket.close()
+            except (WebSocketDisconnect, OSError):
+                logger.debug("Failed to close WS in game-over branch", exc_info=True)
+            return
+
+        # Normal path: accept, bind, receive loop
+        await websocket.accept()
+        self._ws = websocket
+
+        try:
+            while True:
+                try:
+                    raw = await websocket.receive_json()
+                except (WebSocketDisconnect, OSError):
+                    logger.debug("WS receive loop ended (client disconnected)")
+                    break
+
+                # receive_json() returns Any. Use _is_str_dict TypeGuard to narrow
+                # to dict[str, object] instead of dict[Unknown, Unknown].
+                if not _is_str_dict(raw):
+                    continue
+                t = raw.get("type")
+                action_type: str | None = t if isinstance(t, str) else None
+                s = raw.get("seq", 0)
+                client_seq: int = s if isinstance(s, int) else 0
+                pass_val_raw = raw.get("pass", False)
+                is_pass: bool = isinstance(pass_val_raw, bool) and pass_val_raw
+                cards_raw = raw.get("cards")
+                card_ids_result = _extract_card_ids(cards_raw)
+
+                # Seq validation: if seq doesn't match current state, push
+                # current state with error (unicast). Seq unchanged.
+                if client_seq != game.current_seq:
+                    snapshot = game.snapshot(self.index)
+                    try:
+                        await websocket.send_json({
+                            "type": "state",
+                            "seq": game.current_seq,
+                            "awaiting": snapshot.awaiting_action,
+                            "state": snapshot.to_dict(),
+                            "error": f"seq mismatch: expected {game.current_seq}, got {client_seq}",
+                        })
+                    except (WebSocketDisconnect, OSError):
+                        break
+                    continue
+
+                # Action parsing
+                parse_result = self._parse_action(game, self.index, action_type, is_pass, card_ids_result)
+                if isinstance(parse_result, Rejected):
+                    snapshot = game.snapshot(self.index)
+                    try:
+                        await websocket.send_json({
+                            "type": "state",
+                            "seq": game.current_seq,
+                            "awaiting": snapshot.awaiting_action,
+                            "state": snapshot.to_dict(),
+                            "error": parse_result.reason,
+                        })
+                    except (WebSocketDisconnect, OSError):
+                        break
+                    continue
+
+                # Submit action to game
+                await game.act(self.index, parse_result.value)
+
+                # After game.act, check if game is over
+                if game.is_over():
+                    # The GAME_OVER state push comes from on_state().
+                    # Just exit the loop; on_state() already sent it.
+                    break
+
+        finally:
+            self._clear_ws_if_current(websocket)
+
+    @staticmethod
+    def _parse_action(
+        game: GameView,
+        player_index: int,
+        action_type: str | None,
+        is_pass: bool,
+        card_ids_result: StateResult[list[str]],
+    ) -> StateResult[PlayerAction]:
+        """Parse a WS action into a PlayerAction.
+
+        Fields are pre-extracted from the raw WS message by handle_connection.
+        Uses game.resolve_cards() to convert card IDs to Card objects.
+        Returns Rejected for unknown action types or card resolution failures.
+        """
+        if action_type is None:
+            return Rejected(reason="missing action type")
+
+        if action_type == "bid":
+            if is_pass:
+                return Ok(value=SkipBidAction())
+            if isinstance(card_ids_result, Rejected):
+                return card_ids_result
+            resolved_result = game.resolve_cards(player_index, card_ids_result.value)
+            if isinstance(resolved_result, Rejected):
+                return resolved_result
+            return Ok(value=BidAction(cards=resolved_result.value, count=len(resolved_result.value)))
+
+        elif action_type == "stir":
+            if is_pass:
+                return Ok(value=SkipStirAction())
+            if isinstance(card_ids_result, Rejected):
+                return card_ids_result
+            resolved_result = game.resolve_cards(player_index, card_ids_result.value)
+            if isinstance(resolved_result, Rejected):
+                return resolved_result
+            return Ok(value=StirAction(cards=resolved_result.value))
+
+        elif action_type == "discard":
+            if isinstance(card_ids_result, Rejected):
+                return card_ids_result
+            resolved_result = game.resolve_cards(player_index, card_ids_result.value)
+            if isinstance(resolved_result, Rejected):
+                return resolved_result
+            return Ok(value=DiscardAction(cards=resolved_result.value))
+
+        elif action_type == "play":
+            if isinstance(card_ids_result, Rejected):
+                return card_ids_result
+            resolved_result = game.resolve_cards(player_index, card_ids_result.value)
+            if isinstance(resolved_result, Rejected):
+                return resolved_result
+            return Ok(value=PlayAction(cards=resolved_result.value))
+
+        elif action_type == "next_round":
+            return Ok(value=NextRoundAction())
+
+        else:
+            return Rejected(reason=f"unknown action type: {action_type}")
+
+    def _clear_ws_if_current(self, ws: WebSocket) -> None:
         """Clear the WebSocket reference only if it still points to the given instance.
 
         Used in finally blocks to avoid clearing a connection that has already
@@ -313,15 +489,12 @@ class HumanPlayer(Player):
         """Return True if this player has an active WebSocket connection."""
         return self._ws is not None
 
-    async def send_error(self, message: str) -> None:
-        """No-op: errors are now merged into state messages.
-
-        Kept for GameView Protocol compatibility.
-        """
-        pass
-
     async def close_ws(self) -> None:
-        """Close the WebSocket connection if active, then clear the reference."""
+        """Close the WebSocket connection if active, then clear the reference.
+
+        Sends a final state push before closing so the client receives
+        the last known state (e.g., when the game is being deleted).
+        """
         if self._ws is not None:
             ws = self._ws
             self._ws = None
@@ -329,3 +502,50 @@ class HumanPlayer(Player):
                 await ws.close()
             except (WebSocketDisconnect, OSError):
                 logger.debug("Failed to close WS for player %d (already disconnected)", self.index, exc_info=True)
+
+
+# ---- WS message parsing helpers ----
+
+
+def _is_str_dict(val: object) -> TypeGuard[dict[str, object]]:
+    """Narrow object to dict[str, object] — string keys, unknown values.
+
+    isinstance(val, dict) narrows to dict[Unknown, Unknown] which triggers
+    reportUnknownVariableType in strict mode. TypeGuard narrows to
+    dict[str, object] instead, which is properly typed.
+    """
+    return isinstance(val, dict)
+
+
+def _is_obj_list(val: object) -> TypeGuard[list[object]]:
+    """Narrow object to list[object] — properly typed element type.
+
+    isinstance(val, list) narrows to list[Unknown] which triggers
+    reportUnknownVariableType in strict mode. TypeGuard narrows to
+    list[object] instead, which is properly typed.
+    """
+    return isinstance(val, list)
+
+
+def _extract_card_ids(cards_val: object) -> StateResult[list[str]]:
+    """Extract card ID strings from the 'cards' field of a WS message.
+
+    cards_val comes from raw.get("cards") which may be a list of strings
+    or dicts with an "id" key. Returns Rejected if any card format is
+    invalid. Returns Ok([]) if cards_val is not a list.
+    """
+    if not _is_obj_list(cards_val):
+        return Ok(value=[])
+    ids: list[str] = []
+    for item in cards_val:
+        if isinstance(item, str):
+            ids.append(item)
+        elif _is_str_dict(item):
+            id_val = item.get("id")
+            if isinstance(id_val, str):
+                ids.append(id_val)
+            else:
+                return Rejected(reason=f"Invalid card format: missing 'id' in {item}")
+        else:
+            return Rejected(reason=f"Invalid card format: {item}")
+    return Ok(value=ids)

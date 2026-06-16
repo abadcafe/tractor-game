@@ -20,7 +20,6 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     trump_suit: "hearts",
     declarer_team: 0,
     declarer_player: 3,
-    current_player: 3,
     defender_points: 15,
     legal_actions: [],
     trick: null,
@@ -56,7 +55,10 @@ Deno.test("test_renderGameTable_declarer_marker", () => {
 });
 
 Deno.test("test_renderGameTable_current_player_highlight", () => {
-  const snap = makeSnapshot({ current_player: 1 });
+  const snap = makeSnapshot({
+    awaiting_action: "play",
+    trick: { lead_player: 0, slots: [], current_player: 1 },
+  });
   const el = renderGameTable(snap);
   const current = el.querySelectorAll(".player-area.current");
   assertEquals(current.length, 1);

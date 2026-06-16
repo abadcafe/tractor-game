@@ -8,7 +8,8 @@
 
 - **所有 Python 代码**（包括 `*_tests.py`）必须有完整的类型注解
 - 禁止 `Any`、禁止裸 `list` / `dict` / `tuple`（必须写泛型参数如 `list[str]`）
-- 禁止使用 `# pyright: ignore`，`# type: ignore`，和 `cast` 掩盖错误
+- 禁止使用 `# pyright: ignore` 和 `# type: ignore` 掩盖错误
+- 优先使用 `Pydantic` 而不是 `cast`
 - 必须通过 `pyright --pythonversion 3.14` **strict 模式**，**0 errors, 0 warnings**
 - Python 版本：3.14，必须使用 `type` 类型别名语法和泛型函数语法
 

@@ -19,13 +19,11 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     trump_suit: null,
     declarer_team: null,
     declarer_player: null,
-    current_player: 3,
     defender_points: 0,
     legal_actions: [],
     trick: {
       lead_player: 0,
       slots: [{ player: 0, cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }] }],
-      current_player: 3,
     },
     trick_history: [],
     bid_events: [],
@@ -73,7 +71,6 @@ Deno.test("test_renderTrickView_multiple_slots", () => {
         { player: 1, cards: [{ id: "D2-hearts-9", suit: "hearts", rank: "9" }] },
         { player: 2, cards: [{ id: "D3-spades-J", suit: "spades", rank: "J" }] },
       ],
-      current_player: 3,
     },
   });
   const el = renderTrickView(snap);
@@ -92,7 +89,6 @@ Deno.test("test_renderTrickView_slot_with_empty_cards", () => {
       slots: [
         { player: 0, cards: [] },
       ],
-      current_player: 3,
     },
   });
   const el = renderTrickView(snap);
@@ -112,7 +108,6 @@ Deno.test("test_renderTrickView_current_player_highlight", () => {
         { player: 0, cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }] },
         { player: 1, cards: [{ id: "D2-hearts-9", suit: "hearts", rank: "9" }] },
       ],
-      current_player: 1,
     },
   });
   const el = renderTrickView(snap);

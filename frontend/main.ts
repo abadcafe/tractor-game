@@ -7,7 +7,6 @@ import { WsClient } from "./net/ws-client.ts";
 import { GameLoop } from "./engine/game-loop.ts";
 import { render } from "./ui/renderer.ts";
 import { showErrorToast } from "./ui/error-toast.ts";
-import { HUMAN_PLAYER_INDEX } from "./config.ts";
 import {
   handlePlayAction,
   handleDiscardAction,
@@ -137,7 +136,7 @@ function main() {
       precomputeAndRender(snapshot);
     },
     container,
-    HUMAN_PLAYER_INDEX,
+    undefined,  // humanPlayerIndex no longer needed
     () => wsClient.isReconnecting,
     (message) => showErrorToast(message, container),
   );

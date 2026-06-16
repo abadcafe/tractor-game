@@ -17,13 +17,11 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     trump_suit: "hearts",
     declarer_team: 0,
     declarer_player: 3,
-    current_player: 3,
     defender_points: 15,
     legal_actions: [[{ id: "D1-hearts-5", suit: "hearts", rank: "5" }]],
     trick: {
       lead_player: 0,
       slots: [{ player: 0, cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }] }],
-      current_player: 3,
     },
     trick_history: [],
     bid_events: [],
@@ -90,7 +88,7 @@ Deno.test("test_render_stirring_phase", () => {
 Deno.test("test_render_complete_phase", () => {
   const container = freshContainer();
   const snap = makeSnapshot({
-    phase: "COMPLETE",
+    phase: "WAITING",
     awaiting_action: "next_round",
     trick: null,
     scoring: {
@@ -220,7 +218,7 @@ Deno.test("test_render_bidding_dialog_receives_callbacks", () => {
 Deno.test("test_render_scoring_overlay_receives_callback", () => {
   const container = freshContainer();
   const snap = makeSnapshot({
-    phase: "COMPLETE",
+    phase: "WAITING",
     awaiting_action: "next_round",
     trick: null,
     scoring: {

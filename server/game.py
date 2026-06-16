@@ -1,8 +1,19 @@
 """Game aggregate root for the Tractor game.
 
 Wraps sm state machines, manages 4 Player instances, drives the sync
-round-robin bidding, and provides act(), run(), snapshot(), is_over(),
-get_phase(), set_on_game_over(), get_player(), and resolve_cards() interfaces.
+round-robin bidding, and provides act(), push_initial_state(), snapshot(),
+is_over(), get_phase(), set_on_game_over(), get_player(), resolve_cards(),
+and current_seq interfaces.
+
+Game lifecycle: WAITING (confirm to start) → DEAL_BID → STIRRING →
+EXCHANGE → PLAYING → WAITING (confirm for next round) → ... → GAME_OVER.
+
+Push model: every state change triggers exactly one broadcast push with
+seq increment. This includes each card dealt during DEAL_BID, each
+bid/skip, each stir pass, each play, and each WAITING confirmation.
+Error pushes are unicast to the acting player only (seq unchanged).
+process_round_result is called immediately when a round ends (PLAYING →
+COMPLETE) so players see scoring + level changes before confirming.
 """
 
 from __future__ import annotations
@@ -54,41 +65,63 @@ class Game:
         self._next_round_confirmed: set[int] = set()
         self._seq: int = 0
         self._bid_turn: int = 0
-        self._bid_tick_progress: int = 0
 
     @property
     def current_seq(self) -> int:
-        """Current state sequence number (for server.py seq validation)."""
+        """Current state sequence number."""
         return self._seq
 
-    def _execute_deal_tick(self, rs: round_sm.RoundState) -> round_sm.RoundState:
-        """Execute one deal tick: deal 1 card to each of the 4 players.
+    async def _deal_one_and_push(self) -> None:
+        """Deal one card and push to all players.
 
-        Calls round_sm.deal_next_card up to 4 times, checking after each
-        call whether the phase has changed away from DEAL_BID. Returns
-        the updated RoundState.
+        The player who received the card sees awaiting_action='bid'
+        and must act (bid or skip) before the next card is dealt.
+        Their act() calls this method again, forming the chain:
+        deal → bid/skip → deal → bid/skip → ...
         """
-        for _ in range(4):
-            if rs.phase != "DEAL_BID":
-                break
-            match round_sm.deal_next_card(rs):
-                case Ok(value=new_rs):
-                    rs = new_rs
-                    if rs.phase != "DEAL_BID":
-                        break
-                case Rejected(reason=reason):
-                    logger.warning("deal_next_card rejected: %s", reason)
-                    break
-        return rs
+        rs = self._round_state
+        assert rs is not None
+        if rs.phase != "DEAL_BID":
+            return
+        if rs.deal_bid_state is None or rs.deal_bid_state.phase != "DEALING":
+            return
+        # Remember who receives this card (deal_target before advance)
+        recipient = rs.deal_bid_state.deal_target
+        match round_sm.deal_next_card(rs):
+            case Ok(value=new_rs):
+                self._bid_turn = recipient
+                self._round_state = new_rs
+                await self._push_state_to_all()
+            case Rejected(reason=reason):
+                logger.warning("deal_next_card rejected: %s", reason)
+
+    async def push_initial_state(self) -> None:
+        """Push the initial WAITING state to all players.
+
+        Called by the server after creating the game. Triggers AutoPlayer
+        confirmations via on_state() which in turn call act().
+        """
+        await self._push_state_to_all()
 
     async def run(self) -> None:
-        """Start the game: transition to IN_ROUND, create round, execute first deal tick.
+        """Start the game directly, bypassing WAITING confirmation.
+
+        Convenience method for testing: transitions to IN_ROUND, creates
+        the first round, deals, and pushes state. In production, the
+        server uses push_initial_state() + WAITING confirmation flow.
 
         Raises RuntimeError if called more than once.
-        Raises RuntimeError if game_sm.start_game rejects (should never happen).
+        """
+        await self._run_and_push()
+
+    async def _run_and_push(self) -> None:
+        """Start the game after WAITING confirmation: create first round, deal, push.
+
+        Called internally when all 4 players confirm in WAITING phase
+        and _round_state is None (game has not started yet).
         """
         if self._round_state is not None:
-            raise RuntimeError("Game already started; run() can only be called once")
+            raise RuntimeError("Game already started; _run_and_push() called with existing round")
         match game_sm.start_game(self._game_state):
             case Ok(value=new_gs):
                 self._game_state = new_gs
@@ -102,35 +135,35 @@ class Game:
             team1_level=self._game_state.team1_level,
         ))
         self._bid_turn = 0
-        self._bid_tick_progress = 0
 
-        # Execute first deal tick: deal 1 card to each of the 4 players
-        rs = self._round_state
-        rs = self._execute_deal_tick(rs)
-        self._round_state = rs
-
-        await self._push_state_to_all()
+        # Deal the first card — the recipient must bid/skip before
+        # the next card is dealt. Their act() calls _deal_one_and_push.
+        await self._deal_one_and_push()
 
     async def act(self, player_index: int, action: BidAction | SkipBidAction | PlayAction | StirAction | SkipStirAction | DiscardAction | NextRoundAction) -> None:
         """Unified action entry point. Dispatches based on current phase and action type.
 
-        After applying the action, pushes state to all players.
-        Any rejection (invalid action, race condition, etc.) sends an error
-        message to the acting player via WebSocket, then still pushes state
-        so the game never deadlocks.
+        Two push paths, strictly separated:
+        - State push: state changed → broadcast to all, seq increments
+        - Error push: action rejected → unicast to acting player, seq unchanged
+
+        Every state change (including intermediate WAITING confirmations)
+        triggers a broadcast push + seq increment. No special cases.
+
+        WAITING identity validation rejects duplicate confirmations.
 
         All runtime action rejections are communicated through the error
         channel instead of exceptions.  Programming errors (e.g. player
         index out of range) propagate as IndexError from the underlying list.
         """
         rs = self._round_state
-        assert rs is not None, "act() called before run()"
         phase = self.get_phase()
         logger.debug("Game.act: player=%d action=%s phase=%s", player_index, type(action).__name__, phase)
 
         error_msg: str | None = None
 
         if phase == "DEAL_BID" and isinstance(action, BidAction):
+            assert rs is not None
             if player_index != self._bid_turn:
                 error_msg = f"不是你的叫牌回合（当前叫牌者：{self._bid_turn}）"
             else:
@@ -144,20 +177,33 @@ class Game:
                     case Rejected(reason=reason):
                         error_msg = reason
 
-                if error_msg is None:
-                    # Advance bid turn after successful bid
-                    self._bid_tick_progress += 1
-                    rs = self._process_bid_tick_progress(rs)
+            if error_msg is not None:
+                # Bid rejected — unicast error, no state change, no turn advance.
+                # The player must re-decide (choose different cards or pass).
+                self._round_state = rs
+                await self._players[player_index].on_state(self, seq=self._seq, error=error_msg)
+                return
+            # Bid succeeded — advance turn, deal next card
+            self._bid_turn = (self._bid_turn + 1) % 4
+            self._round_state = rs
+            await self._deal_one_and_push()
+            return
 
         elif phase == "DEAL_BID" and isinstance(action, SkipBidAction):
+            assert rs is not None
             if player_index != self._bid_turn:
                 error_msg = f"不是你的叫牌回合（当前叫牌者：{self._bid_turn}）"
-            else:
-                # Skip bid: advance turn without bidding
-                self._bid_tick_progress += 1
-                rs = self._process_bid_tick_progress(rs)
+                self._round_state = rs
+                await self._players[player_index].on_state(self, seq=self._seq, error=error_msg)
+                return
+            # Skip succeeded — advance turn, deal next card
+            self._bid_turn = (self._bid_turn + 1) % 4
+            self._round_state = rs
+            await self._deal_one_and_push()
+            return
 
         elif phase == "STIRRING" and isinstance(action, SkipStirAction):
+            assert rs is not None
             match round_sm.pass_stir(rs, player_index):
                 case Ok(value=new_state):
                     rs = new_state
@@ -165,13 +211,16 @@ class Game:
                     error_msg = reason
 
         elif phase == "STIRRING" and isinstance(action, StirAction):
+            assert rs is not None
             match round_sm.stir(rs, player_index, action.cards):
                 case Ok(value=new_state):
                     rs = new_state
                 case Rejected(reason=reason):
                     error_msg = reason
+                    error_msg = reason
 
         elif phase == "EXCHANGE" and isinstance(action, DiscardAction):
+            assert rs is not None
             match round_sm.discard(rs, player_index, action.cards):
                 case Ok(value=new_state):
                     rs = new_state
@@ -179,33 +228,53 @@ class Game:
                     error_msg = reason
 
         elif phase == "PLAYING" and isinstance(action, PlayAction):
+            assert rs is not None
             match round_sm.play(rs, player_index, action.cards):
                 case Ok(value=new_state):
                     rs = new_state
+                    # If round ended, process result immediately so players
+                    # see scoring + level changes in this push.
+                    if rs.phase == "COMPLETE" and rs.result is not None:
+                        round_result = rs.result
+                        match game_sm.process_round_result(self._game_state, round_result):
+                            case Ok(value=new_gs):
+                                self._game_state = new_gs
+                            case Rejected(reason=reason):
+                                logger.error("process_round_result rejected after round completion: %s", reason)
                 case Rejected(reason=reason):
                     error_msg = reason
+            # Check if game ended after processing the play
+            if error_msg is None and rs.phase == "COMPLETE" and self._game_state.phase == "GAME_OVER":
+                self._round_state = rs
+                await self._push_state_to_all()
+                if self._on_game_over is not None:
+                    self._on_game_over(self)
+                return
 
-        elif phase == "COMPLETE" and isinstance(action, NextRoundAction):
-            self._next_round_confirmed.add(player_index)
+        elif phase == "WAITING" and isinstance(action, NextRoundAction):
+            if player_index in self._next_round_confirmed:
+                error_msg = "你已经确认过了"
+            else:
+                self._next_round_confirmed.add(player_index)
+                if len(self._next_round_confirmed) == 4:
+                    # All 4 confirmed
+                    self._next_round_confirmed.clear()
 
-            if len(self._next_round_confirmed) == 4:
-                # All 4 players confirmed: proceed to next round
-                self._next_round_confirmed.clear()
-                round_result = round_sm.get_round_result(rs)
-                assert round_result is not None, "Round result is None in COMPLETE phase; this indicates an sm layer bug"
-                match game_sm.process_round_result(self._game_state, round_result):
-                    case Ok(value=new_gs):
-                        self._game_state = new_gs
-                    case Rejected(reason=reason):
-                        error_msg = f"处理回合结果失败：{reason}"
+                    if self._round_state is None:
+                        # Game start: create first round, deal, push
+                        await self._run_and_push()
+                        return
 
-                if error_msg is None and self._game_state.phase == "GAME_OVER":
-                    self._round_state = rs
-                    await self._push_state_to_all()
-                    if self._on_game_over is not None:
-                        self._on_game_over(self)
-                    return
-                else:
+                    # Between rounds: _game_state was already updated when
+                    # the round ended (PLAYING branch calls process_round_result).
+                    if self._game_state.phase == "GAME_OVER":
+                        self._round_state = rs
+                        await self._push_state_to_all()
+                        if self._on_game_over is not None:
+                            self._on_game_over(self)
+                        return
+
+                    # Create new round and deal cards
                     rs = round_sm.create_round(round_sm.RoundInput(
                         declarer_team=self._game_state.declarer_team,
                         trump_rank=self._game_state.team0_level,
@@ -213,10 +282,17 @@ class Game:
                         team0_level=self._game_state.team0_level,
                         team1_level=self._game_state.team1_level,
                     ))
-                    # Execute first deal tick for new round
                     self._bid_turn = 0
-                    self._bid_tick_progress = 0
-                    rs = self._execute_deal_tick(rs)
+                    # Push once to show confirmed set cleared + new round
+                    self._round_state = rs
+                    await self._push_state_to_all()
+                    # Deal the first card — the recipient must bid/skip
+                    # before the next card is dealt.
+                    await self._deal_one_and_push()
+                    return
+                # else: intermediate confirmation — fall through to
+                # _push_state_to_all(). next_round_confirmed changed,
+                # that's a state change like any other.
 
         else:
             error_msg = f"无效的操作：{type(action).__name__} 不能在 {phase} 阶段使用"
@@ -224,37 +300,18 @@ class Game:
         self._round_state = rs
 
         if error_msg:
-            # Push state with error to ALL players. Error pushes do NOT
-            # increment _seq because the state has not changed. AutoPlayer
-            # ignores error pushes (returns early in on_state), so there is
-            # no risk of action retry cascades.
-            for i in range(len(self._players)):
-                err = error_msg if i == player_index else None
-                await self._players[i].on_state(self, seq=self._seq, error=err)
+            # Unicast error to acting player. Error pushes do NOT
+            # increment _seq because the game state has not changed.
+            await self._players[player_index].on_state(self, seq=self._seq, error=error_msg)
 
-        if not error_msg:
+            # For DEAL_BID BidAction rejections where bid_turn advanced,
+            # also broadcast the new turn state so the next bidder knows
+            # it's their turn. Exclude the acting player who already
+            # received the error push (which contains the same state).
+            if phase == "DEAL_BID" and isinstance(action, BidAction):
+                await self._push_state_to_all(exclude=player_index)
+        else:
             await self._push_state_to_all()
-
-    def _process_bid_tick_progress(self, rs: round_sm.RoundState) -> round_sm.RoundState:
-        """Process bid tick progress after a bid or skip action.
-
-        After each player acts, increments _bid_tick_progress. When all 4
-        players have acted (_bid_tick_progress == 4), executes the next
-        deal tick (deal 1 card to each player) and resets the progress.
-        Returns the updated RoundState.
-        """
-        if self._bid_tick_progress < 4:
-            # Not all players have acted yet; just advance bid turn
-            self._bid_turn = (self._bid_turn + 1) % 4
-            return rs
-
-        # All 4 players have acted this round; execute next deal tick
-        self._bid_tick_progress = 0
-        self._bid_turn = (self._bid_turn + 1) % 4
-
-        rs = self._execute_deal_tick(rs)
-
-        return rs
 
     @staticmethod
     def _get_legal_stir_actions(
@@ -315,30 +372,48 @@ class Game:
     def snapshot(self, for_player: int) -> StateSnapshot:
         """Build a StateSnapshot for the given player.
 
+        Handles WAITING phase before game start (_round_state is None)
+        by returning a minimal snapshot with empty hands and no round data.
+
         Raises IndexError if for_player is out of range.
         """
         rs = self._round_state
-        assert rs is not None, "snapshot() called before run()"
         gs = self._game_state
+
+        # WAITING phase before game start: no round state yet
+        if rs is None:
+            awaiting_action: str | None = "next_round" if for_player not in self._next_round_confirmed else None
+            return StateSnapshot(
+                phase="WAITING",
+                player_hand=[],
+                player_hand_counts=[0, 0, 0, 0],
+                bottom_cards=[],
+                trump_suit=None,
+                trump_rank=gs.team0_level,
+                declarer_team=None,
+                declarer_player=None,
+                defender_points=0,
+                trick=None,
+                trick_history=[],
+                legal_actions=[],
+                awaiting_action=awaiting_action,
+                bid_legal_actions=None,
+                scoring=None,
+                winning_team=None,
+                team0_level=gs.team0_level,
+                team1_level=gs.team1_level,
+                bid_events=[],
+                bid_winner=None,
+                stirring_state=None,
+                exchange_state=None,
+                next_round_confirmed=sorted(self._next_round_confirmed),
+            )
 
         # player_hand
         player_hand = list(rs.players_hand[for_player]) if for_player < len(rs.players_hand) else []
 
         # player_hand_counts: card count for each player (for game table display)
         player_hand_counts = [len(h) for h in rs.players_hand]
-
-        # current_player derivation
-        current_player = for_player  # default
-        if rs.phase == "DEAL_BID" and rs.deal_bid_state is not None:
-            current_player = rs.deal_bid_state.deal_target
-        elif rs.phase == "STIRRING" and rs.stirring_state is not None:
-            current_player = rs.stirring_state.current_player
-        elif rs.phase == "EXCHANGE" and rs.exchange_state is not None:
-            current_player = rs.exchange_state.declarer_player
-        elif rs.phase == "PLAYING" and rs.trick_state is not None:
-            current_player = rs.trick_state.cur
-        elif rs.phase == "COMPLETE":
-            current_player = rs.declarer_player if rs.declarer_player is not None else 0
 
         # legal_actions
         legal_actions: list[list[Card]] = []
@@ -374,21 +449,23 @@ class Game:
                 if not legal_actions:
                     can_act_in_playing = False
 
-        # awaiting_action
+        # awaiting_action — derived directly from SM state (no current_player)
         awaiting_action = None
         if gs.phase == "GAME_OVER":
             awaiting_action = None
         elif rs.phase == "DEAL_BID":
-            # In sync round-robin mode, only the current bidder sees awaiting_action='bid'
+            # Only the player who just received a card sees
+            # awaiting_action='bid' and must act before the next card
+            # is dealt.
             if for_player == self._bid_turn:
                 awaiting_action = "bid"
             else:
                 awaiting_action = None
-        elif rs.phase == "STIRRING" and for_player == current_player:
+        elif rs.phase == "STIRRING" and rs.stirring_state is not None and for_player == rs.stirring_state.current_player:
             awaiting_action = "stir"
-        elif rs.phase == "EXCHANGE" and for_player == current_player:
+        elif rs.phase == "EXCHANGE" and rs.exchange_state is not None and for_player == rs.exchange_state.declarer_player:
             awaiting_action = "discard"
-        elif rs.phase == "PLAYING" and can_act_in_playing and for_player == current_player:
+        elif rs.phase == "PLAYING" and can_act_in_playing and rs.trick_state is not None and for_player == rs.trick_state.cur:
             awaiting_action = "play"
         elif rs.phase == "COMPLETE":
             if for_player not in self._next_round_confirmed:
@@ -423,7 +500,7 @@ class Game:
         if rs.stirring_state is not None and rs.phase == "STIRRING":
             # Compute legal stir actions for the current player only
             stir_legal_actions: list[list[Card]] = []
-            if for_player == current_player:
+            if awaiting_action == "stir":
                 stir_legal_actions = self._get_legal_stir_actions(
                     player_hand, rs.stirring_state, for_player,
                 )
@@ -464,7 +541,6 @@ class Game:
             trump_rank=rs.trump_rank,
             declarer_team=rs.declarer_team,
             declarer_player=rs.declarer_player,
-            current_player=current_player,
             defender_points=rs.defender_points,
             trick=trick,
             trick_history=list(rs.trick_history),
@@ -489,13 +565,18 @@ class Game:
     def get_phase(self) -> str:
         """Return the current phase.
 
+        WAITING: game not started yet (_round_state is None) or round
+        complete (rs.phase == "COMPLETE"). Both use the same WAITING
+        phase with next_round confirmation mechanism.
         GAME_OVER takes priority over round-level phases.
         """
         if self._game_state.phase == "GAME_OVER":
             return "GAME_OVER"
-        if self._round_state is not None:
-            return self._round_state.phase
-        return self._game_state.phase
+        if self._round_state is None:
+            return "WAITING"
+        if self._round_state.phase == "COMPLETE":
+            return "WAITING"
+        return self._round_state.phase
 
     def set_on_game_over(self, callback: Callable[['Game'], None]) -> None:
         """Register a callback for when the game transitions to GAME_OVER."""
@@ -511,11 +592,13 @@ class Game:
     def resolve_cards(self, player_index: int, card_ids: list[str]) -> Ok[list[Card]] | Rejected:
         """Resolve card ID strings to Card objects from the player's hand.
 
-        Returns Rejected if any card_id is not found in the player's hand.
+        Returns Rejected if the game has not started yet, or if any
+        card_id is not found in the player's hand.
         Raises IndexError if player_index is out of range (programming error).
         """
         rs = self._round_state
-        assert rs is not None, "resolve_cards() called before run()"
+        if rs is None:
+            return Rejected(reason="游戏尚未开始")
         hand = rs.players_hand[player_index]
         card_map = {c.id: c for c in hand}
 
@@ -550,8 +633,10 @@ class Game:
             count=action.count,
         ))
 
-    async def _push_state_to_all(self) -> None:
-        """Push state to all players."""
+    async def _push_state_to_all(self, exclude: int | None = None) -> None:
+        """Push state to all players, optionally excluding one."""
         self._seq += 1
         for i in range(len(self._players)):
+            if i == exclude:
+                continue
             await self._players[i].on_state(self, seq=self._seq, error=None)

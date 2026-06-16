@@ -8,7 +8,7 @@ import type { StateSnapshot } from "../core/types.ts";
 import type { ServerMessage, ClientAction } from "../core/protocol.ts";
 import type { InteractionMode, GameAction } from "../engine/types.ts";
 import type { ActionCallbacks, RenderContext } from "../ui/types.ts";
-import { HUMAN_PLAYER_INDEX } from "../config.ts";
+const HUMAN_PLAYER_INDEX = 3;
 
 // deno-dom's Element is not structurally compatible with the DOM Element type
 // expected by render() and GameLoop. Use this helper to create a properly-typed container.
@@ -35,7 +35,6 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     trump_suit: "hearts",
     declarer_team: 0,
     declarer_player: 3,
-    current_player: 3,
     defender_points: 15,
     legal_actions: [[{ id: "D1-hearts-5", suit: "hearts", rank: "5" }]],
     trick: null,
@@ -87,7 +86,7 @@ Deno.test("test_integration_ws_to_render", () => {
   const msg: ServerMessage = {
     type: "state",
     awaiting: "play",
-    state: makeSnapshot({ phase: "PLAYING", current_player: HUMAN_PLAYER_INDEX }),
+    state: makeSnapshot({ phase: "PLAYING", awaiting_action: "play" }),
   };
   gameLoop.handleMessage(msg);
 
@@ -201,7 +200,6 @@ Deno.test("test_integration_stir_action", () => {
   const snap = makeSnapshot({
     phase: "STIRRING",
     awaiting_action: "stir",
-    current_player: HUMAN_PLAYER_INDEX,
     stirring_state: { phase: "WAITING", trump_suit: null, current_player: HUMAN_PLAYER_INDEX },
     player_hand: [
       { id: "D1-spades-2", suit: "spades", rank: "2" },
@@ -289,7 +287,6 @@ Deno.test("test_integration_stir_not_human_ignored", () => {
     awaiting: "stir",
     state: makeSnapshot({
       phase: "STIRRING",
-      current_player: 1,
       awaiting_action: "stir",
       stirring_state: { phase: "WAITING", trump_suit: null, current_player: 1 },
     }),
@@ -351,7 +348,7 @@ Deno.test("test_integration_card_selection_persists_across_renders", () => {
 Deno.test("test_integration_callback_triggers_send", () => {
   const container = freshContainer();
   const snap = makeSnapshot({
-    phase: "COMPLETE",
+    phase: "WAITING",
     awaiting_action: "next_round",
     trick: null,
     scoring: {

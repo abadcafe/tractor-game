@@ -94,7 +94,6 @@ class StateSnapshot:
     trump_rank: Rank
     declarer_team: int | None
     declarer_player: int | None
-    current_player: int
     defender_points: int
     trick: TrickSnapshot | None
     trick_history: list[CompletedTrick]
@@ -172,7 +171,6 @@ class StateSnapshot:
             "trump_rank": self.trump_rank.value,
             "declarer_team": self.declarer_team,
             "declarer_player": self.declarer_player,
-            "current_player": self.current_player,
             "defender_points": self.defender_points,
             "trick": trick_dict,
             "trick_history": [
@@ -316,7 +314,6 @@ class SnapshotDict(TypedDict):
     trump_rank: str
     declarer_team: int | None
     declarer_player: int | None
-    current_player: int
     defender_points: int
     trick: TrickDict | None
     trick_history: list[CompletedTrickDict]

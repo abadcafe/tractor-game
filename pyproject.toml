@@ -23,6 +23,7 @@ testpaths = [
     "server",
     "tests",
 ]
+pythonpath = ["."]
 python_files = ["*_tests.py", "test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"

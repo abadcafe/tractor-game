@@ -36,7 +36,6 @@ def _make_snapshot(
     *,
     phase: str = "PLAYING",
     awaiting_action: str | None = "play",
-    current_player: int = 0,
     legal_actions: list[list[Card]] | None = None,
     bid_legal_actions: list[list[Card]] | None = None,
     trump_rank: Rank = Rank.TWO,
@@ -63,7 +62,6 @@ def _make_snapshot(
     return StateSnapshot(
         phase=phase,
         awaiting_action=awaiting_action,
-        current_player=current_player,
         legal_actions=legal_actions if legal_actions is not None else [],
         bid_legal_actions=bid_legal_actions,
         trump_rank=trump_rank,
@@ -144,7 +142,6 @@ async def test_auto_player_play_when_current():
     snap = _make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
-        current_player=1,
         legal_actions=[[card]],
     )
     game = _make_game(snap)
@@ -161,7 +158,6 @@ async def test_auto_player_play_from_legal_actions():
     snap = _make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
-        current_player=0,
         legal_actions=[[card1]],
     )
     game = _make_game(snap)
@@ -174,12 +170,11 @@ async def test_auto_player_play_from_legal_actions():
 
 
 @pytest.mark.asyncio
-async def test_auto_player_ignores_wrong_player():
-    """AutoPlayer does not act when current_player != self.index in non-dealing phase."""
+async def test_auto_player_ignores_when_not_awaiting():
+    """AutoPlayer does not act when awaiting_action is None (not their turn)."""
     snap = _make_snapshot(
         phase="PLAYING",
-        awaiting_action="play",
-        current_player=2,
+        awaiting_action=None,
     )
     game = _make_game(snap)
     player = AutoPlayer(index=0)
@@ -189,12 +184,11 @@ async def test_auto_player_ignores_wrong_player():
 
 
 @pytest.mark.asyncio
-async def test_auto_player_ignores_wrong_player_stirring():
-    """AutoPlayer does not stir when current_player != self.index in STIRRING."""
+async def test_auto_player_ignores_stirring_when_not_awaiting():
+    """AutoPlayer does not stir when awaiting_action is None in STIRRING."""
     snap = _make_snapshot(
         phase="STIRRING",
-        awaiting_action="stir",
-        current_player=2,
+        awaiting_action=None,
     )
     game = _make_game(snap)
     player = AutoPlayer(index=0)
@@ -204,12 +198,11 @@ async def test_auto_player_ignores_wrong_player_stirring():
 
 
 @pytest.mark.asyncio
-async def test_auto_player_ignores_wrong_player_discard():
-    """AutoPlayer does not discard when current_player != self.index in EXCHANGE."""
+async def test_auto_player_ignores_discard_when_not_awaiting():
+    """AutoPlayer does not discard when awaiting_action is None in EXCHANGE."""
     snap = _make_snapshot(
         phase="EXCHANGE",
-        awaiting_action="discard",
-        current_player=2,
+        awaiting_action=None,
     )
     game = _make_game(snap)
     player = AutoPlayer(index=0)
@@ -222,9 +215,8 @@ async def test_auto_player_ignores_wrong_player_discard():
 async def test_auto_player_next_round():
     """AutoPlayer submits NextRoundAction when awaiting next_round."""
     snap = _make_snapshot(
-        phase="COMPLETE",
+        phase="WAITING",
         awaiting_action="next_round",
-        current_player=0,
     )
     game = _make_game(snap)
     player = AutoPlayer(index=0)
@@ -236,12 +228,11 @@ async def test_auto_player_next_round():
 
 
 @pytest.mark.asyncio
-async def test_auto_player_submits_next_round_even_when_not_current():
-    """AutoPlayer submits NextRoundAction regardless of current_player in COMPLETE phase."""
+async def test_auto_player_submits_next_round_even_when_other_player():
+    """AutoPlayer submits NextRoundAction whenever awaiting_action is next_round."""
     snap = _make_snapshot(
-        phase="COMPLETE",
+        phase="WAITING",
         awaiting_action="next_round",
-        current_player=2,
     )
     game = _make_game(snap)
     player = AutoPlayer(index=0)
@@ -258,7 +249,6 @@ async def test_auto_player_discard_when_current():
     snap = _make_snapshot(
         phase="EXCHANGE",
         awaiting_action="discard",
-        current_player=0,
         player_hand=[card1, card2],
     )
     game = _make_game(snap)
@@ -276,7 +266,6 @@ async def test_auto_player_stir_when_current():
     snap = _make_snapshot(
         phase="STIRRING",
         awaiting_action="stir",
-        current_player=0,
     )
     game = _make_game(snap)
     player = AutoPlayer(index=0)
@@ -291,7 +280,6 @@ async def test_auto_player_stir_pass():
     snap = _make_snapshot(
         phase="STIRRING",
         awaiting_action="stir",
-        current_player=0,
         player_hand=[],
     )
     game = _make_game(snap)
@@ -309,7 +297,6 @@ async def test_auto_player_bid_during_dealing():
     snap = _make_snapshot(
         phase="DEAL_BID",
         awaiting_action="bid",
-        current_player=0,
         player_hand=[trump_card],
         trump_rank=Rank.TWO,
     )
@@ -327,7 +314,6 @@ async def test_auto_player_ignores_dealing_if_no_trump_rank():
     snap = _make_snapshot(
         phase="DEAL_BID",
         awaiting_action="bid",
-        current_player=0,
         player_hand=[non_trump],
         trump_rank=Rank.TWO,
     )
@@ -346,66 +332,57 @@ async def test_auto_player_ignores_dealing_if_no_trump_rank():
 
 
 @pytest.mark.asyncio
-async def test_human_player_sends_state_on_push():
-    """HumanPlayer sends state JSON via WebSocket on on_state."""
+async def test_human_player_handle_connection_sends_state():
+    """HumanPlayer.handle_connection accepts WS, binds it, and processes messages."""
+    from fastapi import WebSocketDisconnect
     ws = AsyncMock()
+    # receive_json raises after one iteration to end the loop
+    ws.receive_json = AsyncMock(side_effect=WebSocketDisconnect())
     snap = _make_snapshot()
     game = _make_game(snap)
-    player = HumanPlayer(index=0, ws=ws)
-    await player.on_state(game)
-    ws.send_json.assert_awaited_once()
-    sent_data = ws.send_json.call_args[0][0]
-    assert sent_data["type"] == "state"
-    assert "state" in sent_data
-    assert sent_data["state"]["phase"] == "PLAYING"
+    game.is_over = MagicMock(return_value=False)
+    game.current_seq = 1
+    player = HumanPlayer(index=0)
+
+    await player.handle_connection(ws, game)
+    ws.accept.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_human_player_set_ws_replaces_reference():
-    """HumanPlayer.set_ws replaces the WebSocket reference."""
-    ws1 = AsyncMock()
-    ws2 = AsyncMock()
+async def test_human_player_connection_takeover():
+    """HumanPlayer.handle_connection closes old WS and binds new one."""
+    from fastapi import WebSocketDisconnect
+    old_ws = AsyncMock()
+    new_ws = AsyncMock()
     snap = _make_snapshot()
     game = _make_game(snap)
-    player = HumanPlayer(index=0, ws=ws1)
-    await player.on_state(game)
-    ws1.send_json.assert_awaited_once()
+    game.is_over = MagicMock(return_value=False)
+    game.current_seq = 1
+    # Set up old connection via handle_connection with a WS that disconnects
+    old_ws.receive_json = AsyncMock(side_effect=WebSocketDisconnect())
+    player = HumanPlayer(index=0)
+    await player.handle_connection(old_ws, game)
+    assert player.is_connected() is False  # cleaned up after disconnect
 
-    player.set_ws(ws2)
-    await player.on_state(game)
-    ws2.send_json.assert_awaited_once()
-    assert ws1.send_json.await_count == 1  # not called again
+    # New connection should be accepted
+    new_ws.receive_json = AsyncMock(side_effect=WebSocketDisconnect())
+    await player.handle_connection(new_ws, game)
+    new_ws.accept.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_human_player_does_not_send_when_no_ws():
-    """HumanPlayer does nothing when ws is None."""
+    """HumanPlayer.on_state does nothing when no WS is bound (not connected)."""
     snap = _make_snapshot()
     game = _make_game(snap)
-    player = HumanPlayer(index=0, ws=None)
+    player = HumanPlayer(index=0)
     # Should not raise
     await player.on_state(game)
 
 
-def test_human_player_is_connected_true():
-    """HumanPlayer.is_connected() returns True when ws is set."""
-    ws = AsyncMock()
-    player = HumanPlayer(index=0, ws=ws)
-    assert player.is_connected() is True
-
-
 def test_human_player_is_connected_false():
-    """HumanPlayer.is_connected() returns False when ws is None."""
-    player = HumanPlayer(index=0, ws=None)
-    assert player.is_connected() is False
-
-
-def test_human_player_is_connected_false_after_set_ws_none():
-    """HumanPlayer.is_connected() returns False after set_ws(None)."""
-    ws = AsyncMock()
-    player = HumanPlayer(index=0, ws=ws)
-    assert player.is_connected() is True
-    player.set_ws(None)
+    """HumanPlayer.is_connected() returns False when no WS is bound."""
+    player = HumanPlayer(index=0)
     assert player.is_connected() is False
 
 
@@ -433,7 +410,6 @@ async def test_auto_player_stir_only_uses_same_suit_pairs():
     snap = _make_snapshot(
         phase="STIRRING",
         awaiting_action="stir",
-        current_player=0,
         player_hand=[card_hearts_2_d1, card_spades_2_d1, card_hearts_2_d2],
         trump_rank=Rank.TWO,
     )
@@ -475,7 +451,6 @@ async def test_auto_player_discard_with_exchange_state_snapshot():
     snap = _make_snapshot(
         phase="EXCHANGE",
         awaiting_action="discard",
-        current_player=0,
         player_hand=[card1, card2, card3],
         exchange_state=ExchangeStateSnapshot(
             phase="PICKED_UP",

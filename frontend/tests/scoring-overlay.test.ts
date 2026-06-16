@@ -13,14 +13,13 @@ globalThis.document = doc;
 
 function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
   return {
-    phase: "COMPLETE",
+    phase: "WAITING",
     player_hand: [],
     bottom_cards: [],
     trump_rank: "2",
     trump_suit: null,
     declarer_team: 0,
     declarer_player: 3,
-    current_player: 3,
     defender_points: 30,
     legal_actions: [],
     trick: null,

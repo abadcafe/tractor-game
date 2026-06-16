@@ -31,7 +31,7 @@ export interface BidEvent {
 
 /** Full game state snapshot pushed by the server. */
 export interface StateSnapshot {
-  phase: "DEAL_BID" | "STIRRING" | "EXCHANGE" | "PLAYING" | "COMPLETE" | "GAME_OVER";
+  phase: "DEAL_BID" | "STIRRING" | "EXCHANGE" | "PLAYING" | "WAITING" | "GAME_OVER";
 
   player_hand: Card[];
   player_hand_counts: number[];
@@ -43,7 +43,6 @@ export interface StateSnapshot {
   declarer_team: number | null;
   declarer_player: number | null;
 
-  current_player: number;
   defender_points: number;
 
   legal_actions: Card[][];

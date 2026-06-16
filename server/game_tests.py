@@ -36,8 +36,8 @@ def _make_players() -> list[AutoPlayer]:
 
 def test_game_init_creates_valid_state():
     game = _create_game_with_auto_players()
-    # Verify via public interface
-    assert game.get_phase() == "IDLE"
+    # Verify via public interface: game starts in WAITING phase
+    assert game.get_phase() == "WAITING"
     assert game.is_over() is False
 
 
@@ -46,7 +46,7 @@ def test_game_init_creates_valid_state():
 
 def test_get_phase_returns_phase():
     game = _create_game_with_auto_players()
-    assert game.get_phase() == "IDLE"
+    assert game.get_phase() == "WAITING"
 
 
 # ---- run() ----
@@ -58,7 +58,7 @@ async def test_run_transitions_to_deal_bid():
     await game.run()
     # Verify via snapshot (public interface)
     snap = game.snapshot(for_player=0)
-    assert snap.phase in ("DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING", "COMPLETE")
+    assert snap.phase in ("DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING", "WAITING")
 
 
 # ---- act() ----
@@ -94,17 +94,18 @@ async def test_snapshot_returns_player_hand():
     assert isinstance(snap.player_hand, list)
 
 
-def test_snapshot_raises_before_run():
-    """snapshot() must raise when called before run().
+def test_snapshot_before_run_returns_waiting():
+    """snapshot() returns a valid WAITING-phase snapshot before run().
 
-    Before run(), _round_state is None, so snapshot() cannot build a
-    valid StateSnapshot. Rather than returning a partial/empty snapshot
-    that could mislead callers, it raises an error (AssertionError via
-    assert guard).
+    Before run(), _round_state is None, which maps to the WAITING phase
+    externally. The snapshot includes awaiting_action='next_round' and
+    empty hands.
     """
     game = _create_game_with_auto_players()
-    with pytest.raises(AssertionError, match="snapshot\\(\\) called before run"):
-        game.snapshot(for_player=0)
+    snap = game.snapshot(for_player=0)
+    assert snap.phase == "WAITING"
+    assert snap.awaiting_action == "next_round"
+    assert snap.player_hand == []
 
 
 @pytest.mark.asyncio
@@ -112,27 +113,16 @@ async def test_snapshot_phase():
     game = _create_game_with_auto_players()
     await game.run()
     snap = game.snapshot(for_player=0)
-    assert snap.phase in ("DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING", "COMPLETE", "GAME_OVER", "SCORING")
+    assert snap.phase in ("DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING", "WAITING", "GAME_OVER", "SCORING")
 
 
 @pytest.mark.asyncio
-async def test_snapshot_current_player():
+async def test_snapshot_awaiting_action():
+    """awaiting_action should be a valid string or None."""
     game = _create_game_with_auto_players()
     await game.run()
     snap = game.snapshot(for_player=0)
-    assert isinstance(snap.current_player, int)
-    assert 0 <= snap.current_player <= 3
-
-
-@pytest.mark.asyncio
-async def test_snapshot_current_player_deal_bid():
-    """During DEAL_BID, current_player should be the deal_target."""
-    game = _create_game_with_auto_players()
-    await game.run()
-    snap = game.snapshot(for_player=0)
-    if snap.phase == "DEAL_BID":
-        assert isinstance(snap.current_player, int)
-        assert 0 <= snap.current_player <= 3
+    assert snap.awaiting_action is None or isinstance(snap.awaiting_action, str)
 
 
 @pytest.mark.asyncio
@@ -211,7 +201,7 @@ async def test_snapshot_exchange_state():
 
 @pytest.mark.asyncio
 async def test_snapshot_scoring_in_complete():
-    """When round is COMPLETE, snapshot should include scoring info."""
+    """When round is WAITING (SM COMPLETE), snapshot should include scoring info."""
     game = _create_game_with_auto_players()
     await game.run()
     snap = game.snapshot(for_player=0)
@@ -295,7 +285,7 @@ async def test_act_skip_stir_during_stirring():
 
 @pytest.mark.asyncio
 async def test_act_next_round_during_non_complete():
-    """NextRoundAction during non-COMPLETE phase should be rejected without raising."""
+    """NextRoundAction during non-WAITING phase should be rejected without raising."""
     game = _create_game_with_auto_players()
     await game.run()
     # Should not raise; rejection is communicated via send_error instead
@@ -314,7 +304,7 @@ def test_get_phase_prioritizes_game_over():
     is_over() must always be consistent with get_phase().
     """
     game = _create_game_with_auto_players()
-    assert game.get_phase() == "IDLE"
+    assert game.get_phase() == "WAITING"
     # The invariant: is_over() == (get_phase() == "GAME_OVER")
     assert game.is_over() == (game.get_phase() == "GAME_OVER")
 
@@ -326,11 +316,9 @@ def test_get_phase_prioritizes_game_over():
 async def test_set_on_game_over_callback_fires_on_game_over():
     """When game transitions to GAME_OVER, the registered callback should be invoked.
 
-    Strategy: Create a game in IN_ROUND state by patching game_sm.create_game,
-    then patch round_sm.create_round to return a COMPLETE-phase RoundState.
-    After game.run(), patch game_sm.process_round_result to return a GAME_OVER
-    state. Then call game.act() with NextRoundAction. If the callback fires,
-    the mock is called.
+    Strategy: Create a game where a PlayAction triggers round completion.
+    The PLAYING branch calls process_round_result immediately, which can
+    return GAME_OVER. The callback should fire at that point.
     """
     from server.sm import game_sm as gm, round_sm as rm
     from server.sm.scoring import RoundResult
@@ -347,12 +335,26 @@ async def test_set_on_game_over_callback_fires_on_game_over():
         round_number=1,
     )
 
-    # Create a COMPLETE-phase RoundState mock
+    # Create a PLAYING-phase RoundState mock
+    playing_round = MagicMock()
+    playing_round.phase = "PLAYING"
+    playing_round.players_hand = [[] for _ in range(4)]
+    playing_round.declarer_player = 0
+
+    # A COMPLETE-phase RoundState mock (returned by round_sm.play)
     complete_round = MagicMock()
     complete_round.phase = "COMPLETE"
     complete_round.players_hand = [[] for _ in range(4)]
     complete_round.declarer_player = 0
-    complete_round.result = None  # Will be overridden by get_round_result mock
+    complete_round.result = MagicMock(spec=RoundResult)
+    complete_round.result.team0_new_level = Rank.ACE
+    complete_round.result.team1_new_level = Rank.TEN
+    complete_round.result.next_declarer_team = 0
+    complete_round.result.next_declarer_player = 0
+    complete_round.result.total_defender_points = 0
+    complete_round.result.declarer_level_change = 0
+    complete_round.result.switch_declarer = False
+    complete_round.result.bottom_card_bonus = 0
 
     # The GAME_OVER state that process_round_result will return
     game_over_state = gm.GameState(
@@ -365,13 +367,6 @@ async def test_set_on_game_over_callback_fires_on_game_over():
         round_number=1,
     )
 
-    # Build a mock RoundResult
-    mock_result = MagicMock(spec=RoundResult)
-    mock_result.team0_new_level = Rank.ACE
-    mock_result.team1_new_level = Rank.TEN
-    mock_result.next_declarer_team = 0
-    mock_result.next_declarer_player = 0
-
     with patch.object(gm, "create_game", return_value=in_round_state):
         game = _create_game_with_auto_players()
 
@@ -380,20 +375,17 @@ async def test_set_on_game_over_callback_fires_on_game_over():
 
     # Run the game with patched sm functions
     with patch.object(gm, "start_game", return_value=Ok(in_round_state)):
-        with patch.object(rm, "create_round", return_value=complete_round):
+        with patch.object(rm, "create_round", return_value=playing_round):
             await game.run()
 
     # Verify game is not over yet (before triggering GAME_OVER)
     assert not game.is_over()
 
-    # Now trigger GAME_OVER via act() with NextRoundAction.
-    # Patch get_round_result to return our mock_result so act() can pass
-    # it to game_sm.process_round_result.
-    with patch.object(rm, "get_round_result", return_value=mock_result):
+    # Now trigger GAME_OVER via act() with PlayAction.
+    # round_sm.play returns COMPLETE phase, then process_round_result returns GAME_OVER.
+    with patch.object(rm, "play", return_value=Ok(complete_round)):
         with patch.object(gm, "process_round_result", return_value=Ok(game_over_state)):
-            # COMPLETE phase now requires all 4 players to confirm
-            for p in range(4):
-                await game.act(player_index=p, action=NextRoundAction())
+            await game.act(player_index=0, action=PlayAction(cards=[]))
 
     # Game must have transitioned to GAME_OVER
     assert game.is_over()
@@ -437,7 +429,7 @@ async def test_snapshot_to_dict_json_serializable():
     assert "phase" in result
     assert "player_hand" in result
     assert "trump_rank" in result
-    assert "current_player" in result
+    assert "awaiting_action" in result
     # legal_actions must be a list of lists (card lists, not PlayAction dicts)
     legal_actions_raw = result["legal_actions"]
     if len(legal_actions_raw) > 0:
@@ -600,7 +592,6 @@ async def test_snapshot_to_dict_contains_all_required_fields():
         "trump_rank",
         "declarer_team",
         "declarer_player",
-        "current_player",
         "defender_points",
         "trick",
         "trick_history",
@@ -716,7 +707,7 @@ async def test_game_auto_completes_past_deal_bid():
     phase = game.get_phase()
     assert phase in (
         "DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING",
-        "COMPLETE", "GAME_OVER",
+        "WAITING", "GAME_OVER",
     )
     # Snapshot must still be valid
     snap = game.snapshot(for_player=0)
@@ -731,7 +722,7 @@ async def test_game_over_via_auto_players_starts():
     """
     game = _create_game_with_auto_players()
     initial_phase = game.get_phase()
-    assert initial_phase in ("IDLE", "IN_ROUND", "DEAL_BID")
+    assert initial_phase in ("WAITING", "DEAL_BID")
 
 
 # ---- Bug 1 regression: no resource explosion ----
@@ -773,7 +764,7 @@ async def test_full_game_flow_completes_without_resource_explosion():
     phase = game.get_phase()
     assert phase in (
         "DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING",
-        "COMPLETE", "GAME_OVER",
+        "WAITING", "GAME_OVER",
     ), f"Game stuck in unexpected phase: {phase}"
 
     # Snapshot must still be valid (no cascading error state)
@@ -788,8 +779,9 @@ async def test_full_game_flow_completes_without_resource_explosion():
 async def test_game_over_removes_from_registry():
     """Test that the on_game_over callback can remove the game from registry.
 
-    Creates a Game with mocked sm functions to force it through to GAME_OVER,
-    and verifies the callback fires and can remove the game from the registry.
+    Creates a Game with mocked sm functions to force it through to GAME_OVER
+    via a PlayAction that ends the round, and verifies the callback fires
+    and can remove the game from the registry.
     """
     from server.sm import game_sm as gm, round_sm as rm
     from server.sm.card_model import Rank
@@ -810,12 +802,26 @@ async def test_game_over_removes_from_registry():
         round_number=1,
     )
 
-    # Create a COMPLETE-phase RoundState mock (so act() accepts NextRoundAction)
+    # Create a PLAYING-phase RoundState mock
+    playing_round = MagicMock()
+    playing_round.phase = "PLAYING"
+    playing_round.players_hand = [[] for _ in range(4)]
+    playing_round.declarer_player = 0
+
+    # A COMPLETE-phase RoundState mock (returned by round_sm.play)
     complete_round = MagicMock()
     complete_round.phase = "COMPLETE"
     complete_round.players_hand = [[] for _ in range(4)]
     complete_round.declarer_player = 0
-    complete_round.result = None
+    complete_round.result = MagicMock(spec=RoundResult)
+    complete_round.result.team0_new_level = Rank.ACE
+    complete_round.result.team1_new_level = Rank.TEN
+    complete_round.result.next_declarer_team = 0
+    complete_round.result.next_declarer_player = 0
+    complete_round.result.total_defender_points = 0
+    complete_round.result.declarer_level_change = 0
+    complete_round.result.switch_declarer = False
+    complete_round.result.bottom_card_bonus = 0
 
     # The GAME_OVER state that process_round_result will return
     game_over_state = gm.GameState(
@@ -827,13 +833,6 @@ async def test_game_over_removes_from_registry():
         winning_team=0,
         round_number=1,
     )
-
-    # Build a mock RoundResult
-    mock_result = MagicMock(spec=RoundResult)
-    mock_result.team0_new_level = Rank.ACE
-    mock_result.team1_new_level = Rank.TEN
-    mock_result.next_declarer_team = 0
-    mock_result.next_declarer_player = 0
 
     callback_called = [False]
 
@@ -849,19 +848,18 @@ async def test_game_over_removes_from_registry():
 
     game.set_on_game_over(on_game_over)
 
-    # Start the game so _round_state is set to the COMPLETE mock
+    # Start the game so _round_state is set to the PLAYING mock
     with patch.object(gm, "start_game", return_value=Ok(in_round_state)):
-        with patch.object(rm, "create_round", return_value=complete_round):
+        with patch.object(rm, "create_round", return_value=playing_round):
             await game.run()
 
     # Verify game is in registry
     assert test_registry.get(game_id) is not None
 
-    # Now trigger GAME_OVER via act() with NextRoundAction using patched sm
-    with patch.object(gm, "process_round_result", return_value=Ok(game_over_state)):
-        with patch.object(rm, "get_round_result", return_value=mock_result):
-            for p in range(4):
-                await game.act(player_index=p, action=NextRoundAction())
+    # Now trigger GAME_OVER via PlayAction using patched sm
+    with patch.object(rm, "play", return_value=Ok(complete_round)):
+        with patch.object(gm, "process_round_result", return_value=Ok(game_over_state)):
+            await game.act(player_index=0, action=PlayAction(cards=[]))
 
     # Verify the callback was actually called
     assert callback_called[0], "on_game_over callback was not invoked"
@@ -875,59 +873,62 @@ async def test_game_over_removes_from_registry():
 
 @pytest.mark.asyncio
 async def test_deal_bid_sync_round_robin() -> None:
-    """DEAL_BID phase uses sync round-robin: deal 1 card per player (1 deal tick),
-    then each player bids in turn.
+    """DEAL_BID phase: deal one card, recipient must bid/skip, then next card.
 
-    Per spec: "每次 deal tick 发一张牌给每人后，按 CCW 顺序轮流让每个
-    player 决定 bid/pass" — each deal tick deals 1 card to each player (4 calls
-    to deal_next_card), then all 4 players bid/pass in round-robin.
+    Each deal-bid cycle: deal 1 card to a player → that player bids or
+    skips → deal next card to the next player → ...
 
-    Verifies the core behavior:
-    1. After run(), each player has exactly 1 card (first deal tick)
-    2. After one player bids/passes, the next player gets awaiting_action='bid'
-    3. After all 4 players act, 1 more card is dealt to each (total 2 each)
+    Verifies:
+    1. After run(), first player has 1 card and awaiting_action='bid'
+    2. Other players have 0 cards and awaiting_action=None
+    3. After skip, next player receives a card and gets awaiting_action='bid'
     """
     from server.actions import SkipBidAction
     players = _make_players()
     game = Game(players=players)
     await game.run()
 
-    # After run(), should be in DEAL_BID with first deal tick done
-    snapshot = game.snapshot(3)
+    # After run(), should be in DEAL_BID with first card dealt
+    snapshot = game.snapshot(0)
     assert snapshot.phase == "DEAL_BID"
 
-    # Each player should have exactly 1 card after first deal tick
-    # (deal_next_card deals 1 card to 1 player per call; 4 calls = 1 card each)
-    for i in range(4):
-        s = game.snapshot(i)
-        assert len(s.player_hand) == 1, (
-            f"Player {i}: expected 1 card after first deal tick, got {len(s.player_hand)}"
+    # First player (start_player, which is 0 by default) should have
+    # 1 card and awaiting_action='bid'
+    s0 = game.snapshot(0)
+    assert len(s0.player_hand) == 1, (
+        f"Player 0: expected 1 card after first deal, got {len(s0.player_hand)}"
+    )
+    assert s0.awaiting_action == "bid"
+
+    # Other players should have 0 cards and no awaiting
+    for i in range(1, 4):
+        si = game.snapshot(i)
+        assert len(si.player_hand) == 0, (
+            f"Player {i}: expected 0 cards before their deal, got {len(si.player_hand)}"
         )
+        assert si.awaiting_action is None
 
-    # Find the first bidder
-    first_bidder = None
-    for i in range(4):
-        s = game.snapshot(i)
-        if s.awaiting_action == "bid":
-            first_bidder = i
-            break
-    assert first_bidder is not None, "No player has awaiting_action='bid'"
+    # Player 0 skips → next card dealt to next player
+    await game.act(0, SkipBidAction())
 
-    # All 4 players bid/pass in round-robin
-    for turn in range(4):
-        bidder = (first_bidder + turn) % 4
-        s = game.snapshot(bidder)
-        if s.awaiting_action == "bid":
-            await game.act(bidder, SkipBidAction())
+    # Now in DEAL_BID still, next player should have received a card
+    assert game.get_phase() == "DEAL_BID"
+    # Player 0 still has 1 card (no new card yet), next player has 1
+    # The next player in CCW order after 0 is 1
+    s0_after = game.snapshot(0)
+    assert len(s0_after.player_hand) == 1
+    s1 = game.snapshot(1)
+    assert len(s1.player_hand) == 1, (
+        f"Player 1: expected 1 card after their deal, got {len(s1.player_hand)}"
+    )
+    assert s1.awaiting_action == "bid"
 
-    # After all 4 players act, next deal tick deals 1 more card each (total 2)
-    # The phase may have changed to STIRRING if dealing completed
-    for i in range(4):
-        s = game.snapshot(i)
-        if s.phase == "DEAL_BID":
-            assert len(s.player_hand) == 2, (
-                f"Player {i}: expected 2 cards after second deal tick, got {len(s.player_hand)}"
-            )
+    # Continue: player 1 skips → player 3 gets a card (CCW: 1→3)
+    await game.act(1, SkipBidAction())
+    assert game.get_phase() == "DEAL_BID"
+    s3 = game.snapshot(3)
+    assert len(s3.player_hand) == 1
+    assert s3.awaiting_action == "bid"
 
 
 @pytest.mark.asyncio
@@ -1194,14 +1195,15 @@ async def test_stirring_state_snapshot_has_declarer_player() -> None:
     assert stirring_dict["declarer_player"] == snap.stirring_state.declarer_player
 
 
-# ---- Task 003: COMPLETE Phase Awaiting Conditional ----
+# ---- Task 003: WAITING (SM COMPLETE) Phase Awaiting Conditional ----
 
 
 async def _create_complete_phase_game() -> Game:
-    """Helper: create a Game patched into COMPLETE phase via MagicMock.
+    """Helper: create a Game patched into WAITING (SM COMPLETE) phase via MagicMock.
 
     Returns a Game instance whose round_sm.create_round injects a
-    COMPLETE-phase RoundState. Uses only public interfaces after setup.
+    COMPLETE-phase RoundState (externally visible as WAITING via get_phase()).
+    Uses only public interfaces after setup.
     """
     from server.sm import game_sm as gm, round_sm as rm
     from server.sm.card_model import Rank
@@ -1242,12 +1244,11 @@ async def _create_complete_phase_game() -> Game:
 
 @pytest.mark.asyncio
 async def test_complete_awaiting_unconfirmed_player() -> None:
-    """In COMPLETE phase, unconfirmed players have awaiting_action='next_round'.
+    """In WAITING phase (SM COMPLETE), unconfirmed players have awaiting_action='next_round'.
 
-    Uses MagicMock to create a COMPLETE-phase RoundState and patches
-    round_sm.create_round to inject it, then verifies snapshot behavior
-    through the public Game.snapshot() interface. Does NOT access any
-    private fields (_round_state, _next_round_confirmed, etc.).
+    Uses MagicMock to create a COMPLETE-phase RoundState (externally WAITING)
+    and patches round_sm.create_round to inject it, then verifies snapshot
+    behavior through the public Game.snapshot() interface.
     """
     game = await _create_complete_phase_game()
 
@@ -1260,10 +1261,10 @@ async def test_complete_awaiting_unconfirmed_player() -> None:
 
 @pytest.mark.asyncio
 async def test_complete_awaiting_confirmed_player() -> None:
-    """In COMPLETE phase, confirmed players have awaiting_action=None.
+    """In WAITING phase (SM COMPLETE), confirmed players have awaiting_action=None.
 
     Uses MagicMock and public Game.act(player, NextRoundAction()) to confirm
-    player 0, then verifies snapshot behavior. Does NOT access any private fields.
+    player 0, then verifies snapshot behavior.
     """
     game = await _create_complete_phase_game()
 
@@ -1284,17 +1285,18 @@ async def test_complete_awaiting_confirmed_player() -> None:
 
 @pytest.mark.asyncio
 async def test_complete_awaiting_multiple_confirmed() -> None:
-    """In COMPLETE phase, multiple confirmed players have awaiting_action=None
-    while the unconfirmed player still sees awaiting_action='next_round'.
+    """In WAITING phase (SM COMPLETE), multiple confirmed players have
+    awaiting_action=None while the unconfirmed player still sees
+    awaiting_action='next_round'.
 
-    Verifies the COMPLETE-phase conditional logic for 3 confirmed players
-    while the phase is still COMPLETE (the 4th player's confirmation would
-    transition the game out of COMPLETE, so the 'all 4 confirmed' state in
-    COMPLETE is unobservable by design).
+    Verifies the WAITING-phase conditional logic for 3 confirmed players
+    while the phase is still WAITING (the 4th player's confirmation would
+    transition the game out of WAITING, so the 'all 4 confirmed' state in
+    WAITING is unobservable by design).
     """
     game = await _create_complete_phase_game()
 
-    # Confirm players 0, 1, 2 via public interface (still in COMPLETE phase)
+    # Confirm players 0, 1, 2 via public interface (still in WAITING phase)
     for p in range(3):
         await game.act(player_index=p, action=NextRoundAction())
 

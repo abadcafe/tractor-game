@@ -61,7 +61,7 @@ export function render(
   }
 
   // Conditionally render scoring overlay for COMPLETE phase (not GAME_OVER — that has its own overlay)
-  if (snapshot.phase === "COMPLETE") {
+  if (snapshot.phase === "WAITING") {
     container.appendChild(
       renderScoringOverlay(
         snapshot,

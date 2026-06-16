@@ -14,7 +14,6 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     trump_suit: null,
     declarer_team: null,
     declarer_player: null,
-    current_player: 3,
     defender_points: 0,
     legal_actions: [],
     trick: null,
@@ -83,7 +82,6 @@ Deno.test("test_handleMessage_stirring_human", () => {
   const msg = makeStateMsg({
     phase: "STIRRING",
     awaiting_action: "stir",
-    current_player: 3,
     stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3 },
   }, "stir");
   loop.handleMessage(msg);
@@ -98,7 +96,6 @@ Deno.test("test_handleMessage_stirring_not_human", () => {
   const msg = makeStateMsg({
     phase: "STIRRING",
     awaiting_action: "stir",
-    current_player: 1,
     stirring_state: { phase: "WAITING", trump_suit: null, current_player: 1 },
   }, "stir");
   loop.handleMessage(msg);
@@ -113,7 +110,6 @@ Deno.test("test_handleMessage_exchange_human", () => {
   const msg = makeStateMsg({
     phase: "EXCHANGE",
     awaiting_action: "discard",
-    current_player: 3,
     exchange_state: { phase: "PICKED_UP", declarer_player: 3, count: 8 },
   }, "discard");
   loop.handleMessage(msg);
@@ -128,7 +124,6 @@ Deno.test("test_handleMessage_playing_human", () => {
   const msg = makeStateMsg({
     phase: "PLAYING",
     awaiting_action: "play",
-    current_player: 3,
   }, "play");
   loop.handleMessage(msg);
   assertEquals(lastInteractionMode, "play");
@@ -142,7 +137,6 @@ Deno.test("test_handleMessage_playing_not_human", () => {
   const msg = makeStateMsg({
     phase: "PLAYING",
     awaiting_action: "play",
-    current_player: 1,
   }, "play");
   loop.handleMessage(msg);
   assertEquals(lastInteractionMode, null);
@@ -154,9 +148,8 @@ Deno.test("test_handleMessage_complete_human", () => {
   const stateManager = new StateManager();
   const loop = new GameLoop(stateManager, mockRender, mockContainer, 3);
   const msg = makeStateMsg({
-    phase: "COMPLETE",
+    phase: "WAITING",
     awaiting_action: "next_round",
-    current_player: 3,
     scoring: { declarer_team: 0, defender_points: 30, total_defender_points: 30, bottom_card_bonus: 0, bottom_cards: [] },
   }, "next_round");
   loop.handleMessage(msg);
@@ -231,7 +224,6 @@ Deno.test("test_handleMessage_unknown_awaiting_returns_null", () => {
   const msg = makeStateMsg({
     phase: "PLAYING",
     awaiting_action: "unknown_action",
-    current_player: 3,
   }, "unknown_action");
   loop.handleMessage(msg);
   assertEquals(lastInteractionMode, null);

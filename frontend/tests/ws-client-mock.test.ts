@@ -14,7 +14,6 @@ function makeStateMessage(): ServerMessage {
       trump_suit: null,
       declarer_team: null,
       declarer_player: null,
-      current_player: 0,
       defender_points: 0,
       legal_actions: [],
       trick: null,

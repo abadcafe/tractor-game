@@ -23,7 +23,6 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     trump_suit: "hearts",
     declarer_team: 0,
     declarer_player: 3,
-    current_player: 3,
     defender_points: 0,
     legal_actions: [[{ id: "D1-hearts-5", suit: "hearts", rank: "5" }]],
     trick: null,

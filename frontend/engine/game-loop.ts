@@ -20,21 +20,19 @@ export class GameLoop {
   private container: Element;
   private isReconnecting: ReconnectingProvider;
   private onError: ErrorHandler | null;
-  private humanPlayerIndex: number;
   private lastError: string | null = null;
 
   constructor(
     stateManager: StateManager,
     renderFn: (snapshot: StateSnapshot, container: Element, interactionMode: InteractionMode) => void,
     container: Element,
-    humanPlayerIndex: number,
+    _humanPlayerIndex?: number,
     isReconnecting?: ReconnectingProvider,
     onError?: ErrorHandler,
   ) {
     this.stateManager = stateManager;
     this.renderFn = renderFn;
     this.container = container;
-    this.humanPlayerIndex = humanPlayerIndex;
     this.isReconnecting = isReconnecting ?? (() => false);
     this.onError = onError ?? null;
   }
@@ -71,9 +69,10 @@ export class GameLoop {
    * Rules:
    * - If reconnecting -> null (disable all interaction)
    * - If phase is "DEAL_BID" -> always "bid" (show bidding panel)
-   * - If phase is "COMPLETE" -> "next_round" (show scoring + next round button)
+   * - If phase is "WAITING" -> "next_round" (show scoring + next round button)
    * - If phase is "GAME_OVER" -> "next_round" (show scoring overlay without button)
-   * - Else if awaiting is not null and current_player is human -> map awaiting to interaction mode
+   * - Else if awaiting is not null -> map awaiting to interaction mode
+   *   (awaiting is only non-null when it's the human player's turn)
    * - Otherwise -> null (spectator mode)
    */
   private computeInteractionMode(state: StateSnapshot, awaiting: string | null): InteractionMode {
@@ -86,7 +85,7 @@ export class GameLoop {
       return "bid";
     }
 
-    if (state.phase === "COMPLETE") {
+    if (state.phase === "WAITING") {
       return "next_round";
     }
 
@@ -94,7 +93,7 @@ export class GameLoop {
       return "next_round";
     }
 
-    if (awaiting !== null && state.current_player === this.humanPlayerIndex) {
+    if (awaiting !== null) {
       switch (awaiting) {
         case "stir":
           return "stir";
@@ -102,6 +101,8 @@ export class GameLoop {
           return "discard";
         case "play":
           return "play";
+        case "next_round":
+          return "next_round";
         default:
           return null;
       }

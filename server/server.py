@@ -2,41 +2,39 @@
 
 Wires Game, Player, and GameRegistry together. Handles HTTP/WS protocol
 concerns only. Contains no game logic.
+
+Server maintains its own human_players mapping (game_id → HumanPlayer)
+to route WS connections without hardcoding player indices.
 """
 
 import asyncio
 import logging
 import os
-from collections.abc import Sequence
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket
 from fastapi.responses import FileResponse, Response
 
-from server.actions import (
-    BidAction,
-    DiscardAction,
-    NextRoundAction,
-    PlayAction,
-    SkipBidAction,
-    SkipStirAction,
-    StirAction,
-)
 from server.game import Game
 from server.game_registry import GameRegistry
 from server.player import AutoPlayer, HumanPlayer, Player
-from server.sm.result import Ok, Rejected, StateResult
 
 logger = logging.getLogger(__name__)
 
-_HUMAN_PLAYER_INDEX = 3
 registry = GameRegistry()
+human_players: dict[str, HumanPlayer] = {}
 
 
 async def _cleanup_loop():
     """Periodic cleanup of expired games."""
     while True:
         await asyncio.sleep(300)
+        # Clean up human_players entries for expired games
+        expired_ids = set(human_players.keys()) - set(g["game_id"] for g in registry.list_games())
+        for gid in expired_ids:
+            human = human_players.pop(gid, None)
+            if human is not None and human.is_connected():
+                await human.close_ws()
         registry.cleanup_expired(max_age_seconds=3600)
 
 
@@ -63,18 +61,26 @@ async def health():
 
 @app.post("/api/game", status_code=201)
 async def create_game():
-    players: Sequence[Player] = [AutoPlayer(i) for i in range(3)]
-    players = list(players)
-    players.append(HumanPlayer(_HUMAN_PLAYER_INDEX, ws=None))
+    """Create a new game with 3 AI players and 1 human player.
+
+    The game starts in WAITING phase. All players must confirm (next_round)
+    before the game begins. AutoPlayers confirm automatically.
+    """
+    players: list[Player] = [AutoPlayer(i) for i in range(3)]
+    human = HumanPlayer(3)
+    players.append(human)
     game = Game(players=players)
     game_id = registry.create(game)
+    human_players[game_id] = human
 
     def on_game_over(g: Game) -> None:
         registry.delete(game_id)
+        human_players.pop(game_id, None)
 
     game.set_on_game_over(on_game_over)
 
-    asyncio.create_task(game.run())
+    # Push initial WAITING state to all players (triggers AutoPlayer confirmations)
+    asyncio.create_task(game.push_initial_state())
 
     return {"game_id": game_id}
 
@@ -87,11 +93,12 @@ async def list_games():
 @app.delete("/api/game/{game_id}")
 async def delete_game(game_id: str):
     game = registry.get(game_id)
-    if game is not None:
-        human = game.get_player(_HUMAN_PLAYER_INDEX)
-        if human.is_connected():
+    human = human_players.pop(game_id, None)
+    if human is not None and human.is_connected():
+        # Push final state before closing so client receives it
+        if game is not None:
             await human.on_state(game, seq=game.current_seq)
-            await human.close_ws()
+        await human.close_ws()
     registry.delete(game_id)
     return {"ok": True}
 
@@ -101,169 +108,23 @@ async def delete_game(game_id: str):
 
 @app.websocket("/game/{game_id}")
 async def websocket_game(websocket: WebSocket, game_id: str):
+    """WebSocket endpoint for game interaction.
+
+    Delegates entirely to HumanPlayer.handle_connection() which
+    manages the full WS lifecycle (accept, seq validation, action
+    parsing, game.act, cleanup).
+    """
     game = registry.get(game_id)
     if game is None:
         await websocket.close(code=4404, reason="game not found")
         return
 
-    human_player = game.get_player(_HUMAN_PLAYER_INDEX)
-
-    # Connection takeover: if an old connection exists, close it first.
-    # The old connection's finally block uses clear_ws_if_current(old_ws),
-    # so it won't clear the new connection we're about to set up.
-    if human_player.is_connected():
-        await human_player.close_ws()
-
-    if game.is_over():
-        await websocket.accept()
-        snapshot = game.snapshot(_HUMAN_PLAYER_INDEX)
-        try:
-            await websocket.send_json({
-                "type": "state",
-                "seq": game.current_seq,
-                "awaiting": snapshot.awaiting_action,
-                "state": snapshot.to_dict(),
-            })
-        except (WebSocketDisconnect, OSError):
-            logger.debug("Failed to send final state in game-over branch (WS disconnected)", exc_info=True)
-            return
-        try:
-            await websocket.close()
-        except (WebSocketDisconnect, OSError):
-            logger.debug("Failed to close WS in game-over branch (already disconnected)", exc_info=True)
+    human = human_players.get(game_id)
+    if human is None:
+        await websocket.close(code=4403, reason="no human player slot")
         return
 
-    await websocket.accept()
-    human_player.set_ws(websocket)
-
-    while True:
-        try:
-            raw = await websocket.receive_json()
-        except (WebSocketDisconnect, OSError):
-            logger.debug("WS receive loop ended (client disconnected)")
-            break
-        action_type = raw.get("type")
-        seq = raw.get("seq", 0)
-
-        # Seq validation: if seq doesn't match current state, push state with error.
-        # NOTE: In sync round-robin mode, seq changes are driven by player
-        # actions (act() calls), not background tasks. The seq check protects
-        # against stale clients that submit actions based on outdated state.
-        if seq != game.current_seq:
-            snapshot = game.snapshot(_HUMAN_PLAYER_INDEX)
-            try:
-                await websocket.send_json({
-                    "type": "state",
-                    "seq": game.current_seq,
-                    "awaiting": snapshot.awaiting_action,
-                    "state": snapshot.to_dict(),
-                    "error": f"seq mismatch: expected {game.current_seq}, got {seq}",
-                })
-            except (WebSocketDisconnect, OSError):
-                break
-            continue
-
-        parse_result = _parse_action(game, action_type, raw)
-        if isinstance(parse_result, Rejected):
-            snapshot = game.snapshot(_HUMAN_PLAYER_INDEX)
-            try:
-                await websocket.send_json({
-                    "type": "state",
-                    "seq": game.current_seq,
-                    "awaiting": snapshot.awaiting_action,
-                    "state": snapshot.to_dict(),
-                    "error": parse_result.reason,
-                })
-            except (WebSocketDisconnect, OSError):
-                break
-            continue
-
-        await game.act(_HUMAN_PLAYER_INDEX, parse_result.value)
-
-        if game.is_over():
-            await human_player.on_state(game, seq=game.current_seq)
-            break
-
-    human_player.clear_ws_if_current(websocket)
-
-
-def _parse_action(
-    game: Game, action_type: str, raw: dict[str, str | int | bool | None | list[str] | list[dict[str, str]]]
-) -> StateResult[BidAction | SkipBidAction | PlayAction | StirAction | SkipStirAction | DiscardAction | NextRoundAction]:
-    """Parse a WebSocket JSON message into a PlayerAction."""
-    if action_type == "bid":
-        pass_val = raw.get("pass", False)
-        if isinstance(pass_val, bool) and pass_val:
-            return Ok(value=SkipBidAction())
-        card_ids_result = _extract_card_ids(_get_cards_list(raw))
-        if isinstance(card_ids_result, Rejected):
-            return card_ids_result
-        resolved_result = game.resolve_cards(_HUMAN_PLAYER_INDEX, card_ids_result.value)
-        if isinstance(resolved_result, Rejected):
-            return resolved_result
-        return Ok(value=BidAction(cards=resolved_result.value, count=len(resolved_result.value)))
-    elif action_type == "stir":
-        pass_val = raw.get("pass", False)
-        if isinstance(pass_val, bool) and pass_val:
-            return Ok(value=SkipStirAction())
-        card_ids_result = _extract_card_ids(_get_cards_list(raw))
-        if isinstance(card_ids_result, Rejected):
-            return card_ids_result
-        resolved_result = game.resolve_cards(_HUMAN_PLAYER_INDEX, card_ids_result.value)
-        if isinstance(resolved_result, Rejected):
-            return resolved_result
-        return Ok(value=StirAction(cards=resolved_result.value))
-    elif action_type == "discard":
-        card_ids_result = _extract_card_ids(_get_cards_list(raw))
-        if isinstance(card_ids_result, Rejected):
-            return card_ids_result
-        resolved_result = game.resolve_cards(_HUMAN_PLAYER_INDEX, card_ids_result.value)
-        if isinstance(resolved_result, Rejected):
-            return resolved_result
-        return Ok(value=DiscardAction(cards=resolved_result.value))
-    elif action_type == "play":
-        card_ids_result = _extract_card_ids(_get_cards_list(raw))
-        if isinstance(card_ids_result, Rejected):
-            return card_ids_result
-        resolved_result = game.resolve_cards(_HUMAN_PLAYER_INDEX, card_ids_result.value)
-        if isinstance(resolved_result, Rejected):
-            return resolved_result
-        return Ok(value=PlayAction(cards=resolved_result.value))
-    elif action_type == "next_round":
-        return Ok(value=NextRoundAction())
-    else:
-        return Rejected(reason=f"unknown action type: {action_type}")
-
-
-def _get_cards_list(raw: dict[str, str | int | bool | None | list[str] | list[dict[str, str]]]) -> Sequence[str | dict[str, str]]:
-    """Extract the 'cards' field from a WS message.
-
-    Returns [] if the field is missing or not a list.
-    """
-    val = raw.get("cards")
-    if isinstance(val, list):
-        return val
-    return []
-
-
-def _extract_card_ids(cards: Sequence[str | dict[str, str]]) -> StateResult[list[str]]:
-    """Extract card ID strings from WS message cards.
-
-    Cards may be plain strings or dicts with an "id" key.
-    Returns Rejected if any card dict is missing the 'id' key.
-    """
-    ids: list[str] = []
-    for c in cards:
-        if isinstance(c, str):
-            ids.append(c)
-        else:
-            # c is dict[str, str] (the only other option in the union)
-            id_raw = c.get("id")
-            if id_raw is not None:
-                ids.append(id_raw)
-            else:
-                return Rejected(reason=f"Invalid card format: missing 'id' in {c}")
-    return Ok(value=ids)
+    await human.handle_connection(websocket, game)
 
 
 # ---- Static files ----

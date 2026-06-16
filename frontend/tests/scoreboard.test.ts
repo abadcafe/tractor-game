@@ -19,7 +19,6 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     trump_suit: null,
     declarer_team: null,
     declarer_player: null,
-    current_player: 0,
     defender_points: 15,
     legal_actions: [],
     trick: null,
