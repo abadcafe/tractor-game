@@ -8,6 +8,7 @@ Responsibilities: Play complete games through REST+WS external interfaces,
     verifying state transitions, boundary conditions, and error handling.
 """
 
+import random
 import time
 
 from collections.abc import Generator
@@ -788,6 +789,64 @@ def _extract_card_ids_from_dicts(cards: list[dict[str, object]]) -> list[str]:
     return result
 
 
+# ---- Wrong Action Injection ----
+
+
+_WRONG_ACTION_POOL: list[dict[str, object]] = [
+    {"type": "invalid_action_type"},
+    {"type": "play", "cards": ["NONEXISTENT_0"]},
+    {"type": "bid", "cards": ["NONEXISTENT_0"]},
+    {"type": "stir", "cards": ["NONEXISTENT_0"]},
+    {"type": "discard", "cards": ["NONEXISTENT_0"]},
+    {"type": "play", "cards": ["NONEXISTENT_1", "NONEXISTENT_2"]},
+    {"type": "bid", "cards": ["NONEXISTENT_1", "NONEXISTENT_2"]},
+    {"type": "stir", "cards": ["NONEXISTENT_2", "NONEXISTENT_3"]},
+    {"type": "discard", "cards": ["NONEXISTENT_2", "NONEXISTENT_3"]},
+]
+
+
+def _send_wrong_actions(driver: WsGameDriver) -> None:
+    """Send 1-3 random wrong actions before the correct action.
+
+    Verifies that each wrong action is rejected by the server.
+    This tests that the game properly handles invalid actions and
+    continues working normally after rejection.
+
+    Uses send_action + receive_msg directly (not do_action) to avoid
+    the retry-on-seq-mismatch logic, which would re-send the same
+    wrong action indefinitely.
+    """
+    n = random.randint(1, 3)
+    pool = _WRONG_ACTION_POOL.copy()
+    random.shuffle(pool)
+    for i in range(n):
+        wrong_action = pool[i % len(pool)]
+        seq_before = driver.current_seq
+        driver.send_action(wrong_action)
+        deadline = time.monotonic() + 3
+        rejected = False
+        while time.monotonic() < deadline:
+            msg = driver.receive_msg(verbose=False)
+            if msg.get("type") == "state":
+                new_seq = _as_int(msg["seq"])
+                driver.sync_seq(new_seq)
+                error = msg.get("error")
+                if error is not None:
+                    # Wrong action was rejected — expected
+                    rejected = True
+                    break
+                if new_seq > seq_before:
+                    # Seq advanced without error — AutoPlayer cascade
+                    # push, not our action's response. Keep reading.
+                    continue
+                # Seq unchanged, no error — stale push, keep reading
+                continue
+        assert rejected, (
+            f"Wrong action {wrong_action} was not rejected within 3s "
+            f"(seq: {seq_before} -> {driver.current_seq})"
+        )
+
+
 # ---- Phase Handlers ----
 
 
@@ -846,6 +905,7 @@ def _play_deal_bid(
                 chosen = _pick_best_bid(legal_list)
                 card_ids = _extract_card_ids_from_dicts(chosen)
                 print(f"  [R{round_count}:BID] human bids: {card_ids}", flush=True)
+                _send_wrong_actions(driver)
                 response = driver.do_bid(card_ids)
                 if response is not None:
                     state = _as_dict(response["state"])
@@ -869,6 +929,7 @@ def _play_deal_bid(
                     print(f"  [R{round_count}:BID] bid rejected: {driver.last_error}", flush=True)
 
             # Pass: either no legal actions, already bid, or bid failed
+            _send_wrong_actions(driver)
             response = driver.do_bid_pass()
             if response is not None:
                 state = _as_dict(response["state"])
@@ -924,6 +985,7 @@ def _play_stirring(
             break
 
         if msg.get("awaiting") == "stir":
+            _send_wrong_actions(driver)
             response = driver.do_stir_pass()
             if response is not None:
                 state = _as_dict(response["state"])
@@ -975,6 +1037,7 @@ def _play_exchange(
         for c in hand[-count:]:
             discard_ids.append(_as_str(c["id"]))
         print(f"  [R{round_count}:EXCHANGE] human discard {len(discard_ids)} cards", flush=True)
+        _send_wrong_actions(driver)
         response = driver.do_discard(discard_ids)
         if response is not None:
             state = _as_dict(response["state"])
@@ -992,6 +1055,7 @@ def _play_exchange(
                 pass  # already transitioned
             elif _as_str(state.get("awaiting_action", "")) == "discard":
                 # Still our turn, retry discard
+                _send_wrong_actions(driver)
                 response = driver.do_discard(discard_ids)
                 if response is not None:
                     state = _as_dict(response["state"])
@@ -1163,6 +1227,7 @@ def _play_playing(
                         "type": "play",
                         "cards": dict_cards,
                     }
+                    _send_wrong_actions(driver)
                     response = driver.do_action(play_action)
                     assert response is not None, "Dict-format card play should succeed"
                     first_trick = False
@@ -1173,6 +1238,7 @@ def _play_playing(
                         c_dict = _as_dict(c)
                         play_card_ids.append(_as_str(c_dict["id"]))
                     print(f"  [R{round_count}:PLAY] trick {tricks_played + 1}: play {play_card_ids}", flush=True)
+                    _send_wrong_actions(driver)
                     response = driver.do_play(play_card_ids)
                     if response is None:
                         print(f"  [R{round_count}:PLAY] PLAY FAILED! error={driver.last_error}", flush=True)
@@ -1307,6 +1373,7 @@ def _play_waiting(
     # next event loop tick (triggered by receive_msg()'s portal.call).
     if msg.get("awaiting") == "next_round":
         print(f"  [R{round_count}:WAITING] human confirm next_round", flush=True)
+        _send_wrong_actions(driver)
         response = driver.do_next_round()
         if response is not None:
             state = _as_dict(response["state"])
@@ -1321,6 +1388,7 @@ def _play_waiting(
         # was already processed, the resend gets rejected harmlessly
         # ("你已经确认过了"), but do_action still drains cascade messages.
         while state["phase"] == "WAITING":
+            _send_wrong_actions(driver)
             response = driver.do_next_round()
             if response is not None:
                 state = _as_dict(response["state"])
