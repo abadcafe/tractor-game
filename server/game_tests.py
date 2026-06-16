@@ -70,7 +70,7 @@ async def test_act_rejects_wrong_player():
     game = _create_game_with_auto_players()
     await game.run()
     # Should not raise; rejection is communicated via send_error instead
-    await game.act(player_index=0, action=PlayAction(cards=[]))
+    await game.act(player_index=0, seq=game.current_seq, action=PlayAction(cards=[]))
 
 
 @pytest.mark.asyncio
@@ -79,7 +79,59 @@ async def test_act_value_error_not_propagated():
     game = _create_game_with_auto_players()
     await game.run()
     # Should not raise
-    await game.act(player_index=0, action=PlayAction(cards=[]))
+    await game.act(player_index=0, seq=game.current_seq, action=PlayAction(cards=[]))
+
+
+@pytest.mark.asyncio
+async def test_act_rejects_stale_seq() -> None:
+    """game.act() with wrong seq sends unicast error, seq unchanged, state unchanged."""
+    from server.player import Player
+
+    class ErrorTrackingPlayer(Player):
+        """Player that tracks error pushes."""
+        def __init__(self, index: int) -> None:
+            super().__init__(index)
+            self.errors: list[str] = []
+            self.seq_at_error: list[int] = []
+
+        async def on_state(self, game: object, *, seq: int = 0, error: str | None = None) -> None:
+            if error is not None:
+                self.errors.append(error)
+                self.seq_at_error.append(seq)
+
+    players = [ErrorTrackingPlayer(index=i) for i in range(4)]
+    game = Game(players=players)
+    await game.run()
+
+    seq_before = game.current_seq
+    phase_before = game.get_phase()
+
+    # Send action with stale seq (seq=0 when game has advanced past 0)
+    await game.act(player_index=0, seq=0, action=SkipBidAction())
+
+    # seq should NOT have changed (no state change)
+    assert game.current_seq == seq_before, (
+        f"seq should not change on stale action: {seq_before} -> {game.current_seq}"
+    )
+    # phase should NOT have changed
+    assert game.get_phase() == phase_before, (
+        f"phase should not change on stale action: {phase_before} -> {game.get_phase()}"
+    )
+    # Only the acting player should have received the error push
+    assert len(players[0].errors) == 1, (
+        f"Player 0 should have 1 error, got {len(players[0].errors)}"
+    )
+    assert "stale action" in players[0].errors[0], (
+        f"Error should mention 'stale action', got: {players[0].errors[0]}"
+    )
+    assert players[0].seq_at_error[0] == seq_before, (
+        f"Error push should have current seq={seq_before}, got {players[0].seq_at_error[0]}"
+    )
+    # Other players should NOT have received any error
+    for i in range(1, 4):
+        assert len(players[i].errors) == 0, (
+            f"Player {i} should not receive error for player 0's stale action"
+        )
 
 
 # ---- snapshot() ----
@@ -267,7 +319,7 @@ async def test_act_bid_during_dealing_converts_to_bid_event():
         if trump_cards:
             action = BidAction(cards=trump_cards[:1], count=1)
             # Bid may be rejected (e.g. priority too low), but act() never raises
-            await game.act(player_index=0, action=action)
+            await game.act(player_index=0, seq=game.current_seq, action=action)
 
 
 @pytest.mark.asyncio
@@ -289,7 +341,7 @@ async def test_act_next_round_during_non_complete():
     game = _create_game_with_auto_players()
     await game.run()
     # Should not raise; rejection is communicated via send_error instead
-    await game.act(player_index=0, action=NextRoundAction())
+    await game.act(player_index=0, seq=game.current_seq, action=NextRoundAction())
 
 
 # ---- get_phase() GAME_OVER priority ----
@@ -343,7 +395,7 @@ async def test_set_on_game_over_callback_fires_on_game_over():
 
     # A COMPLETE-phase RoundState mock (returned by round_sm.play)
     complete_round = MagicMock()
-    complete_round.phase = "COMPLETE"
+    complete_round.phase = "WAITING"
     complete_round.players_hand = [[] for _ in range(4)]
     complete_round.declarer_player = 0
     complete_round.result = MagicMock(spec=RoundResult)
@@ -385,7 +437,7 @@ async def test_set_on_game_over_callback_fires_on_game_over():
     # round_sm.play returns COMPLETE phase, then process_round_result returns GAME_OVER.
     with patch.object(rm, "play", return_value=Ok(complete_round)):
         with patch.object(gm, "process_round_result", return_value=Ok(game_over_state)):
-            await game.act(player_index=0, action=PlayAction(cards=[]))
+            await game.act(player_index=0, seq=game.current_seq, action=PlayAction(cards=[]))
 
     # Game must have transitioned to GAME_OVER
     assert game.is_over()
@@ -552,7 +604,7 @@ async def test_bid_during_deal_bid_pushes_state_uniformly():
     for i in range(4):
         snap = game.snapshot(i)
         if snap.awaiting_action == "bid":
-            await game.act(i, SkipBidAction())
+            await game.act(i, game.current_seq, SkipBidAction())
             break
 
     # After one action, one more push to all players
@@ -697,7 +749,7 @@ async def test_game_auto_completes_past_deal_bid():
         for i in range(4):
             snap = game.snapshot(i)
             if snap.awaiting_action == "bid":
-                await game.act(i, SkipBidAction())
+                await game.act(i, game.current_seq, SkipBidAction())
                 bid_found = True
                 break
         if not bid_found:
@@ -755,7 +807,7 @@ async def test_full_game_flow_completes_without_resource_explosion():
         for i in range(4):
             snap = game.snapshot(i)
             if snap.awaiting_action == "bid":
-                await game.act(i, SkipBidAction())
+                await game.act(i, game.current_seq, SkipBidAction())
                 bid_found = True
                 break
         if not bid_found:
@@ -810,7 +862,7 @@ async def test_game_over_removes_from_registry():
 
     # A COMPLETE-phase RoundState mock (returned by round_sm.play)
     complete_round = MagicMock()
-    complete_round.phase = "COMPLETE"
+    complete_round.phase = "WAITING"
     complete_round.players_hand = [[] for _ in range(4)]
     complete_round.declarer_player = 0
     complete_round.result = MagicMock(spec=RoundResult)
@@ -859,7 +911,7 @@ async def test_game_over_removes_from_registry():
     # Now trigger GAME_OVER via PlayAction using patched sm
     with patch.object(rm, "play", return_value=Ok(complete_round)):
         with patch.object(gm, "process_round_result", return_value=Ok(game_over_state)):
-            await game.act(player_index=0, action=PlayAction(cards=[]))
+            await game.act(player_index=0, seq=game.current_seq, action=PlayAction(cards=[]))
 
     # Verify the callback was actually called
     assert callback_called[0], "on_game_over callback was not invoked"
@@ -909,7 +961,7 @@ async def test_deal_bid_sync_round_robin() -> None:
         assert si.awaiting_action is None
 
     # Player 0 skips → next card dealt to next player
-    await game.act(0, SkipBidAction())
+    await game.act(0, game.current_seq, SkipBidAction())
 
     # Now in DEAL_BID still, next player should have received a card
     assert game.get_phase() == "DEAL_BID"
@@ -924,7 +976,7 @@ async def test_deal_bid_sync_round_robin() -> None:
     assert s1.awaiting_action == "bid"
 
     # Continue: player 1 skips → player 3 gets a card (CCW: 1→3)
-    await game.act(1, SkipBidAction())
+    await game.act(1, game.current_seq, SkipBidAction())
     assert game.get_phase() == "DEAL_BID"
     s3 = game.snapshot(3)
     assert len(s3.player_hand) == 1
@@ -1083,7 +1135,7 @@ async def test_deal_bid_no_background_delay() -> None:
     assert current_bidder is not None, "No player has awaiting_action='bid'"
 
     # Skip immediately — no sleep or background task needed
-    await game.act(current_bidder, SkipBidAction())
+    await game.act(current_bidder, game.current_seq, SkipBidAction())
 
     # The bid turn must have advanced or phase changed immediately
     snap_after = game.snapshot(current_bidder)
@@ -1127,7 +1179,7 @@ async def test_skip_bid_action_advances_turn() -> None:
     assert current_bidder is not None, "No player has awaiting_action='bid'"
 
     # Send SkipBidAction for the current bidder
-    await game.act(current_bidder, SkipBidAction())
+    await game.act(current_bidder, game.current_seq, SkipBidAction())
 
     # After skipping, either:
     # (a) another player now has awaiting_action='bid' (turn advanced), or
@@ -1173,7 +1225,7 @@ async def test_stirring_state_snapshot_has_declarer_player() -> None:
         for i in range(4):
             s = game.snapshot(i)
             if s.awaiting_action == "bid":
-                await game.act(i, SkipBidAction())
+                await game.act(i, game.current_seq, SkipBidAction())
                 bid_found = True
                 break
         if not bid_found:
@@ -1214,7 +1266,7 @@ async def _create_complete_phase_game() -> Game:
         declarer_team=0, last_declarer_player=0, winning_team=None, round_number=1,
     )
     complete_round = MagicMock()
-    complete_round.phase = "COMPLETE"
+    complete_round.phase = "WAITING"
     complete_round.players_hand = [[] for _ in range(4)]
     complete_round.declarer_player = 0
     complete_round.bottom_cards = []
@@ -1269,7 +1321,7 @@ async def test_complete_awaiting_confirmed_player() -> None:
     game = await _create_complete_phase_game()
 
     # Confirm player 0 via public interface
-    await game.act(player_index=0, action=NextRoundAction())
+    await game.act(player_index=0, seq=game.current_seq, action=NextRoundAction())
 
     # Player 0 confirmed -> awaiting_action=None
     snap0 = game.snapshot(0)
@@ -1298,7 +1350,7 @@ async def test_complete_awaiting_multiple_confirmed() -> None:
 
     # Confirm players 0, 1, 2 via public interface (still in WAITING phase)
     for p in range(3):
-        await game.act(player_index=p, action=NextRoundAction())
+        await game.act(player_index=p, seq=game.current_seq, action=NextRoundAction())
 
     # Confirmed players (0, 1, 2) -> awaiting_action=None
     for p in range(3):
@@ -1600,9 +1652,9 @@ async def test_act_stir_rejects_non_current_player() -> None:
         if snap.awaiting_action == "bid":
             if snap.bid_legal_actions:
                 cards = snap.bid_legal_actions[0]
-                await game.act(0, BidAction(cards=cards, count=len(cards)))
+                await game.act(0, game.current_seq, BidAction(cards=cards, count=len(cards)))
             else:
-                await game.act(0, SkipBidAction())
+                await game.act(0, game.current_seq, SkipBidAction())
         else:
             await asyncio.sleep(0.01)
 
@@ -1624,7 +1676,7 @@ async def test_act_stir_rejects_non_current_player() -> None:
 
     # The other player tries to skip stir -- should be rejected
     # (error is sent via send_error, not raised)
-    await game.act(other, SkipStirAction())
+    await game.act(other, game.current_seq, SkipStirAction())
 
     # The current player should still have awaiting_action='stir'
     snap_after = game.snapshot(for_player=current)
@@ -1649,11 +1701,11 @@ async def test_act_discard_rejects_non_declarer() -> None:
         if snap.awaiting_action == "bid":
             if snap.bid_legal_actions:
                 cards = snap.bid_legal_actions[0]
-                await game.act(0, BidAction(cards=cards, count=len(cards)))
+                await game.act(0, game.current_seq, BidAction(cards=cards, count=len(cards)))
             else:
-                await game.act(0, SkipBidAction())
+                await game.act(0, game.current_seq, SkipBidAction())
         elif snap.awaiting_action == "stir":
-            await game.act(0, SkipStirAction())
+            await game.act(0, game.current_seq, SkipStirAction())
         else:
             await asyncio.sleep(0.01)
 
@@ -1678,7 +1730,7 @@ async def test_act_discard_rejects_non_declarer() -> None:
     hand = snap_other.player_hand
     if hand:
         # Use a card from the other player's hand directly (no Card.from_id needed)
-        await game.act(other, DiscardAction(cards=[hand[0]]))
+        await game.act(other, game.current_seq, DiscardAction(cards=[hand[0]]))
 
     # The declarer should still have awaiting_action='discard'
     snap_after = game.snapshot(for_player=declarer)

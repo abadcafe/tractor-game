@@ -64,11 +64,12 @@ async def create_game():
     """Create a new game with 3 AI players and 1 human player.
 
     The game starts in WAITING phase. All players must confirm (next_round)
-    before the game begins. AutoPlayers confirm automatically.
+    before the game begins. AutoPlayers confirm via run(); the human player
+    confirms when they connect via WebSocket.
     """
-    players: list[Player] = [AutoPlayer(i) for i in range(3)]
+    auto_players: list[AutoPlayer] = [AutoPlayer(i) for i in range(3)]
     human = HumanPlayer(3)
-    players.append(human)
+    players: list[Player] = [*auto_players, human]
     game = Game(players=players)
     game_id = registry.create(game)
     human_players[game_id] = human
@@ -79,8 +80,10 @@ async def create_game():
 
     game.set_on_game_over(on_game_over)
 
-    # Push initial WAITING state to all players (triggers AutoPlayer confirmations)
-    asyncio.create_task(game.push_initial_state())
+    # Start each AutoPlayer independently — they send next_round to get
+    # into the game loop. HumanPlayer starts when their WS connects.
+    for ap in auto_players:
+        asyncio.create_task(ap.run(game))
 
     return {"game_id": game_id}
 

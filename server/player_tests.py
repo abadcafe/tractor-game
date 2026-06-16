@@ -224,7 +224,7 @@ async def test_auto_player_next_round():
     await asyncio.sleep(0.05)
     game.act.assert_awaited()
     call_args = game.act.call_args
-    assert isinstance(call_args[0][1], NextRoundAction)
+    assert isinstance(call_args[0][2], NextRoundAction)
 
 
 @pytest.mark.asyncio
@@ -257,7 +257,7 @@ async def test_auto_player_discard_when_current():
     await asyncio.sleep(0.05)
     game.act.assert_awaited()
     call_args = game.act.call_args
-    assert isinstance(call_args[0][1], DiscardAction)
+    assert isinstance(call_args[0][2], DiscardAction)
 
 
 @pytest.mark.asyncio
@@ -325,7 +325,7 @@ async def test_auto_player_ignores_dealing_if_no_trump_rank():
     game.act.assert_awaited()
     from server.actions import SkipBidAction
     call_args = game.act.call_args
-    assert isinstance(call_args[0][1], SkipBidAction)
+    assert isinstance(call_args[0][2], SkipBidAction)
 
 
 # ---- HumanPlayer ----
@@ -423,7 +423,7 @@ async def test_auto_player_stir_only_uses_same_suit_pairs():
     await asyncio.sleep(0.05)
     game.act.assert_awaited()
     call_args = game.act.call_args
-    action = call_args[0][1]
+    action = call_args[0][2]
 
     if isinstance(action, StirAction):
         # If stirring, both cards must be the same suit
@@ -468,6 +468,6 @@ async def test_auto_player_discard_with_exchange_state_snapshot():
 
     game.act.assert_awaited()
     call_args = game.act.call_args
-    action = call_args[0][1]
+    action = call_args[0][2]
     assert isinstance(action, DiscardAction)
     assert len(action.cards) == 3

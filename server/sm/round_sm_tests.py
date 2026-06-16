@@ -8,7 +8,7 @@ from server.sm.types import BidEvent
 from server.sm.round_sm import (
     RoundState, RoundInput, create_round,
     deal_next_card, reveal, pass_stir, stir, discard, play,
-    is_round_complete, get_round_result,
+    is_round_complete, get_round_result, finalize_deal_bid,
 )
 from server.sm.result import Ok, Rejected
 
@@ -62,7 +62,7 @@ def _play_first_legal(state: RoundState) -> RoundState:
 def _deal_all_cards(state: RoundState) -> RoundState:
     """Deal all 100 cards in the deal-bid phase."""
     while state.phase == "DEAL_BID" and state.deal_bid_state is not None:
-        if state.deal_bid_state.phase != "DEALING":
+        if state.deal_bid_state.phase != "DEALING" or state.deal_bid_state.all_dealt:
             break
         state = _deal(state)
     return state
@@ -71,6 +71,11 @@ def _deal_all_cards(state: RoundState) -> RoundState:
 def _complete_deal_bid_no_bid(state: RoundState) -> RoundState:
     """Complete deal-bid without any reveals (results in NO_BID)."""
     state = _deal_all_cards(state)
+    # After all cards dealt, finalize to transition to STIRRING
+    if state.phase == "DEAL_BID" and state.deal_bid_state is not None and state.deal_bid_state.all_dealt:
+        result = finalize_deal_bid(state)
+        assert isinstance(result, Ok), f"finalize_deal_bid rejected: {result.reason}"
+        state = result.value
     return state
 
 
@@ -99,6 +104,11 @@ def _complete_deal_bid_with_reveal(state: RoundState) -> RoundState:
 
     # Deal remaining cards
     state = _deal_all_cards(state)
+    # After all cards dealt, finalize to transition to STIRRING
+    if state.phase == "DEAL_BID" and state.deal_bid_state is not None and state.deal_bid_state.all_dealt:
+        result = finalize_deal_bid(state)
+        assert isinstance(result, Ok), f"finalize_deal_bid rejected: {result.reason}"
+        state = result.value
     return state
 
 
@@ -502,7 +512,7 @@ class TestPlayingPhase:
             prev_history_len = len(state.trick_history)
         # Game should have progressed through at least some tricks
         assert len(state.trick_history) >= 1
-        assert state.phase in ("SCORING", "COMPLETE", "PLAYING")
+        assert state.phase in ("SCORING", "WAITING", "PLAYING")
 
 
 class TestScoringPhase:
@@ -593,6 +603,11 @@ class TestRoundDeclarer:
                 state = result.value
                 break
         state = _deal_all_cards(state)
+        # Finalize deal-bid to transition to STIRRING
+        if state.deal_bid_state is not None and state.deal_bid_state.all_dealt:
+            result = finalize_deal_bid(state)
+            assert isinstance(result, Ok)
+            state = result.value
         assert state.phase == "STIRRING"
         assert state.deal_bid_state is not None
         assert state.deal_bid_state.bid_winner is not None
@@ -625,6 +640,11 @@ class TestRoundDeclarer:
                 state = result.value
                 break
         state = _deal_all_cards(state)
+        # Finalize deal-bid to transition to STIRRING
+        if state.deal_bid_state is not None and state.deal_bid_state.all_dealt:
+            result = finalize_deal_bid(state)
+            assert isinstance(result, Ok)
+            state = result.value
         assert state.phase == "STIRRING"
         # Winner is on team 1 but declarer_team is 0 -> fallback
         assert state.declarer_team == 0  # unchanged
@@ -720,7 +740,7 @@ class TestRoundFullFlow:
         # Should progress through at least some tricks
         assert len(state.trick_history) >= 1
         # If round completed, verify result is valid
-        if state.phase == "COMPLETE":
+        if state.phase == "WAITING":
             assert is_round_complete(state) is True
             result = get_round_result(state)
             assert result is not None

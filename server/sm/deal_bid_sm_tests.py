@@ -4,7 +4,7 @@ from server.sm.result import Ok, Rejected
 from server.sm.types import BidEvent
 from server.sm.deal_bid_sm import (
     DealBidState, DealBidInput, DealBidResult,
-    create_deal_bid, deal_next_card, reveal,
+    create_deal_bid, deal_next_card, reveal, finalize_dealing,
 )
 
 
@@ -176,7 +176,7 @@ class TestDealNextCard:
             assert len(state.players_hand[i]) == 1
 
     def test_deal_next_card_all_dealt_with_bid(self) -> None:
-        """After 100 cards dealt with a bid placed mid-deal, phase = COMPLETE."""
+        """After 100 cards dealt with a bid placed mid-deal, all_dealt=True."""
         deck, _ = _make_deterministic_deck()
         state = create_deal_bid(DealBidInput(
             deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
@@ -196,20 +196,24 @@ class TestDealNextCard:
         state = result.value
         # Deal remaining 95 cards
         for _ in range(95):
-            if state.phase == "DEALING":
+            if state.phase == "DEALING" and not state.all_dealt:
                 state = _deal(state)
-        assert state.phase == "COMPLETE"
+        # Phase stays DEALING with all_dealt=True — last recipient hasn't acted yet
+        assert state.phase == "DEALING"
+        assert state.all_dealt
 
     def test_deal_next_card_all_dealt_no_bid(self) -> None:
-        """After 100 cards dealt with no bids, phase = NO_BID."""
+        """After 100 cards dealt with no bids, all_dealt=True, phase stays DEALING."""
         deck, _ = _make_deck_with_specific_cards()
         state = create_deal_bid(DealBidInput(
             deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
         ))
         for _ in range(100):
-            if state.phase == "DEALING":
+            if state.phase == "DEALING" and not state.all_dealt:
                 state = _deal(state)
-        assert state.phase == "NO_BID"
+        # Phase stays DEALING with all_dealt=True — last recipient hasn't acted yet
+        assert state.phase == "DEALING"
+        assert state.all_dealt
 
 
 class TestReveal:
@@ -304,21 +308,25 @@ class TestReveal:
         assert state.bid_winner.player == 0
 
     def test_reveal_wrong_phase_rejected(self) -> None:
-        """Reveal after dealing is done is rejected."""
+        """Reveal after dealing is finalized is rejected."""
         deck, _ = _make_deck_with_specific_cards()
         state = create_deal_bid(DealBidInput(
             deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
         ))
         for _ in range(100):
-            if state.phase == "DEALING":
+            if state.phase == "DEALING" and not state.all_dealt:
                 state = _deal(state)
-        # Now phase is NO_BID or COMPLETE
+        # Finalize (no bids → NO_BID)
+        result = finalize_dealing(state)
+        assert isinstance(result, Ok)
+        state = result.value
+        # Now phase is NO_BID — reveal should be rejected
         bid = BidEvent(
             player=0, cards=[], kind="trump_rank",
             suit=Suit.HEARTS, joker_type=None, count=1,
         )
-        result = reveal(state, bid)
-        assert isinstance(result, Rejected)
+        result2 = reveal(state, bid)
+        assert isinstance(result2, Rejected)
 
     def test_reveal_not_in_hand_rejected(self) -> None:
         """Reveal with cards not in player's hand is rejected."""
@@ -480,9 +488,15 @@ class TestReveal:
         state = result.value
         # Deal remaining cards
         for _ in range(95):
-            if state.phase == "DEALING":
+            if state.phase == "DEALING" and not state.all_dealt:
                 state = _deal(state)
-        # After all cards dealt with a joker bid, phase = COMPLETE
+        # After all cards dealt, phase stays DEALING with all_dealt=True
+        assert state.phase == "DEALING"
+        assert state.all_dealt
+        # Finalize → COMPLETE (joker bid exists)
+        result2 = finalize_dealing(state)
+        assert isinstance(result2, Ok)
+        state = result2.value
         assert state.phase == "COMPLETE"
         # The result should have trump_suit=None (无主)
         result_data = _get_result(state)
@@ -536,32 +550,41 @@ class TestReveal:
 
 class TestDealBidFullFlow:
     def test_deal_bid_full_flow_no_bid(self) -> None:
-        """Complete flow: deal all cards with no bids, result is NO_BID."""
+        """Complete flow: deal all cards with no bids, finalize → NO_BID."""
         deck, _ = _make_deck_with_specific_cards()
         state = create_deal_bid(DealBidInput(
             deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
         ))
         # Deal all cards
         for _ in range(100):
-            if state.phase == "DEALING":
+            if state.phase == "DEALING" and not state.all_dealt:
                 state = _deal(state)
-        # Without any bids, should be NO_BID
-        assert state.phase == "NO_BID"
+        # Phase stays DEALING with all_dealt=True
+        assert state.phase == "DEALING"
+        assert state.all_dealt
+        # Finalize → NO_BID
+        result = finalize_dealing(state)
+        assert isinstance(result, Ok)
+        assert result.value.phase == "NO_BID"
 
     def test_deal_bid_no_bid_empty_trump(self) -> None:
-        """No bids = NO_BID phase, result has winner=None, trump_suit=None."""
+        """No bids = finalize → NO_BID phase, result has winner=None, trump_suit=None."""
         deck, _ = _make_deck_with_specific_cards()
         state = create_deal_bid(DealBidInput(
             deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
         ))
         for _ in range(100):
-            if state.phase == "DEALING":
+            if state.phase == "DEALING" and not state.all_dealt:
                 state = _deal(state)
+        # Finalize
+        result = finalize_dealing(state)
+        assert isinstance(result, Ok)
+        state = result.value
         assert state.phase == "NO_BID"
-        result = _get_result(state)
-        assert result.winner is None
-        assert result.trump_suit is None
-        assert result.bid_count == 0
+        result_data = _get_result(state)
+        assert result_data.winner is None
+        assert result_data.trump_suit is None
+        assert result_data.bid_count == 0
 
     def test_deal_bid_bid_value_ordering(self) -> None:
         """Bid values: pair♠(203) > pair♥(202) > single♠(103) > single♦(100)."""
@@ -573,6 +596,128 @@ class TestDealBidFullFlow:
 
         assert bid_value([c_s], Rank.TWO) > bid_value([c_d], Rank.TWO)
         assert bid_value([c_h1, c_h2], Rank.TWO) > bid_value([c_s], Rank.TWO)
+
+
+class TestLastCardBidOpportunity:
+    """Tests for the bug fix: last card recipient must get a chance to bid/skip."""
+
+    def test_deal_next_card_last_card_stays_dealing(self) -> None:
+        """After dealing the 100th card, phase stays DEALING with all_dealt=True.
+
+        The recipient of the last card must still be able to bid or skip.
+        """
+        deck, _ = _make_deck_with_specific_cards()
+        state = create_deal_bid(DealBidInput(
+            deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
+        ))
+        # Deal all 100 cards
+        for _ in range(100):
+            if state.phase == "DEALING" and not state.all_dealt:
+                state = _deal(state)
+        # Phase should still be DEALING (not COMPLETE/NO_BID)
+        assert state.phase == "DEALING"
+        assert state.all_dealt is True
+        assert state.deal_cursor == 100
+
+    def test_last_card_recipient_can_bid(self) -> None:
+        """Last card recipient can still bid after all_dealt=True."""
+        deck, _ = _make_deterministic_deck()
+        state = create_deal_bid(DealBidInput(
+            deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
+        ))
+        # Deal all 100 cards
+        for _ in range(100):
+            if state.phase == "DEALING" and not state.all_dealt:
+                state = _deal(state)
+        assert state.all_dealt is True
+        # The last card was dealt to a player — they should be able to bid
+        # if they have a trump-rank card (reveal still works in DEALING phase)
+        assert state.phase == "DEALING"
+        # Verify reveal is not rejected due to phase
+        # (the specific bid validity depends on hand contents, so just verify
+        # that the phase check passes — not rejected with "wrong phase")
+        fake_bid = BidEvent(
+            player=0, cards=[], kind="trump_rank",
+            suit=Suit.SPADES, joker_type=None, count=1,
+        )
+        result = reveal(state, fake_bid)
+        # Should NOT be rejected with "wrong phase" — other rejections are fine
+        if isinstance(result, Rejected):
+            assert "当前阶段" not in result.reason
+
+    def test_last_card_bid_then_finalize_complete(self) -> None:
+        """After last card recipient bids, finalize → COMPLETE."""
+        deck, _ = _make_deterministic_deck()
+        state = create_deal_bid(DealBidInput(
+            deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
+        ))
+        # Deal 5 cards, place a bid mid-deal
+        for _ in range(5):
+            state = _deal(state)
+        spade_twos = [c for c in state.players_hand[0] if c.rank == Rank.TWO and c.suit == Suit.SPADES]
+        assert len(spade_twos) >= 1
+        event = BidEvent(
+            player=0, cards=[spade_twos[0]], kind="trump_rank",
+            suit=Suit.SPADES, joker_type=None, count=1,
+        )
+        result = reveal(state, event)
+        assert isinstance(result, Ok)
+        state = result.value
+        # Deal remaining cards
+        for _ in range(95):
+            if state.phase == "DEALING" and not state.all_dealt:
+                state = _deal(state)
+        assert state.all_dealt is True
+        # Finalize → COMPLETE (bid_winner exists)
+        result2 = finalize_dealing(state)
+        assert isinstance(result2, Ok)
+        assert result2.value.phase == "COMPLETE"
+
+    def test_last_card_skip_then_finalize_no_bid(self) -> None:
+        """After last card recipient skips (no bids), finalize → NO_BID."""
+        deck, _ = _make_deck_with_specific_cards()
+        state = create_deal_bid(DealBidInput(
+            deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
+        ))
+        # Deal all cards (no bids placed)
+        for _ in range(100):
+            if state.phase == "DEALING" and not state.all_dealt:
+                state = _deal(state)
+        assert state.all_dealt is True
+        # Finalize → NO_BID (no bid_winner)
+        result = finalize_dealing(state)
+        assert isinstance(result, Ok)
+        assert result.value.phase == "NO_BID"
+
+    def test_finalize_before_all_dealt_rejected(self) -> None:
+        """finalize_dealing rejected when not all cards dealt yet."""
+        deck, _ = _make_deck_with_specific_cards()
+        state = create_deal_bid(DealBidInput(
+            deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
+        ))
+        # Deal only 50 cards
+        for _ in range(50):
+            state = _deal(state)
+        assert state.all_dealt is False
+        result = finalize_dealing(state)
+        assert isinstance(result, Rejected)
+
+    def test_all_dealt_flag_transitions(self) -> None:
+        """all_dealt is False until the 100th card, then True."""
+        deck, _ = _make_deck_with_specific_cards()
+        state = create_deal_bid(DealBidInput(
+            deck=deck, declarer_team=None, trump_rank=Rank.TWO, start_player=0,
+        ))
+        # Deal 99 cards — all_dealt should be False
+        for _ in range(99):
+            if state.phase == "DEALING" and not state.all_dealt:
+                state = _deal(state)
+        assert state.all_dealt is False
+        assert state.deal_cursor == 99
+        # Deal the 100th card — all_dealt becomes True
+        state = _deal(state)
+        assert state.all_dealt is True
+        assert state.deal_cursor == 100
 
 
 def _get_result(state: DealBidState) -> DealBidResult:

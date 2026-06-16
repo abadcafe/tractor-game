@@ -264,10 +264,18 @@ class WsGameDriver:
         On seq mismatch, retries with the updated seq. AutoPlayer cascade
         can advance the server's seq between our reads, so we allow
         multiple retries.
+
+        Timeout: 5s overall. If exceeded, returns None and prints a
+        stuck warning. In this state-machine test, a timeout means the
+        game is stuck (no player responding), not slow.
         """
         if self._ws is None:
             raise RuntimeError("Not connected")
+        deadline = time.monotonic() + 5
         for _ in range(20):  # allow many retries for seq mismatch
+            if time.monotonic() > deadline:
+                print(f"  [do_action] TIMEOUT after 5s, seq stuck at {self._current_seq}", flush=True)
+                return None
             self.last_error = None
             seq_before = self._current_seq
             self.send_action(action)
@@ -276,6 +284,9 @@ class WsGameDriver:
             # - error field present with seq unchanged → action rejected
             # - error field present with seq advanced → stale seq, retry
             while True:
+                if time.monotonic() > deadline:
+                    print(f"  [do_action] TIMEOUT after 5s, seq stuck at {self._current_seq}", flush=True)
+                    return None
                 try:
                     msg = self.receive_msg(verbose=False)
                 except Exception as e:
@@ -302,7 +313,7 @@ class WsGameDriver:
             continue
         return None
 
-    def wait_for_phase(self, phase: str, timeout: float = 30) -> dict[str, object]:
+    def wait_for_phase(self, phase: str, timeout: float = 5) -> dict[str, object]:
         """Wait until the game reaches the specified phase.
 
         Receives state messages until the target phase is found.
@@ -320,7 +331,7 @@ class WsGameDriver:
                     return msg
         raise TimeoutError(f"Phase '{phase}' not reached within {timeout}s")
 
-    def wait_for_awaiting(self, value: str, timeout: float = 30) -> dict[str, object]:
+    def wait_for_awaiting(self, value: str, timeout: float = 5) -> dict[str, object]:
         """Wait until awaiting_action equals the specified value.
 
         Pure receive — does NOT send any action. The caller is responsible
@@ -661,7 +672,7 @@ def _recv_until_our_turn(
     label: str,
     phase: str,
     awaiting_values: set[str],
-    timeout: float = 15,
+    timeout: float = 5,
     exit_awaiting: set[str] | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Drain messages until awaiting is in awaiting_values or phase changes.
@@ -684,6 +695,8 @@ def _recv_until_our_turn(
     """
     deadline = time.monotonic() + timeout
     count = 0
+    last_stuck_seq: int = -1
+    stuck_count: int = 0
     while time.monotonic() < deadline:
         msg = driver.receive_msg(verbose=False)
         if msg.get("type") == "state":
@@ -692,18 +705,29 @@ def _recv_until_our_turn(
             count += 1
             awaiting = msg.get("awaiting")
             cur_phase = state.get("phase", "?")
-            seq = msg.get("seq", "?")
+            seq_val = _as_int(msg["seq"])
+
+            # Stuck detection: if seq hasn't advanced for many messages,
+            # print a warning with elapsed time. This catches cases where
+            # the game is stuck (no player responding to a state).
+            if seq_val == last_stuck_seq:
+                stuck_count += 1
+                if stuck_count % 20 == 0:
+                    print(f"  [{label}] STUCK? t={time.monotonic()-deadline+timeout:.1f}s seq={seq_val} phase={cur_phase} awaiting={awaiting} (same seq x{stuck_count})", flush=True)
+            else:
+                last_stuck_seq = seq_val
+                stuck_count = 0
 
             if cur_phase != phase:
-                print(f"  [{label}] phase changed: {phase} -> {cur_phase} seq={seq} (drained {count})", flush=True)
+                print(f"  [{label}] phase changed: {phase} -> {cur_phase} seq={seq_val} (drained {count})", flush=True)
                 return state, msg
 
             if awaiting in awaiting_values:
-                print(f"  [{label}] our turn: awaiting={awaiting} seq={seq} (drained {count})", flush=True)
+                print(f"  [{label}] our turn: awaiting={awaiting} seq={seq_val} (drained {count})", flush=True)
                 return state, msg
 
             if exit_awaiting is not None and awaiting in exit_awaiting:
-                print(f"  [{label}] exit awaiting: {awaiting} seq={seq} (drained {count})", flush=True)
+                print(f"  [{label}] exit awaiting: {awaiting} seq={seq_val} (drained {count})", flush=True)
                 return state, msg
         # else: skip non-state messages
 
@@ -792,7 +816,7 @@ def _play_deal_bid(
         state, msg = _recv_state(driver, f"R{round_count}:BID")
         if state["phase"] != "DEAL_BID":
             print(f"  [R{round_count}:BID] phase={state['phase']}, waiting for DEAL_BID", flush=True)
-            msg = driver.wait_for_phase("DEAL_BID", timeout=15)
+            msg = driver.wait_for_phase("DEAL_BID", timeout=5)
             state = _as_dict(msg["state"])
 
     _verify_common_fields(state, "DEAL_BID")
@@ -962,7 +986,7 @@ def _play_exchange(
             print(f"  [R{round_count}:EXCHANGE] discard failed, draining to get current state", flush=True)
             state, msg = _recv_until_our_turn(
                 driver, f"R{round_count}:EXCH", "EXCHANGE", {"discard"},
-                timeout=15,
+                timeout=5,
             )
             if state["phase"] == "PLAYING":
                 pass  # already transitioned
@@ -977,7 +1001,7 @@ def _play_exchange(
             # Drain until PLAYING (AutoPlayer may cascade)
             state, msg = _recv_until_our_turn(
                 driver, f"R{round_count}:EXCH", "EXCHANGE", {"discard"},
-                timeout=15,
+                timeout=5,
             )
 
         hand_after = _hand_dicts(state)
@@ -989,7 +1013,7 @@ def _play_exchange(
         )
     else:
         print(f"  [R{round_count}:EXCHANGE] declarer={declarer_player}, waiting for PLAYING", flush=True)
-        msg = driver.wait_for_phase("PLAYING", timeout=15)
+        msg = driver.wait_for_phase("PLAYING", timeout=5)
         state = _as_dict(msg["state"])
 
     return state, msg
@@ -1095,7 +1119,7 @@ def _play_playing(
     if msg.get("awaiting") != "play" and state.get("phase") == "PLAYING":
         state, msg = _recv_until_our_turn(
             driver, f"R{round_count}:PLAY", "PLAYING", {"play"},
-            timeout=15,
+            timeout=5,
         )
 
     while True:
@@ -1180,7 +1204,7 @@ def _play_playing(
         while True:
             state, msg = _recv_until_our_turn(
                 driver, f"R{round_count}:PLAY", "PLAYING", {"play"},
-                timeout=15,
+                timeout=5,
             )
             if state["phase"] != "PLAYING":
                 print(f"[round {round_count}] PLAYING -> {state['phase']} after {tricks_played} tricks", flush=True)
@@ -1386,7 +1410,7 @@ def test_full_game(sync_client: TestClient) -> None:
         print(">>> connected <<<", flush=True)
 
         # Game starts in WAITING phase. AutoPlayers (0-2) confirm automatically
-        # via push_initial_state(). When we connect with seq=0 and send next_round,
+        # via run(). When we connect with seq=0 and send next_round,
         # do_action handles seq mismatch internally: it gets the current seq (4,
         # from 4 AutoPlayer confirmations), retries, and our next_round succeeds
         # (we're the 4th confirmer). This starts the game → DEAL_BID.

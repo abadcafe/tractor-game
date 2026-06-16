@@ -1,7 +1,7 @@
 """Game aggregate root for the Tractor game.
 
 Wraps sm state machines, manages 4 Player instances, drives the sync
-round-robin bidding, and provides act(), push_initial_state(), snapshot(),
+round-robin bidding, and provides act(), run(), snapshot(),
 is_over(), get_phase(), set_on_game_over(), get_player(), resolve_cards(),
 and current_seq interfaces.
 
@@ -13,7 +13,7 @@ seq increment. This includes each card dealt during DEAL_BID, each
 bid/skip, each stir pass, each play, and each WAITING confirmation.
 Error pushes are unicast to the acting player only (seq unchanged).
 process_round_result is called immediately when a round ends (PLAYING →
-COMPLETE) so players see scoring + level changes before confirming.
+WAITING) so players see scoring + level changes before confirming.
 """
 
 from __future__ import annotations
@@ -85,6 +85,10 @@ class Game:
             return
         if rs.deal_bid_state is None or rs.deal_bid_state.phase != "DEALING":
             return
+        if rs.deal_bid_state.all_dealt:
+            # All 100 cards dealt — waiting for last recipient to act.
+            # Finalization happens in act() after their bid/skip.
+            return
         # Remember who receives this card (deal_target before advance)
         recipient = rs.deal_bid_state.deal_target
         match round_sm.deal_next_card(rs):
@@ -95,20 +99,11 @@ class Game:
             case Rejected(reason=reason):
                 logger.warning("deal_next_card rejected: %s", reason)
 
-    async def push_initial_state(self) -> None:
-        """Push the initial WAITING state to all players.
-
-        Called by the server after creating the game. Triggers AutoPlayer
-        confirmations via on_state() which in turn call act().
-        """
-        await self._push_state_to_all()
-
     async def run(self) -> None:
         """Start the game directly, bypassing WAITING confirmation.
 
         Convenience method for testing: transitions to IN_ROUND, creates
-        the first round, deals, and pushes state. In production, the
-        server uses push_initial_state() + WAITING confirmation flow.
+        the first round, deals, and pushes state.
 
         Raises RuntimeError if called more than once.
         """
@@ -140,7 +135,7 @@ class Game:
         # the next card is dealt. Their act() calls _deal_one_and_push.
         await self._deal_one_and_push()
 
-    async def act(self, player_index: int, action: BidAction | SkipBidAction | PlayAction | StirAction | SkipStirAction | DiscardAction | NextRoundAction) -> None:
+    async def act(self, player_index: int, seq: int, action: BidAction | SkipBidAction | PlayAction | StirAction | SkipStirAction | DiscardAction | NextRoundAction) -> None:
         """Unified action entry point. Dispatches based on current phase and action type.
 
         Two push paths, strictly separated:
@@ -155,7 +150,18 @@ class Game:
         All runtime action rejections are communicated through the error
         channel instead of exceptions.  Programming errors (e.g. player
         index out of range) propagate as IndexError from the underlying list.
+
+        seq validation: stale actions (seq != current _seq) are rejected
+        with a unicast error push. This prevents actions based on outdated
+        state from corrupting the game — a safety net for AutoPlayer's
+        create_task race window and any client-side stale actions.
         """
+        if seq != self._seq:
+            await self._players[player_index].on_state(
+                self, seq=self._seq, error=f"stale action: expected {self._seq}, got {seq}",
+            )
+            return
+
         rs = self._round_state
         phase = self.get_phase()
         logger.debug("Game.act: player=%d action=%s phase=%s", player_index, type(action).__name__, phase)
@@ -183,10 +189,19 @@ class Game:
                 self._round_state = rs
                 await self._players[player_index].on_state(self, seq=self._seq, error=error_msg)
                 return
-            # Bid succeeded — advance turn, deal next card
+            # Bid succeeded — advance turn
             self._bid_turn = (self._bid_turn + 1) % 4
             self._round_state = rs
-            await self._deal_one_and_push()
+            if rs.deal_bid_state is not None and rs.deal_bid_state.all_dealt:
+                # Last card recipient bid — finalize deal-bid phase
+                match round_sm.finalize_deal_bid(rs):
+                    case Ok(value=new_state):
+                        self._round_state = new_state
+                        await self._push_state_to_all()
+                    case Rejected(reason=reason):
+                        logger.error("finalize_deal_bid rejected after bid: %s", reason)
+            else:
+                await self._deal_one_and_push()
             return
 
         elif phase == "DEAL_BID" and isinstance(action, SkipBidAction):
@@ -196,10 +211,19 @@ class Game:
                 self._round_state = rs
                 await self._players[player_index].on_state(self, seq=self._seq, error=error_msg)
                 return
-            # Skip succeeded — advance turn, deal next card
+            # Skip succeeded — advance turn
             self._bid_turn = (self._bid_turn + 1) % 4
             self._round_state = rs
-            await self._deal_one_and_push()
+            if rs.deal_bid_state is not None and rs.deal_bid_state.all_dealt:
+                # Last card recipient skipped — finalize deal-bid phase
+                match round_sm.finalize_deal_bid(rs):
+                    case Ok(value=new_state):
+                        self._round_state = new_state
+                        await self._push_state_to_all()
+                    case Rejected(reason=reason):
+                        logger.error("finalize_deal_bid rejected after skip: %s", reason)
+            else:
+                await self._deal_one_and_push()
             return
 
         elif phase == "STIRRING" and isinstance(action, SkipStirAction):
@@ -234,7 +258,7 @@ class Game:
                     rs = new_state
                     # If round ended, process result immediately so players
                     # see scoring + level changes in this push.
-                    if rs.phase == "COMPLETE" and rs.result is not None:
+                    if rs.phase == "WAITING" and rs.result is not None:
                         round_result = rs.result
                         match game_sm.process_round_result(self._game_state, round_result):
                             case Ok(value=new_gs):
@@ -244,7 +268,7 @@ class Game:
                 case Rejected(reason=reason):
                     error_msg = reason
             # Check if game ended after processing the play
-            if error_msg is None and rs.phase == "COMPLETE" and self._game_state.phase == "GAME_OVER":
+            if error_msg is None and rs.phase == "WAITING" and self._game_state.phase == "GAME_OVER":
                 self._round_state = rs
                 await self._push_state_to_all()
                 if self._on_game_over is not None:
@@ -283,11 +307,11 @@ class Game:
                         team1_level=self._game_state.team1_level,
                     ))
                     self._bid_turn = 0
-                    # Push once to show confirmed set cleared + new round
                     self._round_state = rs
-                    await self._push_state_to_all()
                     # Deal the first card — the recipient must bid/skip
-                    # before the next card is dealt.
+                    # before the next card is dealt. No intermediate push
+                    # needed; _deal_one_and_push will broadcast once a
+                    # card is dealt. Same pattern as _run_and_push().
                     await self._deal_one_and_push()
                     return
                 # else: intermediate confirmation — fall through to
@@ -303,13 +327,6 @@ class Game:
             # Unicast error to acting player. Error pushes do NOT
             # increment _seq because the game state has not changed.
             await self._players[player_index].on_state(self, seq=self._seq, error=error_msg)
-
-            # For DEAL_BID BidAction rejections where bid_turn advanced,
-            # also broadcast the new turn state so the next bidder knows
-            # it's their turn. Exclude the acting player who already
-            # received the error push (which contains the same state).
-            if phase == "DEAL_BID" and isinstance(action, BidAction):
-                await self._push_state_to_all(exclude=player_index)
         else:
             await self._push_state_to_all()
 
@@ -467,7 +484,7 @@ class Game:
             awaiting_action = "discard"
         elif rs.phase == "PLAYING" and can_act_in_playing and rs.trick_state is not None and for_player == rs.trick_state.cur:
             awaiting_action = "play"
-        elif rs.phase == "COMPLETE":
+        elif rs.phase == "WAITING":
             if for_player not in self._next_round_confirmed:
                 awaiting_action = "next_round"
             else:
@@ -566,15 +583,13 @@ class Game:
         """Return the current phase.
 
         WAITING: game not started yet (_round_state is None) or round
-        complete (rs.phase == "COMPLETE"). Both use the same WAITING
+        complete (rs.phase == "WAITING"). Both use the same WAITING
         phase with next_round confirmation mechanism.
         GAME_OVER takes priority over round-level phases.
         """
         if self._game_state.phase == "GAME_OVER":
             return "GAME_OVER"
         if self._round_state is None:
-            return "WAITING"
-        if self._round_state.phase == "COMPLETE":
             return "WAITING"
         return self._round_state.phase
 
@@ -633,10 +648,8 @@ class Game:
             count=action.count,
         ))
 
-    async def _push_state_to_all(self, exclude: int | None = None) -> None:
-        """Push state to all players, optionally excluding one."""
+    async def _push_state_to_all(self) -> None:
+        """Push state to all players."""
         self._seq += 1
         for i in range(len(self._players)):
-            if i == exclude:
-                continue
             await self._players[i].on_state(self, seq=self._seq, error=None)

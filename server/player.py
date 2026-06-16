@@ -61,6 +61,7 @@ class GameView(Protocol):
     async def act(
         self,
         player_index: int,
+        seq: int,
         action: PlayerAction,
     ) -> None: ...
     def resolve_cards(self, player_index: int, card_ids: list[str]) -> Ok[list[Card]] | Rejected: ...
@@ -112,23 +113,36 @@ class AutoPlayer(Player):
         super().__init__(index)
         self._action_count = 0
 
+    async def run(self, game: GameView) -> None:
+        """Start this player by sending an initial next_round confirmation.
+
+        This is the player-driven entry point: instead of Game pushing initial
+        state, each player independently starts by
+        requesting the current state. The first next_round confirmation in
+        WAITING phase gets the player into the game loop; subsequent on_state
+        pushes drive all further actions.
+        """
+        await game.act(self.index, 0, NextRoundAction())
+
     async def on_state(self, game: GameView, *, seq: int = 0, error: str | None = None) -> None:
-        # Error pushes are now unicast to the acting player only,
-        # so AutoPlayer never receives them. No guard needed.
+        # Error pushes indicate a stale/rejected action. Re-read current
+        # state and retry with the correct seq — the game state hasn't
+        # changed, so our decision logic should produce the same action,
+        # but now with seq matching the current _seq.
         snapshot = game.snapshot(self.index)
 
         if snapshot.phase == "DEAL_BID" and snapshot.awaiting_action == "bid":
-            await self._handle_deal_bid(snapshot, game)
+            await self._handle_deal_bid(snapshot, game, seq=seq)
         elif snapshot.phase == "STIRRING" and snapshot.awaiting_action == "stir":
-            await self._handle_stir(snapshot, game)
+            await self._handle_stir(snapshot, game, seq=seq)
         elif snapshot.phase == "EXCHANGE" and snapshot.awaiting_action == "discard":
-            await self._handle_discard(snapshot, game)
+            await self._handle_discard(snapshot, game, seq=seq)
         elif snapshot.phase == "PLAYING" and snapshot.awaiting_action == "play":
-            await self._handle_play(snapshot, game)
-        elif snapshot.phase in ("WAITING", "COMPLETE") and snapshot.awaiting_action == "next_round":
-            await self._handle_next_round(snapshot, game)
+            await self._handle_play(snapshot, game, seq=seq)
+        elif snapshot.phase == "WAITING" and snapshot.awaiting_action == "next_round":
+            await self._handle_next_round(snapshot, game, seq=seq)
 
-    async def _handle_deal_bid(self, snapshot: StateSnapshot, game: GameView) -> None:
+    async def _handle_deal_bid(self, snapshot: StateSnapshot, game: GameView, *, seq: int) -> None:
         """Bid during DEAL_BID phase if we have a competitive bid.
 
         Only bids if: (a) no bid_winner yet, or (b) we can beat the
@@ -146,14 +160,14 @@ class AutoPlayer(Player):
         if snapshot.declarer_team is not None:
             from server.sm.constants import get_team_index
             if get_team_index(self.index) != snapshot.declarer_team:
-                asyncio.create_task(game.act(self.index, SkipBidAction()))
+                asyncio.create_task(game.act(self.index, seq, SkipBidAction()))
                 return
         hand = snapshot.player_hand
         trump_rank = snapshot.trump_rank
 
         # 50% chance to even consider bidding (prevents deterministic always-bid)
         if random.random() >= 0.5:
-            asyncio.create_task(game.act(self.index, SkipBidAction()))
+            asyncio.create_task(game.act(self.index, seq, SkipBidAction()))
             return
 
         # Group trump-rank cards by suit
@@ -193,7 +207,7 @@ class AutoPlayer(Player):
                     break
 
         if not best_cards:
-            asyncio.create_task(game.act(self.index, SkipBidAction()))
+            asyncio.create_task(game.act(self.index, seq, SkipBidAction()))
             return
 
         # Check if existing bid_winner has higher or equal priority
@@ -202,13 +216,13 @@ class AutoPlayer(Player):
         if bid_winner is not None:
             winner_priority = bid_value(bid_winner.cards, trump_rank)
             if best_priority <= winner_priority:
-                asyncio.create_task(game.act(self.index, SkipBidAction()))
+                asyncio.create_task(game.act(self.index, seq, SkipBidAction()))
                 return  # can't beat current winner
 
         action = BidAction(cards=best_cards, count=len(best_cards))
-        asyncio.create_task(game.act(self.index, action))
+        asyncio.create_task(game.act(self.index, seq, action))
 
-    async def _handle_stir(self, snapshot: StateSnapshot, game: GameView) -> None:
+    async def _handle_stir(self, snapshot: StateSnapshot, game: GameView, *, seq: int) -> None:
         """Act during STIRRING phase."""
         hand = snapshot.player_hand
         trump_rank = snapshot.trump_rank
@@ -233,9 +247,9 @@ class AutoPlayer(Player):
                 action = SkipStirAction()
         else:
             action = SkipStirAction()
-        asyncio.create_task(game.act(self.index, action))
+        asyncio.create_task(game.act(self.index, seq, action))
 
-    async def _handle_discard(self, snapshot: StateSnapshot, game: GameView) -> None:
+    async def _handle_discard(self, snapshot: StateSnapshot, game: GameView, *, seq: int) -> None:
         """Randomly discard cards during EXCHANGE phase."""
         hand = snapshot.player_hand
         exc = snapshot.exchange_state
@@ -247,9 +261,9 @@ class AutoPlayer(Player):
         else:
             return
         action = DiscardAction(cards=cards)
-        asyncio.create_task(game.act(self.index, action))
+        asyncio.create_task(game.act(self.index, seq, action))
 
-    async def _handle_play(self, snapshot: StateSnapshot, game: GameView) -> None:
+    async def _handle_play(self, snapshot: StateSnapshot, game: GameView, *, seq: int) -> None:
         """Pick a random legal play."""
         legal = snapshot.legal_actions
         if not legal:
@@ -261,12 +275,12 @@ class AutoPlayer(Player):
         self._action_count += 1
         if self._action_count % 50 == 0:
             logger.info("AutoPlayer %d: action #%d in PLAYING", self.index, self._action_count)
-        asyncio.create_task(game.act(self.index, action))
+        asyncio.create_task(game.act(self.index, seq, action))
 
-    async def _handle_next_round(self, snapshot: StateSnapshot, game: GameView) -> None:
+    async def _handle_next_round(self, snapshot: StateSnapshot, game: GameView, *, seq: int) -> None:
         """Submit NextRoundAction."""
         action = NextRoundAction()
-        asyncio.create_task(game.act(self.index, action))
+        asyncio.create_task(game.act(self.index, seq, action))
 
 
 # ---- HumanPlayer ----
@@ -373,22 +387,6 @@ class HumanPlayer(Player):
                 cards_raw = raw.get("cards")
                 card_ids_result = _extract_card_ids(cards_raw)
 
-                # Seq validation: if seq doesn't match current state, push
-                # current state with error (unicast). Seq unchanged.
-                if client_seq != game.current_seq:
-                    snapshot = game.snapshot(self.index)
-                    try:
-                        await websocket.send_json({
-                            "type": "state",
-                            "seq": game.current_seq,
-                            "awaiting": snapshot.awaiting_action,
-                            "state": snapshot.to_dict(),
-                            "error": f"seq mismatch: expected {game.current_seq}, got {client_seq}",
-                        })
-                    except (WebSocketDisconnect, OSError):
-                        break
-                    continue
-
                 # Action parsing
                 parse_result = self._parse_action(game, self.index, action_type, is_pass, card_ids_result)
                 if isinstance(parse_result, Rejected):
@@ -406,7 +404,7 @@ class HumanPlayer(Player):
                     continue
 
                 # Submit action to game
-                await game.act(self.index, parse_result.value)
+                await game.act(self.index, client_seq, parse_result.value)
 
                 # After game.act, check if game is over
                 if game.is_over():

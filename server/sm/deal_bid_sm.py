@@ -60,6 +60,7 @@ class DealBidState(BaseModel):
     declarer_team: int | None
     trump_rank: Rank
     start_player: int
+    all_dealt: bool = False
 
 
 # ---- State Machine Operations ----
@@ -84,9 +85,9 @@ def create_deal_bid(input: DealBidInput) -> DealBidState:
 def deal_next_card(state: DealBidState) -> StateResult[DealBidState]:
     """Deal the next card from the deck to the current target player.
 
-    After dealing, if all 100 cards have been dealt:
-      - If bid_winner is set: phase transitions to COMPLETE
-      - If no bid_winner: phase transitions to NO_BID
+    After dealing, if all 100 cards have been dealt, phase stays DEALING
+    with all_dealt=True so the last card recipient can bid or skip.
+    Call finalize_dealing() after their action to complete the phase.
 
     Returns Ok(new_state) on success, Rejected(reason) if not in DEALING phase
     or all cards have already been dealt.
@@ -108,20 +109,16 @@ def deal_next_card(state: DealBidState) -> StateResult[DealBidState]:
     new_cursor = cursor + 1
     new_target = next_player_ccw(target)
 
-    # Determine phase after dealing
-    if new_cursor >= 100:
-        if state.bid_winner is not None:
-            new_phase: Literal["DEALING", "COMPLETE", "NO_BID"] = "COMPLETE"
-        else:
-            new_phase = "NO_BID"
-    else:
-        new_phase = "DEALING"
+    # After the last card, keep phase as DEALING so the recipient can act.
+    # Set all_dealt=True so Game.act() knows to finalize after their action.
+    all_dealt = new_cursor >= 100
 
     return Ok(state.model_copy(update={
-        "phase": new_phase,
+        "phase": "DEALING",
         "deal_cursor": new_cursor,
         "deal_target": new_target,
         "players_hand": new_hands,
+        "all_dealt": all_dealt,
     }))
 
 
@@ -254,3 +251,19 @@ def reveal(state: DealBidState, event: BidEvent) -> StateResult[DealBidState]:
         "bid_winner": event,
         "bid_events": new_bid_events,
     }))
+
+
+def finalize_dealing(state: DealBidState) -> StateResult[DealBidState]:
+    """After all cards are dealt and the last recipient has acted, finalize.
+
+    Transitions phase to COMPLETE (if bid_winner exists) or NO_BID.
+    Must only be called when all_dealt=True.
+
+    Returns Ok(new_state) on success, Rejected(reason) if not ready.
+    """
+    if not state.all_dealt:
+        return Rejected("还有牌未发完，不能结束发牌")
+    new_phase: Literal["DEALING", "COMPLETE", "NO_BID"] = (
+        "COMPLETE" if state.bid_winner is not None else "NO_BID"
+    )
+    return Ok(state.model_copy(update={"phase": new_phase}))

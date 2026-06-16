@@ -360,6 +360,7 @@ from server.sm.round_sm import (
     create_round, deal_next_card as rn_deal,
     pass_stir as rn_pass, discard as rn_discard,
     play as rn_play, is_round_complete, get_round_result, RoundInput, RoundState,
+    finalize_deal_bid as rn_finalize,
 )
 from server.sm.play_rules import get_legal_plays
 
@@ -403,6 +404,9 @@ def _complete_round_no_bid(round_state: RoundState) -> RoundState:
     """Drive a round through all phases with no bids, all pass stirring."""
     while round_state.phase == "DEAL_BID":
         if round_state.deal_bid_state is None or round_state.deal_bid_state.phase != "DEALING":
+            break
+        if round_state.deal_bid_state.all_dealt:
+            round_state = _unwrap_round(rn_finalize(round_state))
             break
         round_state = _unwrap_round(rn_deal(round_state))
 

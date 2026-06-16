@@ -51,7 +51,7 @@ class RoundState(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    phase: Literal["DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING", "SCORING", "COMPLETE"]
+    phase: Literal["DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING", "SCORING", "WAITING"]
     declarer_team: int | None
     declarer_player: int | None
     defender_team: int | None
@@ -163,6 +163,33 @@ def reveal(state: RoundState, event: BidEvent) -> StateResult[RoundState]:
     match db.reveal(state.deal_bid_state, event):
         case Ok(value=new_db):
             return Ok(state.model_copy(update={"deal_bid_state": new_db}))
+        case Rejected(reason=reason):
+            return Rejected(reason)
+
+
+def finalize_deal_bid(state: RoundState) -> StateResult[RoundState]:
+    """Finalize deal-bid after all cards dealt and last recipient has acted.
+
+    Delegates to deal_bid.finalize_dealing, then transitions to STIRRING.
+
+    Returns Ok(new_state) on success, Rejected(reason) on invalid state.
+    """
+    if state.phase != "DEAL_BID":
+        return Rejected(
+            f"只能在发牌阶段结束发牌，当前阶段：{state.phase}"
+        )
+    if state.deal_bid_state is None:
+        return Rejected("发牌状态异常")
+
+    match db.finalize_dealing(state.deal_bid_state):
+        case Ok(value=new_db):
+            return Ok(_transition_to_stirring(
+                state.model_copy(update={
+                    "deal_bid_state": new_db,
+                    "players_hand": [list(h) for h in new_db.players_hand],
+                }),
+                new_db,
+            ))
         case Rejected(reason=reason):
             return Rejected(reason)
 
@@ -382,7 +409,7 @@ def play(state: RoundState, player_index: int, cards: list[Card]) -> StateResult
 
 def is_round_complete(state: RoundState) -> bool:
     """Return True if the round is complete."""
-    return state.phase == "COMPLETE"
+    return state.phase == "WAITING"
 
 
 def get_round_result(state: RoundState) -> RoundResult | None:
@@ -540,6 +567,6 @@ def _transition_to_scoring(state: RoundState) -> RoundState:
     )
 
     return state.model_copy(update={
-        "phase": "COMPLETE",
+        "phase": "WAITING",
         "result": result,
     })
