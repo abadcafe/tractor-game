@@ -6,7 +6,6 @@ StateSnapshot.to_dict.
 No tests access private fields like _game_state, _round_state, or _bid_turn.
 """
 
-import asyncio
 import json
 from unittest.mock import MagicMock, patch
 
@@ -752,8 +751,7 @@ async def test_game_auto_completes_past_deal_bid():
                 await game.act(i, game.current_seq, SkipBidAction())
                 bid_found = True
                 break
-        if not bid_found:
-            await asyncio.sleep(0.01)
+        assert bid_found, "no bidder found — DEAL_BID stuck"
 
     # Verify the game has progressed
     phase = game.get_phase()
@@ -810,8 +808,7 @@ async def test_full_game_flow_completes_without_resource_explosion():
                 await game.act(i, game.current_seq, SkipBidAction())
                 bid_found = True
                 break
-        if not bid_found:
-            await asyncio.sleep(0.01)
+        assert bid_found, "no bidder found — DEAL_BID stuck"
 
     phase = game.get_phase()
     assert phase in (
@@ -1228,8 +1225,7 @@ async def test_stirring_state_snapshot_has_declarer_player() -> None:
                 await game.act(i, game.current_seq, SkipBidAction())
                 bid_found = True
                 break
-        if not bid_found:
-            await asyncio.sleep(0.01)
+        assert bid_found, "no bidder found — DEAL_BID stuck"
 
     snap = game.snapshot(for_player=0)
     assert snap.phase == "STIRRING", f"Expected STIRRING phase, got {snap.phase}"
@@ -1639,47 +1635,13 @@ async def test_stirring_state_has_legal_actions() -> None:
 @pytest.mark.asyncio
 async def test_act_stir_rejects_non_current_player() -> None:
     """SkipStirAction from a non-current player should be rejected."""
-    players = [AutoPlayer(index=i) for i in range(4)]
-    game = Game(players=players)
-    await game.run()
+    game = await _create_stirring_phase_game(current_player=1)
 
-    # Drive to STIRRING phase
-    max_attempts = 200
-    for _ in range(max_attempts):
-        snap = game.snapshot(for_player=0)
-        if snap.phase == "STIRRING":
-            break
-        if snap.awaiting_action == "bid":
-            if snap.bid_legal_actions:
-                cards = snap.bid_legal_actions[0]
-                await game.act(0, game.current_seq, BidAction(cards=cards, count=len(cards)))
-            else:
-                await game.act(0, game.current_seq, SkipBidAction())
-        else:
-            await asyncio.sleep(0.01)
+    # Player 0 is NOT the current stir player — action should be rejected
+    await game.act(0, game.current_seq, SkipStirAction())
 
-    snap = game.snapshot(for_player=0)
-    if snap.phase != "STIRRING":
-        pytest.skip("Could not reach STIRRING phase")
-
-    # Find the current player (the one with awaiting_action='stir')
-    current = None
-    for i in range(4):
-        s = game.snapshot(for_player=i)
-        if s.awaiting_action == "stir":
-            current = i
-            break
-    assert current is not None
-
-    # Pick a different player
-    other = (current + 1) % 4
-
-    # The other player tries to skip stir -- should be rejected
-    # (error is sent via send_error, not raised)
-    await game.act(other, game.current_seq, SkipStirAction())
-
-    # The current player should still have awaiting_action='stir'
-    snap_after = game.snapshot(for_player=current)
+    # Current player 1 should still have awaiting_action='stir'
+    snap_after = game.snapshot(for_player=1)
     assert snap_after.awaiting_action == "stir", (
         f"Current player should still have awaiting_action='stir', got {snap_after.awaiting_action}"
     )
@@ -1688,52 +1650,14 @@ async def test_act_stir_rejects_non_current_player() -> None:
 @pytest.mark.asyncio
 async def test_act_discard_rejects_non_declarer() -> None:
     """DiscardAction from a non-declarer should be rejected."""
-    players = [AutoPlayer(index=i) for i in range(4)]
-    game = Game(players=players)
-    await game.run()
+    game = await _create_exchange_phase_game(declarer_player=2)
 
-    # Drive to EXCHANGE phase
-    max_attempts = 500
-    for _ in range(max_attempts):
-        snap = game.snapshot(for_player=0)
-        if snap.phase == "EXCHANGE":
-            break
-        if snap.awaiting_action == "bid":
-            if snap.bid_legal_actions:
-                cards = snap.bid_legal_actions[0]
-                await game.act(0, game.current_seq, BidAction(cards=cards, count=len(cards)))
-            else:
-                await game.act(0, game.current_seq, SkipBidAction())
-        elif snap.awaiting_action == "stir":
-            await game.act(0, game.current_seq, SkipStirAction())
-        else:
-            await asyncio.sleep(0.01)
+    # Player 3 is NOT the declarer — discard should be rejected
+    # (round_sm.discard checks player_index != declarer before card validation)
+    await game.act(3, game.current_seq, DiscardAction(cards=[]))
 
-    snap = game.snapshot(for_player=0)
-    if snap.phase != "EXCHANGE":
-        pytest.skip("Could not reach EXCHANGE phase")
-
-    # Find the declarer (the one with awaiting_action='discard')
-    declarer = None
-    for i in range(4):
-        s = game.snapshot(for_player=i)
-        if s.awaiting_action == "discard":
-            declarer = i
-            break
-    assert declarer is not None
-
-    # Pick a different player
-    other = (declarer + 1) % 4
-
-    # The other player tries to discard -- should be rejected
-    snap_other = game.snapshot(for_player=other)
-    hand = snap_other.player_hand
-    if hand:
-        # Use a card from the other player's hand directly (no Card.from_id needed)
-        await game.act(other, game.current_seq, DiscardAction(cards=[hand[0]]))
-
-    # The declarer should still have awaiting_action='discard'
-    snap_after = game.snapshot(for_player=declarer)
+    # Declarer player 2 should still have awaiting_action='discard'
+    snap_after = game.snapshot(for_player=2)
     assert snap_after.awaiting_action == "discard", (
         f"Declarer should still have awaiting_action='discard', got {snap_after.awaiting_action}"
     )
