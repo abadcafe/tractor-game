@@ -388,7 +388,7 @@ class TestStir:
         assert result.value.current_priority == 205
 
     def test_stir_empty_trump_big_joker_then_small_joker_rejected(self) -> None:
-        """空主: after big joker pair, small joker pair is rejected (lower priority)."""
+        """空主: after big joker pair, phase is COMPLETE (no higher stir possible)."""
         state = _complete_initial_exchange(create_stirring(_make_input(
             trump_suit=None, trump_rank=Rank.TWO, declarer_player=0,
         )))
@@ -397,13 +397,9 @@ class TestStir:
         result = stir(state, player=state.current_player, cards=big_jokers)
         assert isinstance(result, Ok)
         assert result.value.current_priority == 205
-        # Must complete exchange before continuing
+        # After exchange, goes directly to COMPLETE (max priority)
         state = _complete_initial_exchange(result.value)
-        # Next player tries small joker pair — rejected (204 <= 205)
-        small_jokers = [_card(Suit.JOKER, Rank.SMALL_JOKER, 1), _card(Suit.JOKER, Rank.SMALL_JOKER, 2)]
-        result = stir(state, player=state.current_player, cards=small_jokers)
-        assert isinstance(result, Rejected)
-        assert "优先级" in result.reason
+        assert state.phase == "COMPLETE"
 
     def test_stir_empty_trump_joker_no_infinite_loop(self) -> None:
         """空主: two players with joker pairs cannot alternate infinitely."""
@@ -416,15 +412,36 @@ class TestStir:
         assert isinstance(result, Ok)
         state = _complete_initial_exchange(result.value)
         assert state.current_priority == 205
-
-        # Others pass
-        for _ in range(4):
-            result = pass_stir(state, player=state.current_player)
-            assert isinstance(result, Ok)
-            state = result.value
-
-        # Phase should be COMPLETE — no infinite loop possible
+        # Big joker pair is max priority → COMPLETE directly, no pass needed
         assert state.phase == "COMPLETE"
+
+    def test_stir_big_joker_pair_skips_waiting(self) -> None:
+        """Big joker pair (max priority) skips WAITING, goes directly to COMPLETE after exchange."""
+        state = _complete_initial_exchange(create_stirring(_make_input(
+            trump_suit=Suit.HEARTS, trump_rank=Rank.TWO, declarer_player=0,
+        )))
+        big_jokers = [_card(Suit.JOKER, Rank.BIG_JOKER, 1), _card(Suit.JOKER, Rank.BIG_JOKER, 2)]
+        result = stir(state, player=state.current_player, cards=big_jokers)
+        assert isinstance(result, Ok)
+        assert result.value.phase == "EXCHANGING"
+        assert result.value.current_priority == 205
+        # Complete the exchange — should go to COMPLETE, not WAITING
+        state = _complete_initial_exchange(result.value)
+        assert state.phase == "COMPLETE"
+
+    def test_stir_small_joker_pair_goes_to_waiting(self) -> None:
+        """Small joker pair (not max) goes to WAITING — others could still stir."""
+        state = _complete_initial_exchange(create_stirring(_make_input(
+            trump_suit=Suit.HEARTS, trump_rank=Rank.TWO, declarer_player=0,
+        )))
+        small_jokers = [_card(Suit.JOKER, Rank.SMALL_JOKER, 1), _card(Suit.JOKER, Rank.SMALL_JOKER, 2)]
+        result = stir(state, player=state.current_player, cards=small_jokers)
+        assert isinstance(result, Ok)
+        assert result.value.phase == "EXCHANGING"
+        assert result.value.current_priority == 204
+        # Complete the exchange — should go to WAITING (big joker could still beat it)
+        state = _complete_initial_exchange(result.value)
+        assert state.phase == "WAITING"
 
     def test_stir_wrong_player_rejected(self) -> None:
         """Stir from a player who is not current_player is rejected."""

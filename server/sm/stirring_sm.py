@@ -34,6 +34,9 @@ from server.sm import exchange_sm as exc
 # Matches bid_value's suit ordering: ♦=0, ♣=1, ♥=2, ♠=3, 小王=4, 大王=5
 # For stirring, we compare pair values directly using bid_value.
 
+# Big joker pair = 2*100 + 5 = 205; nothing can beat it.
+_MAX_STIR_PRIORITY: int = 205
+
 
 # ---- Input / Output Models ----
 
@@ -284,6 +287,23 @@ def stir_discard(
         exchanging = state.exchanging_player
         new_hands[exchanging] = list(new_exc.result.new_hand)
         new_bottom_cards = list(new_exc.result.new_bottom_cards)
+
+        # If current_priority is already the maximum (big joker pair),
+        # no higher stir is possible — skip WAITING, go directly to COMPLETE.
+        if state.current_priority >= _MAX_STIR_PRIORITY:
+            return Ok(StirringState(
+                phase="COMPLETE",
+                trump_suit=state.trump_suit,
+                trump_rank=state.trump_rank,
+                declarer_player=state.declarer_player,
+                current_player=exchanging,
+                pass_set=frozenset(),
+                actions=state.actions,
+                last_stir_player=state.last_stir_player,
+                current_priority=state.current_priority,
+                bottom_cards=new_bottom_cards,
+                players_hand=new_hands,
+            ))
 
         # Next player is CCW after the exchanging player
         next_player = next_player_ccw(exchanging)
