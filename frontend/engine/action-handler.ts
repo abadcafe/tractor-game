@@ -32,7 +32,7 @@ export function handleDiscardAction(
   selectedCardIds: Set<string>,
 ): ActionResult {
   const selectedCards = snap.player_hand.filter((c) => selectedCardIds.has(c.id));
-  const count = snap.exchange_state?.count ?? 0;
+  const count = snap.stirring_state?.exchange_count ?? 0;
   if (validateDiscard(selectedCards, count)) {
     return {
       success: true,

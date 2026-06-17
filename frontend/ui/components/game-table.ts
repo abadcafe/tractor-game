@@ -14,8 +14,8 @@ function getCurrentPlayer(snapshot: StateSnapshot): number | null {
   if (snapshot.awaiting_action === "stir" && snapshot.stirring_state) {
     return snapshot.stirring_state.current_player;
   }
-  if (snapshot.awaiting_action === "discard" && snapshot.exchange_state) {
-    return snapshot.exchange_state.declarer_player;
+  if (snapshot.awaiting_action === "discard" && snapshot.stirring_state) {
+    return snapshot.stirring_state.exchanging_player;
   }
   // For bid/next_round, multiple players may be active; no single current player
   return null;

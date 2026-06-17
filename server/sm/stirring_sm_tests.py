@@ -5,7 +5,7 @@ from server.sm.card_model import Card, Suit, Rank
 from server.sm.result import Ok, Rejected
 from server.sm.stirring_sm import (
     StirInput,
-    create_stirring, pass_stir, stir, get_stir_result,
+    create_stirring, pass_stir, stir, stir_discard, get_stir_result,
 )
 
 
@@ -19,85 +19,262 @@ def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
     )
 
 
+def _make_input(
+    *,
+    trump_suit: Suit | None = Suit.HEARTS,
+    trump_rank: Rank = Rank.TWO,
+    declarer_player: int = 0,
+    bottom_cards: list[Card] | None = None,
+    players_hand: list[list[Card]] | None = None,
+) -> StirInput:
+    """Create StirInput with defaults for bottom_cards and players_hand."""
+    if bottom_cards is None:
+        bottom_cards = [
+            _card(Suit.DIAMONDS, Rank.THREE, 1),
+            _card(Suit.DIAMONDS, Rank.FOUR, 1),
+            _card(Suit.DIAMONDS, Rank.FIVE, 1),
+            _card(Suit.DIAMONDS, Rank.SIX, 1),
+            _card(Suit.CLUBS, Rank.THREE, 1),
+            _card(Suit.CLUBS, Rank.FOUR, 1),
+            _card(Suit.CLUBS, Rank.FIVE, 1),
+            _card(Suit.CLUBS, Rank.SIX, 1),
+        ]
+    if players_hand is None:
+        # 4 players, each with 25 cards (enough for exchanges)
+        players_hand = [[] for _ in range(4)]
+        for i in range(4):
+            cards: list[Card] = []
+            for rank in [Rank.THREE, Rank.FOUR, Rank.FIVE, Rank.SIX,
+                         Rank.SEVEN, Rank.EIGHT, Rank.NINE, Rank.TEN,
+                         Rank.JACK, Rank.QUEEN, Rank.KING, Rank.ACE]:
+                cards.append(_card(Suit.HEARTS if i == 0 else Suit.SPADES, rank, 1))
+                cards.append(_card(Suit.HEARTS if i == 0 else Suit.SPADES, rank, 2))
+            # Add one trump-rank card per suit for stirring tests
+            cards.append(_card(Suit.SPADES, Rank.TWO, 1))
+            cards.append(_card(Suit.HEARTS, Rank.TWO, 1))
+            players_hand[i] = cards
+    return StirInput(
+        trump_suit=trump_suit,
+        trump_rank=trump_rank,
+        declarer_player=declarer_player,
+        bottom_cards=bottom_cards,
+        players_hand=players_hand,
+    )
+
+
+def _complete_initial_exchange(state: "StirringState") -> "StirringState":
+    """Complete the initial EXCHANGING sub-phase by discarding bottom cards."""
+    assert state.phase == "EXCHANGING"
+    assert state.exchange_state is not None
+    assert state.exchanging_player is not None
+    discards = state.exchange_state.hand_after_pickup[:state.exchange_state.count]
+    result = stir_discard(state, player=state.exchanging_player, cards=discards)
+    assert isinstance(result, Ok), f"stir_discard rejected: {result.reason}"
+    return result.value
+
+
+# Import StirringState for type hints
+from server.sm.stirring_sm import StirringState
+
+
 class TestCreateStirring:
-    def test_create_stirring_initial_state(self) -> None:
-        """Initial state: WAITING, current_player = CCW_next(declarer), empty pass_set."""
-        state = create_stirring(StirInput(
+    def test_create_stirring_starts_in_exchanging(self) -> None:
+        """Initial state: EXCHANGING phase, current_player = declarer."""
+        state = create_stirring(_make_input(
             trump_suit=Suit.HEARTS,
             trump_rank=Rank.TWO,
             declarer_player=0,
         ))
-        assert state.phase == "WAITING"
-        assert state.current_player == 1  # CCW next of 0
+        assert state.phase == "EXCHANGING"
+        assert state.current_player == 0  # declarer must exchange first
         assert len(state.pass_set) == 0
         assert len(state.actions) == 0
+        assert state.exchanging_player == 0
+
+    def test_create_stirring_has_exchange_state(self) -> None:
+        """Initial state has exchange_state set up for declarer."""
+        state = create_stirring(_make_input(
+            trump_suit=Suit.HEARTS,
+            trump_rank=Rank.TWO,
+            declarer_player=0,
+        ))
+        assert state.exchange_state is not None
+        assert state.exchange_state.phase == "PICKED_UP"
+        assert state.exchange_state.count == 8  # BOTTOM_CARD_COUNT
+
+    def test_create_stirring_with_empty_trump(self) -> None:
+        """空主 (trump_suit=None) also starts in EXCHANGING."""
+        state = create_stirring(_make_input(
+            trump_suit=None,
+            trump_rank=Rank.TWO,
+            declarer_player=0,
+        ))
+        assert state.phase == "EXCHANGING"
+        assert state.current_player == 0
+
+
+class TestStirDiscard:
+    def test_stir_discard_completes_initial_exchange(self) -> None:
+        """After stir_discard, phase transitions to WAITING."""
+        state = create_stirring(_make_input(
+            trump_suit=Suit.HEARTS,
+            trump_rank=Rank.TWO,
+            declarer_player=0,
+        ))
+        assert state.phase == "EXCHANGING"
+        # Discard bottom cards (first 8 from combined hand)
+        assert state.exchange_state is not None
+        discards = state.exchange_state.hand_after_pickup[:8]
+        result = stir_discard(state, player=0, cards=discards)
+        assert isinstance(result, Ok)
+        new_state = result.value
+        assert new_state.phase == "WAITING"
+        assert new_state.current_player == 1  # CCW next of 0
+        assert new_state.exchange_state is None
+        assert new_state.exchanging_player is None
+
+    def test_stir_discard_wrong_player_rejected(self) -> None:
+        """Only the exchanging player can discard."""
+        state = create_stirring(_make_input(
+            trump_suit=Suit.HEARTS,
+            trump_rank=Rank.TWO,
+            declarer_player=0,
+        ))
+        discards = state.exchange_state.hand_after_pickup[:8] if state.exchange_state else []
+        result = stir_discard(state, player=1, cards=discards)
+        assert isinstance(result, Rejected)
+        assert "炒主者" in result.reason
+
+    def test_stir_discard_wrong_card_count_rejected(self) -> None:
+        """Discarding wrong number of cards is rejected."""
+        state = create_stirring(_make_input(
+            trump_suit=Suit.HEARTS,
+            trump_rank=Rank.TWO,
+            declarer_player=0,
+        ))
+        assert state.exchange_state is not None
+        # Discard only 7 cards instead of 8
+        discards = state.exchange_state.hand_after_pickup[:7]
+        result = stir_discard(state, player=0, cards=discards)
+        assert isinstance(result, Rejected)
+
+    def test_stir_discard_not_in_exchanging_rejected(self) -> None:
+        """stir_discard is rejected when not in EXCHANGING phase."""
+        state = _complete_initial_exchange(create_stirring(_make_input(
+            trump_suit=Suit.HEARTS,
+            trump_rank=Rank.TWO,
+            declarer_player=0,
+        )))
+        assert state.phase == "WAITING"
+        result = stir_discard(state, player=0, cards=[])
+        assert isinstance(result, Rejected)
+        assert "换底牌阶段" in result.reason
+
+    def test_stir_discard_updates_hands_and_bottom(self) -> None:
+        """After stir_discard, players_hand and bottom_cards are updated."""
+        bottom = [_card(Suit.DIAMONDS, Rank.THREE, 1)]
+        hands = [
+            [_card(Suit.HEARTS, Rank.ACE, 1)],
+            [], [], [],
+        ]
+        state = create_stirring(_make_input(
+            trump_suit=Suit.HEARTS,
+            declarer_player=0,
+            bottom_cards=bottom,
+            players_hand=hands,
+        ))
+        assert state.exchange_state is not None
+        # Discard the one bottom card
+        discards = state.exchange_state.hand_after_pickup[:1]
+        result = stir_discard(state, player=0, cards=discards)
+        assert isinstance(result, Ok)
+        new_state = result.value
+        # Player 0's hand should be updated (original + bottom - discards)
+        assert len(new_state.players_hand[0]) == 1  # 1 original + 1 bottom - 1 discard
+        # Bottom cards should be the discarded cards
+        assert len(new_state.bottom_cards) == 1
+        assert new_state.bottom_cards[0].id == discards[0].id
 
 
 class TestPassStir:
-    def test_pass_stir_adds_to_pass_set(self) -> None:
-        state = create_stirring(StirInput(
-            trump_suit=Suit.HEARTS, trump_rank=Rank.TWO, declarer_player=0,
+    def test_pass_stir_rejected_in_exchanging(self) -> None:
+        """Pass is rejected during EXCHANGING sub-phase."""
+        state = create_stirring(_make_input(
+            trump_suit=Suit.HEARTS,
+            trump_rank=Rank.TWO,
+            declarer_player=0,
         ))
-        result = pass_stir(state, player=1)
+        assert state.phase == "EXCHANGING"
+        result = pass_stir(state, player=0)
+        assert isinstance(result, Rejected)
+        assert "换底牌" in result.reason
+
+    def test_pass_stir_adds_to_pass_set(self) -> None:
+        state = _complete_initial_exchange(create_stirring(_make_input(
+            trump_suit=Suit.HEARTS, trump_rank=Rank.TWO, declarer_player=0,
+        )))
+        result = pass_stir(state, player=state.current_player)
         assert isinstance(result, Ok)
-        assert 1 in result.value.pass_set
+        assert state.current_player in result.value.pass_set
 
     def test_pass_stir_advances_player(self) -> None:
-        state = create_stirring(StirInput(
+        state = _complete_initial_exchange(create_stirring(_make_input(
             trump_suit=Suit.HEARTS, trump_rank=Rank.TWO, declarer_player=0,
-        ))
-        result = pass_stir(state, player=1)
+        )))
+        cur = state.current_player
+        result = pass_stir(state, player=cur)
         assert isinstance(result, Ok)
-        assert result.value.current_player == 3  # CCW next of 1
+        from server.sm.constants import next_player_ccw
+        assert result.value.current_player == next_player_ccw(cur)
 
     def test_pass_stir_all_pass_complete(self) -> None:
         """When all 4 players pass, phase becomes COMPLETE."""
-        state = create_stirring(StirInput(
+        state = _complete_initial_exchange(create_stirring(_make_input(
             trump_suit=Suit.HEARTS, trump_rank=Rank.TWO, declarer_player=0,
-        ))
-        # Player 1 passes
-        result = pass_stir(state, player=state.current_player)
-        assert isinstance(result, Ok)
-        state = result.value
-        # Player 3 passes
-        result = pass_stir(state, player=state.current_player)
-        assert isinstance(result, Ok)
-        state = result.value
-        # Player 2 passes
-        result = pass_stir(state, player=state.current_player)
-        assert isinstance(result, Ok)
-        state = result.value
-        # Player 0 passes
-        result = pass_stir(state, player=state.current_player)
-        assert isinstance(result, Ok)
-        assert result.value.phase == "COMPLETE"
+        )))
+        for _ in range(4):
+            result = pass_stir(state, player=state.current_player)
+            assert isinstance(result, Ok)
+            state = result.value
+        assert state.phase == "COMPLETE"
 
     def test_pass_stir_wrong_player_rejected(self) -> None:
         """Pass from a player who is not current_player is rejected."""
-        state = create_stirring(StirInput(
+        state = _complete_initial_exchange(create_stirring(_make_input(
             trump_suit=Suit.HEARTS, trump_rank=Rank.TWO, declarer_player=0,
-        ))
+        )))
         # current_player is 1; pass from player 0 should be rejected
         result = pass_stir(state, player=0)
         assert isinstance(result, Rejected)
 
 
 class TestStir:
-    def test_stir_pair_accepted(self) -> None:
-        """Pair of trump rank in higher-priority suit is accepted."""
-        state = create_stirring(StirInput(
+    def test_stir_rejected_in_exchanging(self) -> None:
+        """Stir is rejected during EXCHANGING sub-phase."""
+        state = create_stirring(_make_input(
             trump_suit=Suit.DIAMONDS, trump_rank=Rank.TWO, declarer_player=0,
         ))
         cards = [_card(Suit.SPADES, Rank.TWO, 1), _card(Suit.SPADES, Rank.TWO, 2)]
         result = stir(state, player=state.current_player, cards=cards)
+        assert isinstance(result, Rejected)
+        assert "反主" in result.reason
+
+    def test_stir_pair_accepted(self) -> None:
+        """Pair of trump rank in higher-priority suit is accepted."""
+        state = _complete_initial_exchange(create_stirring(_make_input(
+            trump_suit=Suit.DIAMONDS, trump_rank=Rank.TWO, declarer_player=0,
+        )))
+        cards = [_card(Suit.SPADES, Rank.TWO, 1), _card(Suit.SPADES, Rank.TWO, 2)]
+        result = stir(state, player=state.current_player, cards=cards)
         assert isinstance(result, Ok)
         assert result.value.trump_suit == Suit.SPADES
+        assert result.value.phase == "EXCHANGING"  # transitions to EXCHANGING
 
     def test_stir_pair_changes_trump(self) -> None:
         """Stir changes trump suit to the pair's suit."""
-        state = create_stirring(StirInput(
+        state = _complete_initial_exchange(create_stirring(_make_input(
             trump_suit=Suit.CLUBS, trump_rank=Rank.TWO, declarer_player=0,
-        ))
+        )))
         cards = [_card(Suit.HEARTS, Rank.TWO, 1), _card(Suit.HEARTS, Rank.TWO, 2)]
         result = stir(state, player=state.current_player, cards=cards)
         assert isinstance(result, Ok)
@@ -105,9 +282,9 @@ class TestStir:
 
     def test_stir_pair_resets_pass_set(self) -> None:
         """After a stir, pass_set is reset (others can counter-stir)."""
-        state = create_stirring(StirInput(
+        state = _complete_initial_exchange(create_stirring(_make_input(
             trump_suit=Suit.DIAMONDS, trump_rank=Rank.TWO, declarer_player=0,
-        ))
+        )))
         # Player 1 passes first
         result = pass_stir(state, player=state.current_player)
         assert isinstance(result, Ok)
@@ -121,9 +298,9 @@ class TestStir:
 
     def test_stir_single_rejected(self) -> None:
         """Single card stir is rejected (must be pair)."""
-        state = create_stirring(StirInput(
+        state = _complete_initial_exchange(create_stirring(_make_input(
             trump_suit=Suit.DIAMONDS, trump_rank=Rank.TWO, declarer_player=0,
-        ))
+        )))
         cards = [_card(Suit.SPADES, Rank.TWO, 1)]
         result = stir(state, player=state.current_player, cards=cards)
         assert isinstance(result, Rejected)
@@ -131,9 +308,9 @@ class TestStir:
 
     def test_stir_same_suit_rejected(self) -> None:
         """Stirring with the same suit as current trump is rejected."""
-        state = create_stirring(StirInput(
+        state = _complete_initial_exchange(create_stirring(_make_input(
             trump_suit=Suit.HEARTS, trump_rank=Rank.TWO, declarer_player=0,
-        ))
+        )))
         cards = [_card(Suit.HEARTS, Rank.TWO, 1), _card(Suit.HEARTS, Rank.TWO, 2)]
         result = stir(state, player=state.current_player, cards=cards)
         assert isinstance(result, Rejected)
@@ -141,9 +318,9 @@ class TestStir:
 
     def test_stir_lower_priority_rejected(self) -> None:
         """Pair with lower priority than current trump suit is rejected."""
-        state = create_stirring(StirInput(
+        state = _complete_initial_exchange(create_stirring(_make_input(
             trump_suit=Suit.SPADES, trump_rank=Rank.TWO, declarer_player=0,
-        ))
+        )))
         # ♣ pair has lower priority than current ♠ trump
         cards = [_card(Suit.CLUBS, Rank.TWO, 1), _card(Suit.CLUBS, Rank.TWO, 2)]
         result = stir(state, player=state.current_player, cards=cards)
@@ -152,9 +329,9 @@ class TestStir:
 
     def test_stir_joker_pair_accepted(self) -> None:
         """Joker pair stir is always accepted (highest priority)."""
-        state = create_stirring(StirInput(
+        state = _complete_initial_exchange(create_stirring(_make_input(
             trump_suit=Suit.SPADES, trump_rank=Rank.TWO, declarer_player=0,
-        ))
+        )))
         cards = [_card(Suit.JOKER, Rank.BIG_JOKER, 1), _card(Suit.JOKER, Rank.BIG_JOKER, 2)]
         result = stir(state, player=state.current_player, cards=cards)
         assert isinstance(result, Ok)
@@ -162,9 +339,9 @@ class TestStir:
 
     def test_stir_joker_pair_sets_no_trump(self) -> None:
         """Joker pair stir sets trump_suit=None."""
-        state = create_stirring(StirInput(
+        state = _complete_initial_exchange(create_stirring(_make_input(
             trump_suit=Suit.HEARTS, trump_rank=Rank.TWO, declarer_player=0,
-        ))
+        )))
         cards = [_card(Suit.JOKER, Rank.SMALL_JOKER, 1), _card(Suit.JOKER, Rank.SMALL_JOKER, 2)]
         result = stir(state, player=state.current_player, cards=cards)
         assert isinstance(result, Ok)
@@ -172,9 +349,9 @@ class TestStir:
 
     def test_stir_empty_trump_diamond_pair_accepted(self) -> None:
         """空主: even ♦ pair can stir (lowest priority still beats no trump)."""
-        state = create_stirring(StirInput(
+        state = _complete_initial_exchange(create_stirring(_make_input(
             trump_suit=None, trump_rank=Rank.TWO, declarer_player=0,
-        ))
+        )))
         cards = [_card(Suit.DIAMONDS, Rank.TWO, 1), _card(Suit.DIAMONDS, Rank.TWO, 2)]
         result = stir(state, player=state.current_player, cards=cards)
         assert isinstance(result, Ok)
@@ -182,9 +359,9 @@ class TestStir:
 
     def test_stir_empty_trump_joker_pair_accepted(self) -> None:
         """空主: joker pair is accepted, sets trump to None (per SI-006)."""
-        state = create_stirring(StirInput(
+        state = _complete_initial_exchange(create_stirring(_make_input(
             trump_suit=None, trump_rank=Rank.TWO, declarer_player=0,
-        ))
+        )))
         cards = [_card(Suit.JOKER, Rank.BIG_JOKER, 1), _card(Suit.JOKER, Rank.BIG_JOKER, 2)]
         result = stir(state, player=state.current_player, cards=cards)
         assert isinstance(result, Ok)
@@ -192,18 +369,18 @@ class TestStir:
 
     def test_stir_empty_trump_small_joker_then_big_joker(self) -> None:
         """空主: small joker pair → big joker pair accepted (higher priority)."""
-        state = create_stirring(StirInput(
+        state = _complete_initial_exchange(create_stirring(_make_input(
             trump_suit=None, trump_rank=Rank.TWO, declarer_player=0,
-        ))
-        # Player 1 stirs with small joker pair
+        )))
+        # Player stirs with small joker pair
         small_jokers = [_card(Suit.JOKER, Rank.SMALL_JOKER, 1), _card(Suit.JOKER, Rank.SMALL_JOKER, 2)]
         result = stir(state, player=state.current_player, cards=small_jokers)
         assert isinstance(result, Ok)
         assert result.value.trump_suit is None
         assert result.value.current_priority == 204
-        state = result.value
-
-        # Player 3 (next player CCW) stirs with big joker pair
+        # Must complete exchange before continuing
+        state = _complete_initial_exchange(result.value)
+        # Next player stirs with big joker pair
         big_jokers = [_card(Suit.JOKER, Rank.BIG_JOKER, 1), _card(Suit.JOKER, Rank.BIG_JOKER, 2)]
         result = stir(state, player=state.current_player, cards=big_jokers)
         assert isinstance(result, Ok)
@@ -212,17 +389,17 @@ class TestStir:
 
     def test_stir_empty_trump_big_joker_then_small_joker_rejected(self) -> None:
         """空主: after big joker pair, small joker pair is rejected (lower priority)."""
-        state = create_stirring(StirInput(
+        state = _complete_initial_exchange(create_stirring(_make_input(
             trump_suit=None, trump_rank=Rank.TWO, declarer_player=0,
-        ))
-        # Player 1 stirs with big joker pair
+        )))
+        # Player stirs with big joker pair
         big_jokers = [_card(Suit.JOKER, Rank.BIG_JOKER, 1), _card(Suit.JOKER, Rank.BIG_JOKER, 2)]
         result = stir(state, player=state.current_player, cards=big_jokers)
         assert isinstance(result, Ok)
         assert result.value.current_priority == 205
-        state = result.value
-
-        # Player 3 tries small joker pair — rejected (204 <= 205)
+        # Must complete exchange before continuing
+        state = _complete_initial_exchange(result.value)
+        # Next player tries small joker pair — rejected (204 <= 205)
         small_jokers = [_card(Suit.JOKER, Rank.SMALL_JOKER, 1), _card(Suit.JOKER, Rank.SMALL_JOKER, 2)]
         result = stir(state, player=state.current_player, cards=small_jokers)
         assert isinstance(result, Rejected)
@@ -230,17 +407,17 @@ class TestStir:
 
     def test_stir_empty_trump_joker_no_infinite_loop(self) -> None:
         """空主: two players with joker pairs cannot alternate infinitely."""
-        state = create_stirring(StirInput(
+        state = _complete_initial_exchange(create_stirring(_make_input(
             trump_suit=None, trump_rank=Rank.TWO, declarer_player=0,
-        ))
-        # Player 1 stirs with big joker pair
+        )))
+        # Player stirs with big joker pair
         big_jokers = [_card(Suit.JOKER, Rank.BIG_JOKER, 1), _card(Suit.JOKER, Rank.BIG_JOKER, 2)]
         result = stir(state, player=state.current_player, cards=big_jokers)
         assert isinstance(result, Ok)
-        state = result.value
+        state = _complete_initial_exchange(result.value)
         assert state.current_priority == 205
 
-        # Others pass, then the same player passes (last_stir_player)
+        # Others pass
         for _ in range(4):
             result = pass_stir(state, player=state.current_player)
             assert isinstance(result, Ok)
@@ -251,9 +428,9 @@ class TestStir:
 
     def test_stir_wrong_player_rejected(self) -> None:
         """Stir from a player who is not current_player is rejected."""
-        state = create_stirring(StirInput(
+        state = _complete_initial_exchange(create_stirring(_make_input(
             trump_suit=Suit.DIAMONDS, trump_rank=Rank.TWO, declarer_player=0,
-        ))
+        )))
         cards = [_card(Suit.SPADES, Rank.TWO, 1), _card(Suit.SPADES, Rank.TWO, 2)]
         wrong_player = 0  # current is 1
         result = stir(state, player=wrong_player, cards=cards)
@@ -262,15 +439,15 @@ class TestStir:
 
     def test_stir_last_stir_player_rejected(self) -> None:
         """Player who just stirred cannot immediately stir again."""
-        state = create_stirring(StirInput(
+        state = _complete_initial_exchange(create_stirring(_make_input(
             trump_suit=Suit.DIAMONDS, trump_rank=Rank.TWO, declarer_player=0,
-        ))
+        )))
         cards = [_card(Suit.SPADES, Rank.TWO, 1), _card(Suit.SPADES, Rank.TWO, 2)]
         # Player 1 stirs
         result = stir(state, player=state.current_player, cards=cards)
         assert isinstance(result, Ok)
-        state = result.value
-        # Others pass until it's player 1's turn again
+        state = _complete_initial_exchange(result.value)
+        # Others pass until it's player 1's turn again (but player 1 is last_stir_player)
         for _ in range(3):
             result = pass_stir(state, player=state.current_player)
             assert isinstance(result, Ok)
@@ -283,9 +460,9 @@ class TestStir:
 
     def test_stir_updates_current_priority(self) -> None:
         """Successful stir updates current_priority to the new bid_value."""
-        state = create_stirring(StirInput(
+        state = _complete_initial_exchange(create_stirring(_make_input(
             trump_suit=Suit.DIAMONDS, trump_rank=Rank.TWO, declarer_player=0,
-        ))
+        )))
         # Initial: ♦ pair priority = 200
         assert state.current_priority == 200
 
@@ -295,24 +472,36 @@ class TestStir:
         assert isinstance(result, Ok)
         assert result.value.current_priority == 203
 
+    def test_stir_transitions_to_exchanging(self) -> None:
+        """Successful stir transitions phase to EXCHANGING."""
+        state = _complete_initial_exchange(create_stirring(_make_input(
+            trump_suit=Suit.DIAMONDS, trump_rank=Rank.TWO, declarer_player=0,
+        )))
+        cards = [_card(Suit.SPADES, Rank.TWO, 1), _card(Suit.SPADES, Rank.TWO, 2)]
+        result = stir(state, player=state.current_player, cards=cards)
+        assert isinstance(result, Ok)
+        assert result.value.phase == "EXCHANGING"
+        assert result.value.exchanging_player == state.current_player
+        assert result.value.exchange_state is not None
+
 
 class TestStirFullFlow:
     def test_stir_full_flow_multiple_stirs(self) -> None:
         """Multiple stirs: each higher-priority pair overrides."""
-        state = create_stirring(StirInput(
+        state = _complete_initial_exchange(create_stirring(_make_input(
             trump_suit=Suit.DIAMONDS, trump_rank=Rank.TWO, declarer_player=0,
-        ))
+        )))
         # Player 1 stirs with ♣ pair (beats ♦)
         cards_club = [_card(Suit.CLUBS, Rank.TWO, 1), _card(Suit.CLUBS, Rank.TWO, 2)]
         result = stir(state, player=state.current_player, cards=cards_club)
         assert isinstance(result, Ok)
-        state = result.value
+        state = _complete_initial_exchange(result.value)
         assert state.trump_suit == Suit.CLUBS
-        # Player 3 stirs with ♠ pair (beats ♣)
+        # Player stirs with ♠ pair (beats ♣)
         cards_spade = [_card(Suit.SPADES, Rank.TWO, 1), _card(Suit.SPADES, Rank.TWO, 2)]
         result = stir(state, player=state.current_player, cards=cards_spade)
         assert isinstance(result, Ok)
-        state = result.value
+        state = _complete_initial_exchange(result.value)
         assert state.trump_suit == Suit.SPADES
         # Remaining players pass
         for _ in range(4):
@@ -323,9 +512,9 @@ class TestStirFullFlow:
 
     def test_stir_complete_result(self) -> None:
         """COMPLETE state produces correct StirResult."""
-        state = create_stirring(StirInput(
+        state = _complete_initial_exchange(create_stirring(_make_input(
             trump_suit=Suit.HEARTS, trump_rank=Rank.TWO, declarer_player=0,
-        ))
+        )))
         # All pass
         for _ in range(4):
             result = pass_stir(state, player=state.current_player)
@@ -333,6 +522,56 @@ class TestStirFullFlow:
             state = result.value
         assert state.phase == "COMPLETE"
         # Use get_stir_result to extract StirResult
-        result = get_stir_result(state)
-        assert result.final_trump_suit == Suit.HEARTS
-        assert result.stir_count == 0
+        stir_result = get_stir_result(state)
+        assert stir_result.final_trump_suit == Suit.HEARTS
+        assert stir_result.stir_count == 0
+
+    def test_stir_complete_result_with_stirs(self) -> None:
+        """COMPLETE state after stirs has correct stir_count and result."""
+        state = _complete_initial_exchange(create_stirring(_make_input(
+            trump_suit=Suit.DIAMONDS, trump_rank=Rank.TWO, declarer_player=0,
+        )))
+        # One stir
+        cards = [_card(Suit.SPADES, Rank.TWO, 1), _card(Suit.SPADES, Rank.TWO, 2)]
+        result = stir(state, player=state.current_player, cards=cards)
+        assert isinstance(result, Ok)
+        state = _complete_initial_exchange(result.value)
+        # All pass
+        for _ in range(4):
+            result = pass_stir(state, player=state.current_player)
+            assert isinstance(result, Ok)
+            state = result.value
+        assert state.phase == "COMPLETE"
+        stir_result = get_stir_result(state)
+        assert stir_result.final_trump_suit == Suit.SPADES
+        assert stir_result.stir_count == 1
+
+    def test_stir_discard_after_stir_updates_hands(self) -> None:
+        """After a stir, stir_discard updates the stirring player's hand."""
+        bottom = [_card(Suit.DIAMONDS, Rank.THREE, 1)]
+        hands = [
+            [_card(Suit.HEARTS, Rank.ACE, 1)],
+            [_card(Suit.SPADES, Rank.TWO, 1), _card(Suit.SPADES, Rank.TWO, 2)],
+            [], [],
+        ]
+        state = _complete_initial_exchange(create_stirring(_make_input(
+            trump_suit=Suit.DIAMONDS,
+            declarer_player=0,
+            bottom_cards=bottom,
+            players_hand=hands,
+        )))
+        # Player 1 stirs with ♠ pair
+        cards = [_card(Suit.SPADES, Rank.TWO, 1), _card(Suit.SPADES, Rank.TWO, 2)]
+        result = stir(state, player=state.current_player, cards=cards)
+        assert isinstance(result, Ok)
+        assert result.value.phase == "EXCHANGING"
+        assert result.value.exchanging_player == state.current_player
+        # Player 1 discards
+        assert result.value.exchange_state is not None
+        discards = result.value.exchange_state.hand_after_pickup[:1]
+        assert result.value.exchanging_player is not None
+        result2 = stir_discard(result.value, player=result.value.exchanging_player, cards=discards)
+        assert isinstance(result2, Ok)
+        assert result2.value.phase == "WAITING"
+        # Player 1's hand should be updated
+        assert len(result2.value.players_hand[state.current_player]) == 2  # 2 original + 1 bottom - 1 discard

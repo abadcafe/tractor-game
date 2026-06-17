@@ -43,7 +43,6 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     bid_winner: null,
     awaiting_action: "play",
     stirring_state: null,
-    exchange_state: null,
     scoring: null,
     winning_team: null,
     team0_level: "2",
@@ -200,7 +199,7 @@ Deno.test("test_integration_stir_action", () => {
   const snap = makeSnapshot({
     phase: "STIRRING",
     awaiting_action: "stir",
-    stirring_state: { phase: "WAITING", trump_suit: null, current_player: HUMAN_PLAYER_INDEX },
+    stirring_state: { phase: "WAITING", trump_suit: null, current_player: HUMAN_PLAYER_INDEX, exchanging_player: null, exchange_count: null },
     player_hand: [
       { id: "D1-spades-2", suit: "spades", rank: "2" },
       { id: "D2-spades-2", suit: "spades", rank: "2" },
@@ -288,7 +287,7 @@ Deno.test("test_integration_stir_not_human_ignored", () => {
     state: makeSnapshot({
       phase: "STIRRING",
       awaiting_action: "stir",
-      stirring_state: { phase: "WAITING", trump_suit: null, current_player: 1 },
+      stirring_state: { phase: "WAITING", trump_suit: null, current_player: 1, exchanging_player: null, exchange_count: null },
     }),
   };
   gameLoop.handleMessage(msg);

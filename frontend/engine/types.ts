@@ -18,6 +18,7 @@ export interface BidButtonState {
 /** Pre-computed level change info for scoring overlay.
  *  Calculated by engine layer, passed to UI layer for rendering. */
 export interface LevelChangeInfo {
-  delta: number;
+  declarerDelta: number;
+  defenderDelta: number;
   switched: boolean;
 }

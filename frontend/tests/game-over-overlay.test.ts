@@ -27,7 +27,6 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     bid_winner: null,
     awaiting_action: null,
     stirring_state: null,
-    exchange_state: null,
     scoring: null,
     winning_team: 0,
     team0_level: "A",

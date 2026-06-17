@@ -1,7 +1,7 @@
 """Round state machine for 升级 (Shengji/Tractor).
 
 Orchestrates one round by serially executing sub-state machines and
-threading intermediate data: DealBid -> Stirring -> Exchange -> Trick x 25 -> Scoring.
+threading intermediate data: DealBid -> Stirring (with embedded Exchange) -> Trick x 25 -> Scoring.
 
 Exposes sub-state-machine operations through its own API, delegating
 to the sub-state machines while managing phase transitions.
@@ -22,7 +22,6 @@ from server.sm.constants import (
 )
 from server.sm import deal_bid_sm as db
 from server.sm import stirring_sm as stir_mod
-from server.sm import exchange_sm as exc
 from server.sm import trick_sm as trick_mod
 from server.sm import scoring
 from server.sm import play_rules
@@ -51,7 +50,7 @@ class RoundState(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    phase: Literal["DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING", "SCORING", "WAITING"]
+    phase: Literal["DEAL_BID", "STIRRING", "PLAYING", "SCORING", "WAITING"]
     declarer_team: int | None
     declarer_player: int | None
     defender_team: int | None
@@ -63,7 +62,6 @@ class RoundState(BaseModel):
     trick_history: list[CompletedTrick]
     deal_bid_state: db.DealBidState | None
     stirring_state: stir_mod.StirringState | None
-    exchange_state: exc.ExchangeState | None
     trick_state: trick_mod.TrickState | None
     result: RoundResult | None
     team0_level: Rank
@@ -105,7 +103,6 @@ def create_round(input: RoundInput) -> RoundState:
         trick_history=[],
         deal_bid_state=deal_bid_state,
         stirring_state=None,
-        exchange_state=None,
         trick_state=None,
         result=None,
         team0_level=input.team0_level,
@@ -197,7 +194,7 @@ def finalize_deal_bid(state: RoundState) -> StateResult[RoundState]:
 def pass_stir(state: RoundState, player_index: int) -> StateResult[RoundState]:
     """Pass during STIRRING phase.
 
-    Delegates to stirring.pass_stir. If stirring completes, transitions to EXCHANGE.
+    Delegates to stirring.pass_stir. If stirring completes, transitions to PLAYING.
 
     Returns Ok(new_state) on success, Rejected(reason) on invalid input.
     """
@@ -216,12 +213,19 @@ def pass_stir(state: RoundState, player_index: int) -> StateResult[RoundState]:
     match stir_mod.pass_stir(state.stirring_state, cur):
         case Ok(value=new_ss):
             if new_ss.phase == "COMPLETE":
+                # Stirring complete: sync hands/bottom from StirResult,
+                # then transition directly to PLAYING
                 new_state = state.model_copy(update={
                     "stirring_state": new_ss,
                     "trump_suit": new_ss.trump_suit,
+                    "players_hand": [list(h) for h in new_ss.players_hand],
+                    "bottom_cards": list(new_ss.bottom_cards),
                 })
-                return Ok(_transition_to_exchange(new_state))
-            return Ok(state.model_copy(update={"stirring_state": new_ss}))
+                return Ok(_transition_to_playing(new_state))
+            return Ok(state.model_copy(update={
+                "stirring_state": new_ss,
+                "trump_suit": new_ss.trump_suit,
+            }))
         case Rejected(reason=reason):
             return Rejected(reason)
 
@@ -267,48 +271,35 @@ def stir(state: RoundState, player_index: int, cards: list[Card]) -> StateResult
             return Rejected(reason)
 
 
-def discard(state: RoundState, player_index: int, cards: list[Card]) -> StateResult[RoundState]:
-    """Discard bottom cards during EXCHANGE phase.
+def stir_discard(
+    state: RoundState, player_index: int, cards: list[Card]
+) -> StateResult[RoundState]:
+    """Discard bottom cards during STIRRING EXCHANGING sub-phase.
 
-    Delegates to exchange.discard. If exchange completes, transitions to PLAYING.
+    The player who just established/changed the trump must pick up bottom
+    cards and discard the same number back. Delegates to stirring.stir_discard.
+    After successful discard, syncs hands and bottom_cards.
 
     Returns Ok(new_state) on success, Rejected(reason) on invalid input.
     """
-    if state.phase != "EXCHANGE":
+    if state.phase != "STIRRING":
         return Rejected(
-            f"不能在 {state.phase} 阶段埋牌"
+            f"不能在 {state.phase} 阶段换底牌"
         )
-    if state.exchange_state is None:
-        return Rejected("换底牌状态异常")
+    if state.stirring_state is None:
+        return Rejected("反主状态异常")
 
-    declarer = state.exchange_state.declarer_player
-    if player_index != declarer:
-        return Rejected(
-            f"只有庄家可以埋牌，当前庄家是玩家 {declarer}"
-        )
-
-    match exc.discard(state.exchange_state, cards):
-        case Ok(value=new_exc):
-            pass  # proceed below
+    match stir_mod.stir_discard(state.stirring_state, player_index, cards):
+        case Ok(value=new_ss):
+            new_state = state.model_copy(update={
+                "stirring_state": new_ss,
+                "trump_suit": new_ss.trump_suit,
+                "players_hand": [list(h) for h in new_ss.players_hand],
+                "bottom_cards": list(new_ss.bottom_cards),
+            })
+            return Ok(new_state)
         case Rejected(reason=reason):
             return Rejected(reason)
-
-    if new_exc.phase == "COMPLETE" and new_exc.result is not None:
-        new_hand = new_exc.result.new_hand
-        new_bottom = new_exc.result.new_bottom_cards
-        declarer = new_exc.declarer_player
-
-        new_hands = [list(h) for h in state.players_hand]
-        new_hands[declarer] = list(new_hand)
-
-        new_state = state.model_copy(update={
-            "exchange_state": new_exc,
-            "players_hand": new_hands,
-            "bottom_cards": new_bottom,
-        })
-        return Ok(_transition_to_playing(new_state))
-
-    return Ok(state.model_copy(update={"exchange_state": new_exc}))
 
 
 def play(state: RoundState, player_index: int, cards: list[Card]) -> StateResult[RoundState]:
@@ -473,51 +464,35 @@ def _transition_to_stirring(state: RoundState, deal_bid: db.DealBidState) -> Rou
     # Update players_hand from deal_bid
     new_hands = [list(h) for h in deal_bid.players_hand]
 
-    # Create stirring state
+    # Create stirring state (includes initial exchange for declarer)
     stirring_input = stir_mod.StirInput(
         trump_suit=trump_suit,
         trump_rank=state.trump_rank,
         declarer_player=declarer_player,
+        bottom_cards=list(state.bottom_cards),
+        players_hand=new_hands,
     )
     stirring_state = stir_mod.create_stirring(stirring_input)
 
+    # Sync hands and bottom cards from initial exchange state
+    # (exchange state is created with declarer's hand + bottom cards picked up,
+    # but no discard yet, so hands are unchanged until stir_discard is called)
     return state.model_copy(update={
         "phase": "STIRRING",
         "declarer_team": declarer_team,
         "declarer_player": declarer_player,
         "defender_team": defender_team,
         "trump_suit": trump_suit,
-        "players_hand": new_hands,
+        "players_hand": [list(h) for h in stirring_state.players_hand],
         "stirring_state": stirring_state,
         "deal_bid_state": deal_bid,
     })
 
 
-def _transition_to_exchange(state: RoundState) -> RoundState:
-    """Transition from STIRRING to EXCHANGE."""
-    declarer_player = state.declarer_player
-    assert declarer_player is not None
-
-    declarer_hand = state.players_hand[declarer_player]
-    exchange_input = exc.ExchangeInput(
-        declarer_player=declarer_player,
-        bottom_cards=state.bottom_cards,
-        declarer_hand=declarer_hand,
-    )
-    exchange_state = exc.create_exchange(exchange_input)
-
-    return state.model_copy(update={
-        "phase": "EXCHANGE",
-        "exchange_state": exchange_state,
-    })
-
-
 def _transition_to_playing(state: RoundState) -> RoundState:
-    """Transition from EXCHANGE to PLAYING. Create first trick."""
+    """Transition from STIRRING COMPLETE to PLAYING. Create first trick."""
     declarer_player = state.declarer_player
     assert declarer_player is not None
-    declarer_team = state.declarer_team
-    assert declarer_team is not None
 
     return _start_next_trick(state, declarer_player)
 

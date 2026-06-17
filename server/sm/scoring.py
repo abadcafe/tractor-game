@@ -31,6 +31,7 @@ class RoundResult(BaseModel):
     next_declarer_player: int
     total_defender_points: int
     declarer_level_change: int
+    defender_level_change: int = 0
     switch_declarer: bool
     bottom_card_bonus: int
 
@@ -89,13 +90,23 @@ def _find_lead_cards(last_trick: CompletedTrick) -> list[Card]:
     return []
 
 
-def _determine_level_change(total_points: int) -> tuple[int, bool]:
-    """Return (declarer_level_change, switch_declarer) from total defender points."""
+def _determine_level_change(total_points: int) -> tuple[int, bool, int]:
+    """Return (declarer_level_change, switch_declarer, defender_level_gain).
+
+    Levels never retreat. When defenders score >= 80, the declarer team
+    gets 0 change and the defender team (who becomes the new declarer)
+    gains levels according to the formula: max(0, (pts - 80) // 40).
+
+    For defenders < 80, the threshold table is used (declarer gains,
+    no switch, defender gets 0).
+    """
     for threshold in SCORE_THRESHOLDS:
         if total_points <= threshold.max_points:
-            return (threshold.declarer_change, threshold.switch_declarer)
-    # Should not reach here given the thresholds cover 0-200+
-    return (-3, True)
+            return (threshold.declarer_change, threshold.switch_declarer, 0)
+
+    # Defenders >= 80: switch declarer, new declarer gains levels
+    defender_gain = max(0, (total_points - 80) // 40)
+    return (0, True, defender_gain)
 
 
 def calculate_score(
@@ -132,17 +143,25 @@ def calculate_score(
     total_defender_points = defender_points + bottom_card_bonus
 
     # Determine level change from scoring table
-    declarer_change, switch = _determine_level_change(total_defender_points)
+    declarer_change, switch, defender_gain = _determine_level_change(total_defender_points)
 
-    # Compute new levels
-    defender_change = -declarer_change if declarer_change < 0 else 0
-
-    if declarer_team == 0:
-        team0_new_level = advance_level(team0_level, declarer_change)
-        team1_new_level = advance_level(team1_level, defender_change)
+    # Compute new levels (levels never retreat)
+    if switch:
+        # Declarer team: 0 change; defender team (new declarer): +defender_gain
+        if declarer_team == 0:
+            team0_new_level = advance_level(team0_level, 0)
+            team1_new_level = advance_level(team1_level, defender_gain)
+        else:
+            team0_new_level = advance_level(team0_level, defender_gain)
+            team1_new_level = advance_level(team1_level, 0)
     else:
-        team0_new_level = advance_level(team0_level, defender_change)
-        team1_new_level = advance_level(team1_level, declarer_change)
+        # Declarer team: +declarer_change; defender team: 0 change
+        if declarer_team == 0:
+            team0_new_level = advance_level(team0_level, declarer_change)
+            team1_new_level = advance_level(team1_level, 0)
+        else:
+            team0_new_level = advance_level(team0_level, 0)
+            team1_new_level = advance_level(team1_level, declarer_change)
 
     # Determine next declarer
     if switch:
@@ -159,6 +178,7 @@ def calculate_score(
         next_declarer_player=next_player,
         total_defender_points=total_defender_points,
         declarer_level_change=declarer_change,
+        defender_level_change=defender_gain if switch else 0,
         switch_declarer=switch,
         bottom_card_bonus=bottom_card_bonus,
     )

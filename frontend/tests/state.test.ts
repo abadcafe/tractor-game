@@ -19,7 +19,6 @@ function makeSnapshot(phase: string): StateSnapshot {
     bid_winner: null,
     awaiting_action: null,
     stirring_state: null,
-    exchange_state: null,
     scoring: null,
     winning_team: null,
     team0_level: "2",

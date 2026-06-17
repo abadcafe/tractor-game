@@ -22,7 +22,6 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     bid_winner: null,
     awaiting_action: "play",
     stirring_state: null,
-    exchange_state: null,
     scoring: null,
     winning_team: null,
     team0_level: "2",
@@ -82,7 +81,7 @@ Deno.test("test_handleMessage_stirring_human", () => {
   const msg = makeStateMsg({
     phase: "STIRRING",
     awaiting_action: "stir",
-    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3 },
+    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3, exchanging_player: null, exchange_count: null },
   }, "stir");
   loop.handleMessage(msg);
   assertEquals(lastInteractionMode, "stir");
@@ -96,7 +95,7 @@ Deno.test("test_handleMessage_stirring_not_human", () => {
   const msg = makeStateMsg({
     phase: "STIRRING",
     awaiting_action: "stir",
-    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 1 },
+    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 1, exchanging_player: null, exchange_count: null },
   }, "stir");
   loop.handleMessage(msg);
   assertEquals(lastInteractionMode, null);
@@ -108,9 +107,9 @@ Deno.test("test_handleMessage_exchange_human", () => {
   const stateManager = new StateManager();
   const loop = new GameLoop(stateManager, mockRender, mockContainer, 3);
   const msg = makeStateMsg({
-    phase: "EXCHANGE",
+    phase: "STIRRING",
     awaiting_action: "discard",
-    exchange_state: { phase: "PICKED_UP", declarer_player: 3, count: 8 },
+    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3, exchanging_player: 3, exchange_count: 8 },
   }, "discard");
   loop.handleMessage(msg);
   assertEquals(lastInteractionMode, "discard");

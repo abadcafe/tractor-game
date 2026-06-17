@@ -7,7 +7,7 @@ from server.sm.card_model import Card, Suit, Rank
 from server.sm.types import BidEvent
 from server.sm.round_sm import (
     RoundState, RoundInput, create_round,
-    deal_next_card, reveal, pass_stir, stir, discard, play,
+    deal_next_card, reveal, pass_stir, stir, stir_discard, play,
     is_round_complete, get_round_result, finalize_deal_bid,
 )
 from server.sm.result import Ok, Rejected
@@ -113,25 +113,51 @@ def _complete_deal_bid_with_reveal(state: RoundState) -> RoundState:
 
 
 def _complete_stirring_all_pass(state: RoundState) -> RoundState:
-    """Complete stirring by having all players pass."""
+    """Complete stirring by handling initial EXCHANGING then having all players pass.
+
+    The stirring phase starts in EXCHANGING sub-phase: the declarer must
+    exchange (stir_discard) bottom cards first. After that, all 4 players
+    pass, and stirring completes, transitioning directly to PLAYING.
+    """
+    assert state.phase == "STIRRING"
+    assert state.stirring_state is not None
+
+    # Step 1: Handle initial EXCHANGING sub-phase (declarer exchanges bottom cards)
+    if state.stirring_state.phase == "EXCHANGING":
+        assert state.stirring_state.exchange_state is not None
+        ex = state.stirring_state.exchange_state
+        declarer = state.stirring_state.exchanging_player
+        assert declarer is not None
+        discarded = ex.hand_after_pickup[:ex.count]
+        result = stir_discard(state, player_index=declarer, cards=discarded)
+        assert isinstance(result, Ok), f"stir_discard rejected: {result.reason}"
+        state = result.value
+
+    # Step 2: All 4 players pass
     for _ in range(4):
         if state.phase != "STIRRING":
             break
-        cur = state.stirring_state.current_player if state.stirring_state is not None else 0
+        if state.stirring_state is None:
+            break
+        # If stirring is in EXCHANGING (e.g. after a stir), handle it first
+        if state.stirring_state.phase == "EXCHANGING":
+            assert state.stirring_state.exchange_state is not None
+            ex = state.stirring_state.exchange_state
+            exchanging = state.stirring_state.exchanging_player
+            assert exchanging is not None
+            discarded = ex.hand_after_pickup[:ex.count]
+            result = stir_discard(state, player_index=exchanging, cards=discarded)
+            assert isinstance(result, Ok), f"stir_discard rejected: {result.reason}"
+            state = result.value
+        if state.phase != "STIRRING" or state.stirring_state is None:
+            break
+        cur = state.stirring_state.current_player
         result = pass_stir(state, player_index=cur)
         assert isinstance(result, Ok), f"pass_stir rejected: {result.reason}"
         state = result.value
+
     return state
 
-
-def _complete_exchange(state: RoundState) -> RoundState:
-    """Complete exchange by discarding bottom cards back."""
-    if state.exchange_state is None:
-        return state
-    discarded = state.exchange_state.hand_after_pickup[:state.exchange_state.count]
-    result = discard(state, player_index=state.exchange_state.declarer_player, cards=discarded)
-    assert isinstance(result, Ok), f"discard rejected: {result.reason if hasattr(result, 'reason') else result}"
-    return result.value
 
 
 class TestCreateRound:
@@ -234,15 +260,61 @@ class TestDealBidPhase:
         assert state.trump_suit is None  # empty trump
 
 
+def _complete_initial_exchange(state: RoundState) -> RoundState:
+    """Complete the initial EXCHANGING sub-phase of stirring.
+
+    After deal-bid, stirring starts in EXCHANGING sub-phase where the declarer
+    must exchange (stir_discard) bottom cards before any pass/stir actions.
+    """
+    assert state.phase == "STIRRING"
+    assert state.stirring_state is not None
+    assert state.stirring_state.phase == "EXCHANGING"
+    assert state.stirring_state.exchange_state is not None
+    ex = state.stirring_state.exchange_state
+    exchanging = state.stirring_state.exchanging_player
+    assert exchanging is not None
+    discarded = ex.hand_after_pickup[:ex.count]
+    result = stir_discard(state, player_index=exchanging, cards=discarded)
+    assert isinstance(result, Ok), f"stir_discard rejected: {result.reason}"
+    return result.value
+
+
 class TestStirringPhase:
-    def test_pass_stir_during_stirring(self) -> None:
-        """pass_stir during STIRRING advances current player."""
+    def test_stirring_starts_in_exchanging(self) -> None:
+        """After deal-bid, stirring starts in EXCHANGING sub-phase."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
             last_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
+        assert state.phase == "STIRRING"
+        assert state.stirring_state is not None
+        assert state.stirring_state.phase == "EXCHANGING"
+        assert state.stirring_state.exchange_state is not None
+
+    def test_stir_discard_completes_initial_exchange(self) -> None:
+        """stir_discard during initial EXCHANGING transitions to WAITING."""
+        state = create_round(RoundInput(
+            declarer_team=None, trump_rank=Rank.TWO,
+            last_declarer_player=None,
+            team0_level=Rank.TWO, team1_level=Rank.TWO,
+        ))
+        state = _complete_deal_bid_no_bid(state)
+        state = _complete_initial_exchange(state)
+        assert state.phase == "STIRRING"
+        assert state.stirring_state is not None
+        assert state.stirring_state.phase == "WAITING"
+
+    def test_pass_stir_during_stirring(self) -> None:
+        """pass_stir during STIRRING WAITING sub-phase advances current player."""
+        state = create_round(RoundInput(
+            declarer_team=None, trump_rank=Rank.TWO,
+            last_declarer_player=None,
+            team0_level=Rank.TWO, team1_level=Rank.TWO,
+        ))
+        state = _complete_deal_bid_no_bid(state)
+        state = _complete_initial_exchange(state)
         assert state.phase == "STIRRING"
         assert state.stirring_state is not None
         result = pass_stir(state, player_index=state.stirring_state.current_player)
@@ -252,7 +324,7 @@ class TestStirringPhase:
         assert len(state.stirring_state.pass_set) == 1
 
     def test_stir_during_stirring(self) -> None:
-        """stir during STIRRING changes trump suit."""
+        """stir during STIRRING WAITING sub-phase changes trump suit."""
         random.seed(10)
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
@@ -260,6 +332,7 @@ class TestStirringPhase:
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
+        state = _complete_initial_exchange(state)
         assert state.phase == "STIRRING"
         # With empty trump, find a trump-rank pair in the current player's hand
         assert state.stirring_state is not None
@@ -294,6 +367,7 @@ class TestStirringPhase:
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
+        state = _complete_initial_exchange(state)
         assert state.phase == "STIRRING"
         assert state.stirring_state is not None
         # Fabricate cards that are NOT in the current player's hand
@@ -315,6 +389,7 @@ class TestStirringPhase:
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
+        state = _complete_initial_exchange(state)
         assert state.phase == "STIRRING"
         assert state.stirring_state is not None
         cur = state.stirring_state.current_player
@@ -326,8 +401,8 @@ class TestStirringPhase:
             assert isinstance(result, Rejected)
             assert "对子" in result.reason
 
-    def test_stirring_to_exchange(self) -> None:
-        """After all players pass stirring, round enters EXCHANGE."""
+    def test_stirring_all_pass_to_playing(self) -> None:
+        """After all players pass stirring, round enters PLAYING directly."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
             last_declarer_player=None,
@@ -335,8 +410,7 @@ class TestStirringPhase:
         ))
         state = _complete_deal_bid_no_bid(state)
         state = _complete_stirring_all_pass(state)
-        assert state.phase == "EXCHANGE"
-        assert state.exchange_state is not None
+        assert state.phase == "PLAYING"
 
     def test_stir_cannot_stir_own_trump(self) -> None:
         """Regression for Bug 2: a player who just stirred cannot stir again
@@ -350,6 +424,7 @@ class TestStirringPhase:
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
+        state = _complete_initial_exchange(state)
         assert state.phase == "STIRRING"
         assert state.stirring_state is not None
 
@@ -379,12 +454,35 @@ class TestStirringPhase:
         assert state.stirring_state is not None
         assert state.stirring_state.last_stir_player == cur
 
+        # After stir, phase is EXCHANGING; complete it
+        if state.stirring_state.phase == "EXCHANGING":
+            assert state.stirring_state.exchange_state is not None
+            ex = state.stirring_state.exchange_state
+            exchanging = state.stirring_state.exchanging_player
+            assert exchanging is not None
+            discarded = ex.hand_after_pickup[:ex.count]
+            result = stir_discard(state, player_index=exchanging, cards=discarded)
+            assert isinstance(result, Ok), f"stir_discard rejected: {result.reason}"
+            state = result.value
+
         # Pass around until the turn comes back to the same player
         for _ in range(3):
             if state.phase != "STIRRING":
                 break
             assert state.stirring_state is not None
-            result = pass_stir(state, player_index=state.stirring_state.current_player)
+            if state.stirring_state.phase == "EXCHANGING":
+                assert state.stirring_state.exchange_state is not None
+                ex = state.stirring_state.exchange_state
+                exchanging = state.stirring_state.exchanging_player
+                assert exchanging is not None
+                discarded = ex.hand_after_pickup[:ex.count]
+                result = stir_discard(state, player_index=exchanging, cards=discarded)
+                assert isinstance(result, Ok), f"stir_discard rejected: {result.reason}"
+                state = result.value
+            if state.stirring_state is None:
+                break
+            p = state.stirring_state.current_player
+            result = pass_stir(state, player_index=p)
             assert isinstance(result, Ok), f"pass_stir rejected: {result.reason}"
             state = result.value
 
@@ -397,33 +495,6 @@ class TestStirringPhase:
         assert isinstance(result, Rejected)
 
 
-class TestExchangePhase:
-    def test_discard_during_exchange(self) -> None:
-        """discard during EXCHANGE transitions to PLAYING."""
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
-        state = _complete_deal_bid_no_bid(state)
-        state = _complete_stirring_all_pass(state)
-        assert state.phase == "EXCHANGE"
-        state = _complete_exchange(state)
-        assert state.phase == "PLAYING"
-
-    def test_exchange_to_playing(self) -> None:
-        """After exchange completes, round enters PLAYING."""
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
-        state = _complete_deal_bid_no_bid(state)
-        state = _complete_stirring_all_pass(state)
-        state = _complete_exchange(state)
-        assert state.phase == "PLAYING"
-        assert state.trick_state is not None
-
 
 class TestPlayingPhase:
     def test_play_during_playing_first_trick(self) -> None:
@@ -435,7 +506,6 @@ class TestPlayingPhase:
         ))
         state = _complete_deal_bid_no_bid(state)
         state = _complete_stirring_all_pass(state)
-        state = _complete_exchange(state)
         assert state.phase == "PLAYING"
         # Current trick should be in LEADING state
         assert state.trick_state is not None
@@ -450,7 +520,6 @@ class TestPlayingPhase:
         ))
         state = _complete_deal_bid_no_bid(state)
         state = _complete_stirring_all_pass(state)
-        state = _complete_exchange(state)
         # Play a complete trick: 4 players play
         trick = state.trick_state
         assert trick is not None
@@ -489,7 +558,6 @@ class TestPlayingPhase:
         ))
         state = _complete_deal_bid_no_bid(state)
         state = _complete_stirring_all_pass(state)
-        state = _complete_exchange(state)
         # Play tricks until phase changes from PLAYING or no progress
         max_iterations = 30
         prev_history_len = 0
@@ -529,7 +597,6 @@ class TestScoringPhase:
         ))
         state = _complete_deal_bid_no_bid(state)
         state = _complete_stirring_all_pass(state)
-        state = _complete_exchange(state)
         # Play tricks until phase changes or no progress
         prev_history_len = 0
         for _ in range(30):
@@ -710,12 +777,8 @@ class TestRoundFullFlow:
         state = _complete_deal_bid_no_bid(state)
         assert state.phase == "STIRRING"
 
-        # Stirring: all pass
+        # Stirring: all pass (includes initial stir_discard)
         state = _complete_stirring_all_pass(state)
-        assert state.phase == "EXCHANGE"
-
-        # Exchange: discard
-        state = _complete_exchange(state)
         assert state.phase == "PLAYING"
 
         # Play tricks until phase changes or no progress
@@ -749,7 +812,7 @@ class TestRoundFullFlow:
 
 
 class TestPlayerIdentityValidation:
-    """Bug 4 regression: pass_stir, stir, and discard must reject wrong player_index."""
+    """Bug 4 regression: pass_stir, stir, and stir_discard must reject wrong player_index."""
 
     def test_pass_stir_rejects_wrong_player(self) -> None:
         """pass_stir rejects when player_index doesn't match current_player."""
@@ -760,6 +823,19 @@ class TestPlayerIdentityValidation:
         ))
         state = _complete_deal_bid_no_bid(state)
         assert state.phase == "STIRRING"
+        assert state.stirring_state is not None
+        # Stirring starts in EXCHANGING sub-phase, so pass_stir is rejected
+        # regardless of player identity. First complete the exchange.
+        assert state.stirring_state.phase == "EXCHANGING"
+        assert state.stirring_state.exchange_state is not None
+        ex = state.stirring_state.exchange_state
+        exchanging = state.stirring_state.exchanging_player
+        assert exchanging is not None
+        discarded = ex.hand_after_pickup[:ex.count]
+        result = stir_discard(state, player_index=exchanging, cards=discarded)
+        assert isinstance(result, Ok), f"stir_discard rejected: {result.reason}"
+        state = result.value
+        # Now in WAITING sub-phase, test wrong player
         assert state.stirring_state is not None
         cur = state.stirring_state.current_player
         wrong_player = (cur + 1) % 4
@@ -777,6 +853,17 @@ class TestPlayerIdentityValidation:
         state = _complete_deal_bid_no_bid(state)
         assert state.phase == "STIRRING"
         assert state.stirring_state is not None
+        # Stirring starts in EXCHANGING sub-phase; complete it first
+        assert state.stirring_state.phase == "EXCHANGING"
+        assert state.stirring_state.exchange_state is not None
+        ex = state.stirring_state.exchange_state
+        exchanging = state.stirring_state.exchanging_player
+        assert exchanging is not None
+        discarded = ex.hand_after_pickup[:ex.count]
+        result = stir_discard(state, player_index=exchanging, cards=discarded)
+        assert isinstance(result, Ok), f"stir_discard rejected: {result.reason}"
+        state = result.value
+        assert state.stirring_state is not None
         cur = state.stirring_state.current_player
         wrong_player = (cur + 1) % 4
         # Use any cards; the player identity check happens before card validation
@@ -790,27 +877,29 @@ class TestPlayerIdentityValidation:
         assert isinstance(result, Rejected)
         assert "不是你的回合" in result.reason
 
-    def test_discard_rejects_wrong_player(self) -> None:
-        """discard rejects when player_index doesn't match declarer_player."""
+    def test_stir_discard_rejects_wrong_player(self) -> None:
+        """stir_discard rejects when player_index doesn't match exchanging_player."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
             last_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
-        state = _complete_stirring_all_pass(state)
-        assert state.phase == "EXCHANGE"
-        assert state.exchange_state is not None
-        declarer = state.exchange_state.declarer_player
-        wrong_player = (declarer + 1) % 4
+        assert state.phase == "STIRRING"
+        assert state.stirring_state is not None
+        assert state.stirring_state.phase == "EXCHANGING"
+        assert state.stirring_state.exchange_state is not None
+        exchanging = state.stirring_state.exchanging_player
+        assert exchanging is not None
+        wrong_player = (exchanging + 1) % 4
         # Use any cards; the player identity check happens before card validation
         fake_cards = [
             Card(id="D1-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
                  is_joker=False, is_big_joker=False, points=0, deck=1),
         ]
-        result = discard(state, player_index=wrong_player, cards=fake_cards)
+        result = stir_discard(state, player_index=wrong_player, cards=fake_cards)
         assert isinstance(result, Rejected)
-        assert "只有庄家可以埋牌" in result.reason
+        assert "炒主者" in result.reason
 
     def test_pass_stir_accepts_correct_player(self) -> None:
         """pass_stir succeeds when player_index matches current_player."""
@@ -822,22 +911,36 @@ class TestPlayerIdentityValidation:
         state = _complete_deal_bid_no_bid(state)
         assert state.phase == "STIRRING"
         assert state.stirring_state is not None
+        # Stirring starts in EXCHANGING; complete it first
+        assert state.stirring_state.phase == "EXCHANGING"
+        assert state.stirring_state.exchange_state is not None
+        ex = state.stirring_state.exchange_state
+        exchanging = state.stirring_state.exchanging_player
+        assert exchanging is not None
+        discarded = ex.hand_after_pickup[:ex.count]
+        result = stir_discard(state, player_index=exchanging, cards=discarded)
+        assert isinstance(result, Ok), f"stir_discard rejected: {result.reason}"
+        state = result.value
+        assert state.stirring_state is not None
         cur = state.stirring_state.current_player
         result = pass_stir(state, player_index=cur)
         assert isinstance(result, Ok)
 
-    def test_discard_accepts_correct_player(self) -> None:
-        """discard succeeds when player_index matches declarer_player."""
+    def test_stir_discard_accepts_correct_player(self) -> None:
+        """stir_discard succeeds when player_index matches exchanging_player."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
             last_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
-        state = _complete_stirring_all_pass(state)
-        assert state.phase == "EXCHANGE"
-        assert state.exchange_state is not None
-        declarer = state.exchange_state.declarer_player
-        discarded = state.exchange_state.hand_after_pickup[:state.exchange_state.count]
-        result = discard(state, player_index=declarer, cards=discarded)
+        assert state.phase == "STIRRING"
+        assert state.stirring_state is not None
+        assert state.stirring_state.phase == "EXCHANGING"
+        assert state.stirring_state.exchange_state is not None
+        ex = state.stirring_state.exchange_state
+        exchanging = state.stirring_state.exchanging_player
+        assert exchanging is not None
+        discarded = ex.hand_after_pickup[:ex.count]
+        result = stir_discard(state, player_index=exchanging, cards=discarded)
         assert isinstance(result, Ok)

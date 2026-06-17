@@ -149,7 +149,7 @@ class TestCalculateScore:
         assert result.team1_new_level == Rank.TWO    # unchanged
 
     def test_calculate_score_switch(self) -> None:
-        """Defender 80-119 -> switch declarer."""
+        """Defender 80-119 -> switch declarer, no level change for either."""
         result = calculate_score(
             defender_points=100,
             bottom_cards=[],
@@ -162,13 +162,14 @@ class TestCalculateScore:
             trump_rank=_TRUMP_RANK,
         )
         assert result.declarer_level_change == 0
+        assert result.defender_level_change == 0
         assert result.switch_declarer is True
         assert result.next_declarer_team == 1
-        assert result.team0_new_level == Rank.TWO  # TWO + 0 = TWO (no change for declarer)
-        assert result.team1_new_level == Rank.TWO  # defender gets abs(0) = 0 advance
+        assert result.team0_new_level == Rank.TWO  # no change (levels never retreat)
+        assert result.team1_new_level == Rank.TWO  # defender gets 0 advance
 
     def test_calculate_score_defender_plus1(self) -> None:
-        """Defender 120-159 -> defender +1, switch."""
+        """Defender 120-159 -> switch, defender (new declarer) +1."""
         result = calculate_score(
             defender_points=130,
             bottom_cards=[],
@@ -180,13 +181,14 @@ class TestCalculateScore:
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
-        assert result.declarer_level_change == -1
+        assert result.declarer_level_change == 0
+        assert result.defender_level_change == 1
         assert result.switch_declarer is True
-        assert result.team0_new_level == Rank.FOUR  # FIVE - 1 = FOUR
-        assert result.team1_new_level == Rank.FOUR  # THREE + abs(-1) = FOUR
+        assert result.team0_new_level == Rank.FIVE   # no change (levels never retreat)
+        assert result.team1_new_level == Rank.FOUR   # THREE + 1 = FOUR
 
     def test_calculate_score_defender_plus2(self) -> None:
-        """Defender 160-199 -> defender +2."""
+        """Defender 160-199 -> switch, defender (new declarer) +2."""
         result = calculate_score(
             defender_points=180,
             bottom_cards=[],
@@ -198,12 +200,14 @@ class TestCalculateScore:
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
-        assert result.declarer_level_change == -2
-        assert result.team0_new_level == Rank.THREE  # FIVE - 2 = THREE
-        assert result.team1_new_level == Rank.FIVE   # THREE + abs(-2) = FIVE
+        assert result.declarer_level_change == 0
+        assert result.defender_level_change == 2
+        assert result.switch_declarer is True
+        assert result.team0_new_level == Rank.FIVE   # no change (levels never retreat)
+        assert result.team1_new_level == Rank.FIVE   # THREE + 2 = FIVE
 
     def test_calculate_score_defender_plus3(self) -> None:
-        """Defender 200 -> defender +3."""
+        """Defender 200 -> switch, defender (new declarer) +3."""
         result = calculate_score(
             defender_points=200,
             bottom_cards=[],
@@ -215,9 +219,11 @@ class TestCalculateScore:
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
-        assert result.declarer_level_change == -3
-        assert result.team0_new_level == Rank.TWO    # FIVE - 3 = TWO (clamped at 2)
-        assert result.team1_new_level == Rank.SIX     # THREE + abs(-3) = SIX
+        assert result.declarer_level_change == 0
+        assert result.defender_level_change == 3
+        assert result.switch_declarer is True
+        assert result.team0_new_level == Rank.FIVE   # no change (levels never retreat)
+        assert result.team1_new_level == Rank.SIX     # THREE + 3 = SIX
 
 
 class TestAmbushMultiplier:
@@ -437,24 +443,24 @@ class TestDeclarerRotation:
 
 class TestBoundaryValues:
     @pytest.mark.parametrize(
-        "points,expected_change,expected_switch",
+        "points,expected_declarer_change,expected_defender_change,expected_switch",
         [
-            (0, 3, False),
-            (1, 2, False),
-            (39, 2, False),
-            (40, 1, False),
-            (79, 1, False),
-            (80, 0, True),
-            (119, 0, True),
-            (120, -1, True),
-            (159, -1, True),
-            (160, -2, True),
-            (199, -2, True),
-            (200, -3, True),
+            (0, 3, 0, False),
+            (1, 2, 0, False),
+            (39, 2, 0, False),
+            (40, 1, 0, False),
+            (79, 1, 0, False),
+            (80, 0, 0, True),
+            (119, 0, 0, True),
+            (120, 0, 1, True),
+            (159, 0, 1, True),
+            (160, 0, 2, True),
+            (199, 0, 2, True),
+            (200, 0, 3, True),
         ],
     )
     def test_calculate_score_boundary_values(
-        self, points: int, expected_change: int, expected_switch: bool,
+        self, points: int, expected_declarer_change: int, expected_defender_change: int, expected_switch: bool,
     ) -> None:
         result = calculate_score(
             defender_points=points,
@@ -467,7 +473,8 @@ class TestBoundaryValues:
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
-        assert result.declarer_level_change == expected_change
+        assert result.declarer_level_change == expected_declarer_change
+        assert result.defender_level_change == expected_defender_change
         assert result.switch_declarer == expected_switch
 
 
@@ -506,16 +513,17 @@ class TestDeclarerTeam1:
             trump_rank=_TRUMP_RANK,
         )
         assert result.declarer_level_change == 0
+        assert result.defender_level_change == 0
         assert result.switch_declarer is True
         assert result.next_declarer_team == 0
         assert result.next_declarer_player == 3  # CCW next of 1 is 3
-        assert result.team1_new_level == Rank.TWO  # declarer team unchanged
+        assert result.team1_new_level == Rank.TWO  # declarer team unchanged (levels never retreat)
         assert result.team0_new_level == Rank.TWO  # defender gets 0 advance
 
 
 class TestOver200:
     def test_defender_over_200_from_bonus(self) -> None:
-        """When ambush bonus pushes total over 200, still gets -3 and switch."""
+        """When ambush bonus pushes total over 200, formula gives large gain."""
         # 6-card tractor ambush: 2^6=64, bottom_base=50 -> bonus=3200
         # total = 50 + 3200 = 3250, well over 200
         bottom = [
@@ -534,15 +542,16 @@ class TestOver200:
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
-        # total = 50 + 3200 = 3250 -> fallback: -3, switch
-        assert result.declarer_level_change == -3
+        # total = 50 + 3200 = 3250 -> formula: (3250 - 80) // 40 = 79
+        assert result.declarer_level_change == 0
+        assert result.defender_level_change == 79
         assert result.switch_declarer is True
         assert result.total_defender_points == 3250
-        assert result.team0_new_level == Rank.TWO  # TWO - 3 clamped at TWO
-        assert result.team1_new_level == Rank.FIVE  # TWO + 3 = FIVE
+        assert result.team0_new_level == Rank.TWO   # no change (levels never retreat)
+        assert result.team1_new_level == Rank.ACE    # TWO + 79 clamped at ACE
 
     def test_defender_points_exactly_200(self) -> None:
-        """Defender points exactly 200 -> -3, switch."""
+        """Defender points exactly 200 -> formula: (200-80)//40 = 3."""
         result = calculate_score(
             defender_points=200,
             bottom_cards=[],
@@ -554,7 +563,8 @@ class TestOver200:
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
-        assert result.declarer_level_change == -3
+        assert result.declarer_level_change == 0
+        assert result.defender_level_change == 3
         assert result.switch_declarer is True
         assert result.total_defender_points == 200
 

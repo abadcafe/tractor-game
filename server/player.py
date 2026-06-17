@@ -135,7 +135,7 @@ class AutoPlayer(Player):
             await self._handle_deal_bid(snapshot, game, seq=seq)
         elif snapshot.phase == "STIRRING" and snapshot.awaiting_action == "stir":
             await self._handle_stir(snapshot, game, seq=seq)
-        elif snapshot.phase == "EXCHANGE" and snapshot.awaiting_action == "discard":
+        elif snapshot.phase == "STIRRING" and snapshot.awaiting_action == "discard":
             await self._handle_discard(snapshot, game, seq=seq)
         elif snapshot.phase == "PLAYING" and snapshot.awaiting_action == "play":
             await self._handle_play(snapshot, game, seq=seq)
@@ -250,10 +250,10 @@ class AutoPlayer(Player):
         asyncio.create_task(game.act(self.index, seq, action))
 
     async def _handle_discard(self, snapshot: StateSnapshot, game: GameView, *, seq: int) -> None:
-        """Randomly discard cards during EXCHANGE phase."""
+        """Randomly discard cards during STIRRING EXCHANGING sub-phase."""
         hand = snapshot.player_hand
-        exc = snapshot.exchange_state
-        count = exc.count if exc is not None else 8
+        stir = snapshot.stirring_state
+        count = stir.exchange_count if stir is not None and stir.exchange_count is not None else 8
         if len(hand) >= count and count > 0:
             cards = random.sample(hand, count)
         elif len(hand) > 0:

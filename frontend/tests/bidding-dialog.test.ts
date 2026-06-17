@@ -30,7 +30,6 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     bid_winner: null,
     awaiting_action: null,
     stirring_state: null,
-    exchange_state: null,
     scoring: null,
     winning_team: null,
     team0_level: "2",
@@ -52,7 +51,7 @@ Deno.test("test_renderBiddingDialog_deal_bid_phase", () => {
 Deno.test("test_renderBiddingDialog_stirring_human", () => {
   const snap = makeSnapshot({
     phase: "STIRRING",
-    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3 },
+    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3, exchanging_player: null, exchange_count: null },
   });
   const el = renderBiddingDialog(snap, "stir");
   const buttons = el.querySelectorAll("button");
@@ -63,7 +62,7 @@ Deno.test("test_renderBiddingDialog_stirring_human", () => {
 Deno.test("test_renderBiddingDialog_stirring_not_human", () => {
   const snap = makeSnapshot({
     phase: "STIRRING",
-    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 1 },
+    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 1, exchanging_player: null, exchange_count: null },
   });
   // When interactionMode is null (not human's turn), no action buttons
   const el = renderBiddingDialog(snap, null);
@@ -91,7 +90,7 @@ Deno.test("test_renderBiddingDialog_bid_events_displayed", () => {
 Deno.test("test_renderBiddingDialog_pass_callback", () => {
   const snap = makeSnapshot({
     phase: "STIRRING",
-    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3 },
+    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3, exchanging_player: null, exchange_count: null },
   });
   let passCalled = false;
   const onPass = () => { passCalled = true; };
@@ -121,7 +120,7 @@ Deno.test("test_renderBiddingDialog_bid_callback", () => {
 Deno.test("test_renderBiddingDialog_stir_callback", () => {
   const snap = makeSnapshot({
     phase: "STIRRING",
-    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3 },
+    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3, exchanging_player: null, exchange_count: null },
     player_hand: [
       { id: "D1-spades-2", suit: "spades", rank: "2" },
       { id: "D2-spades-2", suit: "spades", rank: "2" },

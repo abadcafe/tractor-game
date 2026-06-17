@@ -100,20 +100,16 @@ class ScoreThreshold:
 
 
 # Spec section 9, lookup table:
-# 闲家得分     庄家级别变化  换庄
-# 0            +3           否
-# 1~39         +2           否
-# 40~79        +1           否
-# 80~119       0            是
-# 120~159      -1           是
-# 160~199      -2           是
-# 200          -3           是
+# 闲家得分     庄家级别变化  闲家(新庄)级别变化  换庄
+# 0            +3           0                   否
+# 1~39         +2           0                   否
+# 40~79        +1           0                   否
+# ≥80          0            (得分-80)//40       是
+#
+# 级别永不倒退。闲家≥80分时，庄家换人，新庄家（原闲家）升级数
+# = max(0, (闲家得分 - 80) // 40)，上不封顶。
 SCORE_THRESHOLDS: tuple[ScoreThreshold, ...] = (
     ScoreThreshold(max_points=0,   declarer_change=3,  switch_declarer=False),
     ScoreThreshold(max_points=39,  declarer_change=2,  switch_declarer=False),
     ScoreThreshold(max_points=79,  declarer_change=1,  switch_declarer=False),
-    ScoreThreshold(max_points=119, declarer_change=0,  switch_declarer=True),
-    ScoreThreshold(max_points=159, declarer_change=-1, switch_declarer=True),
-    ScoreThreshold(max_points=199, declarer_change=-2, switch_declarer=True),
-    ScoreThreshold(max_points=200, declarer_change=-3, switch_declarer=True),
 )

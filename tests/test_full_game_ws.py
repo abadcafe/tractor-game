@@ -552,16 +552,12 @@ def test_reconnect_resumes_game(sync_client: TestClient) -> None:
 # Scoring thresholds from server/sm/constants.py
 # Each entry: (max_points, declarer_change, switch_declarer)
 # - declarer_change: how many levels the declarer advances (positive = up)
-# - switch_declarer: if True, defenders advance by |declarer_change| levels
+# - switch_declarer: if True, defenders become new declarer and gain levels
+# Levels never retreat. For defender_points >= 80, formula applies.
 _SCORE_THRESHOLDS: list[tuple[int, int, bool]] = [
     (0,   3, False),   # 0 points: declarer +3, no switch
     (39,  2, False),   # 1-39: declarer +2, no switch
     (79,  1, False),   # 40-79: declarer +1, no switch
-    (119, 0, True),    # 80-119: declarer +0, switch (defenders advance)
-    (159, -1, True),   # 120-159: declarer -1, switch
-    (199, -2, True),   # 160-199: declarer -2, switch
-    (200, -3, True),   # 200: declarer -3, switch
-    (999, -3, True),   # >200: same as 200 (fallback in server scoring)
 ]
 
 _RANK_ORDER = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
@@ -582,30 +578,31 @@ def _compute_expected_levels(
 ) -> tuple[str, str]:
     """Compute expected team levels from scoring data.
 
-    Mirrors server/sm/constants.py SCORE_THRESHOLDS logic:
-    - Declarer advances by declarer_change levels
-    - If switch_declarer is True, defenders advance by |declarer_change| levels
-    - If switch_declarer is False, defenders do not advance
+    Mirrors server/sm/constants.py SCORE_THRESHOLDS + formula logic:
+    - Declarer advances by declarer_change levels (0 when switch)
+    - If switch_declarer is True, new declarer (old defender) advances by defender_gain
+    - Formula for >= 80: defender_gain = max(0, (total - 80) // 40)
+    - Levels never retreat
     """
     declarer_change = 0
-    switch = False
-    for max_pts, change, sw in _SCORE_THRESHOLDS:
+    defender_gain = 0
+
+    for max_pts, change, _sw in _SCORE_THRESHOLDS:
         if total_defender_points <= max_pts:
             declarer_change = change
-            switch = sw
             break
-
-    # Defenders only advance when they win (switch_declarer=True)
-    defender_change = -declarer_change if switch else 0
+    else:
+        # defender_points >= 80: switch, formula for new declarer gain
+        defender_gain = max(0, (total_defender_points - 80) // 40)
 
     if declarer_team == 0:
         return (
             _advance_level(team0_level, declarer_change),
-            _advance_level(team1_level, defender_change),
+            _advance_level(team1_level, defender_gain),
         )
     else:
         return (
-            _advance_level(team0_level, defender_change),
+            _advance_level(team0_level, defender_gain),
             _advance_level(team1_level, declarer_change),
         )
 
@@ -959,11 +956,8 @@ def _play_stirring(
 ) -> tuple[dict[str, object], dict[str, object]]:
     """Play through STIRRING phase. Returns (final_state, final_msg).
 
-    The human always passes during STIRRING. This avoids the complex
-    message interleaving issues where do_action reads AutoPlayer cascade
-    pushes instead of our stir response. AutoPlayers handle any stir
-    actions that are needed; the test only needs to advance through
-    the phase.
+    Handles both EXCHANGING sub-phase (discard) and WAITING sub-phase (stir/pass).
+    The human always passes during WAITING and discards during EXCHANGING.
     """
     print(f"[round {round_count}] === STIRRING ===", flush=True)
     _verify_common_fields(state, "STIRRING")
@@ -980,10 +974,15 @@ def _play_stirring(
         # Check if STIRRING is done
         if state["phase"] != "STIRRING":
             break
-        if msg.get("awaiting") not in ("stir", None):
-            print(f"[round {round_count}] STIRRING -> {state['phase']} (awaiting={msg.get('awaiting')})", flush=True)
-            break
 
+        # Handle EXCHANGING sub-phase (discard bottom cards)
+        if msg.get("awaiting") == "discard":
+            state, msg = _play_stirring_exchange(driver, state, round_count)
+            if state["phase"] != "STIRRING":
+                break
+            continue
+
+        # Handle WAITING sub-phase (stir/pass)
         if msg.get("awaiting") == "stir":
             _send_wrong_actions(driver)
             response = driver.do_stir_pass()
@@ -992,13 +991,12 @@ def _play_stirring(
                 msg = response
                 if state["phase"] != "STIRRING":
                     break
-                if msg.get("awaiting") == "stir":
+                if msg.get("awaiting") in ("stir", "discard"):
                     continue
             # Fall through to drain
 
         state, msg = _recv_until_our_turn(
-            driver, f"R{round_count}:STIR", "STIRRING", {"stir"},
-            exit_awaiting={"discard"},
+            driver, f"R{round_count}:STIR", "STIRRING", {"stir", "discard"},
         )
         if state["phase"] != "STIRRING":
             print(f"[round {round_count}] STIRRING -> {state['phase']}", flush=True)
@@ -1007,78 +1005,57 @@ def _play_stirring(
     return state, msg
 
 
-def _play_exchange(
+def _play_stirring_exchange(
     driver: WsGameDriver,
     state: dict[str, object],
     round_count: int,
 ) -> tuple[dict[str, object], dict[str, object]]:
-    """Play through EXCHANGE phase. Returns (final_state, final_msg)."""
-    print(f"[round {round_count}] === EXCHANGE ===", flush=True)
-    _verify_common_fields(state, "EXCHANGE")
-    assert "exchange_state" in state
-    exchange = _as_dict_or_none(state.get("exchange_state"))
-    assert exchange is not None
-    assert "phase" in exchange
-    assert "declarer_player" in exchange
-    assert "count" in exchange
+    """Play through STIRRING EXCHANGING sub-phase (discard during stirring).
 
-    declarer_player_raw = exchange.get("declarer_player")
-    declarer_player = _as_int(declarer_player_raw) if isinstance(declarer_player_raw, int) else None
+    Called when phase is "STIRRING" and awaiting_action is "discard".
+    Returns (final_state, final_msg).
+    """
+    _verify_common_fields(state, "STIRRING")
+    stirring = _as_dict_or_none(state.get("stirring_state"))
+    assert stirring is not None
+    exchanging_player_raw = stirring.get("exchanging_player")
+    exchanging_player = _as_int(exchanging_player_raw) if isinstance(exchanging_player_raw, int) else None
+    exchange_count_raw = stirring.get("exchange_count", 8)
+    exchange_count = _as_int(exchange_count_raw) if isinstance(exchange_count_raw, int) else 8
 
     # Build a placeholder msg; will be updated when we receive actual responses
     msg: dict[str, object] = {}
 
-    if declarer_player == 3:
+    if exchanging_player == 3:
         hand = _hand_dicts(state)
-
-        count_raw = exchange.get("count", 8)
-        count = _as_int(count_raw) if isinstance(count_raw, int) else 8
         discard_ids: list[str] = []
-        for c in hand[-count:]:
+        for c in hand[-exchange_count:]:
             discard_ids.append(_as_str(c["id"]))
-        print(f"  [R{round_count}:EXCHANGE] human discard {len(discard_ids)} cards", flush=True)
+        print(f"  [R{round_count}:STIR-EXCH] human discard {len(discard_ids)} cards", flush=True)
         _send_wrong_actions(driver)
         response = driver.do_discard(discard_ids)
         if response is not None:
             state = _as_dict(response["state"])
             msg = response
-            print(f"  [R{round_count}:EXCHANGE] discard response: phase={state.get('phase')} awaiting={response.get('awaiting')} hand_size={len(_hand_dicts(state))}", flush=True)
+            print(f"  [R{round_count}:STIR-EXCH] discard response: phase={state.get('phase')} awaiting={response.get('awaiting')}", flush=True)
         else:
-            # Discard failed (likely seq mismatch was resolved but we need to
-            # catch up on state). Drain messages until we get a current state.
-            print(f"  [R{round_count}:EXCHANGE] discard failed, draining to get current state", flush=True)
+            print(f"  [R{round_count}:STIR-EXCH] discard failed, draining to get current state", flush=True)
             state, msg = _recv_until_our_turn(
-                driver, f"R{round_count}:EXCH", "EXCHANGE", {"discard"},
+                driver, f"R{round_count}:STIR-EXCH", "STIRRING", {"discard"},
                 timeout=5,
             )
-            if state["phase"] == "PLAYING":
-                pass  # already transitioned
-            elif _as_str(state.get("awaiting_action", "")) == "discard":
-                # Still our turn, retry discard
+            if _as_str(state.get("awaiting_action", "")) == "discard":
                 _send_wrong_actions(driver)
                 response = driver.do_discard(discard_ids)
                 if response is not None:
                     state = _as_dict(response["state"])
                     msg = response
-
-        if state["phase"] != "PLAYING":
-            # Drain until PLAYING (AutoPlayer may cascade)
-            state, msg = _recv_until_our_turn(
-                driver, f"R{round_count}:EXCH", "EXCHANGE", {"discard"},
-                timeout=5,
-            )
-
-        hand_after = _hand_dicts(state)
-        # In Tractor, the declarer discards `count` cards to the bottom and
-        # picks up the same number of bottom cards, so hand size stays the same.
-        assert len(hand_after) == len(hand), (
-            f"Hand count should stay the same after exchange: "
-            f"before={len(hand)}, after={len(hand_after)}"
-        )
     else:
-        print(f"  [R{round_count}:EXCHANGE] declarer={declarer_player}, waiting for PLAYING", flush=True)
-        msg = driver.wait_for_phase("PLAYING", timeout=5)
-        state = _as_dict(msg["state"])
+        print(f"  [R{round_count}:STIR-EXCH] exchanging_player={exchanging_player}, waiting for our turn", flush=True)
+        state, msg = _recv_until_our_turn(
+            driver, f"R{round_count}:STIR-EXCH", "STIRRING", {"discard", "stir", "play"},
+            timeout=5,
+        )
 
     return state, msg
 
@@ -1176,7 +1153,7 @@ def _play_playing(
     prev_trick_count: int = len(_as_list(state.get("trick_history", [])))
 
     # If msg is stale (e.g., awaiting is not "play"), drain until we know
-    # whether it's our turn. This handles cases where the EXCHANGE phase
+    # whether it's our turn. This handles cases where the STIRRING EXCHANGING sub-phase
     # didn't produce a response with awaiting="play" (e.g., when the
     # human is not the declarer and the phase transition happened in the
     # background).
@@ -1509,7 +1486,7 @@ def test_full_game(sync_client: TestClient) -> None:
             cur_phase = state.get("phase", "?")
             cur_awaiting = msg.get("awaiting")
             print(f"  initial state: phase={cur_phase} awaiting={cur_awaiting} seq={driver.current_seq}", flush=True)
-            if cur_phase in ("DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING", "GAME_OVER"):
+            if cur_phase in ("DEAL_BID", "STIRRING", "PLAYING", "GAME_OVER"):
                 break
             # Still in WAITING or transitional state — drain more
             msg = driver.receive_msg_safe()
@@ -1544,10 +1521,6 @@ def test_full_game(sync_client: TestClient) -> None:
             # STIRRING (optional)
             if state["phase"] == "STIRRING":
                 state, msg = _play_stirring(driver, state, msg, round_count)
-
-            # EXCHANGE (optional)
-            if state["phase"] == "EXCHANGE":
-                state, msg = _play_exchange(driver, state, round_count)
 
             # PLAYING
             if state["phase"] == "PLAYING":

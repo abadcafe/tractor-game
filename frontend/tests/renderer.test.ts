@@ -28,7 +28,6 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     bid_winner: null,
     awaiting_action: "play",
     stirring_state: null,
-    exchange_state: null,
     scoring: null,
     winning_team: null,
     team0_level: "3",
@@ -77,7 +76,7 @@ Deno.test("test_render_stirring_phase", () => {
   const snap = makeSnapshot({
     phase: "STIRRING",
     awaiting_action: "stir",
-    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3 },
+    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3, exchanging_player: null, exchange_count: null },
     trick: null,
   });
   render(snap, container, "stir");
@@ -120,9 +119,9 @@ Deno.test("test_render_game_over_phase", () => {
 Deno.test("test_render_exchange_phase", () => {
   const container = freshContainer();
   const snap = makeSnapshot({
-    phase: "EXCHANGE",
+    phase: "STIRRING",
     awaiting_action: "discard",
-    exchange_state: { phase: "PICKED_UP", declarer_player: 3, count: 8 },
+    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3, exchanging_player: 3, exchange_count: 8 },
     trick: null,
   });
   render(snap, container, "discard");

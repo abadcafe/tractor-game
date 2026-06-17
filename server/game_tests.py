@@ -75,7 +75,7 @@ async def test_next_round_confirmation_starts_game() -> None:
         await game.act(i, game.current_seq, NextRoundAction())
     assert game.get_phase() != "WAITING"
     snap = game.snapshot(for_player=0)
-    assert snap.phase in ("DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING")
+    assert snap.phase in ("DEAL_BID", "STIRRING", "PLAYING")
 
 
 @pytest.mark.asyncio
@@ -143,7 +143,7 @@ async def test_start_game_transitions_to_deal_bid():
     game = await _start_game(_make_players())
     # Verify via snapshot (public interface)
     snap = game.snapshot(for_player=0)
-    assert snap.phase in ("DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING", "WAITING")
+    assert snap.phase in ("DEAL_BID", "STIRRING", "PLAYING", "WAITING")
 
 
 # ---- act() ----
@@ -245,7 +245,7 @@ def test_snapshot_before_run_returns_waiting():
 async def test_snapshot_phase():
     game = await _start_game(_make_players())
     snap = game.snapshot(for_player=0)
-    assert snap.phase in ("DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING", "WAITING", "GAME_OVER", "SCORING")
+    assert snap.phase in ("DEAL_BID", "STIRRING", "PLAYING", "WAITING", "GAME_OVER", "SCORING")
 
 
 @pytest.mark.asyncio
@@ -314,13 +314,6 @@ async def test_snapshot_stirring_state():
     # stirring_state may be None outside of STIRRING phase
     assert snap.stirring_state is None or isinstance(snap.stirring_state, StirringStateSnapshot)
 
-
-@pytest.mark.asyncio
-async def test_snapshot_exchange_state():
-    game = await _start_game(_make_players())
-    snap = game.snapshot(for_player=0)
-    from server.snapshot import ExchangeStateSnapshot
-    assert snap.exchange_state is None or isinstance(snap.exchange_state, ExchangeStateSnapshot)
 
 
 @pytest.mark.asyncio
@@ -474,6 +467,7 @@ async def test_set_on_game_over_callback_fires_on_game_over():
     complete_round.result.next_declarer_player = 0
     complete_round.result.total_defender_points = 0
     complete_round.result.declarer_level_change = 0
+    complete_round.result.defender_level_change = 0
     complete_round.result.switch_declarer = False
     complete_round.result.bottom_card_bonus = 0
 
@@ -721,7 +715,6 @@ async def test_snapshot_to_dict_contains_all_required_fields():
         "bid_events",
         "bid_winner",
         "stirring_state",
-        "exchange_state",
         "next_round_confirmed",
     ]
 
@@ -817,7 +810,7 @@ async def test_game_auto_completes_past_deal_bid():
     # Verify the game has progressed
     phase = game.get_phase()
     assert phase in (
-        "DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING",
+        "DEAL_BID", "STIRRING", "PLAYING",
         "WAITING", "GAME_OVER",
     )
     # Snapshot must still be valid
@@ -872,7 +865,7 @@ async def test_full_game_flow_completes_without_resource_explosion():
 
     phase = game.get_phase()
     assert phase in (
-        "DEAL_BID", "STIRRING", "EXCHANGE", "PLAYING",
+        "DEAL_BID", "STIRRING", "PLAYING",
         "WAITING", "GAME_OVER",
     ), f"Game stuck in unexpected phase: {phase}"
 
@@ -929,6 +922,7 @@ async def test_game_over_removes_from_registry():
     complete_round.result.next_declarer_player = 0
     complete_round.result.total_defender_points = 0
     complete_round.result.declarer_level_change = 0
+    complete_round.result.defender_level_change = 0
     complete_round.result.switch_declarer = False
     complete_round.result.bottom_card_bonus = 0
 
@@ -1320,11 +1314,11 @@ async def _create_complete_phase_game() -> Game:
     complete_round.trick_state = None
     complete_round.trick_history = []
     complete_round.stirring_state = None
-    complete_round.exchange_state = None
     complete_round.deal_bid_state = None
     complete_round.result = MagicMock(spec=RoundResult)
     complete_round.result.total_defender_points = 10
     complete_round.result.bottom_card_bonus = 0
+    complete_round.result.defender_level_change = 0
 
     players = _make_players()
     with patch.object(gm, "create_game", return_value=in_round_state):
@@ -1412,7 +1406,7 @@ async def test_complete_awaiting_multiple_confirmed() -> None:
     )
 
 
-# ---- Task 004: Bug 3 — Awaiting Conditional for PLAYING/STIRRING/EXCHANGE ----
+# ---- Task 004: Bug 3 — Awaiting Conditional for PLAYING/STIRRING ----
 
 
 async def _create_stirring_phase_game(current_player: int = 1) -> Game:
@@ -1438,10 +1432,10 @@ async def _create_stirring_phase_game(current_player: int = 1) -> Game:
     stirring_round.defender_points = 0
     stirring_round.trick_state = None
     stirring_round.trick_history = []
-    stirring_round.exchange_state = None
     stirring_round.deal_bid_state = None
     stirring_round.result = None
     stirring_round.stirring_state = MagicMock()
+    stirring_round.stirring_state.phase = "WAITING"
     stirring_round.stirring_state.current_player = current_player
     stirring_round.stirring_state.declarer_player = 0
     stirring_round.stirring_state.trump_suit = Suit.HEARTS
@@ -1460,39 +1454,47 @@ async def _create_stirring_phase_game(current_player: int = 1) -> Game:
     return game
 
 
-async def _create_exchange_phase_game(declarer_player: int = 2) -> Game:
-    """Helper: create a Game patched into EXCHANGE phase via MagicMock."""
+async def _create_stirring_exchanging_phase_game(declarer_player: int = 2) -> Game:
+    """Helper: create a Game patched into STIRRING/EXCHANGING phase via MagicMock.
+
+    Creates a RoundState with phase="STIRRING" and stirring_state.phase="EXCHANGING",
+    which is the new replacement for the removed EXCHANGE phase. The declarer_player
+    is the exchanging player who should see awaiting_action='discard'.
+    """
     from server.sm import game_sm as gm, round_sm as rm
 
     in_round_state = gm.GameState(
         phase="IN_ROUND", team0_level=Rank.TWO, team1_level=Rank.TWO,
         declarer_team=0, last_declarer_player=0, winning_team=None, round_number=1,
     )
-    exchange_round = MagicMock()
-    exchange_round.phase = "EXCHANGE"
-    exchange_round.players_hand = [[] for _ in range(4)]
-    exchange_round.declarer_player = declarer_player
-    exchange_round.bottom_cards = []
-    exchange_round.trump_suit = Suit.HEARTS
-    exchange_round.trump_rank = Rank.TWO
-    exchange_round.declarer_team = 0
-    exchange_round.defender_points = 0
-    exchange_round.trick_state = None
-    exchange_round.trick_history = []
-    exchange_round.stirring_state = None
-    exchange_round.deal_bid_state = None
-    exchange_round.result = None
-    exchange_round.exchange_state = MagicMock()
-    exchange_round.exchange_state.phase = "PICKED_UP"
-    exchange_round.exchange_state.declarer_player = declarer_player
-    exchange_round.exchange_state.count = 8
+    stirring_exchanging_round = MagicMock()
+    stirring_exchanging_round.phase = "STIRRING"
+    stirring_exchanging_round.players_hand = [[] for _ in range(4)]
+    stirring_exchanging_round.declarer_player = declarer_player
+    stirring_exchanging_round.bottom_cards = []
+    stirring_exchanging_round.trump_suit = Suit.HEARTS
+    stirring_exchanging_round.trump_rank = Rank.TWO
+    stirring_exchanging_round.declarer_team = 0
+    stirring_exchanging_round.defender_points = 0
+    stirring_exchanging_round.trick_state = None
+    stirring_exchanging_round.trick_history = []
+    stirring_exchanging_round.deal_bid_state = None
+    stirring_exchanging_round.result = None
+    stirring_exchanging_round.stirring_state = MagicMock()
+    stirring_exchanging_round.stirring_state.phase = "EXCHANGING"
+    stirring_exchanging_round.stirring_state.exchanging_player = declarer_player
+    stirring_exchanging_round.stirring_state.current_player = declarer_player
+    stirring_exchanging_round.stirring_state.declarer_player = declarer_player
+    stirring_exchanging_round.stirring_state.trump_suit = Suit.HEARTS
+    stirring_exchanging_round.stirring_state.exchange_state = MagicMock()
+    stirring_exchanging_round.stirring_state.exchange_state.count = 8
 
     players = _make_players()
     with patch.object(gm, "create_game", return_value=in_round_state):
         game = Game(players=players)
 
     with patch.object(gm, "start_game", return_value=Ok(in_round_state)):
-        with patch.object(rm, "create_round", return_value=exchange_round):
+        with patch.object(rm, "create_round", return_value=stirring_exchanging_round):
             for i in range(4):
                 await game.act(i, game.current_seq, NextRoundAction())
 
@@ -1527,7 +1529,6 @@ async def _create_playing_phase_game(cur_player: int = 3) -> Game:
     playing_round.defender_points = 0
     playing_round.trick_history = []
     playing_round.stirring_state = None
-    playing_round.exchange_state = None
     playing_round.deal_bid_state = None
     playing_round.result = None
     playing_round.trick_state = MagicMock()
@@ -1587,19 +1588,20 @@ async def test_stirring_awaiting_for_current_player() -> None:
 
 
 @pytest.mark.asyncio
-async def test_exchange_awaiting_for_declarer() -> None:
-    """In EXCHANGE phase, only the declarer has awaiting_action='discard'.
+async def test_stirring_exchanging_awaiting_for_declarer() -> None:
+    """In STIRRING/EXCHANGING phase, only the exchanging player has awaiting_action='discard'.
 
-    Uses MagicMock to inject an EXCHANGE-phase RoundState with
-    declarer_player=2, then verifies only player 2 sees awaiting='discard'.
+    Uses MagicMock to inject a STIRRING-phase RoundState with
+    stirring_state.phase="EXCHANGING" and exchanging_player=2,
+    then verifies only player 2 sees awaiting='discard'.
     """
-    game = await _create_exchange_phase_game(declarer_player=2)
+    game = await _create_stirring_exchanging_phase_game(declarer_player=2)
     snap = game.snapshot(for_player=2)
-    assert snap.phase == "EXCHANGE"
+    assert snap.phase == "STIRRING"
 
-    # Player 2 (declarer) must have awaiting_action='discard'
+    # Player 2 (exchanging player) must have awaiting_action='discard'
     assert snap.awaiting_action == "discard", (
-        f"Player 2 (declarer): expected awaiting_action='discard', got {snap.awaiting_action}"
+        f"Player 2 (exchanging): expected awaiting_action='discard', got {snap.awaiting_action}"
     )
 
     # All other players must have awaiting_action=None
@@ -1680,7 +1682,7 @@ async def test_stirring_state_has_legal_actions() -> None:
         )
 
 
-# ---- Task 005: Bug 4 — Pass player_index to STIRRING/EXCHANGE act() ----
+# ---- Task 005: Bug 4 — Pass player_index to STIRRING act() ----
 
 
 @pytest.mark.asyncio
@@ -1700,15 +1702,15 @@ async def test_act_stir_rejects_non_current_player() -> None:
 
 @pytest.mark.asyncio
 async def test_act_discard_rejects_non_declarer() -> None:
-    """DiscardAction from a non-declarer should be rejected."""
-    game = await _create_exchange_phase_game(declarer_player=2)
+    """DiscardAction from a non-exchanging player during STIRRING/EXCHANGING should be rejected."""
+    game = await _create_stirring_exchanging_phase_game(declarer_player=2)
 
-    # Player 3 is NOT the declarer — discard should be rejected
-    # (round_sm.discard checks player_index != declarer before card validation)
+    # Player 3 is NOT the exchanging player — discard should be rejected
+    # (round_sm.stir_discard checks player_index != exchanging_player before card validation)
     await game.act(3, game.current_seq, DiscardAction(cards=[]))
 
-    # Declarer player 2 should still have awaiting_action='discard'
+    # Exchanging player 2 should still have awaiting_action='discard'
     snap_after = game.snapshot(for_player=2)
     assert snap_after.awaiting_action == "discard", (
-        f"Declarer should still have awaiting_action='discard', got {snap_after.awaiting_action}"
+        f"Exchanging player should still have awaiting_action='discard', got {snap_after.awaiting_action}"
     )

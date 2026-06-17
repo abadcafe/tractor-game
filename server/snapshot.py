@@ -67,15 +67,8 @@ class StirringStateSnapshot:
     current_player: int
     declarer_player: int
     legal_actions: list[list[Card]]
-
-
-@dataclass
-class ExchangeStateSnapshot:
-    """Snapshot of the exchange (换底牌) phase state."""
-
-    phase: str
-    declarer_player: int
-    count: int
+    exchanging_player: int | None
+    exchange_count: int | None
 
 
 @dataclass
@@ -107,7 +100,6 @@ class StateSnapshot:
     bid_events: list[BidEvent]
     bid_winner: BidEvent | None
     stirring_state: StirringStateSnapshot | None
-    exchange_state: ExchangeStateSnapshot | None
     next_round_confirmed: list[int]
 
     def to_dict(self) -> SnapshotDict:
@@ -152,14 +144,8 @@ class StateSnapshot:
                     [_card_to_dict(c) for c in entry]
                     for entry in self.stirring_state.legal_actions
                 ],
-            }
-
-        exchange_dict: ExchangeStateDict | None = None
-        if self.exchange_state is not None:
-            exchange_dict = {
-                "phase": self.exchange_state.phase,
-                "declarer_player": self.exchange_state.declarer_player,
-                "count": self.exchange_state.count,
+                "exchanging_player": self.stirring_state.exchanging_player,
+                "exchange_count": self.stirring_state.exchange_count,
             }
 
         return {
@@ -205,7 +191,6 @@ class StateSnapshot:
             "bid_events": [_serialize_bid_event(e) for e in self.bid_events],
             "bid_winner": _serialize_bid_event(self.bid_winner) if self.bid_winner is not None else None,
             "stirring_state": stirring_dict,
-            "exchange_state": exchange_dict,
             "next_round_confirmed": self.next_round_confirmed,
         }
 
@@ -282,14 +267,8 @@ class StirringStateDict(TypedDict):
     current_player: int
     declarer_player: int
     legal_actions: list[list[CardDict]]
-
-
-class ExchangeStateDict(TypedDict):
-    """Serialized exchange phase state."""
-
-    phase: str
-    declarer_player: int
-    count: int
+    exchanging_player: int | None
+    exchange_count: int | None
 
 
 class BidEventDict(TypedDict):
@@ -327,5 +306,4 @@ class SnapshotDict(TypedDict):
     bid_events: list[BidEventDict]
     bid_winner: BidEventDict | None
     stirring_state: StirringStateDict | None
-    exchange_state: ExchangeStateDict | None
     next_round_confirmed: list[int]

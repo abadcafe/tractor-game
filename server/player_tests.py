@@ -12,7 +12,7 @@ from server.actions import (
 )
 from server.player import AutoPlayer, HumanPlayer
 from server.snapshot import (
-    ExchangeStateSnapshot, ScoringSnapshot,
+    ScoringSnapshot,
     StateSnapshot, StirringStateSnapshot, TrickSnapshot,
 )
 from server.sm.card_model import Card, Suit, Rank
@@ -51,7 +51,6 @@ def _make_snapshot(
     bid_events: list[BidEvent] | None = None,
     bid_winner: BidEvent | None = None,
     stirring_state: StirringStateSnapshot | None = None,
-    exchange_state: ExchangeStateSnapshot | None = None,
     scoring: ScoringSnapshot | None = None,
     winning_team: int | None = None,
     team0_level: Rank = Rank.TWO,
@@ -77,7 +76,6 @@ def _make_snapshot(
         bid_events=bid_events if bid_events is not None else [],
         bid_winner=bid_winner,
         stirring_state=stirring_state,
-        exchange_state=exchange_state,
         scoring=scoring,
         winning_team=winning_team,
         team0_level=team0_level,
@@ -199,9 +197,9 @@ async def test_auto_player_ignores_stirring_when_not_awaiting():
 
 @pytest.mark.asyncio
 async def test_auto_player_ignores_discard_when_not_awaiting():
-    """AutoPlayer does not discard when awaiting_action is None in EXCHANGE."""
+    """AutoPlayer does not discard when awaiting_action is None in STIRRING."""
     snap = _make_snapshot(
-        phase="EXCHANGE",
+        phase="STIRRING",
         awaiting_action=None,
     )
     game = _make_game(snap)
@@ -247,8 +245,17 @@ async def test_auto_player_discard_when_current():
     card1 = _card(Suit.DIAMONDS, Rank.THREE, 1)
     card2 = _card(Suit.CLUBS, Rank.FOUR, 1)
     snap = _make_snapshot(
-        phase="EXCHANGE",
+        phase="STIRRING",
         awaiting_action="discard",
+        stirring_state=StirringStateSnapshot(
+            phase="EXCHANGING",
+            trump_suit=None,
+            current_player=0,
+            declarer_player=0,
+            legal_actions=[],
+            exchanging_player=0,
+            exchange_count=2,
+        ),
         player_hand=[card1, card2],
     )
     game = _make_game(snap)
@@ -434,28 +441,32 @@ async def test_auto_player_stir_only_uses_same_suit_pairs():
         )
 
 
-# ---- Exchange state typed access ----
+# ---- Stirring exchange count typed access ----
 
 
 @pytest.mark.asyncio
-async def test_auto_player_discard_with_exchange_state_snapshot():
-    """AutoPlayer._handle_discard uses ExchangeStateSnapshot.count.
+async def test_auto_player_discard_with_stirring_exchange_count():
+    """AutoPlayer._handle_discard uses StirringStateSnapshot.exchange_count.
 
-    The snapshot's exchange_state is now a structured ExchangeStateSnapshot
-    instead of a dict, so attribute access (exc.count) works directly.
+    The snapshot's stirring_state.exchange_count provides the discard count
+    during the STIRRING EXCHANGING sub-phase.
     """
     card1 = _card(Suit.DIAMONDS, Rank.THREE, 1)
     card2 = _card(Suit.CLUBS, Rank.FOUR, 1)
     card3 = _card(Suit.SPADES, Rank.FIVE, 1)
 
     snap = _make_snapshot(
-        phase="EXCHANGE",
+        phase="STIRRING",
         awaiting_action="discard",
         player_hand=[card1, card2, card3],
-        exchange_state=ExchangeStateSnapshot(
-            phase="PICKED_UP",
+        stirring_state=StirringStateSnapshot(
+            phase="EXCHANGING",
+            trump_suit=None,
+            current_player=0,
             declarer_player=0,
-            count=3,
+            legal_actions=[],
+            exchanging_player=0,
+            exchange_count=3,
         ),
     )
 

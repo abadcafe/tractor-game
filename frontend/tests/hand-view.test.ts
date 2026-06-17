@@ -31,7 +31,6 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     bid_winner: null,
     awaiting_action: "play",
     stirring_state: null,
-    exchange_state: null,
     scoring: null,
     winning_team: null,
     team0_level: "2",
@@ -80,9 +79,9 @@ Deno.test("test_renderHandView_play_button", () => {
 
 Deno.test("test_renderHandView_discard_button", () => {
   const snap = makeSnapshot({
-    phase: "EXCHANGE",
+    phase: "STIRRING",
     awaiting_action: "discard",
-    exchange_state: { phase: "PICKED_UP", declarer_player: 3, count: 8 },
+    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3, exchanging_player: 3, exchange_count: 8 },
     legal_actions: [],
   });
   const el = renderHandView(snap, "discard");

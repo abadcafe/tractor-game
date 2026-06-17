@@ -46,6 +46,7 @@ class TestProcessRoundResult:
             next_declarer_player=3,
             total_defender_points=20,
             declarer_level_change=2,
+            defender_level_change=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
@@ -68,6 +69,7 @@ class TestProcessRoundResult:
             next_declarer_player=3,
             total_defender_points=50,
             declarer_level_change=1,
+            defender_level_change=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
@@ -90,6 +92,7 @@ class TestProcessRoundResult:
             next_declarer_player=1,
             total_defender_points=100,
             declarer_level_change=0,
+            defender_level_change=0,
             switch_declarer=True,
             bottom_card_bonus=0,
         )
@@ -114,6 +117,7 @@ class TestGameOver:
             next_declarer_player=3,
             total_defender_points=0,
             declarer_level_change=3,
+            defender_level_change=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
@@ -135,7 +139,8 @@ class TestGameOver:
             next_declarer_team=1,
             next_declarer_player=2,
             total_defender_points=150,
-            declarer_level_change=-2,
+            declarer_level_change=0,
+            defender_level_change=2,
             switch_declarer=True,
             bottom_card_bonus=0,
         )
@@ -158,6 +163,7 @@ class TestGameOver:
             next_declarer_player=3,
             total_defender_points=30,
             declarer_level_change=2,
+            defender_level_change=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
@@ -179,6 +185,7 @@ class TestGameOver:
             next_declarer_player=3,
             total_defender_points=20,
             declarer_level_change=2,
+            defender_level_change=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
@@ -194,7 +201,8 @@ class TestGameOver:
             next_declarer_team=1,
             next_declarer_player=1,
             total_defender_points=120,
-            declarer_level_change=-1,
+            declarer_level_change=0,
+            defender_level_change=1,
             switch_declarer=True,
             bottom_card_bonus=0,
         )
@@ -228,6 +236,7 @@ class TestInvalidTransitions:
             next_declarer_player=0,
             total_defender_points=0,
             declarer_level_change=3,
+            defender_level_change=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
@@ -247,6 +256,7 @@ class TestInvalidTransitions:
             next_declarer_player=0,
             total_defender_points=0,
             declarer_level_change=2,
+            defender_level_change=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
@@ -266,6 +276,7 @@ class TestInvalidTransitions:
             next_declarer_player=0,
             total_defender_points=0,
             declarer_level_change=3,
+            defender_level_change=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
@@ -280,6 +291,7 @@ class TestInvalidTransitions:
             next_declarer_player=0,
             total_defender_points=0,
             declarer_level_change=3,
+            defender_level_change=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
@@ -301,6 +313,7 @@ class TestEdgeCases:
             next_declarer_player=0,
             total_defender_points=0,
             declarer_level_change=3,
+            defender_level_change=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
@@ -326,6 +339,7 @@ class TestEdgeCases:
             next_declarer_player=3,
             total_defender_points=20,
             declarer_level_change=1,
+            defender_level_change=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
@@ -342,6 +356,7 @@ class TestEdgeCases:
             next_declarer_player=3,
             total_defender_points=0,
             declarer_level_change=3,
+            defender_level_change=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
@@ -358,7 +373,7 @@ class TestEdgeCases:
 
 from server.sm.round_sm import (
     create_round, deal_next_card as rn_deal,
-    pass_stir as rn_pass, discard as rn_discard,
+    pass_stir as rn_pass, stir_discard as rn_stir_discard,
     play as rn_play, is_round_complete, get_round_result, RoundInput, RoundState,
     finalize_deal_bid as rn_finalize,
 )
@@ -410,15 +425,27 @@ def _complete_round_no_bid(round_state: RoundState) -> RoundState:
             break
         round_state = _unwrap_round(rn_deal(round_state))
 
-    for _ in range(4):
+    # STIRRING phase: handle EXCHANGING sub-phase and WAITING sub-phase
+    max_stir_iterations = 20
+    for _ in range(max_stir_iterations):
         if round_state.phase != "STIRRING":
             break
-        cur = round_state.stirring_state.current_player if round_state.stirring_state is not None else 0
-        round_state = _unwrap_round(rn_pass(round_state, player_index=cur))
-
-    if round_state.phase == "EXCHANGE" and round_state.exchange_state is not None:
-        discards = round_state.exchange_state.hand_after_pickup[:round_state.exchange_state.count]
-        round_state = _unwrap_round(rn_discard(round_state, player_index=round_state.exchange_state.declarer_player, cards=discards))
+        stirring = round_state.stirring_state
+        if stirring is None:
+            break
+        if stirring.phase == "EXCHANGING":
+            # Discard bottom cards for the exchanging player
+            assert stirring.exchange_state is not None
+            assert stirring.exchanging_player is not None
+            discards = stirring.exchange_state.hand_after_pickup[:stirring.exchange_state.count]
+            round_state = _unwrap_round(rn_stir_discard(
+                round_state, player_index=stirring.exchanging_player, cards=discards,
+            ))
+        elif stirring.phase == "WAITING":
+            cur = stirring.current_player
+            round_state = _unwrap_round(rn_pass(round_state, player_index=cur))
+        else:
+            break  # COMPLETE or unknown
 
     prev_history_len = 0
     max_iterations = 30

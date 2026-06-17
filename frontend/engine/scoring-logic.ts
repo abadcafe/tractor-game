@@ -1,32 +1,34 @@
 /** Scoring thresholds matching server-side SCORE_THRESHOLDS.
  *  Each threshold: max_points (inclusive), declarer_change, switch_declarer.
+ *  Levels never retreat. For defender_points >= 80, formula applies:
+ *  defender_gain = max(0, (points - 80) / 40)
  */
 const SCORE_THRESHOLDS = [
   { maxPoints: 0, declarerChange: 3, switch: false },
   { maxPoints: 39, declarerChange: 2, switch: false },
   { maxPoints: 79, declarerChange: 1, switch: false },
-  { maxPoints: 119, declarerChange: 0, switch: true },
-  { maxPoints: 159, declarerChange: -1, switch: true },
-  { maxPoints: 199, declarerChange: -2, switch: true },
-  { maxPoints: 200, declarerChange: -3, switch: true },
 ];
 
 /** Level change result from computeLevelChange. */
 interface LevelChangeResult {
-  delta: number;
+  declarerDelta: number;
+  defenderDelta: number;
   switched: boolean;
 }
 
 /** Compute level change from total defender points.
  *  Matches server-side _determine_level_change() logic.
- *  delta > 0 = declarer levels up, delta < 0 = declarer levels down.
+ *  - declarerDelta: levels the declarer team gains (never negative)
+ *  - defenderDelta: levels the defender team gains when they win (switch=true)
+ *  - switched: whether the declarer switches to the defender team
  */
 export function computeLevelChange(totalPoints: number): LevelChangeResult {
   for (const t of SCORE_THRESHOLDS) {
     if (totalPoints <= t.maxPoints) {
-      return { delta: t.declarerChange, switched: t.switch };
+      return { declarerDelta: t.declarerChange, defenderDelta: 0, switched: t.switch };
     }
   }
-  // Fallback (should not reach here)
-  return { delta: -3, switched: true };
+  // defender_points >= 80: switch declarer, new declarer gains levels
+  const defenderGain = Math.max(0, Math.floor((totalPoints - 80) / 40));
+  return { declarerDelta: 0, defenderDelta: defenderGain, switched: true };
 }

@@ -49,18 +49,21 @@ export function renderScoringOverlay(
       const isHumanDeclarer = snapshot.scoring.declarer_team === HUMAN_TEAM;
 
       if (levelChange.switched) {
-        // Declarer lost — new declarer gains levels
+        // Declarer lost — new declarer (old defender) gains levels
         const loser = isHumanDeclarer ? "我们" : "对方";
         const winner = isHumanDeclarer ? "对方" : "我们";
+        const gainText = levelChange.defenderDelta > 0
+          ? `，${winner}升 ${levelChange.defenderDelta} 级`
+          : "";
         overlay.appendChild(
           el("div", { class: "scoring-overlay__level-change" },
-            `${loser}下庄，${winner}升 ${levelChange.delta} 级`),
+            `${loser}下庄${gainText}`),
         );
       } else {
         const who = isHumanDeclarer ? "我们" : "对方";
         overlay.appendChild(
           el("div", { class: "scoring-overlay__level-change" },
-            `${who}升 ${levelChange.delta} 级`),
+            `${who}升 ${levelChange.declarerDelta} 级`),
         );
       }
     }

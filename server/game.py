@@ -6,7 +6,7 @@ is_over(), get_phase(), set_on_game_over(), get_player(), resolve_cards(),
 and current_seq interfaces.
 
 Game lifecycle: WAITING (confirm to start) → DEAL_BID → STIRRING →
-EXCHANGE → PLAYING → WAITING (confirm for next round) → ... → GAME_OVER.
+PLAYING → WAITING (confirm for next round) → ... → GAME_OVER.
 
 Push model: every state change triggers exactly one broadcast push with
 seq increment. This includes each card dealt during DEAL_BID, each
@@ -39,7 +39,6 @@ from server.sm.card_model import Card, Rank, Suit
 from server.sm.result import Ok, Rejected
 from server.sm.types import BidEvent
 from server.snapshot import (
-    ExchangeStateSnapshot,
     ScoringSnapshot,
     StateSnapshot,
     StirringStateSnapshot,
@@ -233,9 +232,9 @@ class Game:
                     error_msg = reason
                     error_msg = reason
 
-        elif phase == "EXCHANGE" and isinstance(action, DiscardAction):
+        elif phase == "STIRRING" and isinstance(action, DiscardAction):
             assert rs is not None
-            match round_sm.discard(rs, player_index, action.cards):
+            match round_sm.stir_discard(rs, player_index, action.cards):
                 case Ok(value=new_state):
                     rs = new_state
                 case Rejected(reason=reason):
@@ -412,7 +411,6 @@ class Game:
                 bid_events=[],
                 bid_winner=None,
                 stirring_state=None,
-                exchange_state=None,
                 next_round_confirmed=sorted(self._next_round_confirmed),
             )
 
@@ -468,10 +466,11 @@ class Game:
                 awaiting_action = "bid"
             else:
                 awaiting_action = None
-        elif rs.phase == "STIRRING" and rs.stirring_state is not None and for_player == rs.stirring_state.current_player:
-            awaiting_action = "stir"
-        elif rs.phase == "EXCHANGE" and rs.exchange_state is not None and for_player == rs.exchange_state.declarer_player:
-            awaiting_action = "discard"
+        elif rs.phase == "STIRRING" and rs.stirring_state is not None:
+            if rs.stirring_state.phase == "EXCHANGING" and for_player == rs.stirring_state.exchanging_player:
+                awaiting_action = "discard"
+            elif rs.stirring_state.phase == "WAITING" and for_player == rs.stirring_state.current_player:
+                awaiting_action = "stir"
         elif rs.phase == "PLAYING" and can_act_in_playing and rs.trick_state is not None and for_player == rs.trick_state.cur:
             awaiting_action = "play"
         elif rs.phase == "WAITING":
@@ -511,21 +510,20 @@ class Game:
                 stir_legal_actions = self._get_legal_stir_actions(
                     player_hand, rs.stirring_state, for_player,
                 )
+            exchanging_player: int | None = None
+            exchange_count: int | None = None
+            if rs.stirring_state.phase == "EXCHANGING":
+                exchanging_player = rs.stirring_state.exchanging_player
+                if rs.stirring_state.exchange_state is not None:
+                    exchange_count = rs.stirring_state.exchange_state.count
             stirring_state_snap = StirringStateSnapshot(
                 phase=rs.stirring_state.phase,
                 trump_suit=rs.stirring_state.trump_suit,
                 current_player=rs.stirring_state.current_player,
                 declarer_player=rs.stirring_state.declarer_player,
                 legal_actions=stir_legal_actions,
-            )
-
-        # exchange_state
-        exchange_state_snap: ExchangeStateSnapshot | None = None
-        if rs.exchange_state is not None and rs.phase == "EXCHANGE":
-            exchange_state_snap = ExchangeStateSnapshot(
-                phase=rs.exchange_state.phase,
-                declarer_player=rs.exchange_state.declarer_player,
-                count=rs.exchange_state.count,
+                exchanging_player=exchanging_player,
+                exchange_count=exchange_count,
             )
 
         # scoring
@@ -561,7 +559,6 @@ class Game:
             bid_events=bid_events,
             bid_winner=bid_winner,
             stirring_state=stirring_state_snap,
-            exchange_state=exchange_state_snap,
             next_round_confirmed=sorted(self._next_round_confirmed),
         )
 
