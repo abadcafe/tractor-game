@@ -1,28 +1,27 @@
 import { StateManager } from "./core/state.ts";
-import type { ClientAction, ServerMessage } from "./core/protocol.ts";
-import type { GameAction, InteractionMode } from "./engine/types.ts";
+import type { StateSnapshot } from "./core/types.ts";
+import type { ServerMessage, ClientAction } from "./core/protocol.ts";
+import type { InteractionMode, GameAction, BidOption } from "./engine/types.ts";
 import type { ActionCallbacks, RenderContext } from "./ui/types.ts";
 import { createGame } from "./net/rest-client.ts";
 import { WsClient } from "./net/ws-client.ts";
 import { GameLoop } from "./engine/game-loop.ts";
-import { StatePlaybackQueue } from "./engine/state-playback-queue.ts";
 import { render } from "./ui/renderer.ts";
 import { showErrorToast } from "./ui/error-toast.ts";
 import {
-  handleBidAction,
-  handleDiscardAction,
-  handlePassStirAction,
   handlePlayAction,
-  handleSkipBidAction,
+  handleDiscardAction,
+  handleBidAction,
   handleStirAction,
+  handlePassStirAction,
 } from "./engine/action-handler.ts";
 import {
-  computeBidButtonState,
-  computeLegalCardIds,
-  computeLevelChangeInfo,
   computeStirButtonState,
+  computeLevelChangeInfo,
+  computeLegalCardIds,
   isSelectionStillLegal,
 } from "./engine/ui-state-computer.ts";
+import { computeBidOptions } from "./engine/bid-logic.ts";
 
 function main() {
   const containerEl = document.querySelector("#app");
@@ -38,39 +37,25 @@ function main() {
   // UI state: persists across re-renders
   const selectedCardIds = new Set<string>();
   let currentInteractionMode: InteractionMode = null;
-  let initialNextRoundPending = false;
-  let actionPending = false;
-  let playbackCaughtUp = true;
-  let playbackQueue: StatePlaybackQueue<ServerMessage> | null = null;
+
+  // Auto-bid state
+  let pendingBidIntent: BidOption | null = null;
+  let suppressBidError = false;
 
   // Shared render context
-  const renderCtx: RenderContext = {
-    selectedCardIds,
-    legalCardIds: new Set(),
-  };
+  const renderCtx: RenderContext = { selectedCardIds, legalCardIds: new Set() };
 
   /** Pre-compute all UI state and render. */
   function precomputeAndRender(snap: ReturnType<StateManager["get"]>) {
     if (!snap) return;
-    const effectiveInteractionMode = interactionBlocked()
-      ? null
-      : currentInteractionMode;
-    renderCtx.legalCardIds = computeLegalCardIds(
-      snap,
-      effectiveInteractionMode,
-    );
-    renderCtx.bidButtonState = computeBidButtonState(
-      snap,
-      selectedCardIds,
-    );
-    renderCtx.stirButtonState = computeStirButtonState(
-      snap,
-      selectedCardIds,
-    );
+    renderCtx.legalCardIds = computeLegalCardIds(snap, currentInteractionMode);
+    renderCtx.bidOptions = computeBidOptions(snap.player_hand, snap.trump_rank, snap.bid_winner);
+    renderCtx.pendingBidIntent = pendingBidIntent;
+    renderCtx.stirButtonState = computeStirButtonState(snap, selectedCardIds);
     renderCtx.levelChange = snap.scoring
       ? computeLevelChangeInfo(snap.scoring.total_defender_points)
       : undefined;
-    render(snap, container, effectiveInteractionMode, renderCtx);
+    render(snap, container, currentInteractionMode, renderCtx);
   }
 
   /** Re-render from current state (for selection changes). */
@@ -84,22 +69,15 @@ function main() {
     return stateManager.seq;
   }
 
-  function interactionBlocked(): boolean {
-    return actionPending || !playbackCaughtUp;
-  }
-
   /** Send action, clear selection, re-render. */
   function sendAndClear(action: ClientAction) {
-    actionPending = true;
     wsClient.send(action);
     selectedCardIds.clear();
     reRender();
   }
 
   /** Handle a validated action result. */
-  function handleResult(
-    result: { success: boolean; action?: ClientAction; error?: string },
-  ) {
+  function handleResult(result: { success: boolean; action?: ClientAction; error?: string }) {
     if (result.success && result.action) {
       sendAndClear(result.action);
     } else if (result.error) {
@@ -107,10 +85,33 @@ function main() {
     }
   }
 
-  // Action callbacks -- close over selectedCardIds, wsClient, stateManager
+  /** Auto-bid: send skip or pending intent when it's the human's turn to bid. */
+  function handleAutoBid(snapshot: StateSnapshot, interactionMode: InteractionMode) {
+    if (interactionMode !== "bid") return;
+    const seq = currentSeq();
+
+    if (pendingBidIntent) {
+      // Check if the pending intent's cards are still in hand
+      const handIds = new Set(snapshot.player_hand.map((c: { id: string }) => c.id));
+      const allInHand = pendingBidIntent.cardIds.every((id) => handIds.has(id));
+
+      if (allInHand) {
+        // Try sending the pending bid — server will validate priority
+        suppressBidError = true;
+        wsClient.send({ type: "bid", seq, cards: pendingBidIntent.cardIds });
+        return;
+      }
+      // Cards no longer in hand, clear intent silently
+      pendingBidIntent = null;
+    }
+
+    // Auto-skip
+    wsClient.send({ type: "bid", seq, pass: true });
+  }
+
+  // Action callbacks
   const callbacks: ActionCallbacks = {
     onCardClick(cardId: string) {
-      if (interactionBlocked()) return;
       if (selectedCardIds.has(cardId)) {
         selectedCardIds.delete(cardId);
       } else {
@@ -120,7 +121,6 @@ function main() {
     },
 
     onAction(action: GameAction) {
-      if (interactionBlocked()) return;
       const snap = stateManager.get();
       if (!snap) return;
       const seq = currentSeq();
@@ -132,110 +132,76 @@ function main() {
         case "discard":
           handleResult(handleDiscardAction(snap, selectedCardIds, seq));
           break;
-        case "skip_bid":
-          handleResult(handleSkipBidAction(seq));
-          break;
         case "next_round": {
-          const result = {
-            success: true,
-            action: { type: "next_round" as const, seq },
-          };
-          sendAndClear(result.action);
+          const clientAction: ClientAction = { type: "next_round", seq };
+          sendAndClear(clientAction);
           break;
         }
       }
     },
 
-    onBid(cardIds: string[]) {
-      if (interactionBlocked()) return;
-      const snap = stateManager.get();
-      if (!snap) return;
-      handleResult(handleBidAction(snap, cardIds, currentSeq()));
+    onBidOptionSelect(option: BidOption) {
+      // Toggle: if clicking the same option, clear intent; otherwise set it
+      if (pendingBidIntent && pendingBidIntent.cardIds.join(",") === option.cardIds.join(",")) {
+        pendingBidIntent = null;
+      } else {
+        pendingBidIntent = option;
+      }
+      reRender();
     },
 
     onStir(cardIds: string[]) {
-      if (interactionBlocked()) return;
       const snap = stateManager.get();
       if (!snap) return;
       handleResult(handleStirAction(snap, cardIds, currentSeq()));
     },
 
     onPass() {
-      if (interactionBlocked()) return;
-      const seq = currentSeq();
-      // Determine if this is a bid pass or stir pass based on current mode
-      if (currentInteractionMode === "bid") {
-        handleResult(handleSkipBidAction(seq));
-      } else {
-        handleResult(handlePassStirAction(seq));
-      }
+      handleResult(handlePassStirAction(currentSeq()));
     },
 
     onNewGame() {
       selectedCardIds.clear();
+      pendingBidIntent = null;
+      suppressBidError = false;
       stateManager.reset();
-      playbackQueue?.clear();
-      actionPending = false;
-      playbackCaughtUp = true;
       container.innerHTML = "";
       startNewGame();
     },
   };
   renderCtx.callbacks = callbacks;
 
-  container.innerHTML = `
-    <div class="boot-screen">
-      <div class="boot-screen__title">拖拉机</div>
-      <div class="boot-screen__status">正在连接牌桌...</div>
-    </div>
-  `;
-
   // GameLoop with renderFn that injects callbacks + selectedCardIds
   const gameLoop = new GameLoop(
     stateManager,
-    (snapshot, containerEl, interactionMode) => {
+    (snapshot, _containerEl, interactionMode) => {
       currentInteractionMode = interactionMode;
       if (!isSelectionStillLegal(snapshot, selectedCardIds)) {
         selectedCardIds.clear();
       }
       precomputeAndRender(snapshot);
+
+      // Auto-bid after render
+      handleAutoBid(snapshot, interactionMode);
     },
     container,
-    undefined, // humanPlayerIndex no longer needed
+    undefined,
     () => wsClient.isReconnecting,
-    (message) => showErrorToast(message, container),
-  );
-
-  playbackQueue = new StatePlaybackQueue<ServerMessage>(
-    (msg) => {
-      const shouldRetryInitialNextRound = initialNextRoundPending &&
-        msg.awaiting === "next_round";
-      actionPending = false;
-      gameLoop.handleMessage(
-        shouldRetryInitialNextRound && msg.error
-          ? { ...msg, error: undefined }
-          : msg,
-      );
-      if (shouldRetryInitialNextRound) {
-        actionPending = true;
-        wsClient.send({ type: "next_round", seq: msg.seq });
+    (message) => {
+      // If suppressing bid errors, silently clear intent and don't show toast
+      if (suppressBidError) {
+        suppressBidError = false;
+        pendingBidIntent = null;
         reRender();
         return;
       }
-      initialNextRoundPending = false;
-    },
-    {
-      minFrameMs: 500,
-      onCaughtUpChange(caughtUp) {
-        playbackCaughtUp = caughtUp;
-        reRender();
-      },
+      showErrorToast(message, container);
     },
   );
 
   // Register message handler BEFORE connecting
   wsClient.onMessage((msg: ServerMessage) => {
-    playbackQueue?.enqueue(msg);
+    gameLoop.handleMessage(msg);
   });
 
   wsClient.onDisconnect(() => {
@@ -251,19 +217,12 @@ function main() {
     try {
       wsClient.disconnect();
       const gameId = await createGame();
-      const protocol = window.location.protocol === "https:"
-        ? "wss:"
-        : "ws:";
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const host = window.location.host;
       const wsHost = `${protocol}//${host}`;
       await wsClient.connect(gameId, wsHost);
-      initialNextRoundPending = true;
-      actionPending = true;
-      wsClient.send({ type: "next_round", seq: 0 });
     } catch (e) {
       console.error("Failed to start game:", e);
-      initialNextRoundPending = false;
-      actionPending = false;
       showErrorToast("无法启动游戏，请刷新页面重试", container);
     }
   }

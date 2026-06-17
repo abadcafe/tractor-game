@@ -777,6 +777,43 @@ button:disabled {
   font-weight: 900;
 }
 
+.bid-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+}
+
+.bid-option {
+  display: inline-block;
+  padding: 4px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.bid-option:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.bid-option.selected {
+  background: rgba(242, 201, 76, 0.2);
+  border-color: var(--gold);
+  color: var(--gold);
+}
+
+.bid-intent-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--gold);
+  font-weight: 700;
+}
+
 .bidding-dialog-hint,
 .waiting-hint {
   color: var(--muted);
@@ -861,6 +898,44 @@ button:disabled {
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.08);
   font-size: 14px;
+}
+
+.confirm-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 12px 0;
+}
+
+.confirm-slot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.confirm-slot.ready {
+  background: rgba(69, 193, 119, 0.15);
+  border: 1px solid rgba(69, 193, 119, 0.4);
+  color: var(--green);
+}
+
+.confirm-slot.pending {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--muted);
+}
+
+.confirm-slot__name {
+  font-size: 13px;
+}
+
+.confirm-slot__status {
+  font-size: 16px;
+  font-weight: 900;
 }
 
 .scoring-overlay__next-round {

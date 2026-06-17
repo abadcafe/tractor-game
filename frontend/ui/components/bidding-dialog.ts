@@ -1,148 +1,106 @@
 import type { StateSnapshot, BidEvent } from "../../core/types.ts";
-import type { InteractionMode, BidButtonState } from "../../engine/types.ts";
-import { suitSymbol, suitDisplayName } from "../../core/card.ts";
+import type { InteractionMode, BidOption } from "../../engine/types.ts";
+import { suitDisplayName } from "../../core/card.ts";
 import { SEAT_MAP } from "../../config.ts";
 
 /**
- * Render the bidding/stirring dialog.
+ * Render the bidding info panel for DEAL_BID phase.
  *
- * - DEAL_BID + "bid" interaction: shows "叫牌" and "不叫" buttons
- * - STIRRING + "stir" interaction: shows "反主" and "不反" buttons
- * - When not our turn during DEAL_BID/STIRRING: shows a slim info bar with bid events
+ * - Shows available bid options as clickable pills
+ * - Highlights the currently selected pending intent
+ * - Shows bid events history
+ * - No action buttons — auto-bid handles everything
+ *
+ * For STIRRING phase, renders the traditional stir/pass dialog.
  */
 export function renderBiddingDialog(
   snapshot: StateSnapshot,
   interactionMode: InteractionMode,
-  onBid?: (cardIds: string[]) => void,
+  _onBid?: (cardIds: string[]) => void,
   onStir?: (cardIds: string[]) => void,
   onPass?: () => void,
-  selectedCardIds?: Set<string>,
-  bidButtonState?: BidButtonState,
-  stirButtonState?: BidButtonState,
+  _selectedCardIds?: Set<string>,
+  _bidButtonState?: unknown,
+  stirButtonState?: { disabled: boolean; title?: string },
+  bidOptions?: BidOption[],
+  pendingBidIntent?: BidOption | null,
+  onBidOptionSelect?: (option: BidOption) => void,
 ): HTMLElement {
-  // Get user-selected card IDs
-  const selectedIds = selectedCardIds ? [...selectedCardIds] : [];
-
-  const isOurTurn = interactionMode === "bid" || interactionMode === "stir";
-
-  if (isOurTurn) {
-    return renderActiveDialog(snapshot, interactionMode, onBid, onStir, onPass, selectedIds, bidButtonState, stirButtonState);
+  if (snapshot.phase === "DEAL_BID") {
+    return renderBidOptionsPanel(snapshot, bidOptions ?? [], pendingBidIntent ?? null, onBidOptionSelect);
   }
 
-  // Not our turn — show passive info bar
-  return renderPassiveInfoBar(snapshot);
+  if (snapshot.phase === "STIRRING") {
+    return renderStirDialog(snapshot, interactionMode, onStir, onPass, stirButtonState);
+  }
+
+  // Shouldn't be called for other phases
+  return document.createElement("div");
 }
 
-/** Render the active bidding/stirring dialog when it's our turn. */
-function renderActiveDialog(
+/** Render the bid options panel for DEAL_BID phase. */
+function renderBidOptionsPanel(
   snapshot: StateSnapshot,
-  interactionMode: InteractionMode,
-  onBid?: (cardIds: string[]) => void,
-  onStir?: (cardIds: string[]) => void,
-  onPass?: () => void,
-  selectedIds?: string[],
-  bidButtonState?: BidButtonState,
-  stirButtonState?: BidButtonState,
+  bidOptions: BidOption[],
+  pendingBidIntent: BidOption | null,
+  onBidOptionSelect?: (option: BidOption) => void,
 ): HTMLElement {
   const container = document.createElement("div");
   container.classList.add("bidding-dialog");
 
-  if (interactionMode === "bid") {
-    // Title
-    const title = document.createElement("div");
-    title.classList.add("bidding-dialog-title");
-    title.textContent = "叫牌";
-    container.appendChild(title);
+  // Title
+  const title = document.createElement("div");
+  title.classList.add("bidding-dialog-title");
+  title.textContent = "叫牌";
+  container.appendChild(title);
 
-    // Hint
-    const hint = document.createElement("div");
-    hint.classList.add("bidding-dialog-hint");
-    hint.textContent = selectedIds && selectedIds.length > 0
-      ? `已选择 ${selectedIds.length} 张`
-      : "选择手牌中的级牌或王来叫牌";
-    container.appendChild(hint);
+  // Bid options
+  if (bidOptions.length > 0) {
+    const optionsWrap = document.createElement("div");
+    optionsWrap.classList.add("bid-options");
 
-    // Action buttons
-    const actions = document.createElement("div");
-    actions.classList.add("bid-actions");
+    for (const option of bidOptions) {
+      const pill = document.createElement("span");
+      pill.classList.add("bid-option");
 
-    // Bid button
-    const bidButton = document.createElement("button");
-    bidButton.classList.add("btn-primary");
-    bidButton.textContent = "叫牌";
-    if (bidButtonState) {
-      bidButton.disabled = bidButtonState.disabled;
-      if (bidButtonState.title) bidButton.title = bidButtonState.title;
+      // Highlight if this is the pending intent
+      if (pendingBidIntent && pendingBidIntent.cardIds.join(",") === option.cardIds.join(",")) {
+        pill.classList.add("selected");
+      }
+
+      // Show what trump suit this would create
+      const trumpLabel = option.trumpSuit
+        ? ` (${suitDisplayName(option.trumpSuit)}主)`
+        : "";
+      pill.textContent = option.label + trumpLabel;
+
+      if (onBidOptionSelect) {
+        pill.addEventListener("click", () => onBidOptionSelect(option));
+      }
+
+      optionsWrap.appendChild(pill);
     }
-    bidButton.addEventListener("click", () => {
-      if (onBid && !bidButton.disabled && selectedIds && selectedIds.length > 0) {
-        onBid(selectedIds);
-      }
-    });
-    actions.appendChild(bidButton);
 
-    // Skip bid button (不叫)
-    const skipButton = document.createElement("button");
-    skipButton.classList.add("btn-secondary");
-    skipButton.textContent = "不叫";
-    skipButton.addEventListener("click", () => {
-      if (onPass) {
-        onPass();
-      }
-    });
-    actions.appendChild(skipButton);
-
-    container.appendChild(actions);
-
-  } else if (interactionMode === "stir") {
-    // Title
-    const title = document.createElement("div");
-    title.classList.add("bidding-dialog-title");
-    title.textContent = "反主";
-    container.appendChild(title);
-
-    // Hint
-    const hint = document.createElement("div");
-    hint.classList.add("bidding-dialog-hint");
-    hint.textContent = selectedIds && selectedIds.length > 0
-      ? `已选择 ${selectedIds.length} 张`
-      : "选择对子来反主，或选择不反";
-    container.appendChild(hint);
-
-    // Action buttons
-    const actions = document.createElement("div");
-    actions.classList.add("bid-actions");
-
-    // Stir button
-    const stirButton = document.createElement("button");
-    stirButton.classList.add("btn-warning");
-    stirButton.textContent = "反主";
-    if (stirButtonState) {
-      stirButton.disabled = stirButtonState.disabled;
-      if (stirButtonState.title) stirButton.title = stirButtonState.title;
-    }
-    stirButton.addEventListener("click", () => {
-      if (onStir && !stirButton.disabled && selectedIds && selectedIds.length > 0) {
-        onStir(selectedIds);
-      }
-    });
-    actions.appendChild(stirButton);
-
-    // Pass button
-    const passButton = document.createElement("button");
-    passButton.classList.add("btn-secondary");
-    passButton.textContent = "不反";
-    passButton.addEventListener("click", () => {
-      if (onPass) {
-        onPass();
-      }
-    });
-    actions.appendChild(passButton);
-
-    container.appendChild(actions);
+    container.appendChild(optionsWrap);
+  } else {
+    const noOptions = document.createElement("div");
+    noOptions.classList.add("bidding-dialog-hint");
+    noOptions.textContent = "当前无可用叫牌选项";
+    container.appendChild(noOptions);
   }
 
-  // Render bid events
+  // Pending intent indicator
+  if (pendingBidIntent) {
+    const intentHint = document.createElement("div");
+    intentHint.classList.add("bid-intent-hint");
+    const trumpLabel = pendingBidIntent.trumpSuit
+      ? ` (${suitDisplayName(pendingBidIntent.trumpSuit)}主)`
+      : "";
+    intentHint.textContent = `待叫: ${pendingBidIntent.label}${trumpLabel}`;
+    container.appendChild(intentHint);
+  }
+
+  // Bid events
   if (snapshot.bid_events.length > 0) {
     const eventsContainer = document.createElement("div");
     eventsContainer.classList.add("bid-events");
@@ -158,70 +116,97 @@ function renderActiveDialog(
   return container;
 }
 
-/** Render a passive info bar when it's not our turn. */
-function renderPassiveInfoBar(snapshot: StateSnapshot): HTMLElement {
-  const bar = document.createElement("div");
-  bar.classList.add("bid-info-bar");
+/** Render the stirring dialog for STIRRING phase. */
+function renderStirDialog(
+  snapshot: StateSnapshot,
+  interactionMode: InteractionMode,
+  onStir?: (cardIds: string[]) => void,
+  onPass?: () => void,
+  stirButtonState?: { disabled: boolean; title?: string },
+): HTMLElement {
+  const container = document.createElement("div");
 
-  if (snapshot.bid_winner) {
-    const winner = document.createElement("div");
-    winner.classList.add("bid-current");
-    winner.textContent = `当前叫牌 ${formatBidEvent(snapshot.bid_winner)}`;
-    bar.appendChild(winner);
-  }
+  if (interactionMode === "stir") {
+    container.classList.add("bidding-dialog");
 
-  if (snapshot.bid_events.length > 0) {
-    const eventsContainer = document.createElement("div");
-    eventsContainer.classList.add("bid-events");
-    for (const event of snapshot.bid_events) {
-      const eventEl = document.createElement("div");
-      eventEl.classList.add("bid-event");
-      eventEl.textContent = formatBidEvent(event);
-      eventsContainer.appendChild(eventEl);
+    const title = document.createElement("div");
+    title.classList.add("bidding-dialog-title");
+    title.textContent = "反主";
+    container.appendChild(title);
+
+    const hint = document.createElement("div");
+    hint.classList.add("bidding-dialog-hint");
+    hint.textContent = "选择手牌中的对子来反主";
+    container.appendChild(hint);
+
+    const actions = document.createElement("div");
+    actions.classList.add("bid-actions");
+
+    const stirButton = document.createElement("button");
+    stirButton.classList.add("btn-warning");
+    stirButton.textContent = "反主";
+    if (stirButtonState) {
+      stirButton.disabled = stirButtonState.disabled;
+      if (stirButtonState.title) stirButton.title = stirButtonState.title;
     }
-    bar.appendChild(eventsContainer);
-  }
+    stirButton.addEventListener("click", () => {
+      if (onStir && !stirButton.disabled) {
+        // Get selected cards from the render context
+        const selectedIds = document.querySelectorAll(".hand-view .card.selected");
+        const cardIds: string[] = [];
+        selectedIds.forEach((el) => {
+          const cardId = el.getAttribute("data-card-id");
+          if (cardId) cardIds.push(cardId);
+        });
+        if (cardIds.length > 0) onStir(cardIds);
+      }
+    });
+    actions.appendChild(stirButton);
 
-  let waitingFor = "";
-  if (snapshot.phase === "DEAL_BID") {
-    waitingFor = snapshot.awaiting_action === "bid" ? "等待你叫牌..." : "发牌与叫牌进行中...";
-  } else if (snapshot.phase === "STIRRING" && snapshot.stirring_state) {
-    const player = snapshot.stirring_state.phase === "EXCHANGING"
-      ? snapshot.stirring_state.exchanging_player
-      : snapshot.stirring_state.current_player;
-    const seat = player !== null && player !== undefined ? SEAT_MAP[player] : null;
-    const verb = snapshot.stirring_state.phase === "EXCHANGING" ? "换底牌" : "反主";
-    waitingFor = seat ? `等待${seat.label}${verb}...` : `等待${verb}...`;
+    const passButton = document.createElement("button");
+    passButton.classList.add("btn-secondary");
+    passButton.textContent = "不反";
+    passButton.addEventListener("click", () => {
+      if (onPass) onPass();
+    });
+    actions.appendChild(passButton);
+
+    container.appendChild(actions);
   } else {
-    waitingFor = "等待其他玩家...";
+    // Not our turn — passive info bar
+    container.classList.add("bid-info-bar");
+
+    const hint = document.createElement("div");
+    hint.classList.add("waiting-hint");
+    const seat = snapshot.stirring_state
+      ? SEAT_MAP[snapshot.stirring_state.current_player]
+      : null;
+    hint.textContent = seat ? `等待${seat.label}反主...` : "等待反主...";
+    container.appendChild(hint);
   }
 
-  const hint = document.createElement("div");
-  hint.classList.add("waiting-hint");
-  hint.textContent = waitingFor;
-  bar.appendChild(hint);
-
-  return bar;
-}
-
-/** Compact display for a card in bid events (horizontal, no newline). */
-function _compactCard(c: { suit: string; rank: string }): string {
-  if (c.suit === "joker") {
-    return c.rank === "BJ" ? "大王" : "小王";
-  }
-  return suitSymbol(c.suit) + c.rank;
+  return container;
 }
 
 /** Format a bid event for display. */
 function formatBidEvent(event: BidEvent): string {
   const seat = SEAT_MAP[event.player];
   const name = seat ? seat.label : `玩家${event.player}`;
-  const cardsStr = event.cards.map(_compactCard).join(" ");
+  const cardsStr = event.cards.map(compactCard).join(" ");
   if (event.kind === "trump_rank" && event.suit) {
     return `${name}: ${cardsStr} (${suitDisplayName(event.suit)}主)`;
   }
   if (event.kind === "joker" && event.joker_type) {
     return `${name}: ${cardsStr} (${event.joker_type === "big" ? "大" : "小"}王)`;
   }
-  return `${name}: ${cardsStr}`;
+  return `${name}: 不叫`;
+}
+
+/** Compact display for a card in bid events. */
+function compactCard(c: { suit: string; rank: string }): string {
+  if (c.suit === "joker") {
+    return c.rank === "BJ" ? "大王" : "小王";
+  }
+  const symbols: Record<string, string> = { hearts: "♥", spades: "♠", diamonds: "♦", clubs: "♣" };
+  return (symbols[c.suit] ?? "") + c.rank;
 }

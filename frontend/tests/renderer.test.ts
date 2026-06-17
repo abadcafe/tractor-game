@@ -2,7 +2,7 @@ import { assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/ass
 import { DOMParser } from "jsr:@b-fuze/deno-dom@0.1.56";
 import { render } from "../ui/renderer.ts";
 import type { StateSnapshot } from "../core/types.ts";
-import type { InteractionMode, GameAction } from "../engine/types.ts";
+import type { BidOption, InteractionMode, GameAction } from "../engine/types.ts";
 import type { ActionCallbacks } from "../ui/types.ts";
 
 function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
@@ -174,7 +174,7 @@ Deno.test("test_render_hand_view_receives_callbacks", () => {
   const callbacks: ActionCallbacks = {
     onCardClick: (cardId: string) => { clickedCardId = cardId; },
     onAction: (action: GameAction) => { actionFired = action; },
-    onBid: () => {},
+    onBidOptionSelect: (_option: BidOption) => {},
     onStir: () => {},
     onPass: () => {},
     onNewGame: () => {},
@@ -200,18 +200,17 @@ Deno.test("test_render_bidding_dialog_receives_callbacks", () => {
     awaiting_action: null,
     trick: null,
   });
-  let bidCards: string[] | null = null;
-  let passCalled = false;
+  let selectedOption: BidOption | null = null;
   const callbacks: ActionCallbacks = {
     onCardClick: () => {},
     onAction: () => {},
-    onBid: (cardIds: string[]) => { bidCards = cardIds; },
+    onBidOptionSelect: (option: BidOption) => { selectedOption = option; },
     onStir: () => {},
-    onPass: () => { passCalled = true; },
+    onPass: () => {},
     onNewGame: () => {},
   };
   render(snap, container, "bid", { callbacks, selectedCardIds: new Set(), legalCardIds: new Set() });
-  // In bid mode, there should be a bid button
+  // In bid mode, there should be a bidding dialog
   const bidEl = container.querySelector(".bidding-dialog");
   assertNotEquals(bidEl, null);
 });
@@ -234,7 +233,7 @@ Deno.test("test_render_scoring_overlay_receives_callback", () => {
   const callbacks: ActionCallbacks = {
     onCardClick: () => {},
     onAction: (action: GameAction) => { if (action === "next_round") nextRoundCalled = true; },
-    onBid: () => {},
+    onBidOptionSelect: (_option: BidOption) => {},
     onStir: () => {},
     onPass: () => {},
     onNewGame: () => {},
@@ -259,7 +258,7 @@ Deno.test("test_render_game_over_receives_callback", () => {
   const callbacks: ActionCallbacks = {
     onCardClick: () => {},
     onAction: () => {},
-    onBid: () => {},
+    onBidOptionSelect: (_option: BidOption) => {},
     onStir: () => {},
     onPass: () => {},
     onNewGame: () => { newGameCalled = true; },

@@ -1,44 +1,15 @@
 import type { StateSnapshot, Card } from "../core/types.ts";
-import type { InteractionMode, BidButtonState, LevelChangeInfo } from "./types.ts";
+import type { InteractionMode, StirButtonState, LevelChangeInfo } from "./types.ts";
 import { computeBidPriority } from "./bid-logic.ts";
 import { computeLevelChange } from "./scoring-logic.ts";
 import { validatePlay } from "./input-validator.ts";
 import { isJoker, isTrumpRank } from "../core/card.ts";
 
-/** Compute bid button state based on selected cards. */
-export function computeBidButtonState(
-  snap: StateSnapshot,
-  selectedCardIds: Set<string>,
-): BidButtonState {
-  const selectedIds = [...selectedCardIds];
-  const selectedCards = selectedIds
-    .map((id) => snap.player_hand.find((c) => c.id === id))
-    .filter((c): c is Card => c !== undefined);
-
-  if (selectedCards.length === 0) {
-    return { disabled: true, title: "请先选择要叫的牌" };
-  }
-
-  const priority = computeBidPriority(selectedCards, snap.trump_rank);
-  if (priority === 0) {
-    return { disabled: true, title: "选择的牌不构成有效叫牌" };
-  }
-
-  if (snap.bid_winner) {
-    const winnerPriority = computeBidPriority(snap.bid_winner.cards, snap.trump_rank);
-    if (priority <= winnerPriority) {
-      return { disabled: true, title: "优先级不足，无法超过当前叫牌" };
-    }
-  }
-
-  return { disabled: false };
-}
-
 /** Compute stir button state based on selected cards. */
 export function computeStirButtonState(
   snap: StateSnapshot,
   selectedCardIds: Set<string>,
-): BidButtonState {
+): StirButtonState {
   const selectedIds = [...selectedCardIds];
   const selectedCards = selectedIds
     .map((id) => snap.player_hand.find((c) => c.id === id))
@@ -71,20 +42,21 @@ export function computeLegalCardIds(
   interactionMode: InteractionMode,
 ): Set<string> {
   const legalCardIds = new Set<string>();
-  if (interactionMode === "bid" || interactionMode === "stir") {
-    // In bid/stir mode, highlight all trump-rank cards and jokers as selectable
+  if (interactionMode === "stir") {
+    // In stir mode, highlight all trump-rank cards and jokers as selectable
     for (const card of snap.player_hand) {
       if (isJoker(card) || isTrumpRank(card, snap.trump_rank)) {
         legalCardIds.add(card.id);
       }
     }
-  } else {
+  } else if (interactionMode === "play" || interactionMode === "discard") {
     for (const cards of snap.legal_actions) {
       for (const card of cards) {
         legalCardIds.add(card.id);
       }
     }
   }
+  // bid mode: no card selection needed (bid options are clicked instead)
   return legalCardIds;
 }
 

@@ -1,12 +1,12 @@
 import type { StateSnapshot } from "../../core/types.ts";
 import type { InteractionMode, LevelChangeInfo } from "../../engine/types.ts";
 import { el } from "../dom.ts";
-import { HUMAN_TEAM, TEAM_LABELS } from "../../config.ts";
+import { HUMAN_TEAM, TEAM_LABELS, SEAT_MAP } from "../../config.ts";
 import { suitSymbol } from "../../core/card.ts";
 
 /**
- * Render a round scoring overlay showing scoring details and optionally
- * a "下一轮" button.
+ * Render a round scoring overlay showing scoring details, player confirmation
+ * status, and optionally a "下一轮" button.
  */
 export function renderScoringOverlay(
   snapshot: StateSnapshot,
@@ -77,18 +77,27 @@ export function renderScoringOverlay(
     }
   }
 
-  // Next round button
+  // Confirmation status grid
+  const confirmedSet = new Set(snapshot.next_round_confirmed);
+  const confirmGrid = el("div", { class: "confirm-grid" });
+  for (let i = 0; i < 4; i++) {
+    const seat = SEAT_MAP[i];
+    const isReady = confirmedSet.has(i);
+    const slotClass = `confirm-slot ${isReady ? "ready" : "pending"}`;
+    const slot = el("div", { class: slotClass });
+    slot.appendChild(el("span", { class: "confirm-slot__name" }, seat.label));
+    slot.appendChild(el("span", { class: "confirm-slot__status" }, isReady ? "✓" : "⋯"));
+    confirmGrid.appendChild(slot);
+  }
+  card.appendChild(confirmGrid);
+
+  // Next round button (shown when human hasn't confirmed yet)
   if (interactionMode === "next_round") {
     const button = el("button", { class: "btn-primary scoring-overlay__next-round" }, "下一轮");
     if (onNextRound) {
       button.addEventListener("click", () => onNextRound());
     }
     card.appendChild(button);
-  } else {
-    // Waiting for other players to confirm
-    card.appendChild(
-      el("div", { class: "waiting-indicator" }, "等待其他玩家确认..."),
-    );
   }
 
   overlay.appendChild(card);

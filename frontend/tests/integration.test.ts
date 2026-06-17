@@ -6,7 +6,7 @@ import { validatePlay, validateBidCards } from "../engine/input-validator.ts";
 import { render } from "../ui/renderer.ts";
 import type { StateSnapshot } from "../core/types.ts";
 import type { ServerMessage, ClientAction } from "../core/protocol.ts";
-import type { InteractionMode, GameAction } from "../engine/types.ts";
+import type { InteractionMode, GameAction, BidOption } from "../engine/types.ts";
 import type { ActionCallbacks, RenderContext } from "../ui/types.ts";
 const HUMAN_PLAYER_INDEX = 3;
 
@@ -86,7 +86,7 @@ Deno.test("test_integration_ws_to_render", () => {
   const callbacks: ActionCallbacks = {
     onCardClick: () => {},
     onAction: () => {},
-    onBid: () => {},
+    onBidOptionSelect: (_option: BidOption) => {},
     onStir: () => {},
     onPass: () => {},
     onNewGame: () => {},
@@ -138,7 +138,7 @@ Deno.test("test_integration_play_action", () => {
         }
       }
     },
-    onBid: () => {},
+    onBidOptionSelect: (_option: BidOption) => {},
     onStir: () => {},
     onPass: () => {},
     onNewGame: () => {},
@@ -179,32 +179,35 @@ Deno.test("test_integration_bid_action", () => {
   });
 
   // Step 1: Render with bid mode
-  let bidCards: string[] | null = null;
+  let selectedBidOption: BidOption | null = null;
   const callbacks: ActionCallbacks = {
     onCardClick: () => {},
     onAction: () => {},
-    onBid: (cardIds: string[]) => { bidCards = cardIds; },
+    onBidOptionSelect: (option: BidOption) => { selectedBidOption = option; },
     onStir: () => {},
     onPass: () => {},
     onNewGame: () => {},
   };
 
-  render(snap, container, "bid", { callbacks, selectedCardIds: new Set(), legalCardIds: new Set() });
+  const bidOptions: BidOption[] = [
+    { cardIds: ["D1-spades-2"], label: "♠2", trumpSuit: "spades", priority: 1 },
+  ];
+
+  render(snap, container, "bid", { callbacks, selectedCardIds: new Set(), legalCardIds: new Set(), bidOptions });
 
   // Step 2: Verify bidding dialog is shown
   const bidEl = container.querySelector(".bidding-dialog");
   assertNotEquals(bidEl, null);
 
-  // Step 3: User selects trump rank cards
-  const selectedCards = [snap.player_hand[0]]; // spades-2
+  // Step 3: Verify bid options are rendered as pills
+  const pills = container.querySelectorAll(".bid-option");
+  assertEquals(pills.length, 1);
 
-  // Step 4: Validate
-  const valid = validateBidCards(selectedCards, snap.trump_rank);
-  assertEquals(valid, true);
-
-  // Step 5: Construct action via onBid callback
-  callbacks.onBid([selectedCards[0].id]);
-  assertEquals(bidCards, ["D1-spades-2"]);
+  // Step 4: Click the bid option pill to select it
+  pills[0].dispatchEvent(new Event("click", { bubbles: true }));
+  assertNotEquals(selectedBidOption, null);
+  assertEquals(selectedBidOption!.cardIds, ["D1-spades-2"]);
+  assertEquals(selectedBidOption!.label, "♠2");
 });
 
 Deno.test("test_integration_stir_action", () => {
@@ -226,7 +229,7 @@ Deno.test("test_integration_stir_action", () => {
   const callbacks: ActionCallbacks = {
     onCardClick: () => {},
     onAction: () => {},
-    onBid: () => {},
+    onBidOptionSelect: (_option: BidOption) => {},
     onStir: (cardIds: string[]) => { stirCardIds = cardIds; },
     onPass: () => {},
     onNewGame: () => {},
@@ -331,7 +334,7 @@ Deno.test("test_integration_card_selection_persists_across_renders", () => {
       else selectedCardIds.add(cardId);
     },
     onAction: () => {},
-    onBid: () => {},
+    onBidOptionSelect: (_option: BidOption) => {},
     onStir: () => {},
     onPass: () => {},
     onNewGame: () => {},
@@ -382,7 +385,7 @@ Deno.test("test_integration_callback_triggers_send", () => {
     onAction: (action: GameAction) => {
       if (action === "next_round") mockSend({ type: "next_round", seq: 0 });
     },
-    onBid: () => {},
+    onBidOptionSelect: (_option: BidOption) => {},
     onStir: () => {},
     onPass: () => {},
     onNewGame: () => {},

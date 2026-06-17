@@ -10,9 +10,6 @@ import { renderGameOverOverlay } from "./components/game-over-overlay.ts";
 
 /**
  * Orchestrate rendering of all UI components from a state snapshot.
- *
- * Clears the container and appends components based on the current phase
- * and interaction mode.
  */
 export function render(
   snapshot: StateSnapshot,
@@ -20,40 +17,13 @@ export function render(
   interactionMode: InteractionMode,
   ctx?: RenderContext,
 ): void {
+  // Clear the container
   container.innerHTML = "";
 
-  const shell = document.createElement("div");
-  shell.className = "game-shell";
+  // Always render: game table (includes trick view), hand view, scoreboard
+  container.appendChild(renderGameTable(snapshot));
 
-  const playRegion = document.createElement("main");
-  playRegion.className = "play-region";
-
-  const tableRegion = document.createElement("section");
-  tableRegion.className = "table-region";
-  tableRegion.appendChild(renderGameTable(snapshot));
-  playRegion.appendChild(tableRegion);
-
-  const tableControls = document.createElement("section");
-  tableControls.className = "table-controls";
-
-  const isBiddingPhase = snapshot.phase === "DEAL_BID" ||
-    snapshot.phase === "STIRRING";
-  if (isBiddingPhase) {
-    tableControls.appendChild(
-      renderBiddingDialog(
-        snapshot,
-        interactionMode,
-        ctx?.callbacks?.onBid,
-        ctx?.callbacks?.onStir,
-        ctx?.callbacks?.onPass,
-        ctx?.selectedCardIds,
-        ctx?.bidButtonState,
-        ctx?.stirButtonState,
-      ),
-    );
-  }
-
-  tableControls.appendChild(
+  container.appendChild(
     renderHandView(
       snapshot,
       interactionMode,
@@ -63,15 +33,28 @@ export function render(
       ctx?.callbacks?.onAction,
     ),
   );
-  playRegion.appendChild(tableControls);
-  shell.appendChild(playRegion);
 
-  const sidebar = document.createElement("aside");
-  sidebar.className = "side-panel";
-  sidebar.appendChild(renderScoreboard(snapshot));
-  shell.appendChild(sidebar);
+  container.appendChild(renderScoreboard(snapshot));
 
-  container.appendChild(shell);
+  // Bidding panel: always show during DEAL_BID or STIRRING
+  const isBiddingPhase = snapshot.phase === "DEAL_BID" || snapshot.phase === "STIRRING";
+  if (isBiddingPhase) {
+    container.appendChild(
+      renderBiddingDialog(
+        snapshot,
+        interactionMode,
+        undefined, // onBid — no longer used
+        ctx?.callbacks?.onStir,
+        ctx?.callbacks?.onPass,
+        ctx?.selectedCardIds,
+        undefined, // bidButtonState — no longer used
+        ctx?.stirButtonState,
+        ctx?.bidOptions,
+        ctx?.pendingBidIntent,
+        ctx?.callbacks?.onBidOptionSelect,
+      ),
+    );
+  }
 
   // Scoring overlay for WAITING phase
   if (snapshot.phase === "WAITING") {

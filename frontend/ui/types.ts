@@ -1,5 +1,5 @@
 import type { StateSnapshot } from "../core/types.ts";
-import type { GameAction, BidButtonState, LevelChangeInfo } from "../engine/types.ts";
+import type { GameAction, BidOption, StirButtonState, LevelChangeInfo } from "../engine/types.ts";
 
 /** Callbacks for user interactions. Created in main.ts, passed through renderer to components. */
 export interface ActionCallbacks {
@@ -7,14 +7,11 @@ export interface ActionCallbacks {
   onCardClick: (cardId: string) => void;
   /** Called when an action button is clicked. */
   onAction: (action: GameAction) => void;
-  /** Called when the player submits a bid with selected card IDs during DEAL_BID phase.
-   *  Sends { type: "bid", cards: cardIds } to the server. */
-  onBid: (cardIds: string[]) => void;
-  /** Called when the player submits a stir with selected card IDs during STIRRING phase.
-   *  Sends { type: "stir", cards: cardIds } to the server. */
+  /** Called when the player clicks a bid option to set their pending bid intent. */
+  onBidOptionSelect: (option: BidOption) => void;
+  /** Called when the player submits a stir with selected card IDs during STIRRING phase. */
   onStir: (cardIds: string[]) => void;
-  /** Called when the player passes on stirring.
-   *  Sends { type: "stir", pass: true } to the server. */
+  /** Called when the player passes on stirring. */
   onPass: () => void;
   /** Called when the player clicks "new game" on the game over screen. */
   onNewGame: () => void;
@@ -26,10 +23,12 @@ export interface RenderContext {
   selectedCardIds: Set<string>;
   /** Pre-computed legal card IDs for hand highlighting. */
   legalCardIds: Set<string>;
-  /** Pre-computed bid button state from engine layer. */
-  bidButtonState?: BidButtonState;
+  /** Pre-computed bid options from engine layer. */
+  bidOptions?: BidOption[];
+  /** Current pending bid intent set by the player. */
+  pendingBidIntent?: BidOption | null;
   /** Pre-computed stir button state from engine layer. */
-  stirButtonState?: BidButtonState;
+  stirButtonState?: StirButtonState;
   /** Pre-computed level change info from engine layer. */
   levelChange?: LevelChangeInfo;
 }

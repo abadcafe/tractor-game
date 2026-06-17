@@ -1,4 +1,6 @@
-import type { Card } from "../core/types.ts";
+import type { Card, BidEvent } from "../core/types.ts";
+import type { BidOption } from "./types.ts";
+import { suitSymbol } from "../core/card.ts";
 
 /** Suit rank values matching server-side bid_value ordering. */
 const SUIT_RANK: Record<string, number> = {
@@ -47,4 +49,98 @@ export function computeBidPriority(cards: Card[], trumpRank: string): number {
 
   const suit = cards[0].suit;
   return count * 100 + (SUIT_RANK[suit] ?? 0);
+}
+
+/** Compute all available bid options from the player's hand.
+ *  Returns options sorted by priority (highest first).
+ *  Only includes options that would beat the current bid_winner. */
+export function computeBidOptions(
+  hand: Card[],
+  trumpRank: string,
+  bidWinner: BidEvent | null,
+): BidOption[] {
+  const options: BidOption[] = [];
+  const winnerPriority = bidWinner
+    ? computeBidPriority(bidWinner.cards, trumpRank)
+    : 0;
+
+  // Group trump-rank cards by suit, collect jokers
+  const suitGroups: Record<string, Card[]> = {};
+  const sjCards: Card[] = [];
+  const bjCards: Card[] = [];
+
+  for (const card of hand) {
+    if (card.rank === "SJ") {
+      sjCards.push(card);
+    } else if (card.rank === "BJ") {
+      bjCards.push(card);
+    } else if (card.rank === trumpRank) {
+      const suit = card.suit;
+      if (!suitGroups[suit]) suitGroups[suit] = [];
+      suitGroups[suit].push(card);
+    }
+  }
+
+  // Big joker pair
+  if (bjCards.length >= 2) {
+    const cards = bjCards.slice(0, 2);
+    const priority = computeBidPriority(cards, trumpRank);
+    if (priority > winnerPriority) {
+      options.push({
+        cardIds: cards.map((c) => c.id),
+        label: "大王对",
+        trumpSuit: null,
+        priority,
+      });
+    }
+  }
+
+  // Small joker pair
+  if (sjCards.length >= 2) {
+    const cards = sjCards.slice(0, 2);
+    const priority = computeBidPriority(cards, trumpRank);
+    if (priority > winnerPriority) {
+      options.push({
+        cardIds: cards.map((c) => c.id),
+        label: "小王对",
+        trumpSuit: null,
+        priority,
+      });
+    }
+  }
+
+  // Trump-rank pairs by suit (highest suit first)
+  const sortedSuits = Object.entries(suitGroups).sort(
+    (a, b) => (SUIT_RANK[b[0]] ?? 0) - (SUIT_RANK[a[0]] ?? 0),
+  );
+  for (const [suit, cards] of sortedSuits) {
+    if (cards.length >= 2) {
+      const bidCards = cards.slice(0, 2);
+      const priority = computeBidPriority(bidCards, trumpRank);
+      if (priority > winnerPriority) {
+        options.push({
+          cardIds: bidCards.map((c) => c.id),
+          label: `${suitSymbol(suit)}${trumpRank}对`,
+          trumpSuit: suit,
+          priority,
+        });
+      }
+    }
+  }
+
+  // Single trump-rank cards by suit (highest suit first)
+  for (const [suit, cards] of sortedSuits) {
+    const bidCards = [cards[0]];
+    const priority = computeBidPriority(bidCards, trumpRank);
+    if (priority > winnerPriority) {
+      options.push({
+        cardIds: bidCards.map((c) => c.id),
+        label: `${suitSymbol(suit)}${trumpRank}`,
+        trumpSuit: suit,
+        priority,
+      });
+    }
+  }
+
+  return options;
 }
