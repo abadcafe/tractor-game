@@ -5,6 +5,7 @@ import type { ServerMessage, ClientAction } from "../core/protocol.ts";
 function makeStateMessage(): ServerMessage {
   return {
     type: "state",
+    seq: 0,
     awaiting: null,
     state: {
       phase: "DEAL_BID",
@@ -16,6 +17,7 @@ function makeStateMessage(): ServerMessage {
       declarer_player: null,
       defender_points: 0,
       legal_actions: [],
+      bid_legal_actions: null,
       trick: null,
       trick_history: [],
       bid_events: [],
@@ -104,7 +106,7 @@ Deno.test("test_send_action", async () => {
   await client.connect("test-id", `ws://localhost:${port}`);
   await waitFor(() => serverReady);
 
-  const action: ClientAction = { type: "bid", cards: ["D1-hearts-2"] };
+  const action: ClientAction = { type: "bid", seq: 0, cards: ["D1-hearts-2"] };
   client.send(action);
 
   await waitFor(() => receivedAction !== null);

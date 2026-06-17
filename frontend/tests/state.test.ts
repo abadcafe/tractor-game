@@ -13,6 +13,7 @@ function makeSnapshot(phase: string): StateSnapshot {
     declarer_player: null,
     defender_points: 0,
     legal_actions: [],
+    bid_legal_actions: null,
     trick: null,
     trick_history: [],
     bid_events: [],
@@ -36,28 +37,28 @@ Deno.test("test_get_returns_null_initially", () => {
 Deno.test("test_update_stores_snapshot", () => {
   const mgr = new StateManager();
   const snap = makeSnapshot("DEAL_BID");
-  mgr.update(snap);
+  mgr.update(snap, 0);
   assertEquals(mgr.get(), snap);
 });
 
 Deno.test("test_get_returns_latest", () => {
   const mgr = new StateManager();
-  mgr.update(makeSnapshot("DEAL_BID"));
-  mgr.update(makeSnapshot("STIRRING"));
+  mgr.update(makeSnapshot("DEAL_BID"), 0);
+  mgr.update(makeSnapshot("STIRRING"), 1);
   assertEquals(mgr.get()!.phase, "STIRRING");
 });
 
 Deno.test("test_update_replaces_previous_snapshot", () => {
   const mgr = new StateManager();
-  mgr.update(makeSnapshot("DEAL_BID"));
-  mgr.update(makeSnapshot("STIRRING"));
+  mgr.update(makeSnapshot("DEAL_BID"), 0);
+  mgr.update(makeSnapshot("STIRRING"), 1);
   const result = mgr.get()!;
   assertEquals(result.phase, "STIRRING");
 });
 
 Deno.test("test_reset_clears_state", () => {
   const mgr = new StateManager();
-  mgr.update(makeSnapshot("PLAYING"));
+  mgr.update(makeSnapshot("PLAYING"), 0);
   assertNotEquals(mgr.get(), null);
   mgr.reset();
   assertEquals(mgr.get(), null);
@@ -65,8 +66,8 @@ Deno.test("test_reset_clears_state", () => {
 
 Deno.test("test_reset_returns_get_to_null", () => {
   const mgr = new StateManager();
-  mgr.update(makeSnapshot("DEAL_BID"));
-  mgr.update(makeSnapshot("STIRRING"));
+  mgr.update(makeSnapshot("DEAL_BID"), 0);
+  mgr.update(makeSnapshot("STIRRING"), 1);
   mgr.reset();
   assertEquals(mgr.get(), null);
 });

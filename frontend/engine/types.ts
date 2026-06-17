@@ -1,7 +1,7 @@
 /** Types exported from engine layer to UI layer. */
 
-/** Action type for onAction callback. Replaces raw string parameter. */
-export type GameAction = "play" | "discard" | "next_round";
+/** Action type for onAction callback. */
+export type GameAction = "play" | "discard" | "next_round" | "skip_bid";
 
 /** Interaction mode computed by GameLoop from awaiting_action.
  *  Passed to renderer so it knows which buttons/dialogs to show.

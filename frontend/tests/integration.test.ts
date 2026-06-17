@@ -37,6 +37,7 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     declarer_player: 3,
     defender_points: 15,
     legal_actions: [[{ id: "D1-hearts-5", suit: "hearts", rank: "5" }]],
+    bid_legal_actions: null,
     trick: null,
     trick_history: [],
     bid_events: [],
@@ -81,9 +82,21 @@ Deno.test("test_integration_ws_to_render", () => {
   const stateManager = new StateManager();
   const gameLoop = new GameLoop(stateManager, trackingRender, container, 3);
 
+  // Set up render context with callbacks so action buttons are rendered
+  const callbacks: ActionCallbacks = {
+    onCardClick: () => {},
+    onAction: () => {},
+    onBid: () => {},
+    onStir: () => {},
+    onPass: () => {},
+    onNewGame: () => {},
+  };
+  lastRenderedCtx = { callbacks, selectedCardIds: new Set(), legalCardIds: new Set() };
+
   // Simulate WS message for PLAYING phase with human turn
   const msg: ServerMessage = {
     type: "state",
+    seq: 0,
     awaiting: "play",
     state: makeSnapshot({ phase: "PLAYING", awaiting_action: "play" }),
   };
@@ -99,7 +112,7 @@ Deno.test("test_integration_ws_to_render", () => {
   // Verify: DOM was updated
   const handEl = container.querySelector(".hand-view");
   assertNotEquals(handEl, null);
-  const playButton = container.querySelector("button");
+  const playButton = container.querySelector(".action-panel button");
   assertNotEquals(playButton, null);
   assertEquals(playButton!.textContent, "出牌");
 });
@@ -121,7 +134,7 @@ Deno.test("test_integration_play_action", () => {
         const selectedCards = snap.player_hand.filter((c) => selectedCardIds.has(c.id));
         const matchedCards = validatePlay(selectedCards, snap.legal_actions);
         if (matchedCards) {
-          sentAction = { type: "play", cards: matchedCards.map((c) => c.id) };
+          sentAction = { type: "play", seq: 0, cards: matchedCards.map((c) => c.id) };
         }
       }
     },
@@ -141,7 +154,7 @@ Deno.test("test_integration_play_action", () => {
   card.dispatchEvent(new Event("click", { bubbles: true })); // triggers onCardClick -> adds to selectedCardIds
 
   // Step 3: User clicks play button
-  const playButton = Array.from(container.querySelectorAll(".hand-view button"))
+  const playButton = Array.from(container.querySelectorAll(".action-panel button"))
     .find((b) => b.textContent === "出牌");
   assertNotEquals(playButton, undefined);
   playButton!.dispatchEvent(new Event("click", { bubbles: true })); // triggers onAction("play")
@@ -199,7 +212,7 @@ Deno.test("test_integration_stir_action", () => {
   const snap = makeSnapshot({
     phase: "STIRRING",
     awaiting_action: "stir",
-    stirring_state: { phase: "WAITING", trump_suit: null, current_player: HUMAN_PLAYER_INDEX, exchanging_player: null, exchange_count: null },
+    stirring_state: { phase: "WAITING", trump_suit: null, current_player: HUMAN_PLAYER_INDEX, declarer_player: 0, legal_actions: [], exchanging_player: null, exchange_count: null },
     player_hand: [
       { id: "D1-spades-2", suit: "spades", rank: "2" },
       { id: "D2-spades-2", suit: "spades", rank: "2" },
@@ -255,6 +268,7 @@ Deno.test("test_integration_error_message", () => {
   // First, establish a state
   const stateMsg: ServerMessage = {
     type: "state",
+    seq: 0,
     awaiting: "play",
     state: makeSnapshot(),
   };
@@ -262,12 +276,12 @@ Deno.test("test_integration_error_message", () => {
   const stateBefore = stateManager.get();
   assertNotEquals(stateBefore, null);
 
-  // Now send an error
-  const errMsg: ServerMessage = { type: "error", message: "无效的出牌" };
+  // Now send a state message with an error
+  const errMsg: ServerMessage = { type: "state", seq: 1, awaiting: "play", state: makeSnapshot(), error: "无效的出牌" };
   gameLoop.handleMessage(errMsg);
 
-  // Verify: state was NOT updated
-  assertEquals(stateManager.get(), stateBefore);
+  // Verify: state was updated (state messages always update, even with errors)
+  assertNotEquals(stateManager.get(), null);
 
   // Verify: error callback was called
   assertEquals(errorReceived, "无效的出牌");
@@ -280,14 +294,15 @@ Deno.test("test_integration_stir_not_human_ignored", () => {
   const stateManager = new StateManager();
   const gameLoop = new GameLoop(stateManager, trackingRender, container, 3);
 
-  // STIRRING phase, but NOT human's turn
+  // STIRRING phase, but NOT human's turn (awaiting is null since it's not our action)
   const msg: ServerMessage = {
     type: "state",
-    awaiting: "stir",
+    seq: 0,
+    awaiting: null,
     state: makeSnapshot({
       phase: "STIRRING",
-      awaiting_action: "stir",
-      stirring_state: { phase: "WAITING", trump_suit: null, current_player: 1, exchanging_player: null, exchange_count: null },
+      awaiting_action: null,
+      stirring_state: { phase: "WAITING", trump_suit: null, current_player: 1, declarer_player: 0, legal_actions: [], exchanging_player: null, exchange_count: null },
     }),
   };
   gameLoop.handleMessage(msg);
@@ -297,7 +312,7 @@ Deno.test("test_integration_stir_not_human_ignored", () => {
 
   // Verify: no interactive buttons in the rendered output
   render(stateManager.get()!, container, null, undefined);
-  // In spectator mode, hand-view should have no buttons
+  // In spectator mode, the action-panel should have no buttons
   const handEl = container.querySelector(".hand-view");
   if (handEl) {
     const buttons = handEl.querySelectorAll("button");
@@ -365,7 +380,7 @@ Deno.test("test_integration_callback_triggers_send", () => {
   const callbacks: ActionCallbacks = {
     onCardClick: () => {},
     onAction: (action: GameAction) => {
-      if (action === "next_round") mockSend({ type: "next_round" });
+      if (action === "next_round") mockSend({ type: "next_round", seq: 0 });
     },
     onBid: () => {},
     onStir: () => {},

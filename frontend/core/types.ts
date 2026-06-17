@@ -29,7 +29,8 @@ export interface BidEvent {
   count: number;
 }
 
-/** Full game state snapshot pushed by the server. */
+/** Full game state snapshot pushed by the server.
+ *  Matches server/snapshot.py SnapshotDict exactly. */
 export interface StateSnapshot {
   phase: "DEAL_BID" | "STIRRING" | "PLAYING" | "WAITING" | "GAME_OVER";
 
@@ -46,6 +47,7 @@ export interface StateSnapshot {
   defender_points: number;
 
   legal_actions: Card[][];
+  bid_legal_actions: Card[][] | null;
 
   trick: {
     lead_player: number;
@@ -64,12 +66,14 @@ export interface StateSnapshot {
     phase: string;
     trump_suit: string | null;
     current_player: number;
+    declarer_player: number;
+    legal_actions: Card[][];
     exchanging_player: number | null;
     exchange_count: number | null;
   } | null;
 
   scoring: {
-    declarer_team: number;
+    declarer_team: number | null;
     defender_points: number;
     total_defender_points: number;
     bottom_card_bonus: number;
@@ -82,4 +86,3 @@ export interface StateSnapshot {
   team1_level: string;
   next_round_confirmed: number[];
 }
-

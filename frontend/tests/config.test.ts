@@ -26,13 +26,13 @@ Deno.test("test_seat_map_north_is_teammate", () => {
 });
 
 Deno.test("test_seat_map_west_is_opponent_a", () => {
-  assertEquals(SEAT_MAP[1].label, "对手A");
+  assertEquals(SEAT_MAP[1].label, "左家");
   assertEquals(SEAT_MAP[1].position, "西");
   assertEquals(SEAT_MAP[1].team, 1);
 });
 
 Deno.test("test_seat_map_east_is_opponent_b", () => {
-  assertEquals(SEAT_MAP[2].label, "对手B");
+  assertEquals(SEAT_MAP[2].label, "右家");
   assertEquals(SEAT_MAP[2].position, "东");
   assertEquals(SEAT_MAP[2].team, 1);
 });

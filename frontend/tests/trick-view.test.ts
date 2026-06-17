@@ -21,9 +21,11 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     declarer_player: null,
     defender_points: 0,
     legal_actions: [],
+    bid_legal_actions: null,
     trick: {
       lead_player: 0,
       slots: [{ player: 0, cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }] }],
+      current_player: 1,
     },
     trick_history: [],
     bid_events: [],
@@ -57,7 +59,7 @@ Deno.test("test_renderTrickView_empty_trick", () => {
 Deno.test("test_renderTrickView_player_labels", () => {
   const snap = makeSnapshot();
   const el = renderTrickView(snap);
-  const labels = el.querySelectorAll(".player-label");
+  const labels = el.querySelectorAll(".trick-player-label");
   assertEquals(labels.length, 1);
 });
 
@@ -70,6 +72,7 @@ Deno.test("test_renderTrickView_multiple_slots", () => {
         { player: 1, cards: [{ id: "D2-hearts-9", suit: "hearts", rank: "9" }] },
         { player: 2, cards: [{ id: "D3-spades-J", suit: "spades", rank: "J" }] },
       ],
+      current_player: 3,
     },
   });
   const el = renderTrickView(snap);
@@ -77,7 +80,7 @@ Deno.test("test_renderTrickView_multiple_slots", () => {
   assertEquals(slots.length, 3);
   const trickCards = el.querySelectorAll(".trick-card");
   assertEquals(trickCards.length, 3);
-  const labels = el.querySelectorAll(".player-label");
+  const labels = el.querySelectorAll(".trick-player-label");
   assertEquals(labels.length, 3);
 });
 
@@ -88,6 +91,7 @@ Deno.test("test_renderTrickView_slot_with_empty_cards", () => {
       slots: [
         { player: 0, cards: [] },
       ],
+      current_player: 0,
     },
   });
   const el = renderTrickView(snap);
@@ -95,7 +99,7 @@ Deno.test("test_renderTrickView_slot_with_empty_cards", () => {
   assertEquals(slots.length, 1);
   const trickCards = el.querySelectorAll(".trick-card");
   assertEquals(trickCards.length, 0);
-  const labels = el.querySelectorAll(".player-label");
+  const labels = el.querySelectorAll(".trick-player-label");
   assertEquals(labels.length, 1);
 });
 
@@ -107,6 +111,7 @@ Deno.test("test_renderTrickView_current_player_highlight", () => {
         { player: 0, cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }] },
         { player: 1, cards: [{ id: "D2-hearts-9", suit: "hearts", rank: "9" }] },
       ],
+      current_player: 1,
     },
   });
   const el = renderTrickView(snap);

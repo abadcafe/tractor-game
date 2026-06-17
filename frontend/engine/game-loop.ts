@@ -39,18 +39,19 @@ export class GameLoop {
 
   /**
    * Handle an incoming server message.
-   * - Error messages: store the error, do not update state or re-render.
-   * - State messages: update StateManager, compute interactionMode, call renderFn.
+   * - State messages: update StateManager (with seq), handle error field,
+   *   compute interactionMode, call renderFn.
    */
   handleMessage(msg: ServerMessage): void {
-    if (msg.type === "error") {
-      this.lastError = msg.message;
-      this.onError?.(msg.message);
-      return;
-    }
-
     if (msg.type === "state") {
-      this.stateManager.update(msg.state);
+      this.stateManager.update(msg.state, msg.seq);
+
+      // Handle error field from server (action rejection feedback)
+      if (msg.error) {
+        this.lastError = msg.error;
+        this.onError?.(msg.error);
+      }
+
       const interactionMode = this.computeInteractionMode(msg.state, msg.awaiting);
       this.renderFn(msg.state, this.container, interactionMode);
     }
@@ -66,14 +67,15 @@ export class GameLoop {
   /**
    * Compute the interaction mode from the state snapshot and awaiting value.
    *
-   * Rules:
-   * - If reconnecting -> null (disable all interaction)
-   * - If phase is "DEAL_BID" -> always "bid" (show bidding panel)
-   * - If phase is "WAITING" -> "next_round" (show scoring + next round button)
-   * - If phase is "GAME_OVER" -> "next_round" (show scoring overlay without button)
-   * - Else if awaiting is not null -> map awaiting to interaction mode
-   *   (awaiting is only non-null when it's the human player's turn)
-   * - Otherwise -> null (spectator mode)
+   * Uses the `awaiting` field from the server message as the authoritative
+   * source for what action the human player should take. This correctly
+   * handles:
+   * - DEAL_BID: only shows "bid" when awaiting="bid" (human's turn)
+   * - STIRRING: shows "stir" or "discard" based on awaiting
+   * - PLAYING: shows "play" when awaiting="play"
+   * - WAITING: shows "next_round"
+   * - GAME_OVER: null (no interaction needed)
+   * - Reconnecting: null (all interaction disabled)
    */
   private computeInteractionMode(state: StateSnapshot, awaiting: string | null): InteractionMode {
     // Disable all interaction while reconnecting
@@ -81,20 +83,11 @@ export class GameLoop {
       return null;
     }
 
-    if (state.phase === "DEAL_BID") {
-      return "bid";
-    }
-
-    if (state.phase === "WAITING") {
-      return "next_round";
-    }
-
-    if (state.phase === "GAME_OVER") {
-      return "next_round";
-    }
-
+    // Use awaiting as authoritative source
     if (awaiting !== null) {
       switch (awaiting) {
+        case "bid":
+          return "bid";
         case "stir":
           return "stir";
         case "discard":

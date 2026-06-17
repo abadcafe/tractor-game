@@ -21,6 +21,7 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     declarer_player: null,
     defender_points: 0,
     legal_actions: [],
+    bid_legal_actions: null,
     trick: null,
     trick_history: [],
     bid_events: [],
@@ -44,7 +45,7 @@ Deno.test("test_renderGameOverOverlay_shows_winner", () => {
   assertNotEquals(winnerEl, null);
   const text = winnerEl?.textContent ?? "";
   // Team 0 is human team, so it shows "🏆 我们赢了!"
-  assertEquals(text.includes("🏆 我们赢了!"), true);
+  assertEquals(text.includes("🏆 我们赢了！"), true);
 });
 
 Deno.test("test_renderGameOverOverlay_team1_wins", () => {
@@ -53,7 +54,7 @@ Deno.test("test_renderGameOverOverlay_team1_wins", () => {
   const winnerEl = el.querySelector(".winner-text");
   assertNotEquals(winnerEl, null);
   const text = winnerEl?.textContent ?? "";
-  assertEquals(text.includes("队伍1获胜!"), true);
+  assertEquals(text.includes("对方获胜"), true);
 });
 
 Deno.test("test_renderGameOverOverlay_null_winning_team", () => {

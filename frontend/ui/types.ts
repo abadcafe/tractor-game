@@ -1,12 +1,9 @@
 import type { StateSnapshot } from "../core/types.ts";
 import type { GameAction, BidButtonState, LevelChangeInfo } from "../engine/types.ts";
 
-/** Callbacks for user interactions. Created in main.ts, passed through renderer to components.
- *  These callbacks close over selectedCardIds state and the wsClient.send function.
- *  onStir is separate from onBid because the STIRRING phase sends { type: "stir" }
- *  while the DEAL_BID phase sends { type: "bid" } -- they are distinct server actions. */
+/** Callbacks for user interactions. Created in main.ts, passed through renderer to components. */
 export interface ActionCallbacks {
-  /** Called when a card in hand is clicked. Toggles selection in the parent closure. */
+  /** Called when a card in hand is clicked. Toggles selection. */
   onCardClick: (cardId: string) => void;
   /** Called when an action button is clicked. */
   onAction: (action: GameAction) => void;

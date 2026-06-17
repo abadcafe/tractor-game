@@ -1,18 +1,12 @@
 import type { StateSnapshot } from "../../core/types.ts";
 import type { InteractionMode, LevelChangeInfo } from "../../engine/types.ts";
 import { el } from "../dom.ts";
-import { HUMAN_TEAM } from "../../config.ts";
+import { HUMAN_TEAM, TEAM_LABELS } from "../../config.ts";
 import { suitSymbol } from "../../core/card.ts";
 
 /**
  * Render a round scoring overlay showing scoring details and optionally
- * a "下一轮" (next round) button when the human declarer needs to acknowledge.
- *
- * @param snapshot - Current game state snapshot
- * @param interactionMode - Current interaction mode; "next_round" shows the button
- * @param onNextRound - Optional callback invoked when the next-round button is clicked
- * @param levelChange - Pre-computed level change info from engine layer
- * @returns An HTMLElement containing the scoring overlay
+ * a "下一轮" button.
  */
 export function renderScoringOverlay(
   snapshot: StateSnapshot,
@@ -21,69 +15,82 @@ export function renderScoringOverlay(
   levelChange?: LevelChangeInfo,
 ): HTMLElement {
   const overlay = el("div", { class: "scoring-overlay" });
+  const card = el("div", { class: "scoring-overlay__card" });
+
+  card.appendChild(el("div", { class: "scoring-overlay__title" }, "本轮结算"));
 
   if (snapshot.scoring) {
     const trickPts = snapshot.scoring.defender_points;
     const bonus = snapshot.scoring.bottom_card_bonus;
     const total = snapshot.scoring.total_defender_points;
 
+    // Points breakdown
     if (bonus > 0) {
-      overlay.appendChild(
-        el("div", { class: "scoring-overlay__defender-points" },
-          `敌方得牌分: ${trickPts} + 底牌加分: ${bonus} = 总分: ${total}`),
-      );
-    } else {
-      overlay.appendChild(
-        el("div", { class: "scoring-overlay__defender-points" },
-          `敌方得分: ${total}`),
+      card.appendChild(
+        el("div", { class: "scoring-overlay__row" },
+          `防守方得牌分: ${trickPts}  +  底牌加分: ${bonus}`),
       );
     }
-
-    overlay.appendChild(
-      el("div", { class: "scoring-overlay__declarer-team" },
-        `庄家队伍: ${snapshot.scoring.declarer_team === 0 ? "队伍0" : "队伍1"}`),
+    card.appendChild(
+      el("div", { class: "scoring-overlay__row scoring-overlay__row--highlight" },
+        `防守方总分: ${total}`),
     );
 
-    // Level change info - pre-computed by engine layer
+    // Declarer team
+    const declarerLabel = snapshot.scoring.declarer_team !== null
+      ? TEAM_LABELS[snapshot.scoring.declarer_team] ?? `队伍${snapshot.scoring.declarer_team}`
+      : "—";
+    card.appendChild(
+      el("div", { class: "scoring-overlay__row" }, `庄家: ${declarerLabel}`),
+    );
+
+    // Level change info
     if (levelChange) {
       const isHumanDeclarer = snapshot.scoring.declarer_team === HUMAN_TEAM;
 
       if (levelChange.switched) {
-        // Declarer lost — new declarer (old defender) gains levels
-        const loser = isHumanDeclarer ? "我们" : "对方";
-        const winner = isHumanDeclarer ? "对方" : "我们";
+        const loser = isHumanDeclarer ? TEAM_LABELS[0] : TEAM_LABELS[1];
+        const winner = isHumanDeclarer ? TEAM_LABELS[1] : TEAM_LABELS[0];
         const gainText = levelChange.defenderDelta > 0
           ? `，${winner}升 ${levelChange.defenderDelta} 级`
           : "";
-        overlay.appendChild(
-          el("div", { class: "scoring-overlay__level-change" },
+        card.appendChild(
+          el("div", { class: "scoring-overlay__row scoring-overlay__row--highlight" },
             `${loser}下庄${gainText}`),
         );
       } else {
-        const who = isHumanDeclarer ? "我们" : "对方";
-        overlay.appendChild(
-          el("div", { class: "scoring-overlay__level-change" },
+        const who = isHumanDeclarer ? TEAM_LABELS[0] : TEAM_LABELS[1];
+        card.appendChild(
+          el("div", { class: "scoring-overlay__row scoring-overlay__row--highlight" },
             `${who}升 ${levelChange.declarerDelta} 级`),
         );
       }
     }
 
+    // Bottom cards
     if (snapshot.scoring.bottom_cards.length > 0) {
-      const cardTexts = snapshot.scoring.bottom_cards.map((c) => `${suitSymbol(c.suit)}${c.rank}`).join(", ");
-      overlay.appendChild(
+      const cardTexts = snapshot.scoring.bottom_cards.map((c) => `${suitSymbol(c.suit)}${c.rank}`).join("  ");
+      card.appendChild(
         el("div", { class: "scoring-overlay__bottom-cards" },
           `底牌: ${cardTexts}`),
       );
     }
   }
 
+  // Next round button
   if (interactionMode === "next_round") {
-    const button = el("button", { class: "scoring-overlay__next-round" }, "下一轮");
+    const button = el("button", { class: "btn-primary scoring-overlay__next-round" }, "下一轮");
     if (onNextRound) {
       button.addEventListener("click", () => onNextRound());
     }
-    overlay.appendChild(button);
+    card.appendChild(button);
+  } else {
+    // Waiting for other players to confirm
+    card.appendChild(
+      el("div", { class: "waiting-indicator" }, "等待其他玩家确认..."),
+    );
   }
 
+  overlay.appendChild(card);
   return overlay;
 }

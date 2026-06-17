@@ -22,6 +22,7 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     declarer_player: 3,
     defender_points: 15,
     legal_actions: [],
+    bid_legal_actions: null,
     trick: null,
     trick_history: [],
     bid_events: [],
@@ -70,6 +71,6 @@ Deno.test("test_renderGameTable_player_labels", () => {
   const labelTexts = Array.from(labels).map((l) => l.textContent);
   assertEquals(labelTexts.includes("你"), true);
   assertEquals(labelTexts.includes("同伴"), true);
-  assertEquals(labelTexts.includes("对手A"), true);
-  assertEquals(labelTexts.includes("对手B"), true);
+  assertEquals(labelTexts.includes("左家"), true);
+  assertEquals(labelTexts.includes("右家"), true);
 });

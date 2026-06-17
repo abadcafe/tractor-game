@@ -25,6 +25,7 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     declarer_player: 3,
     defender_points: 0,
     legal_actions: [[{ id: "D1-hearts-5", suit: "hearts", rank: "5" }]],
+    bid_legal_actions: null,
     trick: null,
     trick_history: [],
     bid_events: [],
@@ -71,7 +72,8 @@ Deno.test("test_renderHandView_legal_highlight", () => {
 
 Deno.test("test_renderHandView_play_button", () => {
   const snap = makeSnapshot();
-  const el = renderHandView(snap, "play");
+  const onAction = (_action: string) => {};
+  const el = renderHandView(snap, "play", undefined, undefined, undefined, onAction);
   const buttons = el.querySelectorAll("button");
   const buttonTexts = Array.from(buttons).map((b) => b.textContent);
   assertEquals(buttonTexts.includes("出牌"), true);
@@ -81,13 +83,14 @@ Deno.test("test_renderHandView_discard_button", () => {
   const snap = makeSnapshot({
     phase: "STIRRING",
     awaiting_action: "discard",
-    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3, exchanging_player: 3, exchange_count: 8 },
+    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3, declarer_player: 0, legal_actions: [], exchanging_player: 3, exchange_count: 8 },
     legal_actions: [],
   });
-  const el = renderHandView(snap, "discard");
+  const onAction = (_action: string) => {};
+  const el = renderHandView(snap, "discard", undefined, undefined, undefined, onAction);
   const buttons = el.querySelectorAll("button");
   const buttonTexts = Array.from(buttons).map((b) => b.textContent);
-  assertEquals(buttonTexts.includes("弃牌"), true);
+  assertEquals(buttonTexts.includes("换底牌"), true);
 });
 
 Deno.test("test_renderHandView_no_button_when_spectating", () => {

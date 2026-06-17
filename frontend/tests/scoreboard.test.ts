@@ -21,6 +21,7 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     declarer_player: null,
     defender_points: 15,
     legal_actions: [],
+    bid_legal_actions: null,
     trick: null,
     trick_history: [],
     bid_events: [],

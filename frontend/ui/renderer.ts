@@ -13,11 +13,6 @@ import { renderGameOverOverlay } from "./components/game-over-overlay.ts";
  *
  * Clears the container and appends components based on the current phase
  * and interaction mode.
- *
- * @param snapshot - current game state snapshot
- * @param container - DOM element to render into
- * @param interactionMode - current interaction mode from GameLoop
- * @param ctx - optional render context (callbacks + selected card IDs)
  */
 export function render(
   snapshot: StateSnapshot,
@@ -25,28 +20,26 @@ export function render(
   interactionMode: InteractionMode,
   ctx?: RenderContext,
 ): void {
-  // Clear the container
   container.innerHTML = "";
 
-  // Always render: game table (includes trick view), hand view, scoreboard
-  container.appendChild(renderGameTable(snapshot));
+  const shell = document.createElement("div");
+  shell.className = "game-shell";
 
-  container.appendChild(
-    renderHandView(
-      snapshot,
-      interactionMode,
-      ctx?.selectedCardIds,
-      ctx?.legalCardIds,
-      ctx?.callbacks?.onCardClick,
-      ctx?.callbacks?.onAction,
-    ),
-  );
+  const playRegion = document.createElement("main");
+  playRegion.className = "play-region";
 
-  container.appendChild(renderScoreboard(snapshot));
+  const tableRegion = document.createElement("section");
+  tableRegion.className = "table-region";
+  tableRegion.appendChild(renderGameTable(snapshot));
+  playRegion.appendChild(tableRegion);
 
-  // Conditionally render bidding dialog for bid or stir interaction modes
-  if (interactionMode === "bid" || interactionMode === "stir") {
-    container.appendChild(
+  const tableControls = document.createElement("section");
+  tableControls.className = "table-controls";
+
+  const isBiddingPhase = snapshot.phase === "DEAL_BID" ||
+    snapshot.phase === "STIRRING";
+  if (isBiddingPhase) {
+    tableControls.appendChild(
       renderBiddingDialog(
         snapshot,
         interactionMode,
@@ -60,7 +53,27 @@ export function render(
     );
   }
 
-  // Conditionally render scoring overlay for COMPLETE phase (not GAME_OVER — that has its own overlay)
+  tableControls.appendChild(
+    renderHandView(
+      snapshot,
+      interactionMode,
+      ctx?.selectedCardIds,
+      ctx?.legalCardIds,
+      ctx?.callbacks?.onCardClick,
+      ctx?.callbacks?.onAction,
+    ),
+  );
+  playRegion.appendChild(tableControls);
+  shell.appendChild(playRegion);
+
+  const sidebar = document.createElement("aside");
+  sidebar.className = "side-panel";
+  sidebar.appendChild(renderScoreboard(snapshot));
+  shell.appendChild(sidebar);
+
+  container.appendChild(shell);
+
+  // Scoring overlay for WAITING phase
   if (snapshot.phase === "WAITING") {
     container.appendChild(
       renderScoringOverlay(
@@ -74,7 +87,7 @@ export function render(
     );
   }
 
-  // Conditionally render game over overlay
+  // Game over overlay
   if (snapshot.phase === "GAME_OVER") {
     container.appendChild(
       renderGameOverOverlay(snapshot, ctx?.callbacks?.onNewGame),

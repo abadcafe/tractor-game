@@ -4,6 +4,7 @@ import { WS_PATH } from "../config.ts";
 /**
  * WebSocket client that manages a single connection to the game server.
  * Supports automatic reconnection with exponential backoff.
+ * Tracks seq from server for stale-action detection.
  */
 export class WsClient {
   private _ws: WebSocket | null = null;
@@ -32,11 +33,6 @@ export class WsClient {
     this._reconnectFailHandler = handler;
   }
 
-  /** Set the WebSocket host URL (e.g. "ws://localhost:8080"). */
-  private setWsHost(host: string): void {
-    this._wsHost = host;
-  }
-
   /** Connect to the game server. Constructs the WebSocket URL from gameId and wsHost. */
   connect(gameId: string, wsHost?: string): Promise<void> {
     if (wsHost !== undefined) {
@@ -52,7 +48,7 @@ export class WsClient {
     return this._doConnect(gameId, this._wsHost);
   }
 
-  /** Send an action to the server. */
+  /** Send an action to the server. The seq is already included in the ClientAction. */
   send(action: ClientAction): void {
     if (this._ws && this._ws.readyState === WebSocket.OPEN) {
       this._ws.send(JSON.stringify(action));
