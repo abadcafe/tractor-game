@@ -18,6 +18,7 @@ WAITING) so players see scoring + level changes before confirming.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import defaultdict
 from collections.abc import Sequence
@@ -48,6 +49,8 @@ from server.snapshot import (
 
 logger = logging.getLogger(__name__)
 
+type GameAction = BidAction | SkipBidAction | PlayAction | StirAction | SkipStirAction | DiscardAction | NextRoundAction
+
 
 class Game:
     """Aggregate root that orchestrates game lifecycle using sm state machines.
@@ -64,6 +67,7 @@ class Game:
         self._next_round_confirmed: set[int] = set()
         self._seq: int = 0
         self._bid_turn: int = 0
+        self._act_lock = asyncio.Lock()
 
     @property
     def current_seq(self) -> int:
@@ -124,7 +128,17 @@ class Game:
         # the next card is dealt. Their act() calls _deal_one_and_push.
         await self._deal_one_and_push()
 
-    async def act(self, player_index: int, seq: int, action: BidAction | SkipBidAction | PlayAction | StirAction | SkipStirAction | DiscardAction | NextRoundAction) -> None:
+    async def act(self, player_index: int, seq: int, action: GameAction) -> None:
+        """Serialize player actions through the aggregate root.
+
+        AutoPlayer submits actions with create_task during state pushes. Without
+        this lock, those tasks can re-enter act() before the previous broadcast
+        has finished, producing stale cascades and out-of-order WS pushes.
+        """
+        async with self._act_lock:
+            await self._act_unlocked(player_index, seq, action)
+
+    async def _act_unlocked(self, player_index: int, seq: int, action: GameAction) -> None:
         """Unified action entry point. Dispatches based on current phase and action type.
 
         Two push paths, strictly separated:
@@ -229,7 +243,6 @@ class Game:
                 case Ok(value=new_state):
                     rs = new_state
                 case Rejected(reason=reason):
-                    error_msg = reason
                     error_msg = reason
 
         elif phase == "STIRRING" and isinstance(action, DiscardAction):
@@ -401,9 +414,8 @@ class Game:
                 defender_points=0,
                 trick=None,
                 trick_history=[],
-                legal_actions=[],
+                action_hints=[],
                 awaiting_action=awaiting_action,
-                bid_legal_actions=None,
                 scoring=None,
                 winning_team=None,
                 team0_level=gs.team0_level,
@@ -420,39 +432,29 @@ class Game:
         # player_hand_counts: card count for each player (for game table display)
         player_hand_counts = [len(h) for h in rs.players_hand]
 
-        # legal_actions
-        legal_actions: list[list[Card]] = []
+        if (
+            rs.phase == "STIRRING"
+            and rs.stirring_state is not None
+            and rs.stirring_state.phase == "EXCHANGING"
+            and rs.stirring_state.exchanging_player == for_player
+            and rs.stirring_state.exchange_state is not None
+        ):
+            player_hand = list(rs.stirring_state.exchange_state.hand_after_pickup)
+            player_hand_counts[for_player] = len(player_hand)
+
         can_act_in_playing = False  # whether current player can act in PLAYING
         if rs.phase == "PLAYING" and rs.trick_state is not None:
             is_leading = rs.trick_state.phase == "LEADING"
-            lead_cards = None
             if is_leading:
                 can_act_in_playing = True
             else:
-                # Following: only compute legal actions if lead cards exist
+                # Following: only act if lead cards exist
                 lead_slots = rs.trick_state.slots
                 if lead_slots:
                     lead_cards = lead_slots[rs.trick_state.lead_player].cards
                     if lead_cards:
                         can_act_in_playing = True
                     # else: lead player hasn't played yet, followers must wait
-            if can_act_in_playing:
-                # Compute other_hands: all cards not in current player's hand
-                other_hands: list[Card] = []
-                for i in range(4):
-                    if i != for_player:
-                        other_hands.extend(rs.players_hand[i])
-                legal_actions = play_rules.get_legal_plays(
-                    hand=player_hand,
-                    is_leading=is_leading,
-                    lead_cards=lead_cards,
-                    trump_suit=rs.trump_suit,
-                    trump_rank=rs.trump_rank,
-                    other_hands=other_hands,
-                )
-                # Safety: if legal_actions is empty despite can_act, no valid play yet
-                if not legal_actions:
-                    can_act_in_playing = False
 
         # awaiting_action — derived directly from SM state (no current_player)
         awaiting_action = None
@@ -479,6 +481,8 @@ class Game:
             else:
                 awaiting_action = None
 
+        action_hints = self._get_action_hints(awaiting_action, for_player, player_hand)
+
         # trick
         trick: TrickSnapshot | None = None
         if rs.phase == "PLAYING" and rs.trick_state is not None:
@@ -496,20 +500,9 @@ class Game:
             bid_events = list(rs.deal_bid_state.bid_events)
             bid_winner = rs.deal_bid_state.bid_winner
 
-        # bid_legal_actions
-        bid_legal_actions: list[list[Card]] | None = None
-        if rs.phase == "DEAL_BID" and awaiting_action == "bid":
-            bid_legal_actions = deal_bid_sm.get_bid_legal_actions(player_hand, rs.trump_rank)
-
         # stirring_state
         stirring_state_snap: StirringStateSnapshot | None = None
         if rs.stirring_state is not None and rs.phase == "STIRRING":
-            # Compute legal stir actions for the current player only
-            stir_legal_actions: list[list[Card]] = []
-            if awaiting_action == "stir":
-                stir_legal_actions = self._get_legal_stir_actions(
-                    player_hand, rs.stirring_state, for_player,
-                )
             exchanging_player: int | None = None
             exchange_count: int | None = None
             if rs.stirring_state.phase == "EXCHANGING":
@@ -521,7 +514,6 @@ class Game:
                 trump_suit=rs.stirring_state.trump_suit,
                 current_player=rs.stirring_state.current_player,
                 declarer_player=rs.stirring_state.declarer_player,
-                legal_actions=stir_legal_actions,
                 exchanging_player=exchanging_player,
                 exchange_count=exchange_count,
             )
@@ -549,9 +541,8 @@ class Game:
             defender_points=rs.defender_points,
             trick=trick,
             trick_history=list(rs.trick_history),
-            legal_actions=legal_actions,
+            action_hints=action_hints,
             awaiting_action=awaiting_action,
-            bid_legal_actions=bid_legal_actions,
             scoring=scoring_snap,
             winning_team=gs.winning_team,
             team0_level=gs.team0_level,
@@ -560,6 +551,64 @@ class Game:
             bid_winner=bid_winner,
             stirring_state=stirring_state_snap,
             next_round_confirmed=sorted(self._next_round_confirmed),
+        )
+
+    def _get_action_hints(
+        self,
+        awaiting_action: str | None,
+        player_index: int,
+        player_hand: list[Card],
+    ) -> list[list[Card]]:
+        """Return advisory card-group hints for the current awaiting action."""
+        rs = self._round_state
+        if rs is None:
+            return []
+
+        if awaiting_action == "bid" and rs.phase == "DEAL_BID" and rs.deal_bid_state is not None:
+            return deal_bid_sm.get_bid_action_hints(rs.deal_bid_state, player_index)
+
+        if awaiting_action == "stir" and rs.phase == "STIRRING" and rs.stirring_state is not None:
+            return self._get_legal_stir_actions(player_hand, rs.stirring_state, player_index)
+
+        if awaiting_action == "play" and rs.phase == "PLAYING":
+            hints = self._get_play_action_hints(player_index)
+            if len(hints) > play_rules.MAX_LEGAL_PLAY_HINTS:
+                return []
+            return hints
+
+        return []
+
+    def _get_play_action_hints(self, player_index: int) -> list[list[Card]]:
+        """Compute complete play hints for the player-facing snapshot."""
+        rs = self._round_state
+        if rs is None or rs.phase != "PLAYING" or rs.trick_state is None:
+            return []
+        if player_index != rs.trick_state.cur:
+            return []
+
+        player_hand = list(rs.players_hand[player_index])
+        is_leading = rs.trick_state.phase == "LEADING"
+        lead_cards = None
+        if not is_leading:
+            lead_slots = rs.trick_state.slots
+            if not lead_slots:
+                return []
+            lead_cards = lead_slots[rs.trick_state.lead_player].cards
+            if not lead_cards:
+                return []
+
+        other_hands: list[Card] = []
+        for i in range(4):
+            if i != player_index:
+                other_hands.extend(rs.players_hand[i])
+
+        return play_rules.get_legal_plays(
+            hand=player_hand,
+            is_leading=is_leading,
+            lead_cards=lead_cards,
+            trump_suit=rs.trump_suit,
+            trump_rank=rs.trump_rank,
+            other_hands=other_hands,
         )
 
     def is_over(self) -> bool:
@@ -602,6 +651,14 @@ class Game:
         if rs is None:
             return Rejected(reason="游戏尚未开始")
         hand = rs.players_hand[player_index]
+        if (
+            rs.phase == "STIRRING"
+            and rs.stirring_state is not None
+            and rs.stirring_state.phase == "EXCHANGING"
+            and rs.stirring_state.exchanging_player == player_index
+            and rs.stirring_state.exchange_state is not None
+        ):
+            hand = rs.stirring_state.exchange_state.hand_after_pickup
         card_map = {c.id: c for c in hand}
 
         result: list[Card] = []

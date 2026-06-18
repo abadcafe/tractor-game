@@ -624,6 +624,23 @@ button:disabled {
   font-weight: 900;
 }
 
+.scoreboard__ready {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.scoreboard__ready.ready {
+  color: #14301f;
+  background: #70d78e;
+}
+
+.scoreboard__ready.pending {
+  color: rgba(247, 251, 248, 0.72);
+  background: rgba(255, 255, 255, 0.1);
+}
+
 .scoreboard__log-row {
   justify-content: flex-start;
   color: rgba(247, 251, 248, 0.82);

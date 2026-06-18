@@ -20,7 +20,7 @@ export function renderHandView(
   const summary = el("div", { class: "hand-panel__summary" });
   summary.appendChild(el("span", { class: "hand-panel__title" }, "手牌"));
   summary.appendChild(el("span", { class: "hand-panel__count" }, `${snapshot.player_hand.length} 张`));
-  const hint = interactionHint(interactionMode);
+  const hint = interactionHint(interactionMode, snapshot.action_hints ?? []);
   if (hint) {
     summary.appendChild(el("span", { class: "hand-panel__hint" }, hint));
   }
@@ -104,7 +104,7 @@ export function renderHandView(
   return container;
 }
 
-function interactionHint(interactionMode: InteractionMode): string {
+function interactionHint(interactionMode: InteractionMode, actionHints: Card[][]): string {
   switch (interactionMode) {
     case "bid":
       return "选择级牌或王叫牌";
@@ -113,7 +113,7 @@ function interactionHint(interactionMode: InteractionMode): string {
     case "discard":
       return "选择要放入底牌的牌";
     case "play":
-      return "绿色边框为可出的牌";
+      return actionHints.length > 0 ? "绿色边框为提示出牌" : "自由出牌，服务器校验";
     case "next_round":
       return "本轮结束";
     default:

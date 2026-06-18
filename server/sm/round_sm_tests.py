@@ -306,6 +306,68 @@ class TestStirringPhase:
         assert state.stirring_state is not None
         assert state.stirring_state.phase == "WAITING"
 
+    def test_stir_discard_after_max_stir_transitions_round_to_playing(self) -> None:
+        """A max-priority stir that completes during exchange advances the round."""
+        state = create_round(RoundInput(
+            declarer_team=None, trump_rank=Rank.TWO,
+            last_declarer_player=None,
+            team0_level=Rank.TWO, team1_level=Rank.TWO,
+        ))
+        state = _complete_deal_bid_no_bid(state)
+        state = _complete_initial_exchange(state)
+        assert state.phase == "STIRRING"
+        assert state.stirring_state is not None
+
+        cur = state.stirring_state.current_player
+        big_jokers = [
+            Card(
+                id="test-big-joker-1",
+                suit=Suit.JOKER,
+                rank=Rank.BIG_JOKER,
+                is_joker=True,
+                is_big_joker=True,
+                points=0,
+                deck=1,
+            ),
+            Card(
+                id="test-big-joker-2",
+                suit=Suit.JOKER,
+                rank=Rank.BIG_JOKER,
+                is_joker=True,
+                is_big_joker=True,
+                points=0,
+                deck=2,
+            ),
+        ]
+        hands = [list(hand) for hand in state.players_hand]
+        hands[cur].extend(big_jokers)
+        assert state.stirring_state is not None
+        state = state.model_copy(update={
+            "players_hand": hands,
+            "stirring_state": state.stirring_state.model_copy(update={"players_hand": hands}),
+        })
+
+        stir_result = stir(state, player_index=cur, cards=big_jokers)
+        assert isinstance(stir_result, Ok), f"stir rejected: {stir_result.reason}"
+        state = stir_result.value
+        assert state.phase == "STIRRING"
+        assert state.stirring_state is not None
+        assert state.stirring_state.phase == "EXCHANGING"
+        assert state.stirring_state.exchange_state is not None
+        exchanging = state.stirring_state.exchanging_player
+        assert exchanging is not None
+        ex = state.stirring_state.exchange_state
+
+        discard_result = stir_discard(
+            state,
+            player_index=exchanging,
+            cards=ex.hand_after_pickup[:ex.count],
+        )
+        assert isinstance(discard_result, Ok), f"stir_discard rejected: {discard_result.reason}"
+        state = discard_result.value
+        assert state.phase == "PLAYING"
+        assert state.trick_state is not None
+
     def test_pass_stir_during_stirring(self) -> None:
         """pass_stir during STIRRING WAITING sub-phase advances current player."""
         state = create_round(RoundInput(

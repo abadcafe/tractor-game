@@ -8,12 +8,25 @@ ASGI WebSocket testing natively.
 import pytest
 import httpx
 from collections.abc import AsyncGenerator, Generator
-from typing import TypeGuard
-from starlette.testclient import TestClient
+from typing import Protocol, TypeGuard
+from starlette.testclient import TestClient, WebSocketTestSession
 
 from server.game import Game
 from server.player import HumanPlayer
 from server.server import app
+
+
+class AsyncRestClient(Protocol):
+    async def get(self, url: str) -> httpx.Response: ...
+    async def post(self, url: str) -> httpx.Response: ...
+    async def delete(self, url: str) -> httpx.Response: ...
+
+
+class SyncServerClient(Protocol):
+    def get(self, url: str) -> httpx.Response: ...
+    def post(self, url: str) -> httpx.Response: ...
+    def delete(self, url: str) -> httpx.Response: ...
+    def websocket_connect(self, url: str) -> WebSocketTestSession: ...
 
 
 # ---- Type-guard helpers for JSON narrowing ----
@@ -42,7 +55,7 @@ def _game_id_from(resp: httpx.Response) -> str:
 
 
 @pytest.fixture
-async def client() -> AsyncGenerator[httpx.AsyncClient, None]:
+async def client() -> AsyncGenerator[AsyncRestClient, None]:
     """Async test client using httpx with ASGI transport (REST only)."""
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -50,7 +63,7 @@ async def client() -> AsyncGenerator[httpx.AsyncClient, None]:
 
 
 @pytest.fixture
-def sync_client() -> TestClient:
+def sync_client() -> SyncServerClient:
     """Synchronous test client using starlette TestClient (WebSocket support)."""
     return TestClient(app)
 
@@ -74,7 +87,7 @@ def clean_registry() -> Generator[None, None, None]:
 
 
 @pytest.mark.asyncio
-async def test_health_endpoint(client: httpx.AsyncClient, clean_registry: None) -> None:
+async def test_health_endpoint(client: AsyncRestClient, clean_registry: None) -> None:
     response = await client.get("/health")
     assert response.status_code == 200
     data = response.json()
@@ -86,7 +99,7 @@ async def test_health_endpoint(client: httpx.AsyncClient, clean_registry: None) 
 
 
 @pytest.mark.asyncio
-async def test_create_game_returns_201(client: httpx.AsyncClient, clean_registry: None) -> None:
+async def test_create_game_returns_201(client: AsyncRestClient, clean_registry: None) -> None:
     response = await client.post("/api/game")
     assert response.status_code == 201
     data = response.json()
@@ -95,7 +108,7 @@ async def test_create_game_returns_201(client: httpx.AsyncClient, clean_registry
 
 
 @pytest.mark.asyncio
-async def test_create_game_starts_game(client: httpx.AsyncClient, clean_registry: None) -> None:
+async def test_create_game_starts_game(client: AsyncRestClient, clean_registry: None) -> None:
     response = await client.post("/api/game")
     data = response.json()
     assert _is_dict(data)
@@ -108,7 +121,7 @@ async def test_create_game_starts_game(client: httpx.AsyncClient, clean_registry
 
 
 @pytest.mark.asyncio
-async def test_list_games_empty(client: httpx.AsyncClient, clean_registry: None) -> None:
+async def test_list_games_empty(client: AsyncRestClient, clean_registry: None) -> None:
     response = await client.get("/api/game")
     assert response.status_code == 200
     data = response.json()
@@ -117,7 +130,7 @@ async def test_list_games_empty(client: httpx.AsyncClient, clean_registry: None)
 
 
 @pytest.mark.asyncio
-async def test_list_games_with_games(client: httpx.AsyncClient, clean_registry: None) -> None:
+async def test_list_games_with_games(client: AsyncRestClient, clean_registry: None) -> None:
     # Create a game first
     create_resp = await client.post("/api/game")
     assert create_resp.status_code == 201
@@ -138,7 +151,7 @@ async def test_list_games_with_games(client: httpx.AsyncClient, clean_registry: 
 
 
 @pytest.mark.asyncio
-async def test_delete_game_returns_200(client: httpx.AsyncClient, clean_registry: None) -> None:
+async def test_delete_game_returns_200(client: AsyncRestClient, clean_registry: None) -> None:
     create_resp = await client.post("/api/game")
     game_id = _game_id_from(create_resp)
     response = await client.delete(f"/api/game/{game_id}")
@@ -149,7 +162,7 @@ async def test_delete_game_returns_200(client: httpx.AsyncClient, clean_registry
 
 
 @pytest.mark.asyncio
-async def test_delete_nonexistent_returns_200(client: httpx.AsyncClient, clean_registry: None) -> None:
+async def test_delete_nonexistent_returns_200(client: AsyncRestClient, clean_registry: None) -> None:
     """DELETE is idempotent -- returns 200 even for unknown game_id."""
     response = await client.delete("/api/game/nonexistent123")
     assert response.status_code == 200
@@ -158,7 +171,7 @@ async def test_delete_nonexistent_returns_200(client: httpx.AsyncClient, clean_r
     assert data["ok"] is True
 
 
-def test_delete_game_with_active_ws(sync_client: TestClient, clean_registry: None) -> None:
+def test_delete_game_with_active_ws(sync_client: SyncServerClient, clean_registry: None) -> None:
     """DELETE a game that has an active WebSocket connection.
 
     The server should return 200 with {"ok": true} even when a WebSocket
@@ -195,7 +208,7 @@ def test_delete_game_with_active_ws(sync_client: TestClient, clean_registry: Non
 # ---- Human player index ----
 
 
-def test_human_player_index_is_3(sync_client: TestClient, clean_registry: None) -> None:
+def test_human_player_index_is_3(sync_client: SyncServerClient, clean_registry: None) -> None:
     """The human player is always at index 3 (convention: last player).
     Verify by connecting via WebSocket, sending seq=0, and confirming
     a state message is received.
@@ -216,7 +229,7 @@ def test_human_player_index_is_3(sync_client: TestClient, clean_registry: None) 
 # ---- WebSocket: Connect ----
 
 
-def test_ws_connect_receives_state(sync_client: TestClient, clean_registry: None) -> None:
+def test_ws_connect_receives_state(sync_client: SyncServerClient, clean_registry: None) -> None:
     """Connecting to a game via WebSocket and sending seq=0 should receive a state message."""
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
@@ -228,14 +241,14 @@ def test_ws_connect_receives_state(sync_client: TestClient, clean_registry: None
         assert data["type"] == "state"
 
 
-def test_ws_connect_nonexistent_rejected(sync_client: TestClient, clean_registry: None) -> None:
+def test_ws_connect_nonexistent_rejected(sync_client: SyncServerClient, clean_registry: None) -> None:
     """Connecting to a nonexistent game should be rejected."""
     with pytest.raises(Exception):
         with sync_client.websocket_connect("/game/nonexistent999") as ws:
             ws.receive_json()
 
 
-def test_ws_connect_game_over_receives_state_and_closes(sync_client: TestClient, clean_registry: None) -> None:
+def test_ws_connect_game_over_receives_state_and_closes(sync_client: SyncServerClient, clean_registry: None) -> None:
     """When connecting to a game that is over, the server should accept the
     connection, push state with winning_team, then close.
 
@@ -271,7 +284,7 @@ def test_ws_connect_game_over_receives_state_and_closes(sync_client: TestClient,
             pass
 
 
-def test_ws_connect_takeover_closes_old_connection(sync_client: TestClient, clean_registry: None) -> None:
+def test_ws_connect_takeover_closes_old_connection(sync_client: SyncServerClient, clean_registry: None) -> None:
     """When a game already has an active WebSocket connection, a second
     connection should take over: the old connection is closed and the new
     one is accepted.
@@ -309,7 +322,7 @@ def test_ws_connect_takeover_closes_old_connection(sync_client: TestClient, clea
 # the server actually processes the message rather than silently discarding it.
 
 
-def test_ws_bid_action_receives_response(sync_client: TestClient, clean_registry: None) -> None:
+def test_ws_bid_action_receives_response(sync_client: SyncServerClient, clean_registry: None) -> None:
     """Sending a bid action via WebSocket should produce a response from the server."""
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
@@ -332,7 +345,7 @@ def test_ws_bid_action_receives_response(sync_client: TestClient, clean_registry
             assert response["type"] == "state"
 
 
-def test_ws_play_action_receives_response(sync_client: TestClient, clean_registry: None) -> None:
+def test_ws_play_action_receives_response(sync_client: SyncServerClient, clean_registry: None) -> None:
     """Sending a play action via WebSocket should produce a response."""
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
@@ -354,7 +367,7 @@ def test_ws_play_action_receives_response(sync_client: TestClient, clean_registr
             assert response["type"] == "state"
 
 
-def test_ws_next_round_action_receives_response(sync_client: TestClient, clean_registry: None) -> None:
+def test_ws_next_round_action_receives_response(sync_client: SyncServerClient, clean_registry: None) -> None:
     """Sending a next_round action should produce a response."""
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
@@ -376,7 +389,7 @@ def test_ws_next_round_action_receives_response(sync_client: TestClient, clean_r
             assert response["type"] == "state"
 
 
-def test_ws_stir_action_receives_response(sync_client: TestClient, clean_registry: None) -> None:
+def test_ws_stir_action_receives_response(sync_client: SyncServerClient, clean_registry: None) -> None:
     """Sending a stir action should produce a response."""
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
@@ -398,7 +411,7 @@ def test_ws_stir_action_receives_response(sync_client: TestClient, clean_registr
             assert response["type"] == "state"
 
 
-def test_ws_discard_action_receives_response(sync_client: TestClient, clean_registry: None) -> None:
+def test_ws_discard_action_receives_response(sync_client: SyncServerClient, clean_registry: None) -> None:
     """Sending a discard action should produce a response."""
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
@@ -423,7 +436,7 @@ def test_ws_discard_action_receives_response(sync_client: TestClient, clean_regi
 # ---- WebSocket: Error Handling ----
 
 
-def test_ws_invalid_action_returns_error(sync_client: TestClient, clean_registry: None) -> None:
+def test_ws_invalid_action_returns_error(sync_client: SyncServerClient, clean_registry: None) -> None:
     """Sending an action with an unknown type should return a state message with error field.
 
     The server must respond with {"type": "state", "error": ...} rather
@@ -458,7 +471,7 @@ def test_ws_invalid_action_returns_error(sync_client: TestClient, clean_registry
 # ---- Reconnect ----
 
 
-def test_reconnect_replaces_ws(sync_client: TestClient, clean_registry: None) -> None:
+def test_reconnect_replaces_ws(sync_client: SyncServerClient, clean_registry: None) -> None:
     """Reconnecting to a game should replace the WebSocket reference."""
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
@@ -478,7 +491,7 @@ def test_reconnect_replaces_ws(sync_client: TestClient, clean_registry: None) ->
 # ---- WebSocket: Seq Protocol ----
 
 
-def test_seq_in_state_message(sync_client: TestClient, clean_registry: None) -> None:
+def test_seq_in_state_message(sync_client: SyncServerClient, clean_registry: None) -> None:
     """State messages must include a 'seq' field starting from 1."""
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
@@ -493,7 +506,7 @@ def test_seq_in_state_message(sync_client: TestClient, clean_registry: None) -> 
         assert data["seq"] >= 1
 
 
-def test_seq_mismatch_returns_state_with_error(sync_client: TestClient, clean_registry: None) -> None:
+def test_seq_mismatch_returns_state_with_error(sync_client: SyncServerClient, clean_registry: None) -> None:
     """When action seq doesn't match current state seq, server returns current state with error."""
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
@@ -518,7 +531,7 @@ def test_seq_mismatch_returns_state_with_error(sync_client: TestClient, clean_re
         assert data["seq"] >= current_seq
 
 
-def test_error_merged_into_state(sync_client: TestClient, clean_registry: None) -> None:
+def test_error_merged_into_state(sync_client: SyncServerClient, clean_registry: None) -> None:
     """Invalid actions return error as a field in the state message, not as a separate message.
 
     Tests with an invalid action that the server rejects regardless of seq.
@@ -552,7 +565,7 @@ def test_error_merged_into_state(sync_client: TestClient, clean_registry: None) 
         assert data["seq"] >= seq
 
 
-def test_bid_pass_parsed_correctly(sync_client: TestClient, clean_registry: None) -> None:
+def test_bid_pass_parsed_correctly(sync_client: SyncServerClient, clean_registry: None) -> None:
     """Sending a bid pass message (type=bid, pass=true) should be parsed
     as SkipBidAction and handled in DEAL_BID phase without crashing.
     The server parses it as SkipBidAction via _parse_action(), and act()
@@ -584,7 +597,7 @@ def test_bid_pass_parsed_correctly(sync_client: TestClient, clean_registry: None
 
 
 @pytest.mark.asyncio
-async def test_index_returns_404_when_not_built(client: httpx.AsyncClient, clean_registry: None) -> None:
+async def test_index_returns_404_when_not_built(client: AsyncRestClient, clean_registry: None) -> None:
     """GET / returns 404 with helpful message when static/index.html does not exist."""
     import os
     from server.server import static_dir
@@ -604,7 +617,7 @@ async def test_index_returns_404_when_not_built(client: httpx.AsyncClient, clean
 
 
 @pytest.mark.asyncio
-async def test_index_returns_html_when_built(client: httpx.AsyncClient, clean_registry: None) -> None:
+async def test_index_returns_html_when_built(client: AsyncRestClient, clean_registry: None) -> None:
     """GET / returns 200 with HTML when static/index.html exists."""
     import os
     from server.server import static_dir
@@ -625,7 +638,7 @@ async def test_index_returns_html_when_built(client: httpx.AsyncClient, clean_re
 
 
 @pytest.mark.asyncio
-async def test_serve_static_existing_file(client: httpx.AsyncClient, clean_registry: None) -> None:
+async def test_serve_static_existing_file(client: AsyncRestClient, clean_registry: None) -> None:
     """GET /config.js serves the file from static/ directory."""
     response = await client.get("/config.js")
     assert response.status_code == 200
@@ -634,14 +647,14 @@ async def test_serve_static_existing_file(client: httpx.AsyncClient, clean_regis
 
 
 @pytest.mark.asyncio
-async def test_serve_static_subdirectory_file(client: httpx.AsyncClient, clean_registry: None) -> None:
+async def test_serve_static_subdirectory_file(client: AsyncRestClient, clean_registry: None) -> None:
     """GET /core/types.js serves files from subdirectories in static/."""
     response = await client.get("/core/types.js")
     assert response.status_code == 200
 
 
 @pytest.mark.asyncio
-async def test_serve_static_unknown_path_returns_spa_fallback(client: httpx.AsyncClient, clean_registry: None) -> None:
+async def test_serve_static_unknown_path_returns_spa_fallback(client: AsyncRestClient, clean_registry: None) -> None:
     """GET /nonexistent/file.js returns SPA fallback (index.html) when static dir exists,
     or 404 when static dir is empty."""
     import os
@@ -662,7 +675,7 @@ async def test_serve_static_unknown_path_returns_spa_fallback(client: httpx.Asyn
 
 
 @pytest.mark.asyncio
-async def test_path_traversal_unencoded_returns_safe_response(client: httpx.AsyncClient, clean_registry: None) -> None:
+async def test_path_traversal_unencoded_returns_safe_response(client: AsyncRestClient, clean_registry: None) -> None:
     """Unencoded path traversal is normalized by the ASGI layer, so the handler
     receives a cleaned path. When static/index.html exists, SPA fallback serves it;
     otherwise returns 404. Either way, the actual system file is never served."""
@@ -682,7 +695,7 @@ async def test_path_traversal_unencoded_returns_safe_response(client: httpx.Asyn
 
 
 @pytest.mark.asyncio
-async def test_path_traversal_encoded_returns_403(client: httpx.AsyncClient, clean_registry: None) -> None:
+async def test_path_traversal_encoded_returns_403(client: AsyncRestClient, clean_registry: None) -> None:
     """Encoded path traversal attempts bypass ASGI normalization and are blocked by
     the server's path traversal protection with 403."""
     response = await client.get("/..%2F..%2F..%2Fetc/passwd")

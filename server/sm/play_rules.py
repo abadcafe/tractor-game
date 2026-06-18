@@ -10,6 +10,8 @@ from server.sm.card_model import Card, Suit, Rank, SUITED_RANKS
 from server.sm.comparator import SUIT_OFFSET, effective_suit, trump_rank_order
 from server.sm.types import SubPlay
 
+MAX_LEGAL_PLAY_HINTS = 5
+
 
 # ---- Helpers ----
 

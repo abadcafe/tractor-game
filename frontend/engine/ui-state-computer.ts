@@ -3,7 +3,6 @@ import type { InteractionMode, StirButtonState, LevelChangeInfo } from "./types.
 import { computeBidPriority } from "./bid-logic.ts";
 import { computeLevelChange } from "./scoring-logic.ts";
 import { validatePlay } from "./input-validator.ts";
-import { isJoker, isTrumpRank } from "../core/card.ts";
 
 /** Compute stir button state based on selected cards. */
 export function computeStirButtonState(
@@ -43,14 +42,16 @@ export function computeLegalCardIds(
 ): Set<string> {
   const legalCardIds = new Set<string>();
   if (interactionMode === "stir") {
-    // In stir mode, highlight all trump-rank cards and jokers as selectable
-    for (const card of snap.player_hand) {
-      if (isJoker(card) || isTrumpRank(card, snap.trump_rank)) {
-        legalCardIds.add(card.id);
+    const hints = snap.action_hints ?? [];
+    if (hints.length > 0) {
+      for (const cards of hints) {
+        for (const card of cards) {
+          legalCardIds.add(card.id);
+        }
       }
     }
   } else if (interactionMode === "play" || interactionMode === "discard") {
-    for (const cards of snap.legal_actions) {
+    for (const cards of snap.action_hints ?? []) {
       for (const card of cards) {
         legalCardIds.add(card.id);
       }
@@ -71,9 +72,10 @@ export function isSelectionStillLegal(
   const allInHand = [...selectedCardIds].every((id) => handIds.has(id));
   if (!allInHand) return false;
 
-  if (snap.phase === "PLAYING" && snap.legal_actions.length > 0) {
+  const hints = snap.action_hints ?? [];
+  if (snap.phase === "PLAYING" && hints.length > 0) {
     const selectedCards = snap.player_hand.filter((c) => selectedCardIds.has(c.id));
-    const matched = validatePlay(selectedCards, snap.legal_actions);
+    const matched = validatePlay(selectedCards, hints);
     if (!matched) return false;
   }
 

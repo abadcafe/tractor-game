@@ -24,8 +24,7 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     declarer_team: 0,
     declarer_player: 3,
     defender_points: 0,
-    legal_actions: [[{ id: "D1-hearts-5", suit: "hearts", rank: "5" }]],
-    bid_legal_actions: null,
+    action_hints: [[{ id: "D1-hearts-5", suit: "hearts", rank: "5" }]],
     trick: null,
     trick_history: [],
     bid_events: [],
@@ -83,8 +82,7 @@ Deno.test("test_renderHandView_discard_button", () => {
   const snap = makeSnapshot({
     phase: "STIRRING",
     awaiting_action: "discard",
-    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3, declarer_player: 0, legal_actions: [], exchanging_player: 3, exchange_count: 8 },
-    legal_actions: [],
+    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3, declarer_player: 0, exchanging_player: 3, exchange_count: 8 },
   });
   const onAction = (_action: string) => {};
   const el = renderHandView(snap, "discard", undefined, undefined, undefined, onAction);

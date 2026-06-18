@@ -17,6 +17,8 @@ import asyncio
 import logging
 import random
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from itertools import combinations
 from typing import Protocol, TypeGuard
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -30,8 +32,7 @@ from server.actions import (
     SkipStirAction,
     StirAction,
 )
-from server.sm.card_model import Card, Suit
-from server.sm.comparator import bid_value
+from server.sm.card_model import Card, Rank, Suit
 from server.sm.result import Ok, Rejected, StateResult
 from server.snapshot import StateSnapshot
 
@@ -39,6 +40,35 @@ logger = logging.getLogger(__name__)
 
 # Type alias for the action union used in GameView.act()
 PlayerAction = BidAction | SkipBidAction | StirAction | SkipStirAction | DiscardAction | PlayAction | NextRoundAction
+
+
+@dataclass(frozen=True)
+class TrickSlotDecisionKey:
+    """Card ids visible in one trick slot for AutoPlayer retry suppression."""
+
+    player: int
+    card_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class TrickDecisionKey:
+    """Trick fields that can change whether a failed card action is worth retrying."""
+
+    lead_player: int
+    current_player: int
+    slots: tuple[TrickSlotDecisionKey, ...]
+
+
+@dataclass(frozen=True)
+class AutoDecisionKey:
+    """Player-facing state identity for suppressing repeated failed card actions."""
+
+    phase: str
+    awaiting_action: str | None
+    hand_card_ids: tuple[str, ...]
+    trick: TrickDecisionKey | None
+    bid_winner_card_ids: tuple[str, ...]
+    action_hint_card_ids: tuple[tuple[str, ...], ...]
 
 
 # ---- GameView Protocol (DIP: defined at the consumer, not the implementer) ----
@@ -103,7 +133,7 @@ class Player(ABC):
 
 
 class AutoPlayer(Player):
-    """AI player that makes random legal decisions.
+    """Built-in client-like player driven only by player-facing snapshots.
 
     Uses create_task for actions to avoid blocking the on_state call chain,
     which prevents race conditions when _push_state_to_all iterates over players.
@@ -112,6 +142,9 @@ class AutoPlayer(Player):
     def __init__(self, index: int) -> None:
         super().__init__(index)
         self._action_count = 0
+        self._failed_card_actions: dict[AutoDecisionKey, set[tuple[str, ...]]] = {}
+        self._last_attempt_key: AutoDecisionKey | None = None
+        self._last_attempt_cards: tuple[str, ...] | None = None
 
     async def run(self, game: GameView) -> None:
         """Start this player by sending an initial next_round confirmation.
@@ -125,11 +158,18 @@ class AutoPlayer(Player):
         await game.act(self.index, 0, NextRoundAction())
 
     async def on_state(self, game: GameView, *, seq: int = 0, error: str | None = None) -> None:
-        # Error pushes indicate a stale/rejected action. Re-read current
-        # state and retry with the correct seq — the game state hasn't
-        # changed, so our decision logic should produce the same action,
-        # but now with seq matching the current _seq.
         snapshot = game.snapshot(self.index)
+        key = self._decision_key(snapshot)
+        if (
+            error is not None
+            and self._is_card_action_rejection(error)
+            and self._last_attempt_key == key
+            and self._last_attempt_cards is not None
+        ):
+            self._failed_card_actions.setdefault(key, set()).add(self._last_attempt_cards)
+        elif error is None and self._last_attempt_key != key:
+            self._last_attempt_key = None
+            self._last_attempt_cards = None
 
         if snapshot.phase == "DEAL_BID" and snapshot.awaiting_action == "bid":
             await self._handle_deal_bid(snapshot, game, seq=seq)
@@ -143,111 +183,22 @@ class AutoPlayer(Player):
             await self._handle_next_round(snapshot, game, seq=seq)
 
     async def _handle_deal_bid(self, snapshot: StateSnapshot, game: GameView, *, seq: int) -> None:
-        """Bid during DEAL_BID phase if we have a competitive bid.
-
-        Only bids if: (a) no bid_winner yet, or (b) we can beat the
-        current winner's priority.  Prefers pairs over singles.
-        A 50% random factor prevents always-bidding determinism.
-        In sync round-robin mode, must send SkipBidAction when choosing
-        not to bid so the turn advances.
-
-        In subsequent rounds (declarer_team is set), only players on
-        the declarer team may bid — others must skip.
-        """
-        from server.sm.card_model import Rank
-
-        # In subsequent rounds, non-declarer-team players cannot bid
-        if snapshot.declarer_team is not None:
-            from server.sm.constants import get_team_index
-            if get_team_index(self.index) != snapshot.declarer_team:
-                asyncio.create_task(game.act(self.index, seq, SkipBidAction()))
-                return
-        hand = snapshot.player_hand
-        trump_rank = snapshot.trump_rank
-
-        # 50% chance to even consider bidding (prevents deterministic always-bid)
-        if random.random() >= 0.5:
-            asyncio.create_task(game.act(self.index, seq, SkipBidAction()))
+        """Bid only from player-facing action_hints; otherwise pass."""
+        candidates = self._hint_candidates(snapshot)
+        if not candidates:
+            self._submit_action(game, seq, SkipBidAction(), snapshot)
             return
-
-        # Group trump-rank cards by suit
-        suit_groups: dict[Suit, list[Card]] = {}
-        jokers: list[Card] = []
-        for c in hand:
-            if c.rank != trump_rank and not c.is_joker:
-                continue
-            if c.is_joker:
-                jokers.append(c)
-            else:
-                suit_groups.setdefault(c.suit, []).append(c)
-
-        # Best possible bid: prefer joker pair > trump-rank pair > trump-rank single
-        best_cards: list[Card] = []
-
-        # Check joker pairs (requires 2 of same rank)
-        sj = [c for c in jokers if c.rank == Rank.SMALL_JOKER]
-        bj = [c for c in jokers if c.rank == Rank.BIG_JOKER]
-        if len(bj) >= 2:
-            best_cards = bj[:2]
-        elif len(sj) >= 2:
-            best_cards = sj[:2]
-
-        # Check trump-rank pairs (any suit)
-        if not best_cards:
-            for cards in suit_groups.values():
-                if len(cards) >= 2:
-                    best_cards = cards[:2]
-                    break
-
-        # Fall back to single trump-rank card
-        if not best_cards:
-            for cards in suit_groups.values():
-                if cards:
-                    best_cards = [cards[0]]
-                    break
-
-        if not best_cards:
-            asyncio.create_task(game.act(self.index, seq, SkipBidAction()))
-            return
-
-        # Check if existing bid_winner has higher or equal priority
-        best_priority = bid_value(best_cards, trump_rank)
-        bid_winner = snapshot.bid_winner
-        if bid_winner is not None:
-            winner_priority = bid_value(bid_winner.cards, trump_rank)
-            if best_priority <= winner_priority:
-                asyncio.create_task(game.act(self.index, seq, SkipBidAction()))
-                return  # can't beat current winner
-
-        action = BidAction(cards=best_cards, count=len(best_cards))
-        asyncio.create_task(game.act(self.index, seq, action))
+        chosen = self._prefer_longer_candidate(candidates)
+        self._submit_action(game, seq, BidAction(cards=chosen, count=len(chosen)), snapshot)
 
     async def _handle_stir(self, snapshot: StateSnapshot, game: GameView, *, seq: int) -> None:
-        """Act during STIRRING phase."""
-        hand = snapshot.player_hand
-        trump_rank = snapshot.trump_rank
-        current_trump_suit = snapshot.trump_suit
-        # Find pairs of trump rank cards that can beat current trump
-        trump_cards = [c for c in hand if c.rank == trump_rank]
-        if len(trump_cards) >= 2 and random.random() < 0.5:
-            suit_groups: dict[Suit, list[Card]] = {}
-            for c in trump_cards:
-                suit_groups.setdefault(c.suit, []).append(c)
-            valid_pair = None
-            for suit, suit_cards in suit_groups.items():
-                if len(suit_cards) >= 2:
-                    # Skip same-suit as current trump (can't stir to same suit)
-                    if current_trump_suit is not None and suit == current_trump_suit:
-                        continue
-                    valid_pair = suit_cards[:2]
-                    break
-            if valid_pair:
-                action = StirAction(cards=valid_pair)
-            else:
-                action = SkipStirAction()
-        else:
-            action = SkipStirAction()
-        asyncio.create_task(game.act(self.index, seq, action))
+        """Optionally stir using only player-facing action_hints."""
+        candidates = self._hint_candidates(snapshot)
+        if candidates and random.random() < 0.5:
+            chosen = random.choice(candidates)
+            self._submit_action(game, seq, StirAction(cards=chosen), snapshot)
+            return
+        self._submit_action(game, seq, SkipStirAction(), snapshot)
 
     async def _handle_discard(self, snapshot: StateSnapshot, game: GameView, *, seq: int) -> None:
         """Randomly discard cards during STIRRING EXCHANGING sub-phase."""
@@ -261,26 +212,157 @@ class AutoPlayer(Player):
         else:
             return
         action = DiscardAction(cards=cards)
-        asyncio.create_task(game.act(self.index, seq, action))
+        self._submit_action(game, seq, action, snapshot)
 
     async def _handle_play(self, snapshot: StateSnapshot, game: GameView, *, seq: int) -> None:
-        """Pick a random legal play."""
-        legal = snapshot.legal_actions
-        if not legal:
-            logger.warning("AutoPlayer %d: no legal actions in PLAYING phase!", self.index)
+        """Pick a play using only the same snapshot information a human sees."""
+        candidates = self._hint_candidates(snapshot) or self._play_candidates_from_snapshot(snapshot)
+        if not candidates:
+            logger.warning("AutoPlayer %d: no fallback play found", self.index)
             return
-        chosen = random.choice(legal)
-        # chosen is a list[Card] (plain card list from get_legal_plays)
+        chosen = random.choice(candidates)
         action = PlayAction(cards=chosen)
         self._action_count += 1
         if self._action_count % 50 == 0:
             logger.info("AutoPlayer %d: action #%d in PLAYING", self.index, self._action_count)
+        self._submit_action(game, seq, action, snapshot)
+
+    def _hint_candidates(self, snapshot: StateSnapshot) -> list[list[Card]]:
+        return self._filter_failed_candidates(snapshot, [list(cards) for cards in snapshot.action_hints])
+
+    def _play_candidates_from_snapshot(self, snapshot: StateSnapshot) -> list[list[Card]]:
+        hand = list(snapshot.player_hand)
+        if not hand:
+            return []
+        if snapshot.trick is None or not snapshot.trick.slots:
+            return self._filter_failed_candidates(snapshot, [[card] for card in hand])
+
+        lead_slot = snapshot.trick.slots[snapshot.trick.lead_player]
+        lead_cards = list(lead_slot.cards)
+        if not lead_cards:
+            return self._filter_failed_candidates(snapshot, [[card] for card in hand])
+
+        lead_count = len(lead_cards)
+        if len(hand) < lead_count:
+            return []
+
+        lead_eff = self._effective_suit(lead_cards[0], snapshot.trump_suit, snapshot.trump_rank)
+        same_eff_cards = [
+            card for card in hand
+            if self._effective_suit(card, snapshot.trump_suit, snapshot.trump_rank) == lead_eff
+        ]
+        other_cards = [
+            card for card in hand
+            if self._effective_suit(card, snapshot.trump_suit, snapshot.trump_rank) != lead_eff
+        ]
+
+        candidates: list[list[Card]] = []
+        if len(same_eff_cards) >= lead_count:
+            candidates.extend(self._candidate_combinations(same_eff_cards, lead_count))
+        else:
+            needed = lead_count - len(same_eff_cards)
+            candidates.extend(
+                same_eff_cards + fill
+                for fill in self._candidate_combinations(other_cards, needed)
+            )
+
+        return self._filter_failed_candidates(snapshot, candidates)
+
+    def _filter_failed_candidates(self, snapshot: StateSnapshot, candidates: list[list[Card]]) -> list[list[Card]]:
+        failed = self._failed_card_actions.get(self._decision_key(snapshot), set())
+        result: list[list[Card]] = []
+        seen: set[tuple[str, ...]] = set()
+        for candidate in candidates:
+            key = self._cards_key(candidate)
+            if key in failed or key in seen:
+                continue
+            seen.add(key)
+            result.append(candidate)
+        return result
+
+    @staticmethod
+    def _prefer_longer_candidate(candidates: list[list[Card]]) -> list[Card]:
+        return max(candidates, key=len)
+
+    @staticmethod
+    def _candidate_combinations(cards: list[Card], count: int, limit: int = 40) -> list[list[Card]]:
+        if count <= 0:
+            return [[]]
+        if len(cards) < count:
+            return []
+        combos = [list(combo) for combo in combinations(cards, count)]
+        combos.sort(key=AutoPlayer._combo_sort_key)
+        return combos[:limit]
+
+    @staticmethod
+    def _combo_sort_key(cards: list[Card]) -> tuple[int, int]:
+        rank_counts: dict[Rank, int] = {}
+        for card in cards:
+            rank_counts[card.rank] = rank_counts.get(card.rank, 0) + 1
+        pair_like = sum(count // 2 for count in rank_counts.values())
+        point_cards = sum(1 for card in cards if card.rank in (Rank.FIVE, Rank.TEN, Rank.KING))
+        return (-pair_like, point_cards)
+
+    @staticmethod
+    def _effective_suit(card: Card, trump_suit: Suit | None, trump_rank: Rank) -> str:
+        if card.is_joker or card.rank == trump_rank or (trump_suit is not None and card.suit == trump_suit):
+            return "trump"
+        return card.suit.value
+
+    def _submit_action(
+        self,
+        game: GameView,
+        seq: int,
+        action: PlayerAction,
+        snapshot: StateSnapshot,
+    ) -> None:
+        if isinstance(action, BidAction | StirAction | DiscardAction | PlayAction) and action.cards:
+            self._last_attempt_key = self._decision_key(snapshot)
+            self._last_attempt_cards = self._cards_key(action.cards)
+        else:
+            self._last_attempt_key = None
+            self._last_attempt_cards = None
         asyncio.create_task(game.act(self.index, seq, action))
+
+    def _decision_key(self, snapshot: StateSnapshot) -> AutoDecisionKey:
+        trick_key: TrickDecisionKey | None = None
+        if snapshot.trick is not None:
+            trick_key = TrickDecisionKey(
+                lead_player=snapshot.trick.lead_player,
+                current_player=snapshot.trick.current_player,
+                slots=tuple(
+                    TrickSlotDecisionKey(
+                        player=slot.player,
+                        card_ids=tuple(card.id for card in slot.cards),
+                    )
+                    for slot in snapshot.trick.slots
+                ),
+            )
+        bid_winner_cards: tuple[str, ...] = ()
+        if snapshot.bid_winner is not None:
+            bid_winner_cards = tuple(card.id for card in snapshot.bid_winner.cards)
+        return AutoDecisionKey(
+            phase=snapshot.phase,
+            awaiting_action=snapshot.awaiting_action,
+            hand_card_ids=tuple(card.id for card in snapshot.player_hand),
+            trick=trick_key,
+            bid_winner_card_ids=bid_winner_cards,
+            action_hint_card_ids=tuple(tuple(card.id for card in hint) for hint in snapshot.action_hints),
+        )
+
+    @staticmethod
+    def _cards_key(cards: list[Card]) -> tuple[str, ...]:
+        return tuple(sorted(card.id for card in cards))
+
+    @staticmethod
+    def _is_card_action_rejection(error: str) -> bool:
+        """Return whether an error proves the last card choice was invalid."""
+        return not error.startswith("stale action:")
 
     async def _handle_next_round(self, snapshot: StateSnapshot, game: GameView, *, seq: int) -> None:
         """Submit NextRoundAction."""
         action = NextRoundAction()
-        asyncio.create_task(game.act(self.index, seq, action))
+        self._submit_action(game, seq, action, snapshot)
 
 
 # ---- HumanPlayer ----

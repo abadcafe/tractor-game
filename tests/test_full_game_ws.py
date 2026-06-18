@@ -8,14 +8,16 @@ Responsibilities: Play complete games through REST+WS external interfaces,
     verifying state transitions, boundary conditions, and error handling.
 """
 
-import random
+import json
 import time
 
 from collections.abc import Generator
-from typing import TypeGuard
+from itertools import combinations
+from typing import Protocol, TypeGuard
 
+import httpx
 import pytest
-from anyio import BrokenResourceError, ClosedResourceError, EndOfStream
+from anyio import BrokenResourceError, ClosedResourceError, EndOfStream, WouldBlock
 from starlette.testclient import TestClient, WebSocketTestSession
 from starlette.websockets import WebSocketDisconnect
 
@@ -29,6 +31,25 @@ _WS_ERRORS: tuple[type[Exception], ...] = (
     BrokenResourceError,
     EndOfStream,
 )
+
+
+class WsReceiveTimeout(TimeoutError):
+    """Raised when the test WebSocket driver waits too long for a message."""
+
+
+class SyncServerClient(Protocol):
+    def get(self, url: str) -> httpx.Response: ...
+    def post(self, url: str) -> httpx.Response: ...
+    def delete(self, url: str) -> httpx.Response: ...
+    def websocket_connect(self, url: str) -> WebSocketTestSession: ...
+
+
+class _ReceiveNowaitQueue(Protocol):
+    def receive_nowait(self) -> dict[str, object]: ...
+
+
+class _RaiseOnClose(Protocol):
+    def __call__(self, message: dict[str, object]) -> None: ...
 
 
 # ---- Type-guard helpers for JSON narrowing ----
@@ -99,11 +120,31 @@ def _is_list_of_dict(val: object) -> TypeGuard[list[dict[str, object]]]:
     return True
 
 
+def _has_receive_nowait(val: object) -> TypeGuard[_ReceiveNowaitQueue]:
+    return callable(getattr(val, "receive_nowait", None))
+
+
+def _has_raise_on_close(val: object) -> TypeGuard[_RaiseOnClose]:
+    return callable(val)
+
+
+def _private_send_rx(ws: WebSocketTestSession) -> _ReceiveNowaitQueue:
+    queue = object.__getattribute__(ws, "_send_rx")
+    assert _has_receive_nowait(queue)
+    return queue
+
+
+def _private_raise_on_close(ws: WebSocketTestSession) -> _RaiseOnClose:
+    fn = object.__getattribute__(ws, "_raise_on_close")
+    assert _has_raise_on_close(fn)
+    return fn
+
+
 # ---- Fixtures ----
 
 
 @pytest.fixture(autouse=True)
-def clean_registry(sync_client: TestClient) -> Generator[None, None, None]:
+def clean_registry(sync_client: SyncServerClient) -> Generator[None, None, None]:
     """Reset the global registry before each test."""
     resp = sync_client.get("/api/game")
     for g in resp.json()["games"]:
@@ -115,7 +156,7 @@ def clean_registry(sync_client: TestClient) -> Generator[None, None, None]:
 
 
 @pytest.fixture
-def sync_client() -> Generator[TestClient, None, None]:
+def sync_client() -> Generator[SyncServerClient, None, None]:
     """Synchronous test client using Starlette TestClient."""
     with TestClient(app) as c:
         yield c
@@ -128,13 +169,14 @@ class WsGameDriver:
     for game actions.
     """
 
-    def __init__(self, sync_client: TestClient) -> None:
+    def __init__(self, sync_client: SyncServerClient) -> None:
         self._client = sync_client
         self._ws: WebSocketTestSession | None = None
         self._ws_cm: WebSocketTestSession | None = None  # context manager for websocket_connect
         self._current_seq: int = 0
         self.last_error: str | None = None
         self._game_id: str | None = None
+        self._last_state_msg: dict[str, object] | None = None
 
     @property
     def current_seq(self) -> int:
@@ -142,12 +184,15 @@ class WsGameDriver:
         return self._current_seq
 
     def sync_seq(self, seq: int) -> None:
-        """Update _current_seq to the given value.
+        """Update _current_seq monotonically.
 
         Public accessor for seq synchronization from helper functions
         that need to keep the driver's seq in sync with server pushes.
+        WebSocket buffers may still contain older state pushes; those must
+        not move the client seq backwards or the next action becomes stale.
         """
-        self._current_seq = seq
+        if seq > self._current_seq:
+            self._current_seq = seq
 
     def connect(self, game_id: str) -> None:
         """Connect to a game via WebSocket.
@@ -184,9 +229,13 @@ class WsGameDriver:
 
     def send_action(self, action: dict[str, object]) -> None:
         """Send an action with the current seq number."""
+        self.send_action_with_seq(action, self._current_seq)
+
+    def send_action_with_seq(self, action: dict[str, object], seq: int) -> None:
+        """Send an action with an explicit sequence number."""
         if self._ws is None:
             raise RuntimeError("Not connected")
-        action_with_seq = {**action, "seq": self._current_seq}
+        action_with_seq = {**action, "seq": seq}
         t0 = time.monotonic()
         self._ws.send_json(action_with_seq)
         dt = time.monotonic() - t0
@@ -197,18 +246,34 @@ class WsGameDriver:
             detail = " pass" if action_with_seq.get("pass") else f" cards={action_with_seq.get('cards')}"
         elif action_with_seq.get("type") == "stir":
             detail = " pass" if action_with_seq.get("pass") else f" cards={action_with_seq.get('cards')}"
-        print(f"  [WsGameDriver] send: type={action_with_seq.get('type')}{detail} seq={self._current_seq}{slow}", flush=True)
+        print(f"  [WsGameDriver] send: type={action_with_seq.get('type')}{detail} seq={seq}{slow}", flush=True)
 
-    def receive_msg(self, *, verbose: bool = True) -> dict[str, object]:
+    def receive_msg(self, *, verbose: bool = True, timeout: float | None = None) -> dict[str, object]:
         """Receive a message from the server.
 
         Does NOT auto-reconnect on disconnect. Raises the exception
         so that do_action() can handle reconnection in its retry loop.
         When verbose=False, skips per-message logging for high-volume drains.
+        timeout prevents Starlette's blocking receive_json() from hanging
+        the whole test process when no further WS messages are produced.
         """
         if self._ws is None:
             raise RuntimeError("Not connected")
-        raw = self._ws.receive_json()
+        if timeout is None:
+            raw = self._ws.receive_json()
+        else:
+            deadline = time.monotonic() + timeout
+            while True:
+                try:
+                    message = _private_send_rx(self._ws).receive_nowait()
+                    _private_raise_on_close(self._ws)(message)
+                    text = _as_str(message["text"])
+                    raw = json.loads(text)
+                    break
+                except WouldBlock as exc:
+                    if time.monotonic() >= deadline:
+                        raise WsReceiveTimeout("timed out waiting for websocket message") from exc
+                    time.sleep(0.001)
         result = _as_dict(raw)
         if verbose:
             err = result.get("error")
@@ -216,7 +281,40 @@ class WsGameDriver:
             if err is not None:
                 extra = f" ERROR={err}"
             print(f"  [WsGameDriver] recv: type={result.get('type')} seq={result.get('seq')} awaiting={result.get('awaiting')}{extra}", flush=True)
+        if result.get("type") == "state":
+            self._last_state_msg = result
         return result
+
+    def debug_context(self, label: str) -> str:
+        """Return concise context for timeout failures."""
+        if self._last_state_msg is None:
+            return f"{label}: no state received yet; current_seq={self._current_seq}"
+        state = _as_dict_or_none(self._last_state_msg.get("state"))
+        if state is None:
+            return f"{label}: last state payload missing; current_seq={self._current_seq}"
+        parts = [
+            f"{label}: current_seq={self._current_seq}",
+            f"last_seq={self._last_state_msg.get('seq')}",
+            f"phase={state.get('phase')}",
+            f"awaiting={self._last_state_msg.get('awaiting')}",
+            f"hand_count={len(_as_list(state.get('player_hand', [])))}",
+        ]
+        stirring = _as_dict_or_none(state.get("stirring_state"))
+        if stirring is not None:
+            parts.append(
+                "stirring="
+                f"phase:{stirring.get('phase')},"
+                f"current:{stirring.get('current_player')},"
+                f"exchanging:{stirring.get('exchanging_player')}"
+            )
+        trick = _as_dict_or_none(state.get("trick"))
+        if trick is not None:
+            parts.append(
+                "trick="
+                f"current:{trick.get('current_player')},"
+                f"lead:{trick.get('lead_player')}"
+            )
+        return " ".join(parts)
 
     def receive_msg_safe(self) -> dict[str, object]:
         """Receive a message from the server.
@@ -225,7 +323,7 @@ class WsGameDriver:
         """
         msg = self.receive_msg()
         if msg.get("type") == "state":
-            self._current_seq = _as_int(msg["seq"])
+            self.sync_seq(_as_int(msg["seq"]))
         return msg
 
     def receive_state(self) -> dict[str, object]:
@@ -262,57 +360,40 @@ class WsGameDriver:
         Returns the response message dict on success, None on failure.
         Updates _current_seq on success. Sets last_error on failure.
 
-        On seq mismatch, retries with the updated seq. AutoPlayer cascade
-        can advance the server's seq between our reads, so we allow
-        multiple retries.
-
-        Timeout: 5s overall. If exceeded, returns None and prints a
-        stuck warning. In this state-machine test, a timeout means the
-        game is stuck (no player responding), not slow.
+        Sends exactly once. This test driver only calls do_action after it
+        has drained to the human player's turn, so automatic resends create
+        duplicate confirmations/actions and make WS response attribution
+        ambiguous.
         """
         if self._ws is None:
             raise RuntimeError("Not connected")
         deadline = time.monotonic() + 5
-        for _ in range(20):  # allow many retries for seq mismatch
+        self.last_error = None
+        seq_before = self._current_seq
+        self.send_action(action)
+        while True:
             if time.monotonic() > deadline:
                 print(f"  [do_action] TIMEOUT after 5s, seq stuck at {self._current_seq}", flush=True)
                 return None
-            self.last_error = None
-            seq_before = self._current_seq
-            self.send_action(action)
-            # Drain messages until we get a definitive response:
-            # - seq advanced with no error → action succeeded
-            # - error field present with seq unchanged → action rejected
-            # - error field present with seq advanced → stale seq, retry
-            while True:
-                if time.monotonic() > deadline:
-                    print(f"  [do_action] TIMEOUT after 5s, seq stuck at {self._current_seq}", flush=True)
-                    return None
-                try:
-                    msg = self.receive_msg(verbose=False)
-                except Exception as e:
-                    print(f"  [WsGameDriver] do_action: receive error: {type(e).__name__}: {e}", flush=True)
-                    raise
-                if msg.get("type") == "state":
-                    self._current_seq = _as_int(msg["seq"])
-                    error = msg.get("error")
-                    if error is not None:
-                        self.last_error = _as_str(error)
-                        if self._current_seq > seq_before:
-                            # Seq advanced with error → our seq was stale
-                            # (AutoPlayer cascade advanced server state).
-                            # Retry with the updated seq.
-                            break
-                        # Error with seq unchanged → action rejected
-                        return None
-                    if self._current_seq > seq_before:
-                        return msg  # action succeeded
-                    # seq unchanged, no error → stale cascade push, drain more
-                    continue
-                # non-state message → skip and keep receiving
-            # Only reach here on seq mismatch → retry
-            continue
-        return None
+            try:
+                msg = self.receive_msg(verbose=False, timeout=max(0.001, deadline - time.monotonic()))
+            except WsReceiveTimeout:
+                print(f"  [do_action] TIMEOUT waiting for WS message, seq stuck at {self._current_seq}", flush=True)
+                return None
+            except Exception as e:
+                print(f"  [WsGameDriver] do_action: receive error: {type(e).__name__}: {e}", flush=True)
+                raise
+            if msg.get("type") != "state":
+                continue
+            msg_seq = _as_int(msg["seq"])
+            self.sync_seq(msg_seq)
+            error = msg.get("error")
+            if error is not None:
+                self.last_error = _as_str(error)
+                print(f"  [do_action] rejected: error={self.last_error} seq={self._current_seq}", flush=True)
+                return None
+            if msg_seq > seq_before:
+                return msg
 
     def wait_for_phase(self, phase: str, timeout: float = 5) -> dict[str, object]:
         """Wait until the game reaches the specified phase.
@@ -325,8 +406,9 @@ class WsGameDriver:
         """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            msg = self.receive_msg_safe()
+            msg = self.receive_msg(verbose=True, timeout=max(0.001, deadline - time.monotonic()))
             if msg.get("type") == "state":
+                self.sync_seq(_as_int(msg["seq"]))
                 state = _as_dict_or_none(msg.get("state"))
                 if state is not None and state.get("phase") == phase:
                     return msg
@@ -342,9 +424,9 @@ class WsGameDriver:
         """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            msg = self.receive_msg(verbose=False)
+            msg = self.receive_msg(verbose=False, timeout=max(0.001, deadline - time.monotonic()))
             if msg.get("type") == "state":
-                self._current_seq = _as_int(msg["seq"])
+                self.sync_seq(_as_int(msg["seq"]))
                 if msg.get("awaiting") == value:
                     print(f"  [WsGameDriver] wait_for_awaiting: found {value} seq={self._current_seq}", flush=True)
                     return msg
@@ -360,7 +442,38 @@ class WsGameDriver:
 
     def do_stir_pass(self) -> dict[str, object] | None:
         """Pass during STIRRING. Returns response msg on success, None on failure."""
-        return self.do_action({"type": "stir", "pass": True})
+        if self._ws is None:
+            raise RuntimeError("Not connected")
+
+        deadline = time.monotonic() + 5
+        attempts = 0
+        self.last_error = None
+        self.send_action({"type": "stir", "pass": True})
+        while time.monotonic() < deadline:
+            try:
+                msg = self.receive_msg(verbose=False, timeout=max(0.001, deadline - time.monotonic()))
+            except WsReceiveTimeout:
+                print(f"  [do_stir_pass] TIMEOUT waiting for WS message, seq stuck at {self._current_seq}", flush=True)
+                return None
+            if msg.get("type") != "state":
+                continue
+
+            self.sync_seq(_as_int(msg["seq"]))
+            error = msg.get("error")
+            if error is not None:
+                self.last_error = _as_str(error)
+                if self.last_error.startswith("stale action:") and attempts < 4:
+                    attempts += 1
+                    self.send_action({"type": "stir", "pass": True})
+                    continue
+                return None
+
+            state = _as_dict(msg["state"])
+            if state.get("phase") != "STIRRING" or msg.get("awaiting") != "stir":
+                return msg
+
+        print(f"  [do_stir_pass] TIMEOUT after 5s, seq stuck at {self._current_seq}", flush=True)
+        return None
 
     def do_stir(self, card_ids: list[str]) -> dict[str, object] | None:
         """Stir with the given cards. Returns response msg on success, None on failure."""
@@ -376,13 +489,47 @@ class WsGameDriver:
 
     def do_next_round(self) -> dict[str, object] | None:
         """Confirm next round. Returns response msg on success, None on failure."""
-        return self.do_action({"type": "next_round"})
+        if self._ws is None:
+            raise RuntimeError("Not connected")
+
+        deadline = time.monotonic() + 5
+        attempts = 0
+        self.last_error = None
+        self.send_action({"type": "next_round"})
+        while time.monotonic() < deadline:
+            try:
+                msg = self.receive_msg(verbose=False, timeout=max(0.001, deadline - time.monotonic()))
+            except WsReceiveTimeout:
+                print(f"  [do_next_round] TIMEOUT waiting for WS message, seq stuck at {self._current_seq}", flush=True)
+                return None
+            if msg.get("type") != "state":
+                continue
+
+            self.sync_seq(_as_int(msg["seq"]))
+            error = msg.get("error")
+            if error is not None:
+                self.last_error = _as_str(error)
+                if self.last_error.startswith("stale action:") and attempts < 4:
+                    attempts += 1
+                    self.send_action({"type": "next_round"})
+                    continue
+                return None
+
+            state = _as_dict(msg["state"])
+            if state.get("phase") != "WAITING":
+                return msg
+            confirmed = _as_list(state.get("next_round_confirmed", []))
+            if 3 in confirmed:
+                return msg
+
+        print(f"  [do_next_round] TIMEOUT after 5s, seq stuck at {self._current_seq}", flush=True)
+        return None
 
 
 # ---- Infrastructure Tests ----
 
 
-def test_create_game_returns_201(sync_client: TestClient) -> None:
+def test_create_game_returns_201(sync_client: SyncServerClient) -> None:
     """POST /api/game returns 201 with game_id in response body."""
     resp = sync_client.post("/api/game")
     assert resp.status_code == 201
@@ -393,14 +540,14 @@ def test_create_game_returns_201(sync_client: TestClient) -> None:
     assert len(data["game_id"]) > 0
 
 
-def test_health_check(sync_client: TestClient) -> None:
+def test_health_check(sync_client: SyncServerClient) -> None:
     """GET /health returns 200 with status ok."""
     resp = sync_client.get("/health")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
 
 
-def test_list_games(sync_client: TestClient) -> None:
+def test_list_games(sync_client: SyncServerClient) -> None:
     """GET /api/game returns a list of games."""
     # Create a game first
     resp = sync_client.post("/api/game")
@@ -423,7 +570,7 @@ def test_list_games(sync_client: TestClient) -> None:
         assert "phase" in g
 
 
-def test_delete_game_closes_ws(sync_client: TestClient) -> None:
+def test_delete_game_closes_ws(sync_client: SyncServerClient) -> None:
     """DELETE a game while WS connected: receive final state push, then WS closes."""
     resp = sync_client.post("/api/game")
     data = resp.json()
@@ -472,7 +619,7 @@ def test_delete_game_closes_ws(sync_client: TestClient) -> None:
     assert final_state_pushed, "Final state push was not received before WS closed"
 
 
-def test_connect_nonexistent_game(sync_client: TestClient) -> None:
+def test_connect_nonexistent_game(sync_client: SyncServerClient) -> None:
     """Connecting to a nonexistent game closes with code 4404."""
     with pytest.raises(WebSocketDisconnect) as exc_info:
         with sync_client.websocket_connect("/game/nonexistent_id") as ws:
@@ -480,7 +627,7 @@ def test_connect_nonexistent_game(sync_client: TestClient) -> None:
     assert exc_info.value.code == 4404
 
 
-def test_connection_takeover(sync_client: TestClient) -> None:
+def test_connection_takeover(sync_client: SyncServerClient) -> None:
     """New WS connection kicks the old one; old connection gets closed."""
     resp = sync_client.post("/api/game")
     data = resp.json()
@@ -509,7 +656,7 @@ def test_connection_takeover(sync_client: TestClient) -> None:
             ws1.receive_json()
 
 
-def test_reconnect_resumes_game(sync_client: TestClient) -> None:
+def test_reconnect_resumes_game(sync_client: SyncServerClient) -> None:
     """After disconnect, reconnect with seq=0 gets current state; then actions work."""
     resp = sync_client.post("/api/game")
     data = resp.json()
@@ -644,8 +791,12 @@ def _recv_state(
     NOTE: Does NOT update driver._current_seq. See _recv_until_our_turn
     for the rationale.
     """
-    while True:
-        msg = driver.receive_msg()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            msg = driver.receive_msg(timeout=max(0.001, deadline - time.monotonic()))
+        except WsReceiveTimeout as exc:
+            raise TimeoutError(driver.debug_context(label)) from exc
         if msg.get("type") == "state":
             state = _as_dict(msg["state"])
             awaiting = msg.get("awaiting")
@@ -663,6 +814,7 @@ def _recv_state(
             print(f"  [{label}] recv: phase={phase} awaiting={awaiting} seq={seq}{extra}", flush=True)
             return state, msg
         print(f"  [{label}] recv: non-state msg type={msg.get('type')}", flush=True)
+    raise TimeoutError(f"_recv_state: no state message within 5s for {label}")
 
 
 def _recv_until_our_turn(
@@ -696,14 +848,20 @@ def _recv_until_our_turn(
     last_stuck_seq: int = -1
     stuck_count: int = 0
     while time.monotonic() < deadline:
-        msg = driver.receive_msg(verbose=False)
+        try:
+            msg = driver.receive_msg(verbose=False, timeout=max(0.001, deadline - time.monotonic()))
+        except WsReceiveTimeout as exc:
+            raise TimeoutError(driver.debug_context(f"{label}: receive timeout")) from exc
         if msg.get("type") == "state":
-            driver.sync_seq(_as_int(msg["seq"]))
+            msg_seq = _as_int(msg["seq"])
+            driver.sync_seq(msg_seq)
+            if msg_seq < driver.current_seq:
+                continue
             state = _as_dict(msg["state"])
             count += 1
             awaiting = msg.get("awaiting")
             cur_phase = state.get("phase", "?")
-            seq_val = _as_int(msg["seq"])
+            seq_val = msg_seq
 
             # Stuck detection: if seq hasn't advanced for many messages,
             # print a warning with elapsed time. This catches cases where
@@ -729,7 +887,7 @@ def _recv_until_our_turn(
                 return state, msg
         # else: skip non-state messages
 
-    raise TimeoutError(f"_recv_until_our_turn: condition not met within {timeout}s")
+    raise TimeoutError(driver.debug_context(f"{label}: condition not met within {timeout}s"))
 
 
 def _hand_dicts(state: dict[str, object]) -> list[dict[str, object]]:
@@ -746,12 +904,12 @@ def _hand_dicts(state: dict[str, object]) -> list[dict[str, object]]:
 def _should_bid(state: dict[str, object]) -> bool:
     """Decide whether the human should bid or pass.
 
-    Returns True if bid_legal_actions is non-empty and we choose to bid
+    Returns True if action_hints is non-empty and we choose to bid
     (deterministic: always bid when possible in round 1, pass otherwise
     for simplicity). This tests the bid path without making the test
     flaky on random outcomes.
     """
-    legal = state.get("bid_legal_actions")
+    legal = state.get("action_hints")
     if legal is None:
         return False
     legal_list = _as_list(legal)
@@ -759,7 +917,7 @@ def _should_bid(state: dict[str, object]) -> bool:
 
 
 def _pick_best_bid(legal_list: list[object]) -> list[dict[str, object]]:
-    """Pick the best bid option from bid_legal_actions.
+    """Pick the best bid option from action_hints.
 
     Prefers pairs (2 cards) over singles (1 card), as pairs have
     higher bid_value. Returns the card dicts for the chosen option.
@@ -786,7 +944,98 @@ def _extract_card_ids_from_dicts(cards: list[dict[str, object]]) -> list[str]:
     return result
 
 
-# ---- Wrong Action Injection ----
+def _pick_free_play_candidates(state: dict[str, object], *, limit: int = 80) -> list[list[dict[str, object]]]:
+    """Pick fallback play candidates when action_hints is empty.
+
+    Empty hints mean the backend deliberately does not guide the UI; the
+    client may still submit cards and let the backend validate. The test
+    client therefore tries a bounded list of plausible choices.
+    """
+    hand = _hand_dicts(state)
+    if not hand:
+        return []
+    lead_count = 1
+    lead_cards: list[dict[str, object]] = []
+    trick = _as_dict_or_none(state.get("trick"))
+    if trick is not None:
+        lead_player = _as_int(trick.get("lead_player", 0))
+        slots = _as_list(trick.get("slots", []))
+        if 0 <= lead_player < len(slots):
+            lead_slot = _as_dict(slots[lead_player])
+            raw_lead_cards = _as_list(lead_slot.get("cards", []))
+            lead_cards = [_as_dict(c) for c in raw_lead_cards]
+            if raw_lead_cards:
+                lead_count = len(raw_lead_cards)
+    if not lead_cards:
+        return [[card] for card in hand[:limit]]
+
+    trump_suit = _as_str_or_none(state.get("trump_suit"))
+    trump_rank = _as_str(state.get("trump_rank", "2"))
+    lead_eff = _effective_suit_dict(lead_cards[0], trump_suit, trump_rank)
+    same_eff_cards = [
+        card for card in hand
+        if _effective_suit_dict(card, trump_suit, trump_rank) == lead_eff
+    ]
+    other_cards = [card for card in hand if card not in same_eff_cards]
+
+    candidates: list[list[dict[str, object]]] = []
+    if len(same_eff_cards) >= lead_count:
+        candidates.extend(_card_combinations_prefer_pairs(same_eff_cards, lead_count, limit))
+    elif same_eff_cards:
+        needed = lead_count - len(same_eff_cards)
+        for fill in _card_combinations_prefer_pairs(other_cards, needed, limit):
+            candidates.append(same_eff_cards + fill)
+            if len(candidates) >= limit:
+                break
+    else:
+        candidates.extend(_card_combinations_prefer_pairs(hand, lead_count, limit))
+
+    return _dedupe_card_candidates(candidates, limit)
+
+
+def _card_combinations_prefer_pairs(
+    cards: list[dict[str, object]],
+    count: int,
+    limit: int,
+) -> list[list[dict[str, object]]]:
+    if count <= 0:
+        return [[]]
+    if len(cards) < count:
+        return []
+
+    combos = [list(combo) for combo in combinations(cards, count)]
+    if count == 2:
+        combos.sort(key=lambda combo: 0 if _same_rank_pair(combo[0], combo[1]) else 1)
+    return combos[:limit]
+
+
+def _same_rank_pair(a: dict[str, object], b: dict[str, object]) -> bool:
+    return _as_str(a.get("suit")) == _as_str(b.get("suit")) and _as_str(a.get("rank")) == _as_str(b.get("rank"))
+
+
+def _dedupe_card_candidates(
+    candidates: list[list[dict[str, object]]],
+    limit: int,
+) -> list[list[dict[str, object]]]:
+    seen: set[tuple[str, ...]] = set()
+    result: list[list[dict[str, object]]] = []
+    for candidate in candidates:
+        key = tuple(sorted(_as_str(card["id"]) for card in candidate))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(candidate)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def _effective_suit_dict(card: dict[str, object], trump_suit: str | None, trump_rank: str) -> str:
+    suit = _as_str(card.get("suit"))
+    rank = _as_str(card.get("rank"))
+    if suit == "joker" or rank == trump_rank or (trump_suit is not None and suit == trump_suit):
+        return "trump"
+    return suit
 
 
 _WRONG_ACTION_POOL: list[dict[str, object]] = [
@@ -795,53 +1044,78 @@ _WRONG_ACTION_POOL: list[dict[str, object]] = [
     {"type": "bid", "cards": ["NONEXISTENT_0"]},
     {"type": "stir", "cards": ["NONEXISTENT_0"]},
     {"type": "discard", "cards": ["NONEXISTENT_0"]},
-    {"type": "play", "cards": ["NONEXISTENT_1", "NONEXISTENT_2"]},
-    {"type": "bid", "cards": ["NONEXISTENT_1", "NONEXISTENT_2"]},
-    {"type": "stir", "cards": ["NONEXISTENT_2", "NONEXISTENT_3"]},
-    {"type": "discard", "cards": ["NONEXISTENT_2", "NONEXISTENT_3"]},
+    {"type": "play", "cards": "NONEXISTENT_0"},
+    {"type": "stir", "cards": 123},
+    {"cards": ["NONEXISTENT_0"]},
 ]
 
 
-def _send_wrong_actions(driver: WsGameDriver) -> None:
-    """Send 1-3 random wrong actions before the correct action.
+def _wrong_payload_key(action: dict[str, object]) -> str:
+    """Stable-enough key for keeping injected bad payloads distinct."""
+    return repr(action)
 
-    Verifies that each wrong action is rejected by the server.
-    This tests that the game properly handles invalid actions and
-    continues working normally after rejection.
 
-    Uses send_action + receive_msg directly (not do_action) to avoid
-    the retry-on-seq-mismatch logic, which would re-send the same
-    wrong action indefinitely.
+def _pick_distinct_wrong_action(start_index: int, used_payloads: set[str]) -> dict[str, object]:
+    """Pick a bad action payload that has not been used in this injection batch."""
+    for offset in range(len(_WRONG_ACTION_POOL)):
+        candidate = _WRONG_ACTION_POOL[(start_index + offset) % len(_WRONG_ACTION_POOL)]
+        if _wrong_payload_key(candidate) not in used_payloads:
+            return candidate
+    raise AssertionError("wrong action pool is too small for distinct injections")
+
+
+def _send_wrong_actions(
+    driver: WsGameDriver,
+    label: str,
+    correct_action: dict[str, object],
+) -> None:
+    """Send 1-3 bad requests before the real action and assert rejection.
+
+    The final injected request uses the exact correct payload with an old
+    seq when possible. That verifies stale-seq handling at the protocol
+    layer instead of being rejected earlier by action parsing.
     """
-    n = random.randint(1, 3)
-    pool = _WRONG_ACTION_POOL.copy()
-    random.shuffle(pool)
-    for i in range(n):
-        wrong_action = pool[i % len(pool)]
+    count = 1 + (driver.current_seq % 3)
+    used_payloads: set[str] = set()
+    for i in range(count):
         seq_before = driver.current_seq
-        driver.send_action(wrong_action)
-        deadline = time.monotonic() + 3
-        rejected = False
-        while time.monotonic() < deadline:
-            msg = driver.receive_msg(verbose=False)
-            if msg.get("type") == "state":
-                new_seq = _as_int(msg["seq"])
-                driver.sync_seq(new_seq)
-                error = msg.get("error")
-                if error is not None:
-                    # Wrong action was rejected — expected
-                    rejected = True
-                    break
-                if new_seq > seq_before:
-                    # Seq advanced without error — AutoPlayer cascade
-                    # push, not our action's response. Keep reading.
-                    continue
-                # Seq unchanged, no error — stale push, keep reading
-                continue
-        assert rejected, (
-            f"Wrong action {wrong_action} was not rejected within 3s "
-            f"(seq: {seq_before} -> {driver.current_seq})"
-        )
+        if i == count - 1 and seq_before > 0:
+            wrong_action = correct_action
+            assert _wrong_payload_key(wrong_action) not in used_payloads, (
+                f"{label}: duplicate wrong payload before stale injection: {wrong_action}"
+            )
+            used_payloads.add(_wrong_payload_key(wrong_action))
+            driver.send_action_with_seq(wrong_action, seq_before - 1)
+        else:
+            pool_index = (seq_before + i) % len(_WRONG_ACTION_POOL)
+            wrong_action = _pick_distinct_wrong_action(pool_index, used_payloads)
+            used_payloads.add(_wrong_payload_key(wrong_action))
+            driver.send_action(wrong_action)
+        _expect_error_response(driver, label, wrong_action, seq_before)
+
+
+def _expect_error_response(
+    driver: WsGameDriver,
+    label: str,
+    wrong_action: dict[str, object],
+    seq_before: int,
+) -> None:
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        try:
+            msg = driver.receive_msg(verbose=False, timeout=max(0.001, deadline - time.monotonic()))
+        except WsReceiveTimeout as exc:
+            raise TimeoutError(driver.debug_context(f"{label}: wrong action timeout")) from exc
+        if msg.get("type") != "state":
+            continue
+        msg_seq = _as_int(msg["seq"])
+        driver.sync_seq(msg_seq)
+        if msg.get("error") is not None:
+            return
+    raise TimeoutError(
+        f"{label}: wrong action was not rejected within 3s; "
+        f"action={wrong_action} seq_before={seq_before}; {driver.debug_context(label)}"
+    )
 
 
 # ---- Phase Handlers ----
@@ -862,7 +1136,7 @@ def _play_deal_bid(
     In the correct DEAL_BID flow, each card dealt triggers a push.
     The player who received the card sees awaiting_action='bid' and
     must bid or skip before the next card is dealt. The human tries
-    to bid from bid_legal_actions when available; otherwise passes.
+    to bid from action_hints when available; otherwise passes.
     """
     print(f"[round {round_count}] === DEAL_BID ===", flush=True)
 
@@ -877,7 +1151,7 @@ def _play_deal_bid(
 
     _verify_common_fields(state, "DEAL_BID")
     assert "bid_events" in state
-    assert "bid_legal_actions" in state
+    assert "action_hints" in state
     assert "bid_winner" in state
     assert "trump_suit" in state
 
@@ -894,17 +1168,19 @@ def _play_deal_bid(
 
     while True:
         if msg.get("awaiting") == "bid":
-            # Try to bid from bid_legal_actions if available and we
+            # Try to bid from action_hints if available and we
             # haven't already bid this round
-            legal = state.get("bid_legal_actions")
+            bid_action_accepted = False
+            legal = state.get("action_hints")
             legal_list = _as_list(legal) if legal is not None else []
             if not bid_made and _should_bid(state) and legal_list:
                 chosen = _pick_best_bid(legal_list)
                 card_ids = _extract_card_ids_from_dicts(chosen)
                 print(f"  [R{round_count}:BID] human bids: {card_ids}", flush=True)
-                _send_wrong_actions(driver)
+                _send_wrong_actions(driver, f"R{round_count}:BID before bid", {"type": "bid", "cards": card_ids})
                 response = driver.do_bid(card_ids)
                 if response is not None:
+                    bid_action_accepted = True
                     state = _as_dict(response["state"])
                     msg = response
                     # Verify bid succeeded: bid_events should have grown
@@ -920,22 +1196,22 @@ def _play_deal_bid(
                         break
                     if msg.get("awaiting") == "bid":
                         continue
-                    # Not our turn anymore — fall through to drain
                 else:
                     # Bid failed (rejected by server), fall through to pass
                     print(f"  [R{round_count}:BID] bid rejected: {driver.last_error}", flush=True)
 
             # Pass: either no legal actions, already bid, or bid failed
-            _send_wrong_actions(driver)
-            response = driver.do_bid_pass()
-            if response is not None:
-                state = _as_dict(response["state"])
-                msg = response
-                if state["phase"] != "DEAL_BID":
-                    print(f"[round {round_count}] DEAL_BID -> {state['phase']}", flush=True)
-                    break
-                if msg.get("awaiting") == "bid":
-                    continue
+            if not bid_action_accepted:
+                _send_wrong_actions(driver, f"R{round_count}:BID before pass", {"type": "bid", "pass": True})
+                response = driver.do_bid_pass()
+                if response is not None:
+                    state = _as_dict(response["state"])
+                    msg = response
+                    if state["phase"] != "DEAL_BID":
+                        print(f"[round {round_count}] DEAL_BID -> {state['phase']}", flush=True)
+                        break
+                    if msg.get("awaiting") == "bid":
+                        continue
             # Fall through to drain
 
         state, msg = _recv_until_our_turn(
@@ -968,7 +1244,7 @@ def _play_stirring(
     assert "trump_suit" in stirring
     assert "current_player" in stirring
     assert "declarer_player" in stirring
-    assert "legal_actions" in stirring
+    assert "legal_actions" not in stirring
 
     while True:
         # Check if STIRRING is done
@@ -984,7 +1260,7 @@ def _play_stirring(
 
         # Handle WAITING sub-phase (stir/pass)
         if msg.get("awaiting") == "stir":
-            _send_wrong_actions(driver)
+            _send_wrong_actions(driver, f"R{round_count}:STIR before pass", {"type": "stir", "pass": True})
             response = driver.do_stir_pass()
             if response is not None:
                 state = _as_dict(response["state"])
@@ -993,7 +1269,6 @@ def _play_stirring(
                     break
                 if msg.get("awaiting") in ("stir", "discard"):
                     continue
-            # Fall through to drain
 
         state, msg = _recv_until_our_turn(
             driver, f"R{round_count}:STIR", "STIRRING", {"stir", "discard"},
@@ -1032,7 +1307,11 @@ def _play_stirring_exchange(
         for c in hand[-exchange_count:]:
             discard_ids.append(_as_str(c["id"]))
         print(f"  [R{round_count}:STIR-EXCH] human discard {len(discard_ids)} cards", flush=True)
-        _send_wrong_actions(driver)
+        _send_wrong_actions(
+            driver,
+            f"R{round_count}:STIR-EXCH before discard",
+            {"type": "discard", "cards": discard_ids},
+        )
         response = driver.do_discard(discard_ids)
         if response is not None:
             state = _as_dict(response["state"])
@@ -1045,7 +1324,6 @@ def _play_stirring_exchange(
                 timeout=5,
             )
             if _as_str(state.get("awaiting_action", "")) == "discard":
-                _send_wrong_actions(driver)
                 response = driver.do_discard(discard_ids)
                 if response is not None:
                     state = _as_dict(response["state"])
@@ -1148,7 +1426,6 @@ def _play_playing(
     """
     print(f"[round {round_count}] === PLAYING ===", flush=True)
     tricks_played = 0
-    first_trick = True
     current_trump_suit: str | None = _as_str_or_none(state.get("trump_suit"))
     prev_trick_count: int = len(_as_list(state.get("trick_history", [])))
 
@@ -1171,7 +1448,7 @@ def _play_playing(
         assert "trick" in state
         assert "trick_history" in state
         assert "defender_points" in state
-        assert "legal_actions" in state or msg.get("awaiting") != "play"
+        assert "action_hints" in state or msg.get("awaiting") != "play"
 
         ts_raw = _as_str_or_none(state.get("trump_suit"))
         if ts_raw is not None:
@@ -1185,59 +1462,53 @@ def _play_playing(
             print(f"  [R{round_count}:PLAY] trick {cur_trick_count} completed", flush=True)
 
         if msg.get("awaiting") == "play":
-            legal = state.get("legal_actions", [])
+            legal = state.get("action_hints", [])
             legal_list = _as_list(legal)
             if legal_list:
-                chosen_cards = _as_list(legal_list[0])
-                assert len(chosen_cards) >= 1, (
-                    f"Legal play must have at least 1 card, got {len(chosen_cards)}"
-                )
+                play_candidates = [[_as_dict(c) for c in _as_list(option)] for option in legal_list]
+            else:
+                play_candidates = _pick_free_play_candidates(state)
 
-                if first_trick:
-                    # Send ALL cards of the legal action in dict format,
-                    # not just the first card — a legal action may require
-                    # multiple cards (e.g. a pair or tractor).
-                    dict_cards: list[dict[str, object]] = []
-                    for c in chosen_cards:
-                        dict_cards.append(_as_dict(c))
-                    play_action: dict[str, object] = {
-                        "type": "play",
-                        "cards": dict_cards,
-                    }
-                    _send_wrong_actions(driver)
-                    response = driver.do_action(play_action)
-                    assert response is not None, "Dict-format card play should succeed"
-                    first_trick = False
-                    print(f"  [R{round_count}:PLAY] trick {tricks_played + 1}: dict-format play ({len(dict_cards)} cards)", flush=True)
-                else:
-                    play_card_ids: list[str] = []
-                    for c in chosen_cards:
-                        c_dict = _as_dict(c)
-                        play_card_ids.append(_as_str(c_dict["id"]))
+            play_candidates = [candidate for candidate in play_candidates if len(candidate) >= 1]
+            if play_candidates:
+                response: dict[str, object] | None = None
+                attempted: list[list[str]] = []
+                for candidate in play_candidates:
+                    play_card_ids = [_as_str(c["id"]) for c in candidate]
+                    attempted.append(play_card_ids)
                     print(f"  [R{round_count}:PLAY] trick {tricks_played + 1}: play {play_card_ids}", flush=True)
-                    _send_wrong_actions(driver)
+                    if len(attempted) == 1:
+                        _send_wrong_actions(
+                            driver,
+                            f"R{round_count}:PLAY before play",
+                            {"type": "play", "cards": play_card_ids},
+                        )
                     response = driver.do_play(play_card_ids)
-                    if response is None:
-                        print(f"  [R{round_count}:PLAY] PLAY FAILED! error={driver.last_error}", flush=True)
+                    if response is not None:
+                        break
+                    print(f"  [R{round_count}:PLAY] play rejected: error={driver.last_error}", flush=True)
+                assert response is not None, (
+                    f"Could not find accepted play from {len(play_candidates)} candidates; "
+                    f"attempted={attempted[:10]} last_error={driver.last_error}"
+                )
                 tricks_played += 1
 
                 # Use the direct response as current state — do NOT call
                 # _recv_state() or receive_msg_safe() here! The response
                 # already tells us the state after our play.
-                if response is not None:
-                    state = _as_dict(response["state"])
-                    msg = response
-                    if state["phase"] != "PLAYING":
-                        print(f"[round {round_count}] PLAYING -> {state['phase']} after {tricks_played} tricks", flush=True)
-                        break
-                    # Check if we won the trick and it's still our turn
-                    cur_trick_count = len(_as_list(state.get("trick_history", [])))
-                    if cur_trick_count > prev_trick_count:
-                        _verify_trick_invariants(state, current_trump_suit)
-                        prev_trick_count = cur_trick_count
-                        print(f"  [R{round_count}:PLAY] trick {cur_trick_count} completed", flush=True)
-                    if msg.get("awaiting") == "play":
-                        continue  # Still our turn (e.g., won trick → lead next)
+                state = _as_dict(response["state"])
+                msg = response
+                if state["phase"] != "PLAYING":
+                    print(f"[round {round_count}] PLAYING -> {state['phase']} after {tricks_played} tricks", flush=True)
+                    break
+                # Check if we won the trick and it's still our turn
+                cur_trick_count = len(_as_list(state.get("trick_history", [])))
+                if cur_trick_count > prev_trick_count:
+                    _verify_trick_invariants(state, current_trump_suit)
+                    prev_trick_count = cur_trick_count
+                    print(f"  [R{round_count}:PLAY] trick {cur_trick_count} completed", flush=True)
+                if msg.get("awaiting") == "play":
+                    continue  # Still our turn (e.g., won trick -> lead next)
                 # Action failed or not our turn — fall through to drain
             else:
                 print(f"  [R{round_count}:PLAY] no legal actions!? awaiting={msg.get('awaiting')}", flush=True)
@@ -1350,28 +1621,31 @@ def _play_waiting(
     # next event loop tick (triggered by receive_msg()'s portal.call).
     if msg.get("awaiting") == "next_round":
         print(f"  [R{round_count}:WAITING] human confirm next_round", flush=True)
-        _send_wrong_actions(driver)
+        _send_wrong_actions(driver, f"R{round_count}:WAITING before next_round", {"type": "next_round"})
         response = driver.do_next_round()
+        retry_count = 0
+        while (
+            response is None
+            and driver.last_error is not None
+            and driver.last_error.startswith("stale action:")
+            and retry_count < 4
+        ):
+            retry_count += 1
+            print(
+                f"  [R{round_count}:WAITING] retry next_round after stale seq: {driver.last_error}",
+                flush=True,
+            )
+            response = driver.do_next_round()
         if response is not None:
             state = _as_dict(response["state"])
             msg = response
             if state["phase"] != "WAITING":
                 print(f"[round {round_count}] WAITING -> {state['phase']}", flush=True)
                 return state, msg, expected_t0, expected_t1
-        # Our do_action may have read a cascade push instead of our
-        # confirmation. Keep sending next_round and draining. Each
-        # do_action call runs the event loop, letting handle_connection
-        # process our earlier next_round from the WS buffer. If it
-        # was already processed, the resend gets rejected harmlessly
-        # ("你已经确认过了"), but do_action still drains cascade messages.
         while state["phase"] == "WAITING":
-            _send_wrong_actions(driver)
-            response = driver.do_next_round()
-            if response is not None:
-                state = _as_dict(response["state"])
-                msg = response
-                if state["phase"] != "WAITING":
-                    break
+            state, msg = _recv_until_our_turn(
+                driver, f"R{round_count}:WAITING", "WAITING", set(), timeout=5,
+            )
 
     print(f"[round {round_count}] WAITING -> {state['phase']}", flush=True)
     return state, msg, expected_t0, expected_t1
@@ -1381,7 +1655,7 @@ def _verify_game_over(
     driver: WsGameDriver,
     state: dict[str, object],
     game_id: str,
-    sync_client: TestClient,
+    sync_client: SyncServerClient,
     expected_t0: str | None,
     expected_t1: str | None,
 ) -> None:
@@ -1432,11 +1706,12 @@ def _verify_game_over(
 # ---- Full Game Playthrough ----
 
 
-def test_full_game(sync_client: TestClient) -> None:
+def test_full_game(sync_client: SyncServerClient) -> None:
     """Play a complete game from start to GAME_OVER.
 
     At each phase:
-    - Interleave illegal actions to verify error handling
+    - Before every correct human action, inject 1-3 rejected requests
+      covering malformed actions, invalid fields/cards, and stale seq.
     - Verify state fields and phase transitions
     - Let AutoPlayers handle their turns automatically
 
@@ -1489,8 +1764,9 @@ def test_full_game(sync_client: TestClient) -> None:
             if cur_phase in ("DEAL_BID", "STIRRING", "PLAYING", "GAME_OVER"):
                 break
             # Still in WAITING or transitional state — drain more
-            msg = driver.receive_msg_safe()
+            msg = driver.receive_msg(timeout=5)
             if msg.get("type") == "state":
+                driver.sync_seq(_as_int(msg["seq"]))
                 state = _as_dict(msg["state"])
             else:
                 break

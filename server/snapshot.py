@@ -66,7 +66,6 @@ class StirringStateSnapshot:
     trump_suit: Suit | None
     current_player: int
     declarer_player: int
-    legal_actions: list[list[Card]]
     exchanging_player: int | None
     exchange_count: int | None
 
@@ -77,6 +76,13 @@ class StateSnapshot:
 
     Contains all fields from spec section 3.3. The to_dict() method
     serializes to JSON format matching spec section 5.5.
+
+    action_hints is advisory only. When non-empty, it is the complete
+    server-provided set of card groups the client may present for the
+    current awaiting_action. When empty, the server is not providing hints;
+    clients must not treat that as "no legal action" and must still allow
+    user input. The backend remains the authority for accepting or rejecting
+    every submitted action.
     """
 
     phase: str
@@ -90,9 +96,8 @@ class StateSnapshot:
     defender_points: int
     trick: TrickSnapshot | None
     trick_history: list[CompletedTrick]
-    legal_actions: list[list[Card]]
+    action_hints: list[list[Card]]
     awaiting_action: str | None
-    bid_legal_actions: list[list[Card]] | None
     scoring: ScoringSnapshot | None
     winning_team: int | None
     team0_level: Rank
@@ -107,7 +112,8 @@ class StateSnapshot:
 
         Cards are serialized as {"id", "suit", "rank"}.
         Enums are serialized as their string values.
-        legal_actions entries are serialized as lists of card-dict lists.
+        action_hints entries are serialized as lists of card-dict lists and
+        keep the same advisory-only semantics as StateSnapshot.action_hints.
         """
         trick_dict: TrickDict | None = None
         if self.trick is not None:
@@ -140,10 +146,6 @@ class StateSnapshot:
                 "trump_suit": self.stirring_state.trump_suit.value if self.stirring_state.trump_suit is not None else None,
                 "current_player": self.stirring_state.current_player,
                 "declarer_player": self.stirring_state.declarer_player,
-                "legal_actions": [
-                    [_card_to_dict(c) for c in entry]
-                    for entry in self.stirring_state.legal_actions
-                ],
                 "exchanging_player": self.stirring_state.exchanging_player,
                 "exchange_count": self.stirring_state.exchange_count,
             }
@@ -174,16 +176,11 @@ class StateSnapshot:
                 }
                 for t in self.trick_history
             ],
-            "legal_actions": [
+            "action_hints": [
                 [_card_to_dict(c) for c in entry]
-                for entry in self.legal_actions
+                for entry in self.action_hints
             ],
             "awaiting_action": self.awaiting_action,
-            "bid_legal_actions": (
-                [[_card_to_dict(c) for c in entry] for entry in self.bid_legal_actions]
-                if self.bid_legal_actions is not None
-                else None
-            ),
             "scoring": scoring_dict,
             "winning_team": self.winning_team,
             "team0_level": self.team0_level.value,
@@ -266,7 +263,6 @@ class StirringStateDict(TypedDict):
     trump_suit: str | None
     current_player: int
     declarer_player: int
-    legal_actions: list[list[CardDict]]
     exchanging_player: int | None
     exchange_count: int | None
 
@@ -283,7 +279,11 @@ class BidEventDict(TypedDict):
 
 
 class SnapshotDict(TypedDict):
-    """JSON-serialized snapshot matching spec section 5.5."""
+    """JSON-serialized snapshot matching spec section 5.5.
+
+    action_hints is a complete hint set when non-empty. An empty list means
+    no hint is provided, not that the player has no legal action.
+    """
 
     phase: str
     player_hand: list[CardDict]
@@ -296,9 +296,8 @@ class SnapshotDict(TypedDict):
     defender_points: int
     trick: TrickDict | None
     trick_history: list[CompletedTrickDict]
-    legal_actions: list[list[CardDict]]
+    action_hints: list[list[CardDict]]
     awaiting_action: str | None
-    bid_legal_actions: list[list[CardDict]] | None
     scoring: ScoringDict | None
     winning_team: int | None
     team0_level: str

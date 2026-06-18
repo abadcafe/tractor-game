@@ -17,7 +17,17 @@ export function handlePlayAction(
   seq: number,
 ): ActionResult {
   const selectedCards = snap.player_hand.filter((c) => selectedCardIds.has(c.id));
-  const matchedCards = validatePlay(selectedCards, snap.legal_actions);
+  if (selectedCards.length === 0) {
+    return { success: false, error: "请选择要出的牌" };
+  }
+  const hints = snap.action_hints ?? [];
+  if (hints.length === 0) {
+    return {
+      success: true,
+      action: { type: "play", seq, cards: selectedCards.map((c) => c.id) },
+    };
+  }
+  const matchedCards = validatePlay(selectedCards, hints);
   if (matchedCards) {
     return {
       success: true,
@@ -56,7 +66,9 @@ export function handleBidAction(
   seq: number,
 ): ActionResult {
   const selectedCards = snap.player_hand.filter((c) => cardIds.includes(c.id));
-  if (validateBidCards(selectedCards, snap.trump_rank)) {
+  const hints = snap.action_hints ?? [];
+  const matchedCards = hints.length > 0 ? validatePlay(selectedCards, hints) : null;
+  if (matchedCards || (hints.length === 0 && validateBidCards(selectedCards, snap.trump_rank))) {
     return { success: true, action: { type: "bid", seq, cards: cardIds } };
   }
   return { success: false, error: "叫牌牌张无效" };
@@ -74,7 +86,9 @@ export function handleStirAction(
   seq: number,
 ): ActionResult {
   const selectedCards = snap.player_hand.filter((c) => cardIds.includes(c.id));
-  if (validateStirCards(selectedCards, snap.trump_rank)) {
+  const hints = snap.action_hints ?? [];
+  const matchedCards = hints.length > 0 ? validatePlay(selectedCards, hints) : null;
+  if (matchedCards || (hints.length === 0 && validateStirCards(selectedCards, snap.trump_rank))) {
     return { success: true, action: { type: "stir", seq, cards: cardIds } };
   }
   return { success: false, error: "反主必须出对子" };

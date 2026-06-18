@@ -20,8 +20,7 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     declarer_team: null,
     declarer_player: null,
     defender_points: 0,
-    legal_actions: [],
-    bid_legal_actions: null,
+    action_hints: [],
     trick: {
       lead_player: 0,
       slots: [{ player: 0, cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }] }],

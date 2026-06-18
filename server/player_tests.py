@@ -36,8 +36,7 @@ def _make_snapshot(
     *,
     phase: str = "PLAYING",
     awaiting_action: str | None = "play",
-    legal_actions: list[list[Card]] | None = None,
-    bid_legal_actions: list[list[Card]] | None = None,
+    action_hints: list[list[Card]] | None = None,
     trump_rank: Rank = Rank.TWO,
     trump_suit: Suit | None = None,
     player_hand: list[Card] | None = None,
@@ -61,8 +60,7 @@ def _make_snapshot(
     return StateSnapshot(
         phase=phase,
         awaiting_action=awaiting_action,
-        legal_actions=legal_actions if legal_actions is not None else [],
-        bid_legal_actions=bid_legal_actions,
+        action_hints=action_hints if action_hints is not None else [],
         trump_rank=trump_rank,
         trump_suit=trump_suit,
         player_hand=player_hand if player_hand is not None else [],
@@ -140,7 +138,7 @@ async def test_auto_player_play_when_current():
     snap = _make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
-        legal_actions=[[card]],
+        player_hand=[card],
     )
     game = _make_game(snap)
     player = AutoPlayer(index=1)
@@ -150,13 +148,14 @@ async def test_auto_player_play_when_current():
 
 
 @pytest.mark.asyncio
-async def test_auto_player_play_from_legal_actions():
-    """AutoPlayer picks from legal_actions when playing."""
+async def test_auto_player_play_from_action_hints():
+    """AutoPlayer picks from the same action_hints visible to human players."""
     card1 = _card(Suit.SPADES, Rank.ACE, 1)
     snap = _make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
-        legal_actions=[[card1]],
+        player_hand=[card1],
+        action_hints=[[card1]],
     )
     game = _make_game(snap)
     player = AutoPlayer(index=0)
@@ -165,6 +164,70 @@ async def test_auto_player_play_from_legal_actions():
     game.act.assert_awaited()
     call_args = game.act.call_args
     assert call_args[0][0] == 0  # player_index
+
+
+@pytest.mark.asyncio
+async def test_auto_player_error_skips_failed_hint_candidate():
+    """A rejected card action is not repeated for the same player-facing state."""
+    card1 = _card(Suit.SPADES, Rank.ACE, 1)
+    card2 = _card(Suit.HEARTS, Rank.ACE, 1)
+    snap = _make_snapshot(
+        phase="PLAYING",
+        awaiting_action="play",
+        player_hand=[card1, card2],
+        action_hints=[[card1], [card2]],
+    )
+    game = _make_game(snap)
+    player = AutoPlayer(index=0)
+
+    def choose_first(seq: list[list[Card]]) -> list[Card]:
+        return seq[0]
+
+    with patch("server.player.random.choice", side_effect=choose_first):
+        await player.on_state(game)
+        await asyncio.sleep(0.05)
+        first_action = game.act.call_args[0][2]
+        assert isinstance(first_action, PlayAction)
+        assert first_action.cards == [card1]
+
+        game.act.reset_mock()
+        await player.on_state(game, error="rejected")
+        await asyncio.sleep(0.05)
+        second_action = game.act.call_args[0][2]
+        assert isinstance(second_action, PlayAction)
+        assert second_action.cards == [card2]
+
+
+@pytest.mark.asyncio
+async def test_auto_player_stale_error_does_not_skip_hint_candidate():
+    """A stale seq rejection does not prove the selected cards were illegal."""
+    card1 = _card(Suit.SPADES, Rank.ACE, 1)
+    card2 = _card(Suit.HEARTS, Rank.ACE, 1)
+    snap = _make_snapshot(
+        phase="PLAYING",
+        awaiting_action="play",
+        player_hand=[card1, card2],
+        action_hints=[[card1], [card2]],
+    )
+    game = _make_game(snap)
+    player = AutoPlayer(index=0)
+
+    def choose_first(seq: list[list[Card]]) -> list[Card]:
+        return seq[0]
+
+    with patch("server.player.random.choice", side_effect=choose_first):
+        await player.on_state(game)
+        await asyncio.sleep(0.05)
+        first_action = game.act.call_args[0][2]
+        assert isinstance(first_action, PlayAction)
+        assert first_action.cards == [card1]
+
+        game.act.reset_mock()
+        await player.on_state(game, error="stale action: expected 3, got 2")
+        await asyncio.sleep(0.05)
+        second_action = game.act.call_args[0][2]
+        assert isinstance(second_action, PlayAction)
+        assert second_action.cards == [card1]
 
 
 @pytest.mark.asyncio
@@ -252,7 +315,6 @@ async def test_auto_player_discard_when_current():
             trump_suit=None,
             current_player=0,
             declarer_player=0,
-            legal_actions=[],
             exchanging_player=0,
             exchange_count=2,
         ),
@@ -269,21 +331,28 @@ async def test_auto_player_discard_when_current():
 
 @pytest.mark.asyncio
 async def test_auto_player_stir_when_current():
-    """AutoPlayer acts during STIRRING when it's their turn."""
+    """AutoPlayer can stir from the same action_hints visible to human players."""
+    card1 = _card(Suit.HEARTS, Rank.TWO, 1)
+    card2 = _card(Suit.HEARTS, Rank.TWO, 2)
     snap = _make_snapshot(
         phase="STIRRING",
         awaiting_action="stir",
+        action_hints=[[card1, card2]],
     )
     game = _make_game(snap)
     player = AutoPlayer(index=0)
-    await player.on_state(game)
+    with patch("server.player.random.random", return_value=0.4):
+        await player.on_state(game)
     await asyncio.sleep(0.05)
     game.act.assert_awaited()
+    action = game.act.call_args[0][2]
+    assert isinstance(action, StirAction)
+    assert action.cards == [card1, card2]
 
 
 @pytest.mark.asyncio
 async def test_auto_player_stir_pass():
-    """AutoPlayer can pass during STIRRING if no valid stir cards."""
+    """AutoPlayer passes during STIRRING when action_hints is empty."""
     snap = _make_snapshot(
         phase="STIRRING",
         awaiting_action="stir",
@@ -294,6 +363,28 @@ async def test_auto_player_stir_pass():
     await player.on_state(game)
     await asyncio.sleep(0.05)
     game.act.assert_awaited()
+    action = game.act.call_args[0][2]
+    assert isinstance(action, SkipStirAction)
+
+
+@pytest.mark.asyncio
+async def test_auto_player_stir_randomly_skips_hint():
+    """AutoPlayer keeps the old optional-stir behavior by skipping half the time."""
+    card1 = _card(Suit.HEARTS, Rank.TWO, 1)
+    card2 = _card(Suit.HEARTS, Rank.TWO, 2)
+    snap = _make_snapshot(
+        phase="STIRRING",
+        awaiting_action="stir",
+        action_hints=[[card1, card2]],
+    )
+    game = _make_game(snap)
+    player = AutoPlayer(index=0)
+    with patch("server.player.random.random", return_value=0.6):
+        await player.on_state(game)
+    await asyncio.sleep(0.05)
+    game.act.assert_awaited()
+    action = game.act.call_args[0][2]
+    assert isinstance(action, SkipStirAction)
 
 
 @pytest.mark.asyncio
@@ -398,18 +489,7 @@ def test_human_player_is_connected_false():
 
 @pytest.mark.asyncio
 async def test_auto_player_stir_only_uses_same_suit_pairs():
-    """AutoPlayer._handle_stir must only stir with same-suit pairs of trump rank.
-
-    Regression test for Bug 4: when a player had 2+ trump-rank cards of
-    different suits, the old code did `trump_cards[:2]` which could pick
-    two cards of different suits — an invalid stir pair. The stirring SM
-    would reject it, but the AutoPlayer would keep retrying with the same
-    invalid pair in a tight loop.
-
-    The fix groups trump-rank cards by suit and only picks a pair from
-    a single suit group.
-    """
-    # Create 2 trump-rank cards of DIFFERENT suits and 2 of the same suit (forming a valid pair)
+    """AutoPlayer stirs only from server-provided action_hints."""
     card_hearts_2_d1 = _card(Suit.HEARTS, Rank.TWO, 1)
     card_spades_2_d1 = _card(Suit.SPADES, Rank.TWO, 1)
     card_hearts_2_d2 = _card(Suit.HEARTS, Rank.TWO, 2)
@@ -418,12 +498,12 @@ async def test_auto_player_stir_only_uses_same_suit_pairs():
         phase="STIRRING",
         awaiting_action="stir",
         player_hand=[card_hearts_2_d1, card_spades_2_d1, card_hearts_2_d2],
+        action_hints=[[card_hearts_2_d1, card_hearts_2_d2]],
         trump_rank=Rank.TWO,
     )
     game = _make_game(snap)
     player = AutoPlayer(index=0)
 
-    # Force random.random() to 0.4 so the stir branch is taken
     with patch("server.player.random.random", return_value=0.4):
         await player.on_state(game)
 
@@ -432,13 +512,8 @@ async def test_auto_player_stir_only_uses_same_suit_pairs():
     call_args = game.act.call_args
     action = call_args[0][2]
 
-    if isinstance(action, StirAction):
-        # If stirring, both cards must be the same suit
-        assert len(action.cards) == 2
-        suits = {c.suit for c in action.cards}
-        assert len(suits) == 1, (
-            f"StirAction used cards of different suits: {suits}"
-        )
+    assert isinstance(action, StirAction)
+    assert action.cards == [card_hearts_2_d1, card_hearts_2_d2]
 
 
 # ---- Stirring exchange count typed access ----
@@ -464,7 +539,6 @@ async def test_auto_player_discard_with_stirring_exchange_count():
             trump_suit=None,
             current_player=0,
             declarer_player=0,
-            legal_actions=[],
             exchanging_player=0,
             exchange_count=3,
         ),

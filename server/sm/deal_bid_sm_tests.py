@@ -5,6 +5,7 @@ from server.sm.types import BidEvent
 from server.sm.deal_bid_sm import (
     DealBidState, DealBidInput, DealBidResult,
     create_deal_bid, deal_next_card, reveal, finalize_dealing,
+    get_bid_action_hints,
 )
 
 
@@ -737,3 +738,73 @@ def _get_result(state: DealBidState) -> DealBidResult:
         players_hand=state.players_hand,
         bid_events=state.bid_events,
     )
+
+
+def test_get_bid_action_hints_singles_and_pairs() -> None:
+    """get_bid_action_hints returns complete bid hint singles and pairs."""
+    trump_rank = Rank.TWO
+    hand: list[Card] = [
+        Card(id="D1-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
+             is_joker=False, is_big_joker=False, points=0, deck=1),
+        Card(id="D2-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
+             is_joker=False, is_big_joker=False, points=0, deck=2),
+        Card(id="D1-spades-2", suit=Suit.SPADES, rank=Rank.TWO,
+             is_joker=False, is_big_joker=False, points=0, deck=1),
+        Card(id="small-joker", suit=Suit.JOKER, rank=Rank.SMALL_JOKER,
+             is_joker=True, is_big_joker=False, points=0, deck=1),
+        Card(id="D1-hearts-5", suit=Suit.HEARTS, rank=Rank.FIVE,
+             is_joker=False, is_big_joker=False, points=5, deck=1),
+    ]
+    state = DealBidState(
+        phase="DEALING",
+        deck=[],
+        deal_cursor=0,
+        deal_target=0,
+        bid_winner=None,
+        bid_events=[],
+        players_hand=[hand, [], [], []],
+        declarer_team=None,
+        trump_rank=trump_rank,
+        start_player=0,
+    )
+
+    result = get_bid_action_hints(state, player=0)
+
+    assert isinstance(result, list)
+    assert len(result) > 0
+
+    all_bid_card_ids: set[str] = set()
+    for option in result:
+        assert isinstance(option, list)
+        assert len(option) in (1, 2)
+        for card in option:
+            assert isinstance(card, Card)
+            all_bid_card_ids.add(card.id)
+
+    assert "D1-clubs-2" in all_bid_card_ids
+    assert "D2-clubs-2" in all_bid_card_ids
+    assert "D1-spades-2" in all_bid_card_ids
+    assert "D1-hearts-5" not in all_bid_card_ids
+
+
+def test_get_bid_action_hints_filters_declarer_team_rule() -> None:
+    """get_bid_action_hints returns no misleading hints for non-declarer team."""
+    trump_rank = Rank.TWO
+    hand: list[Card] = [
+        Card(id="D1-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
+             is_joker=False, is_big_joker=False, points=0, deck=1),
+    ]
+    state = DealBidState(
+        phase="DEALING",
+        deck=[],
+        deal_cursor=0,
+        deal_target=1,
+        bid_winner=None,
+        bid_events=[],
+        players_hand=[[], hand, [], []],
+        declarer_team=0,
+        trump_rank=trump_rank,
+        start_player=0,
+    )
+
+    assert get_bid_action_hints(state, player=1) == []

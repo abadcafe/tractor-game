@@ -122,8 +122,31 @@ def deal_next_card(state: DealBidState) -> StateResult[DealBidState]:
     }))
 
 
-def get_bid_legal_actions(hand: list[Card], trump_rank: Rank) -> list[list[Card]]:
-    """Compute legal bid options from a player's hand.
+def get_bid_action_hints(state: DealBidState, player: int) -> list[list[Card]]:
+    """Compute complete accepted bid hints for one player.
+
+    The returned options are advisory UI hints, so a non-empty result must
+    match the same validation path used by real bid actions. Candidate card
+    groups are generated from the player's hand, then filtered through
+    reveal() against the full deal-bid state so declarer-team and current
+    bid-priority rules are respected.
+    """
+    if state.phase != "DEALING" or player < 0 or player >= 4:
+        return []
+
+    result: list[list[Card]] = []
+    for candidate in _get_bid_card_candidates(state.players_hand[player], state.trump_rank):
+        event = _bid_event_from_cards(player, candidate)
+        match reveal(state, event):
+            case Ok():
+                result.append(candidate)
+            case Rejected():
+                continue
+    return result
+
+
+def _get_bid_card_candidates(hand: list[Card], trump_rank: Rank) -> list[list[Card]]:
+    """Compute raw bid card groups from a player's hand.
 
     Returns list of bid options where each option is 1 card (single) or
     2 cards (pair). Singles are individual trump-rank cards (one per suit).
@@ -168,6 +191,27 @@ def get_bid_legal_actions(hand: list[Card], trump_rank: Rank) -> list[list[Card]
         result.append([cards[0]])
 
     return result
+
+
+def _bid_event_from_cards(player: int, cards: list[Card]) -> BidEvent:
+    card = cards[0]
+    if card.is_joker:
+        return BidEvent(
+            player=player,
+            cards=cards,
+            kind="joker",
+            suit=None,
+            joker_type="big" if card.is_big_joker else "small",
+            count=len(cards),
+        )
+    return BidEvent(
+        player=player,
+        cards=cards,
+        kind="trump_rank",
+        suit=card.suit,
+        joker_type=None,
+        count=len(cards),
+    )
 
 
 def reveal(state: DealBidState, event: BidEvent) -> StateResult[DealBidState]:

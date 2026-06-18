@@ -21,7 +21,7 @@ import {
   computeLegalCardIds,
   isSelectionStillLegal,
 } from "./engine/ui-state-computer.ts";
-import { computeBidOptions } from "./engine/bid-logic.ts";
+import { computeBidOptions, computeBidOptionsFromHints } from "./engine/bid-logic.ts";
 
 function main() {
   const containerEl = document.querySelector("#app");
@@ -49,7 +49,9 @@ function main() {
   function precomputeAndRender(snap: ReturnType<StateManager["get"]>) {
     if (!snap) return;
     renderCtx.legalCardIds = computeLegalCardIds(snap, currentInteractionMode);
-    renderCtx.bidOptions = computeBidOptions(snap.player_hand, snap.trump_rank, snap.bid_winner);
+    renderCtx.bidOptions = snap.phase === "DEAL_BID"
+      ? computeBidOptions(snap.player_hand, snap.trump_rank, snap.bid_winner)
+      : computeBidOptionsFromHints(snap.action_hints ?? [], snap.trump_rank);
     renderCtx.pendingBidIntent = pendingBidIntent;
     renderCtx.stirButtonState = computeStirButtonState(snap, selectedCardIds);
     renderCtx.levelChange = snap.scoring
@@ -91,17 +93,16 @@ function main() {
     const seq = currentSeq();
 
     if (pendingBidIntent) {
-      // Check if the pending intent's cards are still in hand
-      const handIds = new Set(snapshot.player_hand.map((c: { id: string }) => c.id));
-      const allInHand = pendingBidIntent.cardIds.every((id) => handIds.has(id));
+      const currentHintIds = (snapshot.action_hints ?? []).map((cards) =>
+        cards.map((c) => c.id).sort().join(",")
+      );
+      const intentKey = [...pendingBidIntent.cardIds].sort().join(",");
 
-      if (allInHand) {
-        // Try sending the pending bid — server will validate priority
+      if (currentHintIds.includes(intentKey)) {
         suppressBidError = true;
         wsClient.send({ type: "bid", seq, cards: pendingBidIntent.cardIds });
         return;
       }
-      // Cards no longer in hand, clear intent silently
       pendingBidIntent = null;
     }
 
@@ -141,12 +142,7 @@ function main() {
     },
 
     onBidOptionSelect(option: BidOption) {
-      // Toggle: if clicking the same option, clear intent; otherwise set it
-      if (pendingBidIntent && pendingBidIntent.cardIds.join(",") === option.cardIds.join(",")) {
-        pendingBidIntent = null;
-      } else {
-        pendingBidIntent = option;
-      }
+      pendingBidIntent = option;
       reRender();
     },
 

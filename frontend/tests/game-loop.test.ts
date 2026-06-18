@@ -15,8 +15,7 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     declarer_team: null,
     declarer_player: null,
     defender_points: 0,
-    legal_actions: [],
-    bid_legal_actions: null,
+    action_hints: [],
     trick: null,
     trick_history: [],
     bid_events: [],
@@ -86,7 +85,7 @@ Deno.test("test_handleMessage_stirring_our_turn", () => {
   const msg = makeStateMsg({
     phase: "STIRRING",
     awaiting_action: "stir",
-    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3, declarer_player: 0, legal_actions: [], exchanging_player: null, exchange_count: null },
+    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3, declarer_player: 0, exchanging_player: null, exchange_count: null },
   }, "stir");
   loop.handleMessage(msg);
   assertEquals(lastInteractionMode, "stir");
@@ -100,7 +99,7 @@ Deno.test("test_handleMessage_stirring_not_our_turn", () => {
   const msg = makeStateMsg({
     phase: "STIRRING",
     awaiting_action: null,
-    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 1, declarer_player: 0, legal_actions: [], exchanging_player: null, exchange_count: null },
+    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 1, declarer_player: 0, exchanging_player: null, exchange_count: null },
   }, null);
   loop.handleMessage(msg);
   assertEquals(lastInteractionMode, null);
@@ -114,7 +113,7 @@ Deno.test("test_handleMessage_exchange_our_turn", () => {
   const msg = makeStateMsg({
     phase: "STIRRING",
     awaiting_action: "discard",
-    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3, declarer_player: 0, legal_actions: [], exchanging_player: 3, exchange_count: 8 },
+    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3, declarer_player: 0, exchanging_player: 3, exchange_count: 8 },
   }, "discard");
   loop.handleMessage(msg);
   assertEquals(lastInteractionMode, "discard");

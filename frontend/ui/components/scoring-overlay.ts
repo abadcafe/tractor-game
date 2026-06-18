@@ -1,7 +1,7 @@
 import type { StateSnapshot } from "../../core/types.ts";
 import type { InteractionMode, LevelChangeInfo } from "../../engine/types.ts";
 import { el } from "../dom.ts";
-import { HUMAN_TEAM, TEAM_LABELS, SEAT_MAP } from "../../config.ts";
+import { HUMAN_SEAT, HUMAN_TEAM, TEAM_LABELS, SEAT_MAP } from "../../config.ts";
 import { suitSymbol } from "../../core/card.ts";
 
 /**
@@ -92,7 +92,8 @@ export function renderScoringOverlay(
   card.appendChild(confirmGrid);
 
   // Next round button (shown when human hasn't confirmed yet)
-  if (interactionMode === "next_round") {
+  const humanReady = confirmedSet.has(HUMAN_SEAT);
+  if (!humanReady) {
     const button = el("button", { class: "btn-primary scoring-overlay__next-round" }, "下一轮");
     if (onNextRound) {
       button.addEventListener("click", () => onNextRound());

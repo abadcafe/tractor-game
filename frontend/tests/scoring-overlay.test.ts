@@ -21,8 +21,7 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     declarer_team: 0,
     declarer_player: 3,
     defender_points: 30,
-    legal_actions: [],
-    bid_legal_actions: null,
+    action_hints: [],
     trick: null,
     trick_history: [],
     bid_events: [],
@@ -60,8 +59,8 @@ Deno.test("test_renderScoringOverlay_next_round_button", () => {
   assertEquals(buttonTexts.includes("下一轮"), true);
 });
 
-Deno.test("test_renderScoringOverlay_no_button_when_not_human", () => {
-  const snap = makeSnapshot({ declarer_player: 1 });
+Deno.test("test_renderScoringOverlay_no_button_when_human_ready", () => {
+  const snap = makeSnapshot({ next_round_confirmed: [3] });
   const el = renderScoringOverlay(snap, null);
   const buttons = el.querySelectorAll("button");
   assertEquals(buttons.length, 0);

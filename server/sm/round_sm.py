@@ -297,6 +297,8 @@ def stir_discard(
                 "players_hand": [list(h) for h in new_ss.players_hand],
                 "bottom_cards": list(new_ss.bottom_cards),
             })
+            if new_ss.phase == "COMPLETE":
+                return Ok(_transition_to_playing(new_state))
             return Ok(new_state)
         case Rejected(reason=reason):
             return Rejected(reason)

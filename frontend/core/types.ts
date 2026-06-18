@@ -46,8 +46,13 @@ export interface StateSnapshot {
 
   defender_points: number;
 
-  legal_actions: Card[][];
-  bid_legal_actions: Card[][] | null;
+  /**
+   * Advisory card-group hints for the current awaiting_action.
+   * Non-empty means the backend is providing a complete hint set that the UI
+   * may use for highlighting or shortcuts. Empty means no hint is provided;
+   * it must not disable user input. The backend still validates every action.
+   */
+  action_hints: Card[][];
 
   trick: {
     lead_player: number;
@@ -67,7 +72,6 @@ export interface StateSnapshot {
     trump_suit: string | null;
     current_player: number;
     declarer_player: number;
-    legal_actions: Card[][];
     exchanging_player: number | null;
     exchange_count: number | null;
   } | null;

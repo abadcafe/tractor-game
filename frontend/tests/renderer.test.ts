@@ -18,8 +18,7 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     declarer_team: 0,
     declarer_player: 3,
     defender_points: 15,
-    legal_actions: [[{ id: "D1-hearts-5", suit: "hearts", rank: "5" }]],
-    bid_legal_actions: null,
+    action_hints: [[{ id: "D1-hearts-5", suit: "hearts", rank: "5" }]],
     trick: {
       lead_player: 0,
       slots: [{ player: 0, cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }] }],
@@ -78,7 +77,7 @@ Deno.test("test_render_stirring_phase", () => {
   const snap = makeSnapshot({
     phase: "STIRRING",
     awaiting_action: "stir",
-    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3, declarer_player: 0, legal_actions: [], exchanging_player: null, exchange_count: null },
+    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3, declarer_player: 0, exchanging_player: null, exchange_count: null },
     trick: null,
   });
   render(snap, container, "stir");
@@ -123,7 +122,7 @@ Deno.test("test_render_exchange_phase", () => {
   const snap = makeSnapshot({
     phase: "STIRRING",
     awaiting_action: "discard",
-    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3, declarer_player: 0, legal_actions: [], exchanging_player: 3, exchange_count: 8 },
+    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3, declarer_player: 0, exchanging_player: 3, exchange_count: 8 },
     trick: null,
   });
   render(snap, container, "discard");

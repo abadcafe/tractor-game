@@ -3,20 +3,17 @@
 All tests use only public interfaces: Game.__init__, Game.act,
 Game.snapshot, Game.is_over, Game.get_phase, Game.get_player, Game.set_on_game_over,
 StateSnapshot.to_dict.
-No tests access private fields like _game_state, _round_state, or _bid_turn.
+No tests access Game private fields or patch Game's SM collaborators.
 """
 
 from collections.abc import Sequence
-
 import json
-from unittest.mock import MagicMock, patch
 
 import pytest
 
-from server.actions import BidAction, DiscardAction, NextRoundAction, PlayAction, SkipBidAction, SkipStirAction
+from server.actions import BidAction, NextRoundAction, PlayAction, SkipBidAction, SkipStirAction
 from server.game import Game
 from server.player import AutoPlayer, Player
-from server.sm.card_model import Rank, Suit
 from server.sm.result import Ok, Rejected
 from server.snapshot import StateSnapshot
 
@@ -230,9 +227,8 @@ async def test_snapshot_returns_player_hand():
 def test_snapshot_before_run_returns_waiting():
     """snapshot() returns a valid WAITING-phase snapshot before run().
 
-    Before run(), _round_state is None, which maps to the WAITING phase
-    externally. The snapshot includes awaiting_action='next_round' and
-    empty hands.
+    Before the first round starts, the public snapshot is WAITING with
+    awaiting_action='next_round' and empty hands.
     """
     game = _create_game_with_auto_players()
     snap = game.snapshot(for_player=0)
@@ -257,21 +253,18 @@ async def test_snapshot_awaiting_action():
 
 
 @pytest.mark.asyncio
-async def test_snapshot_legal_actions_in_playing():
-    """Legal actions should be populated during PLAYING phase.
+async def test_snapshot_action_hints_shape():
+    """action_hints should be serialized as optional card-list hints.
 
-    After Task 010 refactor, legal_actions is list[list[Card]].
-    Each entry is a plain list of Card objects (no .type attribute).
+    A non-empty list means the server is willing to show a complete hint set.
+    An empty list means the UI should not constrain input.
     """
     game = await _start_game(_make_players())
     snap = game.snapshot(for_player=0)
-    assert isinstance(snap.legal_actions, list)
-    # If in PLAYING phase, legal_actions should contain card lists
-    if snap.phase == "PLAYING" and len(snap.legal_actions) > 0:
-        entry = snap.legal_actions[0]
-        # Entry is a list of Card objects (not a PlayAction)
+    assert isinstance(snap.action_hints, list)
+    if len(snap.action_hints) > 0:
+        entry = snap.action_hints[0]
         assert isinstance(entry, list)
-        assert not hasattr(entry, "type")  # not a PlayAction
         if len(entry) > 0:
             from server.sm.card_model import Card
             assert isinstance(entry[0], Card)
@@ -388,8 +381,7 @@ async def test_act_bid_during_dealing_converts_to_bid_event():
 @pytest.mark.asyncio
 async def test_act_skip_stir_during_stirring():
     """SkipStirAction is a valid action type that Game.act() can distinguish
-    from StirAction. The actual dispatch routing (SkipStirAction -> round_sm.pass_stir)
-    is verified in integration tests (task-008).
+    from StirAction. The actual dispatch routing is verified in integration tests.
     """
     action = SkipStirAction()
     assert isinstance(action, SkipStirAction)
@@ -410,103 +402,15 @@ async def test_act_next_round_during_non_complete():
 
 
 def test_get_phase_prioritizes_game_over():
-    """get_phase() must return GAME_OVER when _game_state.phase is GAME_OVER,
-    even if _round_state is still non-None with a different phase.
+    """is_over() must always be consistent with the public phase.
 
-    Since we cannot easily force GAME_OVER through public API in a unit test
-    without accessing private fields, we verify the observable contract:
-    is_over() must always be consistent with get_phase().
+    For Game black-box tests, the observable contract is enough:
+    is_over() mirrors get_phase() == "GAME_OVER".
     """
     game = _create_game_with_auto_players()
     assert game.get_phase() == "WAITING"
     # The invariant: is_over() == (get_phase() == "GAME_OVER")
     assert game.is_over() == (game.get_phase() == "GAME_OVER")
-
-
-# ---- on_game_over callback ----
-
-
-@pytest.mark.asyncio
-async def test_set_on_game_over_callback_fires_on_game_over():
-    """When game transitions to GAME_OVER, the registered callback should be invoked.
-
-    Strategy: Create a game where a PlayAction triggers round completion.
-    The PLAYING branch calls process_round_result immediately, which can
-    return GAME_OVER. The callback should fire at that point.
-    """
-    from server.sm import game_sm as gm, round_sm as rm
-    from server.sm.scoring import RoundResult
-    from server.sm.card_model import Rank
-
-    # Create a game in IN_ROUND state by patching create_game
-    in_round_state = gm.GameState(
-        phase="IN_ROUND",
-        team0_level=Rank.TEN,
-        team1_level=Rank.TEN,
-        declarer_team=0,
-        last_declarer_player=0,
-        winning_team=None,
-        round_number=1,
-    )
-
-    # Create a PLAYING-phase RoundState mock
-    playing_round = MagicMock()
-    playing_round.phase = "PLAYING"
-    playing_round.players_hand = [[] for _ in range(4)]
-    playing_round.declarer_player = 0
-
-    # A COMPLETE-phase RoundState mock (returned by round_sm.play)
-    complete_round = MagicMock()
-    complete_round.phase = "WAITING"
-    complete_round.players_hand = [[] for _ in range(4)]
-    complete_round.declarer_player = 0
-    complete_round.result = MagicMock(spec=RoundResult)
-    complete_round.result.team0_new_level = Rank.ACE
-    complete_round.result.team1_new_level = Rank.TEN
-    complete_round.result.next_declarer_team = 0
-    complete_round.result.next_declarer_player = 0
-    complete_round.result.total_defender_points = 0
-    complete_round.result.declarer_level_change = 0
-    complete_round.result.defender_level_change = 0
-    complete_round.result.switch_declarer = False
-    complete_round.result.bottom_card_bonus = 0
-
-    # The GAME_OVER state that process_round_result will return
-    game_over_state = gm.GameState(
-        phase="GAME_OVER",
-        team0_level=Rank.ACE,
-        team1_level=Rank.TEN,
-        declarer_team=None,
-        last_declarer_player=None,
-        winning_team=0,
-        round_number=1,
-    )
-
-    with patch.object(gm, "create_game", return_value=in_round_state):
-        game = Game(players=_make_players())
-
-    callback = MagicMock()
-    game.set_on_game_over(callback)
-
-    # Start the game with patched sm functions
-    with patch.object(gm, "start_game", return_value=Ok(in_round_state)):
-        with patch.object(rm, "create_round", return_value=playing_round):
-            for i in range(4):
-                await game.act(i, game.current_seq, NextRoundAction())
-
-    # Verify game is not over yet (before triggering GAME_OVER)
-    assert not game.is_over()
-
-    # Now trigger GAME_OVER via act() with PlayAction.
-    # round_sm.play returns COMPLETE phase, then process_round_result returns GAME_OVER.
-    with patch.object(rm, "play", return_value=Ok(complete_round)):
-        with patch.object(gm, "process_round_result", return_value=Ok(game_over_state)):
-            await game.act(player_index=0, seq=game.current_seq, action=PlayAction(cards=[]))
-
-    # Game must have transitioned to GAME_OVER
-    assert game.is_over()
-    # Callback must have been called with the game instance
-    callback.assert_called_once_with(game)
 
 
 # ---- get_player() ----
@@ -529,8 +433,8 @@ async def test_snapshot_to_dict_json_serializable():
 
     This is critical because HumanPlayer.on_state() calls ws.send_json() which
     requires JSON-serializable data. The sm Card/Suit/Rank types are Pydantic
-    models and enums that are not directly JSON-serializable. legal_actions
-    is now list[list[Card]], serialized to list of card-dict lists.
+    models and enums that are not directly JSON-serializable. action_hints
+    is list[list[Card]], serialized to list of card-dict lists.
     """
     game = await _start_game(_make_players())
     snap = game.snapshot(for_player=0)
@@ -545,10 +449,12 @@ async def test_snapshot_to_dict_json_serializable():
     assert "player_hand" in result
     assert "trump_rank" in result
     assert "awaiting_action" in result
-    # legal_actions must be a list of lists (card lists, not PlayAction dicts)
-    legal_actions_raw = result["legal_actions"]
-    if len(legal_actions_raw) > 0:
-        legal_entry = legal_actions_raw[0]
+    assert "legal_actions" not in result
+    assert "bid_legal_actions" not in result
+    # action_hints must be a list of lists (card lists, not PlayAction dicts)
+    action_hints_raw = result["action_hints"]
+    if len(action_hints_raw) > 0:
+        legal_entry = action_hints_raw[0]
         # list of card dicts
         if len(legal_entry) > 0:
             assert "id" in legal_entry[0]
@@ -692,7 +598,7 @@ async def test_snapshot_to_dict_contains_all_required_fields():
     snap = game.snapshot(for_player=0)
     result = snap.to_dict()
 
-    # Complete list of required fields per spec section 5.5
+    # Complete list of required fields per current snapshot protocol.
     required_fields = [
         "phase",
         "player_hand",
@@ -705,9 +611,8 @@ async def test_snapshot_to_dict_contains_all_required_fields():
         "defender_points",
         "trick",
         "trick_history",
-        "legal_actions",
+        "action_hints",
         "awaiting_action",
-        "bid_legal_actions",
         "scoring",
         "winning_team",
         "team0_level",
@@ -720,6 +625,8 @@ async def test_snapshot_to_dict_contains_all_required_fields():
 
     for field in required_fields:
         assert field in result, f"Missing required field: {field}"
+    assert "legal_actions" not in result
+    assert "bid_legal_actions" not in result
 
     # player_hand_counts specifically: must be a list of 4 ints
     hand_counts = result["player_hand_counts"]
@@ -732,16 +639,16 @@ async def test_snapshot_to_dict_contains_all_required_fields():
 
 
 @pytest.mark.asyncio
-async def test_snapshot_legal_actions_are_card_lists():
-    """Legal actions entries are plain card lists, not PlayAction objects.
+async def test_snapshot_action_hints_are_card_lists():
+    """action_hints entries are plain card lists, not PlayAction objects.
 
-    After the refactor, legal_actions is list[list[Card]].
+    action_hints is list[list[Card]].
     Each entry is a list of Card objects (no .type attribute).
     """
     game = await _start_game(_make_players())
     snap = game.snapshot(for_player=0)
-    if snap.phase == "PLAYING" and len(snap.legal_actions) > 0:
-        entry = snap.legal_actions[0]
+    if len(snap.action_hints) > 0:
+        entry = snap.action_hints[0]
         # Entry is a list of Card objects, not a PlayAction
         assert isinstance(entry, list)
         assert not hasattr(entry, "type")  # not a PlayAction
@@ -751,14 +658,14 @@ async def test_snapshot_legal_actions_are_card_lists():
 
 
 @pytest.mark.asyncio
-async def test_snapshot_legal_actions_to_dict_format():
-    """to_dict() serializes legal_actions as list of card-dict lists (no 'type' field)."""
+async def test_snapshot_action_hints_to_dict_format():
+    """to_dict() serializes action_hints as list of card-dict lists (no 'type' field)."""
     game = await _start_game(_make_players())
     snap = game.snapshot(for_player=0)
     d = snap.to_dict()
-    legal_actions_val = d["legal_actions"]
-    if snap.phase == "PLAYING" and len(legal_actions_val) > 0:
-        entry = legal_actions_val[0]
+    action_hints_val = d["action_hints"]
+    if len(action_hints_val) > 0:
+        entry = action_hints_val[0]
         # Entry is a list of card dicts, not a dict with 'type' key
         if len(entry) > 0:
             assert "id" in entry[0]  # card dict format
@@ -874,104 +781,6 @@ async def test_full_game_flow_completes_without_resource_explosion():
     assert isinstance(snap.player_hand, list)
 
 
-# ---- Game over removes from registry ----
-
-
-@pytest.mark.asyncio
-async def test_game_over_removes_from_registry():
-    """Test that the on_game_over callback can remove the game from registry.
-
-    Creates a Game with mocked sm functions to force it through to GAME_OVER
-    via a PlayAction that ends the round, and verifies the callback fires
-    and can remove the game from the registry.
-    """
-    from server.sm import game_sm as gm, round_sm as rm
-    from server.sm.card_model import Rank
-    from server.sm.scoring import RoundResult
-    from server.game_registry import GameRegistry
-
-    test_registry = GameRegistry()
-    players = [AutoPlayer(index=i) for i in range(4)]
-
-    # Create game in IN_ROUND state by patching create_game
-    in_round_state = gm.GameState(
-        phase="IN_ROUND",
-        team0_level=Rank.TEN,
-        team1_level=Rank.TEN,
-        declarer_team=0,
-        last_declarer_player=0,
-        winning_team=None,
-        round_number=1,
-    )
-
-    # Create a PLAYING-phase RoundState mock
-    playing_round = MagicMock()
-    playing_round.phase = "PLAYING"
-    playing_round.players_hand = [[] for _ in range(4)]
-    playing_round.declarer_player = 0
-
-    # A COMPLETE-phase RoundState mock (returned by round_sm.play)
-    complete_round = MagicMock()
-    complete_round.phase = "WAITING"
-    complete_round.players_hand = [[] for _ in range(4)]
-    complete_round.declarer_player = 0
-    complete_round.result = MagicMock(spec=RoundResult)
-    complete_round.result.team0_new_level = Rank.ACE
-    complete_round.result.team1_new_level = Rank.TEN
-    complete_round.result.next_declarer_team = 0
-    complete_round.result.next_declarer_player = 0
-    complete_round.result.total_defender_points = 0
-    complete_round.result.declarer_level_change = 0
-    complete_round.result.defender_level_change = 0
-    complete_round.result.switch_declarer = False
-    complete_round.result.bottom_card_bonus = 0
-
-    # The GAME_OVER state that process_round_result will return
-    game_over_state = gm.GameState(
-        phase="GAME_OVER",
-        team0_level=Rank.ACE,
-        team1_level=Rank.TEN,
-        declarer_team=None,
-        last_declarer_player=None,
-        winning_team=0,
-        round_number=1,
-    )
-
-    callback_called = [False]
-
-    with patch.object(gm, "create_game", return_value=in_round_state):
-        game = Game(players=players)
-
-    game_id = test_registry.create(game)
-
-    # Set the on_game_over callback that records invocation AND removes from registry
-    def on_game_over(g: Game) -> None:
-        callback_called[0] = True
-        test_registry.delete(game_id)
-
-    game.set_on_game_over(on_game_over)
-
-    # Start the game so _round_state is set to the PLAYING mock
-    with patch.object(gm, "start_game", return_value=Ok(in_round_state)):
-        with patch.object(rm, "create_round", return_value=playing_round):
-            for i in range(4):
-                await game.act(i, game.current_seq, NextRoundAction())
-
-    # Verify game is in registry
-    assert test_registry.get(game_id) is not None
-
-    # Now trigger GAME_OVER via PlayAction using patched sm
-    with patch.object(rm, "play", return_value=Ok(complete_round)):
-        with patch.object(gm, "process_round_result", return_value=Ok(game_over_state)):
-            await game.act(player_index=0, seq=game.current_seq, action=PlayAction(cards=[]))
-
-    # Verify the callback was actually called
-    assert callback_called[0], "on_game_over callback was not invoked"
-    # Verify game is over and removed from registry
-    assert game.is_over()
-    assert test_registry.get(game_id) is None
-
-
 # ---- Task 002: DEAL_BID Sync Round-Robin Bidding ----
 
 
@@ -1034,8 +843,8 @@ async def test_deal_bid_sync_round_robin() -> None:
 
 
 @pytest.mark.asyncio
-async def test_bid_legal_actions_in_snapshot() -> None:
-    """Snapshot includes bid_legal_actions during DEAL_BID phase for the current bidder."""
+async def test_bid_action_hints_in_snapshot() -> None:
+    """Snapshot includes bid action_hints during DEAL_BID phase for the current bidder."""
     game = await _start_game(_make_players())
 
     # Find the player who has awaiting_action='bid'
@@ -1049,73 +858,11 @@ async def test_bid_legal_actions_in_snapshot() -> None:
 
     snapshot = game.snapshot(bidder)
     assert snapshot.phase == "DEAL_BID"
-    assert snapshot.bid_legal_actions is not None
-    assert isinstance(snapshot.bid_legal_actions, list)
+    assert isinstance(snapshot.action_hints, list)
     # Each entry is a list of cards (1 or 2 cards per bid option)
-    for entry in snapshot.bid_legal_actions:
+    for entry in snapshot.action_hints:
         assert isinstance(entry, list)
         assert len(entry) in (1, 2)
-
-
-def test_get_bid_legal_actions_singles_and_pairs() -> None:
-    """get_bid_legal_actions returns correct singles and pairs from a hand.
-
-    Given a hand with trump-rank cards in different suits and joker pairs,
-    verifies: (1) singles are individual trump-rank cards, (2) pairs are
-    two trump-rank cards of the same suit or two jokers of the same type,
-    (3) non-trump-rank cards are excluded.
-    """
-    from server.sm.deal_bid_sm import get_bid_legal_actions
-    from server.sm.card_model import Card, Suit, Rank
-
-    # Construct a hand with known trump-rank cards
-    trump_rank = Rank.TWO
-    hand: list[Card] = [
-        # Two trump-rank clubs -> should produce a pair and two singles
-        Card(id="D1-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
-             is_joker=False, is_big_joker=False, points=0, deck=1),
-        Card(id="D2-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
-             is_joker=False, is_big_joker=False, points=0, deck=2),
-        # One trump-rank spades -> should produce a single
-        Card(id="D1-spades-2", suit=Suit.SPADES, rank=Rank.TWO,
-             is_joker=False, is_big_joker=False, points=0, deck=1),
-        # Small joker -> should produce a single (not a pair unless two small jokers)
-        Card(id="small-joker", suit=Suit.JOKER, rank=Rank.SMALL_JOKER,
-             is_joker=True, is_big_joker=False, points=0, deck=1),
-        # Non-trump-rank card -> should NOT appear in bid legal actions
-        Card(id="D1-hearts-5", suit=Suit.HEARTS, rank=Rank.FIVE,
-             is_joker=False, is_big_joker=False, points=5, deck=1),
-    ]
-
-    result = get_bid_legal_actions(hand, trump_rank)
-
-    assert isinstance(result, list)
-    assert len(result) > 0, "Should have at least one bid option"
-
-    # Collect all card IDs that appear in bid options
-    all_bid_card_ids: set[str] = set()
-    for option in result:
-        assert isinstance(option, list)
-        assert len(option) in (1, 2), f"Each option must be 1 or 2 cards, got {len(option)}"
-        for c in option:
-            assert isinstance(c, Card)
-            all_bid_card_ids.add(c.id)
-
-    # Trump-rank cards must appear
-    assert "D1-clubs-2" in all_bid_card_ids
-    assert "D2-clubs-2" in all_bid_card_ids
-    assert "D1-spades-2" in all_bid_card_ids
-
-    # Non-trump-rank card must NOT appear
-    assert "D1-hearts-5" not in all_bid_card_ids
-
-    # Verify pair exists (two clubs-2 together)
-    pair_options = [opt for opt in result if len(opt) == 2]
-    clubs_pair = [opt for opt in pair_options
-                  if any(c.id == "D1-clubs-2" for c in opt)
-                  and any(c.id == "D2-clubs-2" for c in opt)]
-    assert len(clubs_pair) >= 1, "Should have a pair option for two clubs-2"
-
 
 @pytest.mark.asyncio
 async def test_awaiting_bid_for_current_bidder() -> None:
@@ -1282,435 +1029,3 @@ async def test_stirring_state_snapshot_has_declarer_player() -> None:
     assert stirring_dict is not None
     assert "declarer_player" in stirring_dict
     assert stirring_dict["declarer_player"] == snap.stirring_state.declarer_player
-
-
-# ---- Task 003: WAITING (SM COMPLETE) Phase Awaiting Conditional ----
-
-
-async def _create_complete_phase_game() -> Game:
-    """Helper: create a Game patched into WAITING (SM COMPLETE) phase via MagicMock.
-
-    Returns a Game instance whose round_sm.create_round injects a
-    COMPLETE-phase RoundState (externally visible as WAITING via get_phase()).
-    Uses only public interfaces after setup.
-    """
-    from server.sm import game_sm as gm, round_sm as rm
-    from server.sm.card_model import Rank
-    from server.sm.scoring import RoundResult
-
-    in_round_state = gm.GameState(
-        phase="IN_ROUND", team0_level=Rank.TWO, team1_level=Rank.TWO,
-        declarer_team=0, last_declarer_player=0, winning_team=None, round_number=1,
-    )
-    complete_round = MagicMock()
-    complete_round.phase = "WAITING"
-    complete_round.players_hand = [[] for _ in range(4)]
-    complete_round.declarer_player = 0
-    complete_round.bottom_cards = []
-    complete_round.trump_suit = None
-    complete_round.trump_rank = Rank.TWO
-    complete_round.declarer_team = 0
-    complete_round.defender_points = 0
-    complete_round.trick_state = None
-    complete_round.trick_history = []
-    complete_round.stirring_state = None
-    complete_round.deal_bid_state = None
-    complete_round.result = MagicMock(spec=RoundResult)
-    complete_round.result.total_defender_points = 10
-    complete_round.result.bottom_card_bonus = 0
-    complete_round.result.defender_level_change = 0
-
-    players = _make_players()
-    with patch.object(gm, "create_game", return_value=in_round_state):
-        game = Game(players=players)
-
-    with patch.object(gm, "start_game", return_value=Ok(in_round_state)):
-        with patch.object(rm, "create_round", return_value=complete_round):
-            for i in range(4):
-                await game.act(i, game.current_seq, NextRoundAction())
-
-    return game
-
-
-@pytest.mark.asyncio
-async def test_complete_awaiting_unconfirmed_player() -> None:
-    """In WAITING phase (SM COMPLETE), unconfirmed players have awaiting_action='next_round'.
-
-    Uses MagicMock to create a COMPLETE-phase RoundState (externally WAITING)
-    and patches round_sm.create_round to inject it, then verifies snapshot
-    behavior through the public Game.snapshot() interface.
-    """
-    game = await _create_complete_phase_game()
-
-    # Player 0 has NOT confirmed (no NextRoundAction sent)
-    snap = game.snapshot(0)
-    assert snap.awaiting_action == "next_round", (
-        f"Unconfirmed player should have awaiting_action='next_round', got {snap.awaiting_action}"
-    )
-
-
-@pytest.mark.asyncio
-async def test_complete_awaiting_confirmed_player() -> None:
-    """In WAITING phase (SM COMPLETE), confirmed players have awaiting_action=None.
-
-    Uses MagicMock and public Game.act(player, NextRoundAction()) to confirm
-    player 0, then verifies snapshot behavior.
-    """
-    game = await _create_complete_phase_game()
-
-    # Confirm player 0 via public interface
-    await game.act(player_index=0, seq=game.current_seq, action=NextRoundAction())
-
-    # Player 0 confirmed -> awaiting_action=None
-    snap0 = game.snapshot(0)
-    assert snap0.awaiting_action is None, (
-        f"Confirmed player should have awaiting_action=None, got {snap0.awaiting_action}"
-    )
-    # Player 1 NOT confirmed -> awaiting_action="next_round"
-    snap1 = game.snapshot(1)
-    assert snap1.awaiting_action == "next_round", (
-        f"Unconfirmed player should have awaiting_action='next_round', got {snap1.awaiting_action}"
-    )
-
-
-@pytest.mark.asyncio
-async def test_complete_awaiting_multiple_confirmed() -> None:
-    """In WAITING phase (SM COMPLETE), multiple confirmed players have
-    awaiting_action=None while the unconfirmed player still sees
-    awaiting_action='next_round'.
-
-    Verifies the WAITING-phase conditional logic for 3 confirmed players
-    while the phase is still WAITING (the 4th player's confirmation would
-    transition the game out of WAITING, so the 'all 4 confirmed' state in
-    WAITING is unobservable by design).
-    """
-    game = await _create_complete_phase_game()
-
-    # Confirm players 0, 1, 2 via public interface (still in WAITING phase)
-    for p in range(3):
-        await game.act(player_index=p, seq=game.current_seq, action=NextRoundAction())
-
-    # Confirmed players (0, 1, 2) -> awaiting_action=None
-    for p in range(3):
-        snap = game.snapshot(p)
-        assert snap.awaiting_action is None, (
-            f"Player {p}: confirmed player should have awaiting_action=None, "
-            f"got {snap.awaiting_action}"
-        )
-
-    # Unconfirmed player (3) -> awaiting_action="next_round"
-    snap3 = game.snapshot(3)
-    assert snap3.awaiting_action == "next_round", (
-        f"Player 3: unconfirmed player should have awaiting_action='next_round', "
-        f"got {snap3.awaiting_action}"
-    )
-
-
-# ---- Task 004: Bug 3 — Awaiting Conditional for PLAYING/STIRRING ----
-
-
-async def _create_stirring_phase_game(current_player: int = 1) -> Game:
-    """Helper: create a Game patched into STIRRING phase via MagicMock.
-
-    Sets stirring_state.current_player to the given value so we can
-    verify only that player sees awaiting_action='stir'.
-    """
-    from server.sm import game_sm as gm, round_sm as rm
-
-    in_round_state = gm.GameState(
-        phase="IN_ROUND", team0_level=Rank.TWO, team1_level=Rank.TWO,
-        declarer_team=0, last_declarer_player=0, winning_team=None, round_number=1,
-    )
-    stirring_round = MagicMock()
-    stirring_round.phase = "STIRRING"
-    stirring_round.players_hand = [[] for _ in range(4)]
-    stirring_round.declarer_player = 0
-    stirring_round.bottom_cards = []
-    stirring_round.trump_suit = Suit.HEARTS
-    stirring_round.trump_rank = Rank.TWO
-    stirring_round.declarer_team = 0
-    stirring_round.defender_points = 0
-    stirring_round.trick_state = None
-    stirring_round.trick_history = []
-    stirring_round.deal_bid_state = None
-    stirring_round.result = None
-    stirring_round.stirring_state = MagicMock()
-    stirring_round.stirring_state.phase = "WAITING"
-    stirring_round.stirring_state.current_player = current_player
-    stirring_round.stirring_state.declarer_player = 0
-    stirring_round.stirring_state.trump_suit = Suit.HEARTS
-    stirring_round.stirring_state.last_stir_player = None
-    stirring_round.stirring_state.current_priority = 0
-
-    players = _make_players()
-    with patch.object(gm, "create_game", return_value=in_round_state):
-        game = Game(players=players)
-
-    with patch.object(gm, "start_game", return_value=Ok(in_round_state)):
-        with patch.object(rm, "create_round", return_value=stirring_round):
-            for i in range(4):
-                await game.act(i, game.current_seq, NextRoundAction())
-
-    return game
-
-
-async def _create_stirring_exchanging_phase_game(declarer_player: int = 2) -> Game:
-    """Helper: create a Game patched into STIRRING/EXCHANGING phase via MagicMock.
-
-    Creates a RoundState with phase="STIRRING" and stirring_state.phase="EXCHANGING",
-    which is the new replacement for the removed EXCHANGE phase. The declarer_player
-    is the exchanging player who should see awaiting_action='discard'.
-    """
-    from server.sm import game_sm as gm, round_sm as rm
-
-    in_round_state = gm.GameState(
-        phase="IN_ROUND", team0_level=Rank.TWO, team1_level=Rank.TWO,
-        declarer_team=0, last_declarer_player=0, winning_team=None, round_number=1,
-    )
-    stirring_exchanging_round = MagicMock()
-    stirring_exchanging_round.phase = "STIRRING"
-    stirring_exchanging_round.players_hand = [[] for _ in range(4)]
-    stirring_exchanging_round.declarer_player = declarer_player
-    stirring_exchanging_round.bottom_cards = []
-    stirring_exchanging_round.trump_suit = Suit.HEARTS
-    stirring_exchanging_round.trump_rank = Rank.TWO
-    stirring_exchanging_round.declarer_team = 0
-    stirring_exchanging_round.defender_points = 0
-    stirring_exchanging_round.trick_state = None
-    stirring_exchanging_round.trick_history = []
-    stirring_exchanging_round.deal_bid_state = None
-    stirring_exchanging_round.result = None
-    stirring_exchanging_round.stirring_state = MagicMock()
-    stirring_exchanging_round.stirring_state.phase = "EXCHANGING"
-    stirring_exchanging_round.stirring_state.exchanging_player = declarer_player
-    stirring_exchanging_round.stirring_state.current_player = declarer_player
-    stirring_exchanging_round.stirring_state.declarer_player = declarer_player
-    stirring_exchanging_round.stirring_state.trump_suit = Suit.HEARTS
-    stirring_exchanging_round.stirring_state.exchange_state = MagicMock()
-    stirring_exchanging_round.stirring_state.exchange_state.count = 8
-
-    players = _make_players()
-    with patch.object(gm, "create_game", return_value=in_round_state):
-        game = Game(players=players)
-
-    with patch.object(gm, "start_game", return_value=Ok(in_round_state)):
-        with patch.object(rm, "create_round", return_value=stirring_exchanging_round):
-            for i in range(4):
-                await game.act(i, game.current_seq, NextRoundAction())
-
-    return game
-
-
-async def _create_playing_phase_game(cur_player: int = 3) -> Game:
-    """Helper: create a Game patched into PLAYING phase via MagicMock."""
-    from server.sm import game_sm as gm, round_sm as rm
-    from server.sm.card_model import Card
-
-    # Give the current player a card so get_legal_plays returns at least one option
-    test_card = Card(
-        id="D1-hearts-3", suit=Suit.HEARTS, rank=Rank.THREE,
-        is_joker=False, is_big_joker=False, points=0, deck=1,
-    )
-    player_hands: list[list[Card]] = [[] for _ in range(4)]
-    player_hands[cur_player] = [test_card]
-
-    in_round_state = gm.GameState(
-        phase="IN_ROUND", team0_level=Rank.TWO, team1_level=Rank.TWO,
-        declarer_team=0, last_declarer_player=0, winning_team=None, round_number=1,
-    )
-    playing_round = MagicMock()
-    playing_round.phase = "PLAYING"
-    playing_round.players_hand = player_hands
-    playing_round.declarer_player = 0
-    playing_round.bottom_cards = []
-    playing_round.trump_suit = Suit.HEARTS
-    playing_round.trump_rank = Rank.TWO
-    playing_round.declarer_team = 0
-    playing_round.defender_points = 0
-    playing_round.trick_history = []
-    playing_round.stirring_state = None
-    playing_round.deal_bid_state = None
-    playing_round.result = None
-    playing_round.trick_state = MagicMock()
-    playing_round.trick_state.phase = "LEADING"
-    playing_round.trick_state.lead_player = cur_player
-    playing_round.trick_state.slots = []
-    playing_round.trick_state.cur = cur_player
-    playing_round.trick_state.trump_suit = Suit.HEARTS
-    playing_round.trick_state.trump_rank = Rank.TWO
-    playing_round.trick_state.defender_points = 0
-    playing_round.trick_state.declarer_team = 0
-    playing_round.trick_state.hands = player_hands
-    playing_round.trick_state.result = None
-
-    players = _make_players()
-    with patch.object(gm, "create_game", return_value=in_round_state):
-        game = Game(players=players)
-
-    with patch.object(gm, "start_game", return_value=Ok(in_round_state)):
-        with patch.object(rm, "create_round", return_value=playing_round):
-            for i in range(4):
-                await game.act(i, game.current_seq, NextRoundAction())
-
-    return game
-
-
-@pytest.mark.asyncio
-async def test_stirring_awaiting_for_current_player() -> None:
-    """In STIRRING phase, only the current player has awaiting_action='stir'.
-
-    Uses MagicMock to inject a STIRRING-phase RoundState with
-    current_player=1, then verifies only player 1 sees awaiting='stir'.
-    Also cross-references with stirring_state.current_player (CQ-004).
-    """
-    game = await _create_stirring_phase_game(current_player=1)
-    snap = game.snapshot(for_player=1)
-    assert snap.phase == "STIRRING"
-
-    # Player 1 (current_player) must have awaiting_action='stir'
-    assert snap.awaiting_action == "stir", (
-        f"Player 1 (current): expected awaiting_action='stir', got {snap.awaiting_action}"
-    )
-
-    # Cross-reference: awaiting player must match stirring_state.current_player (CQ-004)
-    assert snap.stirring_state is not None
-    assert snap.stirring_state.current_player == 1
-
-    # All other players must have awaiting_action=None
-    for i in range(4):
-        s = game.snapshot(for_player=i)
-        if i == 1:
-            assert s.awaiting_action == "stir"
-        else:
-            assert s.awaiting_action is None, (
-                f"Player {i}: expected awaiting_action=None, got {s.awaiting_action}"
-            )
-
-
-@pytest.mark.asyncio
-async def test_stirring_exchanging_awaiting_for_declarer() -> None:
-    """In STIRRING/EXCHANGING phase, only the exchanging player has awaiting_action='discard'.
-
-    Uses MagicMock to inject a STIRRING-phase RoundState with
-    stirring_state.phase="EXCHANGING" and exchanging_player=2,
-    then verifies only player 2 sees awaiting='discard'.
-    """
-    game = await _create_stirring_exchanging_phase_game(declarer_player=2)
-    snap = game.snapshot(for_player=2)
-    assert snap.phase == "STIRRING"
-
-    # Player 2 (exchanging player) must have awaiting_action='discard'
-    assert snap.awaiting_action == "discard", (
-        f"Player 2 (exchanging): expected awaiting_action='discard', got {snap.awaiting_action}"
-    )
-
-    # All other players must have awaiting_action=None
-    for i in range(4):
-        s = game.snapshot(for_player=i)
-        if i == 2:
-            assert s.awaiting_action == "discard"
-        else:
-            assert s.awaiting_action is None, (
-                f"Player {i}: expected awaiting_action=None, got {s.awaiting_action}"
-            )
-
-
-@pytest.mark.asyncio
-async def test_playing_awaiting_for_trick_cur() -> None:
-    """In PLAYING phase, only the current trick player has awaiting_action='play'.
-
-    Uses MagicMock to inject a PLAYING-phase RoundState with trick_state.cur=3
-    in LEADING phase, then verifies only player 3 sees awaiting='play'.
-    """
-    game = await _create_playing_phase_game(cur_player=3)
-    snap = game.snapshot(for_player=3)
-    assert snap.phase == "PLAYING"
-
-    # Player 3 (trick cur) must have awaiting_action='play'
-    assert snap.awaiting_action == "play", (
-        f"Player 3 (trick cur): expected awaiting_action='play', got {snap.awaiting_action}"
-    )
-
-    # All other players must have awaiting_action=None
-    for i in range(4):
-        s = game.snapshot(for_player=i)
-        if i == 3:
-            assert s.awaiting_action == "play"
-        else:
-            assert s.awaiting_action is None, (
-                f"Player {i}: expected awaiting_action=None, got {s.awaiting_action}"
-            )
-
-
-@pytest.mark.asyncio
-async def test_stirring_state_has_legal_actions() -> None:
-    """StirringStateSnapshot includes legal_actions during STIRRING phase.
-
-    The legal_actions field lists valid stir options (pairs of trump-rank
-    cards or joker pairs with priority exceeding current trump). This allows
-    clients to determine which stir actions are legal without duplicating
-    the server's validation logic.
-
-    Also verifies non-current players see empty legal_actions (CQ-003).
-    """
-    game = await _create_stirring_phase_game(current_player=0)
-    snap = game.snapshot(for_player=0)
-    assert snap.phase == "STIRRING"
-
-    assert snap.stirring_state is not None
-    assert isinstance(snap.stirring_state.legal_actions, list)
-    # Each entry should be a list of 2 cards (stir requires pairs)
-    for entry in snap.stirring_state.legal_actions:
-        assert isinstance(entry, list)
-        # Legal stir is always a pair (2 cards)
-        assert len(entry) == 2, f"Each stir option must be a pair, got {len(entry)} cards"
-
-    # Verify to_dict() serialization
-    d = snap.to_dict()
-    stirring_dict = d["stirring_state"]
-    assert stirring_dict is not None
-    assert "legal_actions" in stirring_dict
-    assert isinstance(stirring_dict["legal_actions"], list)
-
-    # CQ-003: non-current players must see empty legal_actions
-    for i in range(1, 4):
-        s = game.snapshot(for_player=i)
-        assert s.stirring_state is not None
-        assert s.stirring_state.legal_actions == [], (
-            f"Player {i} (non-current): expected empty legal_actions, "
-            f"got {s.stirring_state.legal_actions}"
-        )
-
-
-# ---- Task 005: Bug 4 — Pass player_index to STIRRING act() ----
-
-
-@pytest.mark.asyncio
-async def test_act_stir_rejects_non_current_player() -> None:
-    """SkipStirAction from a non-current player should be rejected."""
-    game = await _create_stirring_phase_game(current_player=1)
-
-    # Player 0 is NOT the current stir player — action should be rejected
-    await game.act(0, game.current_seq, SkipStirAction())
-
-    # Current player 1 should still have awaiting_action='stir'
-    snap_after = game.snapshot(for_player=1)
-    assert snap_after.awaiting_action == "stir", (
-        f"Current player should still have awaiting_action='stir', got {snap_after.awaiting_action}"
-    )
-
-
-@pytest.mark.asyncio
-async def test_act_discard_rejects_non_declarer() -> None:
-    """DiscardAction from a non-exchanging player during STIRRING/EXCHANGING should be rejected."""
-    game = await _create_stirring_exchanging_phase_game(declarer_player=2)
-
-    # Player 3 is NOT the exchanging player — discard should be rejected
-    # (round_sm.stir_discard checks player_index != exchanging_player before card validation)
-    await game.act(3, game.current_seq, DiscardAction(cards=[]))
-
-    # Exchanging player 2 should still have awaiting_action='discard'
-    snap_after = game.snapshot(for_player=2)
-    assert snap_after.awaiting_action == "discard", (
-        f"Exchanging player should still have awaiting_action='discard', got {snap_after.awaiting_action}"
-    )

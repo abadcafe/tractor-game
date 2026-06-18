@@ -71,6 +71,7 @@ export function renderScoreboard(snapshot: StateSnapshot): HTMLElement {
     el("div", { class: "scoreboard__section-title" }, "座位"),
   );
   const seatList = el("div", { class: "scoreboard__seat-list" });
+  const confirmedSet = new Set(snapshot.next_round_confirmed);
   for (const player of [0, 1, 2, 3]) {
     const seat = SEAT_MAP[player];
     const row = el("div", {
@@ -89,6 +90,12 @@ export function renderScoreboard(snapshot: StateSnapshot): HTMLElement {
     if (snapshot.declarer_player === player) {
       row.appendChild(
         el("span", { class: "scoreboard__dealer" }, "庄"),
+      );
+    }
+    if (snapshot.phase === "WAITING") {
+      row.appendChild(
+        el("span", { class: `scoreboard__ready ${confirmedSet.has(player) ? "ready" : "pending"}` },
+          confirmedSet.has(player) ? "Ready" : "等待"),
       );
     }
     seatList.appendChild(row);

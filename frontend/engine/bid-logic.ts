@@ -144,3 +144,33 @@ export function computeBidOptions(
 
   return options;
 }
+
+/** Convert complete backend action hints into bid options for display. */
+export function computeBidOptionsFromHints(
+  hints: Card[][],
+  trumpRank: string,
+): BidOption[] {
+  return hints
+    .map((cards) => {
+      const priority = computeBidPriority(cards, trumpRank);
+      if (priority <= 0) return null;
+      return {
+        cardIds: cards.map((c) => c.id),
+        label: formatBidOptionLabel(cards, trumpRank),
+        trumpSuit: cards[0]?.suit === "joker" ? null : cards[0]?.suit ?? null,
+        priority,
+      } satisfies BidOption;
+    })
+    .filter((option): option is BidOption => option !== null)
+    .sort((a, b) => b.priority - a.priority);
+}
+
+function formatBidOptionLabel(cards: Card[], trumpRank: string): string {
+  if (cards.length === 2 && cards.every((c) => c.rank === "BJ")) return "大王对";
+  if (cards.length === 2 && cards.every((c) => c.rank === "SJ")) return "小王对";
+  const first = cards[0];
+  if (!first) return "";
+  if (first.suit === "joker") return first.rank === "BJ" ? "大王" : "小王";
+  const suffix = cards.length === 2 ? "对" : "";
+  return `${suitSymbol(first.suit)}${trumpRank}${suffix}`;
+}
