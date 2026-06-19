@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  chooseFirstActionHint,
   computeLegalCardIds,
   computeStirButtonState,
   isSelectionStillLegal,
@@ -66,6 +67,24 @@ Deno.test("computeLegalCardIds keeps hints advisory in play mode", () => {
 
   assertEquals(legalCardIds.has("D1-spades-4"), true);
   assertEquals(legalCardIds.has("D1-hearts-5"), false);
+});
+
+Deno.test("chooseFirstActionHint preserves server hint order", () => {
+  const firstHint: Card[] = [
+    { id: "D1-spades-A", suit: "spades", rank: "A" },
+  ];
+  const secondHint: Card[] = [
+    { id: "D1-diamonds-3", suit: "diamonds", rank: "3" },
+  ];
+  const snap = makeSnapshot({
+    trump_rank: "4",
+    trump_suit: "hearts",
+    action_hints: [firstHint, secondHint],
+  });
+
+  const result = chooseFirstActionHint(snap);
+
+  assertEquals(result?.map((card) => card.id), ["D1-spades-A"]);
 });
 
 Deno.test("computeStirButtonState enables selected legal hint", () => {

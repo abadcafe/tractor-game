@@ -5,7 +5,7 @@ import {
 import { DOMParser } from "jsr:@b-fuze/deno-dom@0.1.56";
 import { renderHandView } from "../ui/components/hand-view.ts";
 import type { StateSnapshot } from "../core/types.ts";
-import type { InteractionMode } from "../engine/types.ts";
+import type { BidOption, InteractionMode } from "../engine/types.ts";
 
 const doc = new DOMParser().parseFromString(
   `<html><body><div id="app"></div></body></html>`,
@@ -361,6 +361,166 @@ Deno.test("test_renderHandView_stir_buttons_are_above_hand", () => {
 
   assertEquals(stirCardIds, ["D1-spades-2", "D2-spades-2"]);
   assertEquals(passCalled, true);
+});
+
+Deno.test("test_renderHandView_bid_options_are_above_hand", () => {
+  const snap = makeSnapshot({
+    phase: "DEAL_BID",
+    awaiting_action: "bid",
+    action_hints: [],
+    trump_suit: null,
+  });
+  const bidOptions: BidOption[] = [
+    {
+      cardIds: ["D1-spades-2"],
+      label: "♠2",
+      trumpSuit: "spades",
+      priority: 103,
+    },
+    {
+      cardIds: ["D1-hearts-2"],
+      label: "♥2",
+      trumpSuit: "hearts",
+      priority: 102,
+    },
+  ];
+  let selectedOption: BidOption | null = null;
+  const el = renderHandView(
+    snap,
+    "bid",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    bidOptions,
+    bidOptions[1],
+    (option: BidOption) => {
+      selectedOption = option;
+    },
+  );
+
+  const bidPanel = el.querySelector(".hand-actions .action-panel--bid");
+  const handPanelButton = el.querySelector(".hand-panel button");
+  const buttons = Array.from(
+    el.querySelectorAll(".action-panel--bid button"),
+  );
+
+  assertNotEquals(bidPanel, null);
+  assertEquals(el.classList.contains("has-bid-actions"), true);
+  assertEquals(handPanelButton, null);
+  assertEquals(buttons.map((button) => button.textContent), [
+    "♠2",
+    "♥2",
+  ]);
+  assertEquals(buttons[1].classList.contains("selected"), true);
+
+  buttons[0].dispatchEvent(new Event("click", { bubbles: true }));
+  assertEquals(selectedOption, bidOptions[0]);
+});
+
+Deno.test("test_renderHandView_bid_option_colors_match_suits_and_jokers", () => {
+  const snap = makeSnapshot({
+    phase: "DEAL_BID",
+    awaiting_action: "bid",
+    action_hints: [],
+    trump_suit: null,
+  });
+  const bidOptions: BidOption[] = [
+    {
+      cardIds: ["D1-joker-BJ", "D2-joker-BJ"],
+      label: "大王对",
+      trumpSuit: null,
+      priority: 205,
+    },
+    {
+      cardIds: ["D1-joker-SJ", "D2-joker-SJ"],
+      label: "小王对",
+      trumpSuit: null,
+      priority: 204,
+    },
+    {
+      cardIds: ["D1-hearts-2"],
+      label: "♥2",
+      trumpSuit: "hearts",
+      priority: 102,
+    },
+    {
+      cardIds: ["D1-diamonds-2"],
+      label: "♦2",
+      trumpSuit: "diamonds",
+      priority: 100,
+    },
+    {
+      cardIds: ["D1-spades-2"],
+      label: "♠2",
+      trumpSuit: "spades",
+      priority: 103,
+    },
+    {
+      cardIds: ["D1-clubs-2"],
+      label: "♣2",
+      trumpSuit: "clubs",
+      priority: 101,
+    },
+  ];
+
+  const el = renderHandView(
+    snap,
+    "bid",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    bidOptions,
+    null,
+    () => {},
+  );
+  const buttons = Array.from(
+    el.querySelectorAll(".action-panel--bid button"),
+  );
+
+  assertEquals(
+    buttons.map((button) =>
+      button.classList.contains("bid-button-red")
+    ),
+    [
+      true,
+      false,
+      true,
+      true,
+      false,
+      false,
+    ],
+  );
+  assertEquals(
+    buttons.map((button) =>
+      button.classList.contains("bid-button-black")
+    ),
+    [
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+    ],
+  );
 });
 
 Deno.test("test_renderHandView_no_button_when_spectating", () => {

@@ -31,12 +31,20 @@ export function renderTrickView(
   const showingPrevious = !showingFailedThrow &&
     previousTrickPreview !== null &&
     previousTrickPreview !== undefined;
+  const scoringTrick = scoringTrickPreview(snapshot);
+  const showingScoringTrick = !showingPrevious && !showingFailedThrow &&
+    scoringTrick !== null;
   const trickView = el("div", {
-    class: trickViewClass(showingPrevious, showingFailedThrow),
+    class: trickViewClass(
+      showingPrevious || showingScoringTrick,
+      showingFailedThrow,
+    ),
   });
 
   const grid = showingPrevious
     ? renderCompletedTrickGrid(previousTrickPreview)
+    : showingScoringTrick
+    ? renderCompletedTrickGrid(scoringTrick)
     : renderCurrentTrickGrid(snapshot);
   if (grid !== null) {
     trickView.appendChild(grid);
@@ -46,6 +54,19 @@ export function renderTrickView(
   }
 
   return trickView;
+}
+
+function scoringTrickPreview(
+  snapshot: StateSnapshot,
+): CompletedTrick | null {
+  if (
+    snapshot.phase !== "WAITING" ||
+    snapshot.scoring === null ||
+    snapshot.trick !== null
+  ) {
+    return null;
+  }
+  return snapshot.trick_history.at(-1) ?? null;
 }
 
 function trickViewClass(
@@ -85,7 +106,7 @@ function renderCurrentTrickGrid(
     if (isCurrent && !isLead) slotClass += " current";
     if (!slot) slotClass += " empty";
 
-    grid.appendChild(renderTrickSlot(player, slot, slotClass));
+    grid.appendChild(renderTrickSlot(player, slot, slotClass, isLead));
   }
 
   return grid;
@@ -101,9 +122,10 @@ function renderCompletedTrickGrid(trick: CompletedTrick): HTMLElement {
     const direction = PLAYER_TO_DIRECTION[player] ?? "north";
     const slot = slotsByPlayer.get(player);
     let slotClass = `trick-slot trick-slot-${direction}`;
-    if (player === trick.lead_player) slotClass += " lead";
+    const isLead = player === trick.lead_player;
+    if (isLead) slotClass += " lead";
     if (player === trick.winner) slotClass += " winner";
-    grid.appendChild(renderTrickSlot(player, slot, slotClass));
+    grid.appendChild(renderTrickSlot(player, slot, slotClass, isLead));
   }
 
   return grid;
@@ -113,6 +135,7 @@ function renderTrickSlot(
   player: number,
   slot: TrickSlot | undefined,
   slotClass: string,
+  isLead: boolean,
 ): HTMLElement {
   const slotEl = el("div", { class: slotClass });
   const seatInfo = SEAT_MAP[player];
@@ -120,6 +143,11 @@ function renderTrickSlot(
     slotEl.appendChild(
       el("span", { class: "trick-player-label" }, seatInfo.label),
     );
+    if (isLead) {
+      slotEl.appendChild(
+        el("span", { class: "trick-lead-marker" }, "先出"),
+      );
+    }
   }
 
   const cardsDiv = el("div", { class: "trick-cards" });

@@ -11,6 +11,7 @@ from server.sm.play_rules import (
     is_legal_follow,
     is_legal_lead,
     resolve_lead_throw,
+    sort_play_action_hints,
 )
 from server.sm.result import Ok
 
@@ -1061,6 +1062,24 @@ class TestGetLegalPlays:
         hand = [_card(Suit.HEARTS, Rank.ACE)]
         plays = get_legal_plays(hand, False, None, Suit.SPADES, Rank.TWO, [])
         assert plays == []
+
+    def test_sort_play_action_hints_orders_from_small_to_large(self) -> None:
+        """Player-facing play hints are sorted weakest first."""
+        hints = [
+            [_card(Suit.JOKER, Rank.SMALL_JOKER)],
+            [_card(Suit.HEARTS, Rank.THREE)],
+            [_card(Suit.DIAMONDS, Rank.FIVE)],
+            [_card(Suit.SPADES, Rank.TWO)],
+        ]
+
+        result = sort_play_action_hints(hints, Suit.HEARTS, Rank.TWO)
+
+        assert [[card.id for card in hint] for hint in result] == [
+            ["D1-diamonds-5"],
+            ["D1-hearts-3"],
+            ["D1-spades-2"],
+            ["D1-joker-SJ"],
+        ]
 
 
 # ---- Sub-level comparison edge case ----

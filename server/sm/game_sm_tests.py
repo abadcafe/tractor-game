@@ -77,7 +77,7 @@ class TestProcessRoundResult:
         assert isinstance(result, Ok)
         state = result.value
         assert state.declarer_team == 0
-        assert state.last_declarer_player == 3
+        assert state.next_declarer_player == 3
 
     def test_process_round_result_declarer_switches(self) -> None:
         """When declarer switches, next round uses opposite team."""
@@ -100,7 +100,7 @@ class TestProcessRoundResult:
         assert isinstance(result, Ok)
         state = result.value
         assert state.declarer_team == 1
-        assert state.last_declarer_player == 1
+        assert state.next_declarer_player == 1
 
 
 class TestGameOver:
@@ -326,7 +326,7 @@ class TestEdgeCases:
         assert state.team1_level == Rank.ACE
 
     def test_game_over_resets_declarer_fields(self) -> None:
-        """On game over, declarer_team and last_declarer_player are reset to None."""
+        """On game over, declarer_team and next_declarer_player are reset to None."""
         state = create_game()
         result = start_game(state)
         assert isinstance(result, Ok)
@@ -347,7 +347,7 @@ class TestEdgeCases:
         assert isinstance(result, Ok)
         state = result.value
         assert state.declarer_team == 0
-        assert state.last_declarer_player == 3
+        assert state.next_declarer_player == 3
         # Second round ends the game
         r2 = RoundResult(
             team0_new_level=Rank.ACE,
@@ -365,7 +365,7 @@ class TestEdgeCases:
         state = result.value
         assert state.phase == "GAME_OVER"
         assert state.declarer_team is None
-        assert state.last_declarer_player is None
+        assert state.next_declarer_player is None
 
 
 # ---- Integration tests with real round_sm ----
@@ -484,7 +484,7 @@ class TestMultipleRoundsWithRealRoundSm:
             round_state = create_round(RoundInput(
                 declarer_team=game.declarer_team,
                 trump_rank=game.team0_level if (game.declarer_team or 0) == 0 else game.team1_level,
-                last_declarer_player=game.last_declarer_player,
+                next_declarer_player=game.next_declarer_player,
                 team0_level=game.team0_level,
                 team1_level=game.team1_level,
             ))
@@ -516,7 +516,7 @@ class TestMultipleRoundsWithRealRoundSm:
             round_state = create_round(RoundInput(
                 declarer_team=game.declarer_team,
                 trump_rank=game.team0_level if (game.declarer_team or 0) == 0 else game.team1_level,
-                last_declarer_player=game.last_declarer_player,
+                next_declarer_player=game.next_declarer_player,
                 team0_level=game.team0_level,
                 team1_level=game.team1_level,
             ))

@@ -1,5 +1,9 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { validatePlay, validateDiscard, validateBidCards } from "../engine/input-validator.ts";
+import {
+  validateBidCards,
+  validateDiscard,
+  validatePlay,
+} from "../engine/input-validator.ts";
 import type { Card } from "../core/types.ts";
 
 function makeCard(id: string, suit: string, rank: string): Card {
@@ -10,7 +14,9 @@ const H5 = makeCard("D1-hearts-5", "hearts", "5");
 const H6 = makeCard("D1-hearts-6", "hearts", "6");
 const S2 = makeCard("D1-spades-2", "spades", "2");
 const BJ = makeCard("D2-joker-BJ", "joker", "BJ");
+const BJ2 = makeCard("D1-joker-BJ", "joker", "BJ");
 const SJ = makeCard("D2-joker-SJ", "joker", "SJ");
+const SJ2 = makeCard("D1-joker-SJ", "joker", "SJ");
 
 // --- validatePlay ---
 
@@ -91,12 +97,21 @@ Deno.test("test_validateBidCards_trump_rank", () => {
   assertEquals(validateBidCards([S2], "2"), true);
 });
 
-Deno.test("test_validateBidCards_joker", () => {
-  assertEquals(validateBidCards([BJ], "2"), true);
+Deno.test("test_validateBidCards_single_big_joker_rejected", () => {
+  assertEquals(validateBidCards([BJ], "2"), false);
 });
 
-Deno.test("test_validateBidCards_small_joker", () => {
-  assertEquals(validateBidCards([SJ], "2"), true);
+Deno.test("test_validateBidCards_single_small_joker_rejected", () => {
+  assertEquals(validateBidCards([SJ], "2"), false);
+});
+
+Deno.test("test_validateBidCards_joker_pair", () => {
+  assertEquals(validateBidCards([BJ, BJ2], "2"), true);
+  assertEquals(validateBidCards([SJ, SJ2], "2"), true);
+});
+
+Deno.test("test_validateBidCards_mixed_joker_pair_rejected", () => {
+  assertEquals(validateBidCards([BJ, SJ], "2"), false);
 });
 
 Deno.test("test_validateBidCards_non_trump_non_joker", () => {
@@ -113,5 +128,8 @@ Deno.test("test_validateBidCards_mixed_valid_invalid", () => {
 });
 
 Deno.test("test_validateBidCards_multiple_trump_rank", () => {
-  assertEquals(validateBidCards([S2, makeCard("D2-spades-2", "spades", "2")], "2"), true);
+  assertEquals(
+    validateBidCards([S2, makeCard("D2-spades-2", "spades", "2")], "2"),
+    true,
+  );
 });

@@ -52,6 +52,11 @@ Deno.test("test_renderTrickView_shows_played_cards", () => {
   const el = renderTrickView(snap);
   const trickCards = el.querySelectorAll(".trick-card");
   assertEquals(trickCards.length, 1);
+  assertEquals(el.querySelectorAll(".trick-lead-marker").length, 1);
+  assertEquals(
+    el.querySelector(".trick-lead-marker")?.textContent ?? "",
+    "先出",
+  );
 });
 
 Deno.test("test_renderTrickView_empty_trick", () => {
@@ -59,6 +64,53 @@ Deno.test("test_renderTrickView_empty_trick", () => {
   const el = renderTrickView(snap);
   const trickCards = el.querySelectorAll(".trick-card");
   assertEquals(trickCards.length, 0);
+});
+
+Deno.test("test_renderTrickView_waiting_scoring_keeps_last_trick", () => {
+  const snap = makeSnapshot({
+    phase: "WAITING",
+    trick: null,
+    trick_history: [{
+      lead_player: 1,
+      winner: 3,
+      points: 20,
+      slots: [
+        {
+          player: 0,
+          cards: [{ id: "D1-clubs-5", suit: "clubs", rank: "5" }],
+        },
+        {
+          player: 1,
+          cards: [{ id: "D1-hearts-10", suit: "hearts", rank: "10" }],
+        },
+        {
+          player: 2,
+          cards: [{ id: "D1-spades-K", suit: "spades", rank: "K" }],
+        },
+        {
+          player: 3,
+          cards: [{ id: "D1-diamonds-A", suit: "diamonds", rank: "A" }],
+        },
+      ],
+    }],
+    scoring: {
+      declarer_team: 0,
+      defender_points: 80,
+      total_defender_points: 100,
+      bottom_card_bonus: 20,
+      bottom_cards: [],
+    },
+  });
+  const el = renderTrickView(snap);
+
+  assertEquals(el.classList.contains("showing-previous"), true);
+  assertEquals(el.querySelectorAll(".trick-card").length, 4);
+  assertEquals(el.querySelectorAll(".trick-slot.winner").length, 1);
+  assertEquals(
+    el.querySelectorAll(".trick-slot.lead .trick-lead-marker").length,
+    1,
+  );
+  assertEquals((el.textContent ?? "").includes("10"), true);
 });
 
 Deno.test("test_renderTrickView_previous_trick_preview_shows_four_players", () => {
@@ -91,6 +143,10 @@ Deno.test("test_renderTrickView_previous_trick_preview_shows_four_players", () =
   assertEquals(el.querySelectorAll(".trick-slot").length, 4);
   assertEquals(el.querySelectorAll(".trick-card").length, 4);
   assertEquals(el.querySelectorAll(".trick-slot.winner").length, 1);
+  assertEquals(
+    el.querySelectorAll(".trick-slot.lead .trick-lead-marker").length,
+    1,
+  );
   assertEquals(
     el.querySelectorAll(".trick-card-placeholder").length,
     0,
@@ -192,6 +248,7 @@ Deno.test("test_renderTrickView_slot_with_empty_cards", () => {
   assertEquals(trickCards.length, 0);
   const labels = el.querySelectorAll(".trick-player-label");
   assertEquals(labels.length, 0);
+  assertEquals(el.querySelectorAll(".trick-lead-marker").length, 0);
 });
 
 Deno.test("test_renderTrickView_current_player_highlight", () => {

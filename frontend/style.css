@@ -12,19 +12,19 @@ html {
 
 /* Reference-layout UI: desktop card-room window with modernized colors. */
 :root {
-  --room-bg: #e6eef1;
-  --window-bar: #153f4a;
-  --table-blue-a: #0c6682;
-  --table-blue-b: #0f8198;
-  --table-blue-c: #09465d;
+  --room-bg: #182823;
+  --window-bar: #182823;
+  --table-blue-a: #315a5a;
+  --table-blue-b: #436f69;
+  --table-blue-c: #213d3f;
   --table-score-a: #315a5a;
   --table-score-b: #436f69;
-  --sidebar-bg: #e9fbff;
-  --sidebar-panel: #f8feff;
-  --sidebar-line: rgba(12, 73, 91, 0.18);
-  --text-dark: #07323b;
-  --text-soft: #4d7480;
-  --button-blue: #278dc2;
+  --sidebar-bg: #182823;
+  --sidebar-panel: rgba(5, 42, 54, 0.34);
+  --sidebar-line: rgba(255, 223, 90, 0.16);
+  --text-dark: #effcff;
+  --text-soft: rgba(239, 252, 255, 0.72);
+  --button-blue: #2f7ead;
   --button-green: #1aa37a;
   --button-yellow: #ffca3a;
   --button-gray: #526b74;
@@ -1135,9 +1135,10 @@ body {
   padding: 0;
   background:
     linear-gradient(
-      180deg,
-      rgba(255, 255, 255, 0.72),
-      rgba(215, 228, 233, 0.9)
+      145deg,
+      rgba(49, 90, 90, 0.92),
+      rgba(67, 111, 105, 0.9) 48%,
+      rgba(33, 61, 63, 0.96)
     ),
     var(--room-bg);
 }
@@ -1154,7 +1155,7 @@ body {
   grid-template-rows: minmax(0, 1fr) 142px auto;
   gap: 0;
   overflow: hidden;
-  border: 1px solid rgba(4, 35, 43, 0.3);
+  border: 1px solid rgba(255, 223, 90, 0.16);
   border-top: 0;
   border-radius: 0;
   background: linear-gradient(
@@ -1163,7 +1164,7 @@ body {
     var(--table-blue-b) 56%,
     var(--table-blue-c)
   );
-  box-shadow: 0 18px 42px rgba(5, 26, 33, 0.28);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.24);
 }
 
 .game-table {
@@ -1207,7 +1208,7 @@ body {
     135deg,
     var(--table-score-a),
     var(--table-score-b) 58%,
-    #213d3f
+    var(--table-blue-c)
   );
 }
 
@@ -1454,11 +1455,31 @@ body {
 .trick-placeholder-slot.current,
 .trick-slot.lead,
 .trick-placeholder-slot.lead {
+  position: relative;
   min-width: 106px;
   min-height: 74px;
   padding: 4px;
   border: 0;
   background: transparent;
+}
+
+.trick-lead-marker {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  min-width: 28px;
+  height: 17px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  border-radius: 9px;
+  color: #07323b;
+  background: #ffdf5a;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.18);
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
 }
 
 .trick-cards {
@@ -1492,6 +1513,11 @@ body {
   grid-template-rows: 30px 108px;
 }
 
+.hand-area.has-bid-actions {
+  height: 164px;
+  grid-template-rows: 52px 108px;
+}
+
 .hand-actions {
   min-width: 0;
   min-height: 30px;
@@ -1499,6 +1525,7 @@ body {
   align-items: center;
   justify-content: center;
   gap: 8px;
+  overflow: visible;
 }
 
 .hand-panel {
@@ -1512,11 +1539,7 @@ body {
   border: 0;
   border-radius: 0;
   color: #effcff;
-  background: linear-gradient(
-    180deg,
-    rgba(5, 42, 54, 0.58),
-    rgba(5, 36, 47, 0.72)
-  );
+  background: rgba(5, 42, 54, 0.34);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
@@ -1605,6 +1628,40 @@ body {
   gap: 8px;
 }
 
+.action-panel--bid {
+  max-width: min(1400px, calc(100vw - 360px));
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 6px;
+  overflow: visible;
+  padding: 0;
+}
+
+.action-panel--bid .hand-action-button {
+  width: auto;
+  min-width: 46px;
+  min-height: 24px;
+  padding: 0 8px;
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+
+.action-panel--bid .bid-button-red {
+  color: #9e241f;
+  background: #fff7f2;
+  border: 1px solid rgba(174, 44, 34, 0.42);
+}
+
+.action-panel--bid .bid-button-black {
+  color: #13252b;
+  background: #f7fbf8;
+  border: 1px solid rgba(13, 36, 42, 0.32);
+}
+
+.action-panel--bid .hand-action-button.selected {
+  box-shadow: 0 0 0 2px rgba(255, 223, 90, 0.55);
+}
+
 .hand-action-button {
   width: 64px;
   min-height: 28px;
@@ -1655,24 +1712,28 @@ button {
   gap: 6px;
   padding: 10px;
   overflow: hidden;
-  color: var(--text-dark);
-  background: var(--sidebar-bg);
-  border-left: 1px solid rgba(6, 54, 67, 0.22);
+  color: #effcff;
+  background: linear-gradient(
+    180deg,
+    rgba(24, 40, 35, 0.96),
+    rgba(13, 27, 25, 0.98)
+  );
+  border-left: 1px solid rgba(255, 223, 90, 0.15);
 }
 
 .scoreboard__title {
   padding: 0 0 6px;
-  color: var(--text-dark);
-  border-bottom: 1px solid var(--sidebar-line);
+  color: #ffdf5a;
+  border-bottom: 1px solid rgba(255, 223, 90, 0.2);
   font-size: 16px;
 }
 
 .scoreboard__team,
 .scoreboard__section {
-  border: 1px solid var(--sidebar-line);
+  border: 1px solid rgba(255, 223, 90, 0.14);
   border-radius: 5px;
-  background: var(--sidebar-panel);
-  box-shadow: 0 4px 12px rgba(23, 68, 79, 0.08);
+  background: rgba(5, 42, 54, 0.34);
+  box-shadow: none;
 }
 
 .scoreboard__level-grid {
@@ -1714,36 +1775,36 @@ button {
 .scoreboard__section-title,
 .scoreboard__muted,
 .scoreboard__empty {
-  color: var(--text-soft);
+  color: rgba(239, 252, 255, 0.72);
 }
 
 .scoreboard__team-level,
 .scoreboard__rank,
 .scoreboard__seat-row,
 .scoreboard__log-row {
-  color: var(--text-dark);
-  background: #eefaff;
+  color: #effcff;
+  background: rgba(255, 255, 255, 0.055);
 }
 
 .scoreboard__points {
-  color: #d77b19;
+  color: #ffdf5a;
 }
 
 .scoreboard__seat-team {
-  color: var(--text-soft);
+  color: rgba(239, 252, 255, 0.72);
   font-size: 11px;
 }
 
 .scoreboard__seat-status {
   margin-left: auto;
-  color: #0f6d85;
+  color: #75d685;
   font-size: 12px;
   font-weight: 900;
 }
 
 .scoreboard__log-row.accent {
-  color: #0f6d85;
-  background: #dff5fb;
+  color: #ffdf5a;
+  background: rgba(255, 223, 90, 0.12);
   font-weight: 900;
 }
 
@@ -1756,15 +1817,15 @@ button {
 .scoreboard__tab {
   min-height: 28px;
   padding: 0 6px;
-  color: #1c5260;
-  background: #d7f4fb;
+  color: rgba(239, 252, 255, 0.82);
+  background: rgba(255, 255, 255, 0.08);
   box-shadow: none;
   font-size: 12px;
 }
 
 .scoreboard__tab.active {
-  color: #fff;
-  background: var(--button-blue);
+  color: #07323b;
+  background: #ffdf5a;
 }
 
 .scoreboard__tab-panel {
@@ -1791,17 +1852,17 @@ button {
   padding: 6px;
   overflow: hidden;
   border-radius: 5px;
-  background: #eefaff;
+  background: rgba(255, 255, 255, 0.055);
 }
 
 .scoreboard__chat-input {
   width: 100%;
   min-height: 26px;
   padding: 0 8px;
-  border: 1px solid var(--sidebar-line);
+  border: 1px solid rgba(255, 223, 90, 0.14);
   border-radius: 4px;
-  color: var(--text-soft);
-  background: #f8feff;
+  color: rgba(239, 252, 255, 0.72);
+  background: rgba(5, 42, 54, 0.34);
   font: inherit;
 }
 
@@ -2065,6 +2126,11 @@ button {
 
   .action-panel {
     flex-wrap: nowrap;
+  }
+
+  .action-panel--bid {
+    max-width: calc(100vw - 16px);
+    flex-wrap: wrap;
   }
 }
 

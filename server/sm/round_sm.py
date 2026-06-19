@@ -39,7 +39,7 @@ class RoundInput(BaseModel):
 
     declarer_team: int | None
     trump_rank: Rank
-    last_declarer_player: int | None
+    next_declarer_player: int | None
     team0_level: Rank
     team1_level: Rank
 
@@ -67,7 +67,7 @@ class RoundState(BaseModel):
     team0_level: Rank
     team1_level: Rank
     start_player: int
-    last_declarer_player: int | None
+    next_declarer_player: int | None
 
 
 # ---- State Machine Operations ----
@@ -81,7 +81,9 @@ def create_round(input: RoundInput) -> RoundState:
     bottom_cards = decks[:BOTTOM_CARD_COUNT]
     deck = decks[BOTTOM_CARD_COUNT:]
 
-    start_player = 0
+    if input.next_declarer_player is not None:
+        assert input.declarer_team == get_team_index(input.next_declarer_player)
+    start_player = input.next_declarer_player if input.next_declarer_player is not None else 0
 
     deal_bid_state = db.create_deal_bid(db.DealBidInput(
         deck=deck,
@@ -109,7 +111,7 @@ def create_round(input: RoundInput) -> RoundState:
         team0_level=input.team0_level,
         team1_level=input.team1_level,
         start_player=start_player,
-        last_declarer_player=input.last_declarer_player,
+        next_declarer_player=input.next_declarer_player,
     )
 
 
@@ -398,39 +400,33 @@ def _transition_to_stirring(state: RoundState, deal_bid: db.DealBidState) -> Rou
 
     if deal_bid.phase == "COMPLETE" and deal_bid.bid_winner is not None:
         winner = deal_bid.bid_winner.player
-        winner_team = get_team_index(winner)
 
-        valid_winner = False
-        if declarer_team is None:
-            # Case A: First round with winner
-            declarer_team = winner_team
+        if state.next_declarer_player is None:
+            # First round: the deal-bid winner determines the declarer.
+            declarer_team = get_team_index(winner)
             declarer_player = winner
-            valid_winner = True
         else:
-            # Case B: Subsequent round with winner
-            # Validate winner is on declarer team
-            if winner_team == declarer_team:
-                declarer_player = winner
-                valid_winner = True
-            else:
-                # Invalid: ignore and treat as no bid
-                declarer_player = state.last_declarer_player if state.last_declarer_player is not None else state.start_player
+            # Later rounds: the next declarer is fixed by prior scoring.
+            # Deal-bid only chooses trump suit, not the declarer.
+            declarer_player = state.next_declarer_player
+            declarer_team = get_team_index(declarer_player)
 
-        trump_suit = deal_bid.bid_winner.suit if valid_winner else None
-        initial_bid_cards = list(deal_bid.bid_winner.cards) if valid_winner else []
-        bid_winner = deal_bid.bid_winner if valid_winner else None
+        trump_suit = deal_bid.bid_winner.suit
+        initial_bid_cards = list(deal_bid.bid_winner.cards)
+        bid_winner = deal_bid.bid_winner
         defender_team = 1 - declarer_team
 
     elif deal_bid.phase == "NO_BID":
         # Case C: No bid (空主)
         trump_suit = None
-        if declarer_team is None:
-            # First round: declarer_player = start_player
+        if state.next_declarer_player is None:
+            # First round: declarer_player = start_player.
             declarer_player = state.start_player
             declarer_team = get_team_index(declarer_player)
         else:
-            # Subsequent round: declarer_player = last_declarer_player
-            declarer_player = state.last_declarer_player if state.last_declarer_player is not None else state.start_player
+            # Later rounds: declarer_player is fixed by prior scoring.
+            declarer_player = state.next_declarer_player
+            declarer_team = get_team_index(declarer_player)
         defender_team = 1 - declarer_team
     else:
         raise ValueError(

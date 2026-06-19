@@ -1,5 +1,6 @@
 import type { Card, StateSnapshot } from "../../core/types.ts";
 import type {
+  BidOption,
   GameAction,
   InteractionMode,
   StirButtonState,
@@ -33,6 +34,9 @@ export function renderHandView(
   onPass?: () => void,
   stirButtonState?: StirButtonState,
   onShowPreviousTrick?: () => void,
+  bidOptions?: BidOption[],
+  pendingBidIntent?: BidOption | null,
+  onBidOptionSelect?: (option: BidOption) => void,
 ): HTMLElement {
   const actionHints = snapshot.action_hints ?? [];
   const selectedCount = selectedCardIds?.size ?? 0;
@@ -50,15 +54,20 @@ export function renderHandView(
     interactionMode === "discard" || interactionMode === "next_round";
   const needsStirButtons = interactionMode === "stir" &&
     (onStir !== undefined || onPass !== undefined);
+  const needsBidButtons = interactionMode === "bid" &&
+    bidOptions !== undefined &&
+    bidOptions.length > 0 &&
+    onBidOptionSelect !== undefined;
   const canShowPreviousTrick = snapshot.trick_history.length > 0 &&
     onShowPreviousTrick !== undefined;
   const hasControls = (needsButton && onAction !== undefined) ||
-    needsStirButtons || showTools || canShowPreviousTrick;
+    needsStirButtons || needsBidButtons || showTools ||
+    canShowPreviousTrick;
 
   const container = el("div", {
     class: `hand-area${compactHand ? " compact" : ""}${
       hasControls ? " has-actions" : ""
-    }`,
+    }${needsBidButtons ? " has-bid-actions" : ""}`,
   });
 
   if (hasControls) {
@@ -85,6 +94,15 @@ export function renderHandView(
           onStir,
           onPass,
           stirButtonState,
+        ),
+      );
+    }
+    if (needsBidButtons) {
+      controls.appendChild(
+        renderBidActionPanel(
+          bidOptions,
+          pendingBidIntent ?? null,
+          onBidOptionSelect,
         ),
       );
     }
@@ -162,6 +180,57 @@ export function renderHandView(
   container.appendChild(panel);
 
   return container;
+}
+
+function renderBidActionPanel(
+  bidOptions: BidOption[],
+  pendingBidIntent: BidOption | null,
+  onBidOptionSelect: (option: BidOption) => void,
+): HTMLElement {
+  const panel = el("div", { class: "action-panel action-panel--bid" });
+  for (const option of bidOptions) {
+    const className = [
+      isSameBidOption(option, pendingBidIntent)
+        ? "btn-warning hand-action-button selected"
+        : "btn-secondary hand-action-button",
+      bidOptionColorClass(option),
+    ].join(" ");
+    const button = el("button", {
+      class: className,
+      title: bidOptionTitle(option),
+    }, option.label);
+    button.addEventListener("click", () => onBidOptionSelect(option));
+    panel.appendChild(button);
+  }
+  return panel;
+}
+
+function bidOptionColorClass(option: BidOption): string {
+  if (
+    option.trumpSuit === "hearts" || option.trumpSuit === "diamonds"
+  ) {
+    return "bid-button-red";
+  }
+  if (option.trumpSuit === "spades" || option.trumpSuit === "clubs") {
+    return "bid-button-black";
+  }
+  return option.label.startsWith("大王")
+    ? "bid-button-red"
+    : "bid-button-black";
+}
+
+function isSameBidOption(
+  option: BidOption,
+  pendingBidIntent: BidOption | null,
+): boolean {
+  return pendingBidIntent !== null &&
+    pendingBidIntent.cardIds.join(",") === option.cardIds.join(",");
+}
+
+function bidOptionTitle(option: BidOption): string {
+  return option.trumpSuit === null
+    ? `${option.label}，无主`
+    : `${option.label}，亮${suitSymbol(option.trumpSuit)}主`;
 }
 
 function renderPreviousTrickButton(

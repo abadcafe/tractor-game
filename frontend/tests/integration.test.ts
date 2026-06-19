@@ -235,16 +235,18 @@ Deno.test("test_integration_bid_action", () => {
     bidOptions,
   });
 
-  // Step 2: Verify bidding dialog is shown
+  // Step 2: Verify the old bottom bidding dialog is not shown
   const bidEl = container.querySelector(".bidding-dialog");
-  assertNotEquals(bidEl, null);
+  assertEquals(bidEl, null);
 
-  // Step 3: Verify bid options are rendered as pills
-  const pills = container.querySelectorAll(".bid-option");
-  assertEquals(pills.length, 1);
+  // Step 3: Verify bid options are rendered as hand action buttons
+  const buttons = container.querySelectorAll(
+    ".hand-actions .action-panel--bid button",
+  );
+  assertEquals(buttons.length, 1);
 
-  // Step 4: Click the bid option pill to select it
-  pills[0].dispatchEvent(new Event("click", { bubbles: true }));
+  // Step 4: Click the bid option button to select it
+  buttons[0].dispatchEvent(new Event("click", { bubbles: true }));
   assertNotEquals(selectedBidOption, null);
   assertEquals(selectedBidOption!.cardIds, ["D1-spades-2"]);
   assertEquals(selectedBidOption!.label, "♠2");

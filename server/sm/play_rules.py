@@ -8,11 +8,13 @@ from dataclasses import dataclass
 from itertools import combinations, product as iterproduct
 
 from server.sm.card_model import Card, Suit, Rank, SUITED_RANKS
-from server.sm.comparator import SUIT_OFFSET, effective_suit, trump_rank_order
+from server.sm.comparator import SUIT_OFFSET, effective_suit, trump_order, trump_rank_order
 from server.sm.result import Ok, Rejected, StateResult
 from server.sm.types import SubPlay
 
-MAX_LEGAL_PLAY_HINTS = 5
+MAX_PLAY_ACTION_HINTS: int = 5
+
+type PlayActionHintSortKey = tuple[int, int, tuple[int, ...], tuple[str, ...]]
 
 
 # ---- Helpers ----
@@ -148,6 +150,34 @@ def get_legal_plays(
         return []
 
     return _following_plays(hand, lead_cards, trump_suit, trump_rank)
+
+
+def sort_play_action_hints(
+    hints: list[list[Card]],
+    trump_suit: Suit | None,
+    trump_rank: Rank,
+) -> list[list[Card]]:
+    """Sort player-facing play hints from weakest to strongest."""
+    return sorted(
+        [list(cards) for cards in hints],
+        key=lambda cards: _play_action_hint_sort_key(
+            cards, trump_suit, trump_rank
+        ),
+    )
+
+
+def _play_action_hint_sort_key(
+    cards: list[Card],
+    trump_suit: Suit | None,
+    trump_rank: Rank,
+) -> PlayActionHintSortKey:
+    subs = decompose(cards, trump_suit, trump_rank) if cards else []
+    max_sub_level = max((sub.sub_level for sub in subs), default=0)
+    card_orders = tuple(
+        sorted(trump_order(card, trump_suit, trump_rank) for card in cards)
+    )
+    card_ids = tuple(sorted(card.id for card in cards))
+    return (len(cards), max_sub_level, card_orders, card_ids)
 
 
 def _leading_plays(

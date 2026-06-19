@@ -186,7 +186,7 @@ class TestCreateRound:
         state = create_round(RoundInput(
             declarer_team=None,
             trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO,
             team1_level=Rank.TWO,
         ))
@@ -196,16 +196,32 @@ class TestCreateRound:
         assert state.deal_bid_state is not None
 
     def test_create_round_with_declarer(self) -> None:
-        """Subsequent round with known declarer_team."""
+        """Subsequent round starts dealing from the fixed declarer."""
         state = create_round(RoundInput(
             declarer_team=0,
             trump_rank=Rank.THREE,
-            last_declarer_player=0,
+            next_declarer_player=0,
             team0_level=Rank.THREE,
             team1_level=Rank.TWO,
         ))
         assert state.declarer_team == 0
         assert state.trump_rank == Rank.THREE
+        assert state.start_player == 0
+        assert state.deal_bid_state is not None
+        assert state.deal_bid_state.deal_target == 0
+
+    def test_create_round_with_nonzero_declarer_starts_dealing_there(self) -> None:
+        """Subsequent round deal starts from the fixed declarer, not player 0."""
+        state = create_round(RoundInput(
+            declarer_team=1,
+            trump_rank=Rank.FIVE,
+            next_declarer_player=2,
+            team0_level=Rank.THREE,
+            team1_level=Rank.FIVE,
+        ))
+        assert state.start_player == 2
+        assert state.deal_bid_state is not None
+        assert state.deal_bid_state.deal_target == 2
 
 
 class TestDealBidPhase:
@@ -213,7 +229,7 @@ class TestDealBidPhase:
         """deal_next_card during DEAL_BID advances the deal-bid sub-state."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         assert state.phase == "DEAL_BID"
@@ -227,7 +243,7 @@ class TestDealBidPhase:
         """reveal during DEAL_BID adds a bid event."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         # Deal some cards first
@@ -258,7 +274,7 @@ class TestDealBidPhase:
         random.seed(42)
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_with_reveal(state)
@@ -278,7 +294,7 @@ class TestDealBidPhase:
         hands = [[bid_card], over_stir_pair, [], []]
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.FIVE,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.FIVE, team1_level=Rank.TWO,
         ))
         bid_event = BidEvent(
@@ -316,7 +332,7 @@ class TestDealBidPhase:
         """After deal-bid with no bids, round enters STIRRING with empty trump."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
@@ -348,7 +364,7 @@ class TestStirringPhase:
         """After deal-bid, stirring starts in EXCHANGING sub-phase."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
@@ -361,7 +377,7 @@ class TestStirringPhase:
         """stir_discard during initial EXCHANGING transitions to WAITING."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
@@ -374,7 +390,7 @@ class TestStirringPhase:
         """A max-priority stir that completes during exchange advances the round."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
@@ -436,7 +452,7 @@ class TestStirringPhase:
         """pass_stir during STIRRING WAITING sub-phase advances current player."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
@@ -454,7 +470,7 @@ class TestStirringPhase:
         random.seed(10)
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
@@ -493,7 +509,7 @@ class TestStirringPhase:
         """stir with cards not in current player's hand returns Rejected."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
@@ -515,7 +531,7 @@ class TestStirringPhase:
         """stir with in-hand cards that the stirring module rejects returns Rejected."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
@@ -535,7 +551,7 @@ class TestStirringPhase:
         """After all players pass stirring, round enters PLAYING directly."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
@@ -550,7 +566,7 @@ class TestStirringPhase:
         random.seed(10)
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
@@ -631,7 +647,7 @@ class TestPlayingPhase:
         """First play during PLAYING is the lead player's turn."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
@@ -645,7 +661,7 @@ class TestPlayingPhase:
         """After a trick resolves, the next trick starts automatically."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
@@ -683,7 +699,7 @@ class TestPlayingPhase:
         """
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
@@ -722,7 +738,7 @@ class TestScoringPhase:
         """
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
@@ -756,7 +772,7 @@ class TestRoundDeclarer:
         random.seed(42)
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         assert state.declarer_team is None
@@ -769,28 +785,30 @@ class TestRoundDeclarer:
         """Subsequent round: declarer_team is pre-determined."""
         state = create_round(RoundInput(
             declarer_team=1, trump_rank=Rank.THREE,
-            last_declarer_player=1,
+            next_declarer_player=1,
             team0_level=Rank.TWO, team1_level=Rank.THREE,
         ))
         assert state.declarer_team == 1
 
-    def test_round_subsequent_round_bid_winner_on_team(self) -> None:
-        """Subsequent round: bid winner on declarer_team sets declarer_player."""
+    def test_round_subsequent_round_bid_winner_only_sets_trump(self) -> None:
+        """Subsequent round: bid winner does not replace fixed declarer."""
         random.seed(3)
         state = create_round(RoundInput(
             declarer_team=0, trump_rank=Rank.TWO,
-            last_declarer_player=0,
+            next_declarer_player=3,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
-        # Deal some cards
-        for _ in range(20):
-            state = _deal(state)
-        # Find trump rank card in team 0 player's hand (players 0, 3)
+        state = _deal_all_cards(state)
+        # Find a trump rank card outside the fixed declarer player's hand.
         assert state.deal_bid_state is not None
-        for p in [0, 3]:
+        bid_player: int | None = None
+        bid_suit: Suit | None = None
+        for p in [0, 1, 2]:
             trump_cards = [c for c in state.deal_bid_state.players_hand[p]
                            if c.rank == Rank.TWO and not c.is_joker]
             if trump_cards:
+                bid_player = p
+                bid_suit = trump_cards[0].suit
                 event = BidEvent(
                     player=p, cards=[trump_cards[0]], kind="trump_rank",
                     suit=trump_cards[0].suit, joker_type=None, count=1,
@@ -799,7 +817,8 @@ class TestRoundDeclarer:
                 assert isinstance(result, Ok)
                 state = result.value
                 break
-        state = _deal_all_cards(state)
+        assert bid_player is not None
+        assert bid_suit is not None
         # Finalize deal-bid to transition to STIRRING
         if state.deal_bid_state is not None and state.deal_bid_state.all_dealt:
             result = finalize_deal_bid(state)
@@ -809,25 +828,30 @@ class TestRoundDeclarer:
         assert state.deal_bid_state is not None
         assert state.deal_bid_state.bid_winner is not None
         assert state.declarer_team == 0  # unchanged
-        assert state.declarer_player is not None
+        assert state.declarer_player == 3
+        assert state.bid_winner is not None
+        assert state.bid_winner.player == bid_player
+        assert state.trump_suit == bid_suit
 
-    def test_round_subsequent_round_bid_winner_wrong_team(self) -> None:
-        """Subsequent round: bid winner NOT on declarer_team triggers fallback."""
+    def test_round_subsequent_round_other_team_bid_still_sets_trump(self) -> None:
+        """Subsequent round: any player's bid can choose suit without changing declarer."""
         random.seed(3)
         state = create_round(RoundInput(
             declarer_team=0, trump_rank=Rank.TWO,
-            last_declarer_player=2,
+            next_declarer_player=0,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
-        # Deal some cards
-        for _ in range(20):
-            state = _deal(state)
+        state = _deal_all_cards(state)
         # Find trump rank card in team 1 player's hand (players 1, 2)
         assert state.deal_bid_state is not None
+        bid_player: int | None = None
+        bid_suit: Suit | None = None
         for p in [1, 2]:
             trump_cards = [c for c in state.deal_bid_state.players_hand[p]
                            if c.rank == Rank.TWO and not c.is_joker]
             if trump_cards:
+                bid_player = p
+                bid_suit = trump_cards[0].suit
                 event = BidEvent(
                     player=p, cards=[trump_cards[0]], kind="trump_rank",
                     suit=trump_cards[0].suit, joker_type=None, count=1,
@@ -836,23 +860,25 @@ class TestRoundDeclarer:
                 assert isinstance(result, Ok)
                 state = result.value
                 break
-        state = _deal_all_cards(state)
+        assert bid_player is not None
+        assert bid_suit is not None
         # Finalize deal-bid to transition to STIRRING
         if state.deal_bid_state is not None and state.deal_bid_state.all_dealt:
             result = finalize_deal_bid(state)
             assert isinstance(result, Ok)
             state = result.value
         assert state.phase == "STIRRING"
-        # Winner is on team 1 but declarer_team is 0 -> fallback
         assert state.declarer_team == 0  # unchanged
-        assert state.declarer_player == 2  # falls back to last_declarer_player
-        assert state.trump_suit is None  # fallback sets trump_suit to None
+        assert state.declarer_player == 0
+        assert state.bid_winner is not None
+        assert state.bid_winner.player == bid_player
+        assert state.trump_suit == bid_suit
 
     def test_round_empty_trump_no_bid(self) -> None:
         """No bid = empty trump, declarer_player from start_player."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
@@ -861,15 +887,15 @@ class TestRoundDeclarer:
         assert state.declarer_player == 0
 
     def test_round_subsequent_round_no_bid(self) -> None:
-        """Subsequent round no-bid: declarer_player = last_declarer_player."""
+        """Subsequent round no-bid: declarer_player = next_declarer_player."""
         state = create_round(RoundInput(
             declarer_team=1, trump_rank=Rank.THREE,
-            last_declarer_player=2,
+            next_declarer_player=2,
             team0_level=Rank.TWO, team1_level=Rank.THREE,
         ))
         state = _complete_deal_bid_no_bid(state)
         assert state.trump_suit is None
-        # Subsequent round no-bid: declarer_player = last_declarer_player
+        # Subsequent round no-bid: declarer_player = next_declarer_player
         assert state.declarer_player == 2
         assert state.declarer_team == 1  # unchanged
 
@@ -879,7 +905,7 @@ class TestRoundValidation:
         """Calling a phase-specific operation in the wrong phase raises error."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         assert state.phase == "DEAL_BID"
@@ -900,7 +926,7 @@ class TestRoundFullFlow:
         """Integration: complete round from deal-bid to scoring."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         # Deal-bid: no bids
@@ -948,7 +974,7 @@ class TestPlayerIdentityValidation:
         """pass_stir rejects when player_index doesn't match current_player."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
@@ -977,7 +1003,7 @@ class TestPlayerIdentityValidation:
         """stir rejects when player_index doesn't match current_player."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
@@ -1011,7 +1037,7 @@ class TestPlayerIdentityValidation:
         """stir_discard rejects when player_index doesn't match exchanging_player."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
@@ -1035,7 +1061,7 @@ class TestPlayerIdentityValidation:
         """pass_stir succeeds when player_index matches current_player."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
@@ -1060,7 +1086,7 @@ class TestPlayerIdentityValidation:
         """stir_discard succeeds when player_index matches exchanging_player."""
         state = create_round(RoundInput(
             declarer_team=None, trump_rank=Rank.TWO,
-            last_declarer_player=None,
+            next_declarer_player=None,
             team0_level=Rank.TWO, team1_level=Rank.TWO,
         ))
         state = _complete_deal_bid_no_bid(state)
@@ -1115,7 +1141,7 @@ def test_play_leading_accepts_legal_partial_throw_not_in_enumerated_hints() -> N
         team0_level=Rank.TWO,
         team1_level=Rank.TWO,
         start_player=0,
-        last_declarer_player=None,
+        next_declarer_player=None,
     )
 
     result = play(
@@ -1165,7 +1191,7 @@ def test_play_leading_failed_throw_records_public_penalty_event() -> None:
         team0_level=Rank.TWO,
         team1_level=Rank.TWO,
         start_player=0,
-        last_declarer_player=None,
+        next_declarer_player=None,
     )
 
     result = play(state, player_index=0, cards=hands[0])

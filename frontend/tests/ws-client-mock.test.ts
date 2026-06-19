@@ -156,6 +156,96 @@ Deno.test("test_send_action", async () => {
   client.disconnect();
 });
 
+Deno.test("stale socket close does not clear the current connection", async () => {
+  const sockets: WebSocket[] = [];
+  const receivedByPath = new Map<string, string[]>();
+
+  const server = Deno.serve({ port: 0 }, (req) => {
+    const upgrade = req.headers.get("upgrade") || "";
+    if (upgrade.toLowerCase() === "websocket") {
+      const path = new URL(req.url).pathname;
+      const { socket, response } = Deno.upgradeWebSocket(req);
+      socket.addEventListener("open", () => {
+        sockets.push(socket);
+        sendStateOnRequest(socket);
+      });
+      socket.addEventListener("message", (event) => {
+        if (typeof event.data !== "string") return;
+        const existing = receivedByPath.get(path) ?? [];
+        existing.push(event.data);
+        receivedByPath.set(path, existing);
+        if (event.data === JSON.stringify({ seq: 0 })) {
+          socket.send(JSON.stringify(makeStateMessage()));
+        }
+      });
+      return response;
+    }
+    return new Response("Not Found", { status: 404 });
+  });
+
+  const addr = server.addr;
+  const port = typeof addr === "object" && "port" in addr
+    ? addr.port
+    : 0;
+
+  const client = new WsClient();
+  client.onMessage(() => {});
+
+  await client.connect("old-game", `ws://localhost:${port}`);
+  await waitFor(() => sockets.length === 1);
+  await client.connect("new-game", `ws://localhost:${port}`);
+  await waitFor(() => sockets.length === 2);
+
+  sockets[0].close();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  const action: ClientAction = {
+    type: "next_round",
+    seq: 1,
+  };
+  assertEquals(client.send(action), true);
+
+  await waitFor(() =>
+    (receivedByPath.get("/game/new-game") ?? []).some((raw) =>
+      raw === JSON.stringify(action)
+    )
+  );
+
+  client.disconnect();
+  await server.shutdown();
+});
+
+Deno.test("failed initial connect does not schedule reconnects", async () => {
+  let requestCount = 0;
+
+  const server = Deno.serve({ port: 0 }, () => {
+    requestCount++;
+    return new Response("Not Found", { status: 404 });
+  });
+
+  const addr = server.addr;
+  const port = typeof addr === "object" && "port" in addr
+    ? addr.port
+    : 0;
+
+  const client = new WsClient();
+  client.onMessage(() => {});
+
+  let rejected = false;
+  try {
+    await client.connect("missing-game", `ws://localhost:${port}`);
+  } catch {
+    rejected = true;
+  }
+
+  assertEquals(rejected, true);
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  assertEquals(requestCount, 1);
+
+  client.disconnect();
+  await server.shutdown();
+});
+
 Deno.test("test_onMessage_receives_state", async () => {
   const msg = makeStateMessage();
   const server = Deno.serve({ port: 0 }, (req) => {

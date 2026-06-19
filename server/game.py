@@ -53,6 +53,13 @@ logger = logging.getLogger(__name__)
 type GameAction = BidAction | SkipBidAction | PlayAction | StirAction | SkipStirAction | DiscardAction | NextRoundAction
 
 
+def _trump_rank_for_round(state: game_sm.GameState) -> Rank:
+    """Return the level rank played by the next round's declarer team."""
+    if state.declarer_team == 1:
+        return state.team1_level
+    return state.team0_level
+
+
 class Game:
     """Aggregate root that orchestrates game lifecycle using sm state machines.
 
@@ -113,8 +120,8 @@ class Game:
                 raise RuntimeError(f"game_sm.start_game rejected: {reason}")
         self._round_state = round_sm.create_round(round_sm.RoundInput(
             declarer_team=self._game_state.declarer_team,
-            trump_rank=self._game_state.team0_level,  # trump rank starts at team0_level
-            last_declarer_player=self._game_state.last_declarer_player,
+            trump_rank=_trump_rank_for_round(self._game_state),
+            next_declarer_player=self._game_state.next_declarer_player,
             team0_level=self._game_state.team0_level,
             team1_level=self._game_state.team1_level,
         ))
@@ -299,8 +306,8 @@ class Game:
                     # Create new round and deal cards
                     rs = round_sm.create_round(round_sm.RoundInput(
                         declarer_team=self._game_state.declarer_team,
-                        trump_rank=self._game_state.team0_level,
-                        last_declarer_player=self._game_state.last_declarer_player,
+                        trump_rank=_trump_rank_for_round(self._game_state),
+                        next_declarer_player=self._game_state.next_declarer_player,
                         team0_level=self._game_state.team0_level,
                         team1_level=self._game_state.team1_level,
                     ))
@@ -382,6 +389,12 @@ class Game:
             if bid_value(pair, trump_rank) > current_priority:
                 result.append(pair)
 
+        result.sort(
+            key=lambda cards: (
+                bid_value(cards, trump_rank),
+                tuple(sorted(card.id for card in cards)),
+            )
+        )
         return result
 
     def snapshot(self, for_player: int) -> StateSnapshot:
@@ -569,9 +582,7 @@ class Game:
 
         if awaiting_action == "play" and rs.phase == "PLAYING":
             hints = self._get_play_action_hints(player_index)
-            if len(hints) > play_rules.MAX_LEGAL_PLAY_HINTS:
-                return []
-            return hints
+            return hints[:play_rules.MAX_PLAY_ACTION_HINTS]
 
         return []
 
@@ -585,27 +596,34 @@ class Game:
 
         player_hand = list(rs.players_hand[player_index])
         is_leading = rs.trick_state.phase == "LEADING"
+        if is_leading:
+            return []
+
         lead_cards = None
-        if not is_leading:
-            lead_slots = rs.trick_state.slots
-            if not lead_slots:
-                return []
-            lead_cards = lead_slots[rs.trick_state.lead_player].cards
-            if not lead_cards:
-                return []
+        lead_slots = rs.trick_state.slots
+        if not lead_slots:
+            return []
+        lead_cards = lead_slots[rs.trick_state.lead_player].cards
+        if not lead_cards:
+            return []
 
         other_hands: list[Card] = []
         for i in range(4):
             if i != player_index:
                 other_hands.extend(rs.players_hand[i])
 
-        return play_rules.get_legal_plays(
+        hints = play_rules.get_legal_plays(
             hand=player_hand,
             is_leading=is_leading,
             lead_cards=lead_cards,
             trump_suit=rs.trump_suit,
             trump_rank=rs.trump_rank,
             other_hands=other_hands,
+        )
+        return play_rules.sort_play_action_hints(
+            hints,
+            trump_suit=rs.trump_suit,
+            trump_rank=rs.trump_rank,
         )
 
     def is_over(self) -> bool:

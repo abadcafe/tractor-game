@@ -5,7 +5,7 @@ from server.sm.types import BidEvent
 from server.sm.deal_bid_sm import (
     DealBidState, DealBidInput, DealBidResult,
     create_deal_bid, deal_next_card, reveal, finalize_dealing,
-    get_bid_action_hints,
+    get_bid_action_hints, MAX_BID_ACTION_HINTS,
 )
 
 
@@ -504,17 +504,16 @@ class TestReveal:
         assert result_data.trump_suit is None
         assert result_data.winner == 0
 
-    def test_reveal_subsequent_round_non_declarer_team_rejected(self) -> None:
-        """In subsequent rounds, non-declarer-team players cannot reveal."""
+    def test_reveal_subsequent_round_non_declarer_team_accepted(self) -> None:
+        """In subsequent rounds, all players can reveal to choose trump suit."""
         deck, _ = _make_deterministic_deck()
-        # declarer_team=1 means only team1 players (1,2) can reveal
         state = create_deal_bid(DealBidInput(
             deck=deck, declarer_team=1, trump_rank=Rank.TWO, start_player=0,
         ))
         # Deal 5 cards so player 0 has ♠TWO
         for _ in range(5):
             state = _deal(state)
-        # Player 0 is team 0 (not declarer team), should be rejected
+        # Player 0 is team 0, but can still reveal in later rounds.
         spade_twos = [c for c in state.players_hand[0] if c.rank == Rank.TWO and c.suit == Suit.SPADES]
         assert len(spade_twos) >= 1, "Player 0 should have at least one ♠TWO"
         bid = BidEvent(
@@ -522,7 +521,7 @@ class TestReveal:
             suit=Suit.SPADES, joker_type=None, count=1,
         )
         result = reveal(state, bid)
-        assert isinstance(result, Rejected)
+        assert isinstance(result, Ok)
 
     def test_reveal_subsequent_round_declarer_team_accepted(self) -> None:
         """In subsequent rounds, declarer-team players can reveal."""
@@ -787,8 +786,67 @@ def test_get_bid_action_hints_singles_and_pairs() -> None:
     assert "D1-hearts-5" not in all_bid_card_ids
 
 
-def test_get_bid_action_hints_filters_declarer_team_rule() -> None:
-    """get_bid_action_hints returns no misleading hints for non-declarer team."""
+def test_get_bid_action_hints_ordered_from_small_to_large() -> None:
+    """Bid hints are ordered as 10 logical options from small to large."""
+    trump_rank = Rank.TWO
+    hand: list[Card] = [
+        Card(id="D1-diamonds-2", suit=Suit.DIAMONDS, rank=Rank.TWO,
+             is_joker=False, is_big_joker=False, points=0, deck=1),
+        Card(id="D2-diamonds-2", suit=Suit.DIAMONDS, rank=Rank.TWO,
+             is_joker=False, is_big_joker=False, points=0, deck=2),
+        Card(id="D1-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
+             is_joker=False, is_big_joker=False, points=0, deck=1),
+        Card(id="D2-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
+             is_joker=False, is_big_joker=False, points=0, deck=2),
+        Card(id="D1-hearts-2", suit=Suit.HEARTS, rank=Rank.TWO,
+             is_joker=False, is_big_joker=False, points=0, deck=1),
+        Card(id="D2-hearts-2", suit=Suit.HEARTS, rank=Rank.TWO,
+             is_joker=False, is_big_joker=False, points=0, deck=2),
+        Card(id="D1-spades-2", suit=Suit.SPADES, rank=Rank.TWO,
+             is_joker=False, is_big_joker=False, points=0, deck=1),
+        Card(id="D2-spades-2", suit=Suit.SPADES, rank=Rank.TWO,
+             is_joker=False, is_big_joker=False, points=0, deck=2),
+        Card(id="D1-joker-SJ", suit=Suit.JOKER, rank=Rank.SMALL_JOKER,
+             is_joker=True, is_big_joker=False, points=0, deck=1),
+        Card(id="D2-joker-SJ", suit=Suit.JOKER, rank=Rank.SMALL_JOKER,
+             is_joker=True, is_big_joker=False, points=0, deck=2),
+        Card(id="D1-joker-BJ", suit=Suit.JOKER, rank=Rank.BIG_JOKER,
+             is_joker=True, is_big_joker=True, points=0, deck=1),
+        Card(id="D2-joker-BJ", suit=Suit.JOKER, rank=Rank.BIG_JOKER,
+             is_joker=True, is_big_joker=True, points=0, deck=2),
+    ]
+    state = DealBidState(
+        phase="DEALING",
+        deck=[],
+        deal_cursor=0,
+        deal_target=0,
+        bid_winner=None,
+        bid_events=[],
+        players_hand=[hand, [], [], []],
+        declarer_team=None,
+        trump_rank=trump_rank,
+        start_player=0,
+    )
+
+    result = get_bid_action_hints(state, player=0)
+
+    assert len(result) == MAX_BID_ACTION_HINTS
+    assert [[card.id for card in option] for option in result] == [
+        ["D1-diamonds-2"],
+        ["D1-clubs-2"],
+        ["D1-hearts-2"],
+        ["D1-spades-2"],
+        ["D1-diamonds-2", "D2-diamonds-2"],
+        ["D1-clubs-2", "D2-clubs-2"],
+        ["D1-hearts-2", "D2-hearts-2"],
+        ["D1-spades-2", "D2-spades-2"],
+        ["D1-joker-SJ", "D2-joker-SJ"],
+        ["D1-joker-BJ", "D2-joker-BJ"],
+    ]
+
+
+def test_get_bid_action_hints_allow_all_players_in_later_rounds() -> None:
+    """get_bid_action_hints includes legal reveals from any team."""
     trump_rank = Rank.TWO
     hand: list[Card] = [
         Card(id="D1-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
@@ -807,4 +865,6 @@ def test_get_bid_action_hints_filters_declarer_team_rule() -> None:
         start_player=0,
     )
 
-    assert get_bid_action_hints(state, player=1) == []
+    hints = get_bid_action_hints(state, player=1)
+    assert len(hints) == 1
+    assert hints[0][0].id == "D1-clubs-2"

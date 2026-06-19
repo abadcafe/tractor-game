@@ -42,18 +42,27 @@ export function validateDiscard(
 
 /**
  * Validate that all selected cards are valid for bidding:
- * each must be a joker or have the trump rank, and selection must not be empty.
+ * singles must be trump-rank suited cards; pairs must be same-suit trump-rank
+ * cards or same-rank jokers.
  */
 export function validateBidCards(
   selectedCards: Card[],
   trumpRank: string,
 ): boolean {
-  if (selectedCards.length === 0) {
+  if (selectedCards.length === 0 || selectedCards.length > 2) {
     return false;
   }
-  return selectedCards.every(
-    (c) => isJoker(c) || isTrumpRank(c, trumpRank),
-  );
+  if (selectedCards.length === 1) {
+    return isTrumpRank(selectedCards[0], trumpRank);
+  }
+
+  const [a, b] = selectedCards;
+  if (isJoker(a) || isJoker(b)) {
+    return isJoker(a) && isJoker(b) && a.rank === b.rank;
+  }
+  return isTrumpRank(a, trumpRank) &&
+    isTrumpRank(b, trumpRank) &&
+    a.suit === b.suit;
 }
 
 /**
@@ -74,7 +83,10 @@ export function validateStirCards(
     return true;
   }
   // Trump-rank pair: same suit and same rank
-  if (isTrumpRank(a, trumpRank) && isTrumpRank(b, trumpRank) && a.suit === b.suit && a.rank === b.rank) {
+  if (
+    isTrumpRank(a, trumpRank) && isTrumpRank(b, trumpRank) &&
+    a.suit === b.suit && a.rank === b.rank
+  ) {
     return true;
   }
   return false;

@@ -85,7 +85,7 @@ Deno.test("test_render_deal_bid_phase", () => {
   });
   render(snap, container, "bid");
   const bidEl = container.querySelector(".bidding-dialog");
-  assertNotEquals(bidEl, null);
+  assertEquals(bidEl, null);
 });
 
 Deno.test("test_render_stirring_phase", () => {
@@ -127,6 +127,63 @@ Deno.test("test_render_complete_phase", () => {
   render(snap, container, "next_round");
   const overlayEl = container.querySelector(".scoring-overlay");
   assertNotEquals(overlayEl, null);
+});
+
+Deno.test("test_render_complete_phase_keeps_last_trick_on_table", () => {
+  const container = freshContainer();
+  const snap = makeSnapshot({
+    phase: "WAITING",
+    awaiting_action: "next_round",
+    trick: null,
+    trick_history: [{
+      lead_player: 0,
+      winner: 1,
+      points: 25,
+      slots: [
+        {
+          player: 0,
+          cards: [{ id: "D1-clubs-5", suit: "clubs", rank: "5" }],
+        },
+        {
+          player: 1,
+          cards: [{ id: "D1-hearts-10", suit: "hearts", rank: "10" }],
+        },
+        {
+          player: 2,
+          cards: [{ id: "D1-spades-K", suit: "spades", rank: "K" }],
+        },
+        {
+          player: 3,
+          cards: [{ id: "D1-diamonds-A", suit: "diamonds", rank: "A" }],
+        },
+      ],
+    }],
+    scoring: {
+      declarer_team: 0,
+      defender_points: 75,
+      total_defender_points: 100,
+      bottom_card_bonus: 25,
+      bottom_cards: [],
+    },
+  });
+  render(snap, container, "next_round");
+
+  assertNotEquals(container.querySelector(".scoring-overlay"), null);
+  assertEquals(
+    container.querySelectorAll(".trick-view .trick-card").length,
+    4,
+  );
+  assertEquals(
+    container.querySelectorAll(".trick-view .trick-slot.winner").length,
+    1,
+  );
+  assertEquals(
+    container.querySelectorAll(
+      ".trick-view .trick-slot.lead .trick-lead-marker",
+    )
+      .length,
+    1,
+  );
 });
 
 Deno.test("test_render_game_over_phase", () => {
@@ -236,14 +293,20 @@ Deno.test("test_render_hand_view_receives_callbacks", () => {
   assertEquals(actionFired, "play");
 });
 
-Deno.test("test_render_bidding_dialog_receives_callbacks", () => {
+Deno.test("test_render_bid_options_above_hand_receives_callbacks", () => {
   const container = freshContainer();
   const snap = makeSnapshot({
     phase: "DEAL_BID",
-    awaiting_action: null,
+    awaiting_action: "bid",
     trick: null,
   });
   let selectedOption: BidOption | null = null;
+  const bidOptions: BidOption[] = [{
+    cardIds: ["D1-spades-2"],
+    label: "♠2",
+    trumpSuit: "spades",
+    priority: 103,
+  }];
   const callbacks: ActionCallbacks = {
     onCardClick: () => {},
     onAction: () => {},
@@ -258,10 +321,16 @@ Deno.test("test_render_bidding_dialog_receives_callbacks", () => {
     callbacks,
     selectedCardIds: new Set(),
     legalCardIds: new Set(),
+    bidOptions,
   });
-  // In bid mode, there should be a bidding dialog
   const bidEl = container.querySelector(".bidding-dialog");
-  assertNotEquals(bidEl, null);
+  const bidButton = container.querySelector(
+    ".hand-actions .action-panel--bid button",
+  );
+  assertEquals(bidEl, null);
+  assertNotEquals(bidButton, null);
+  bidButton!.dispatchEvent(new Event("click", { bubbles: true }));
+  assertEquals(selectedOption, bidOptions[0]);
 });
 
 Deno.test("test_render_scoring_overlay_receives_callback", () => {

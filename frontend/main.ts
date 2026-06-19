@@ -25,15 +25,13 @@ import {
   handleStirAction,
 } from "./engine/action-handler.ts";
 import {
+  chooseFirstActionHint,
   computeLegalCardIds,
   computeLevelChangeInfo,
   computeStirButtonState,
   isSelectionStillLegal,
 } from "./engine/ui-state-computer.ts";
-import {
-  computeBidOptions,
-  computeBidOptionsFromHints,
-} from "./engine/bid-logic.ts";
+import { computeBidOptionsFromHints } from "./engine/bid-logic.ts";
 
 const GAME_ID_STORAGE_KEY = "tractor-game-id";
 const DEAL_BID_PLAYBACK_INTERVAL_MS = 125;
@@ -89,16 +87,10 @@ function main() {
       snap,
       effectiveInteractionMode,
     );
-    renderCtx.bidOptions = snap.phase === "DEAL_BID"
-      ? computeBidOptions(
-        snap.player_hand,
-        snap.trump_rank,
-        snap.bid_winner,
-      )
-      : computeBidOptionsFromHints(
-        snap.action_hints ?? [],
-        snap.trump_rank,
-      );
+    renderCtx.bidOptions = computeBidOptionsFromHints(
+      snap.action_hints ?? [],
+      snap.trump_rank,
+    );
     renderCtx.pendingBidIntent = pendingBidIntent;
     renderCtx.stirButtonState = computeStirButtonState(
       snap,
@@ -126,7 +118,7 @@ function main() {
 
   /** Block actions while an action response or queued state playback is pending. */
   function interactionBlocked(): boolean {
-    return actionPending || !playbackCaughtUp;
+    return actionPending || !playbackCaughtUp || !wsClient.isConnected;
   }
 
   /** Send an action and wait for the server's next state before accepting more input. */
@@ -297,6 +289,10 @@ function main() {
       pendingBidIntent = null;
     }
 
+    if ((snapshot.action_hints ?? []).length > 0) {
+      return;
+    }
+
     // Auto-skip
     if (sendAction({ type: "bid", seq, pass: true })) {
       reRender();
@@ -324,10 +320,11 @@ function main() {
     onUseHint() {
       if (interactionBlocked()) return;
       const snap = stateManager.get();
-      const firstHint = snap?.action_hints?.[0];
-      if (!firstHint || firstHint.length === 0) return;
+      if (!snap) return;
+      const hint = chooseFirstActionHint(snap);
+      if (hint === null) return;
       selectedCardIds.clear();
-      for (const card of firstHint) {
+      for (const card of hint) {
         selectedCardIds.add(card.id);
       }
       reRender();
@@ -464,9 +461,13 @@ function main() {
 
   wsClient.onDisconnect(() => {
     console.log("WebSocket disconnected");
+    actionPending = false;
+    reRender();
   });
 
   wsClient.onReconnectFail(() => {
+    actionPending = false;
+    reRender();
     showErrorToast("连接已断开，请刷新页面重试", container);
   });
 

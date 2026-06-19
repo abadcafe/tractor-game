@@ -4,7 +4,6 @@ import type { RenderContext } from "./types.ts";
 import { renderGameTable } from "./components/game-table.ts";
 import { renderHandView } from "./components/hand-view.ts";
 import { renderScoreboard } from "./components/scoreboard.ts";
-import { renderBiddingDialog } from "./components/bidding-dialog.ts";
 import { renderScoringOverlay } from "./components/scoring-overlay.ts";
 import { renderGameOverOverlay } from "./components/game-over-overlay.ts";
 
@@ -50,31 +49,13 @@ export function render(
       ctx?.callbacks?.onPass,
       ctx?.stirButtonState,
       ctx?.callbacks?.onShowPreviousTrick,
+      ctx?.bidOptions,
+      ctx?.pendingBidIntent,
+      ctx?.callbacks?.onBidOptionSelect,
     ),
   );
 
   container.appendChild(renderScoreboard(snapshot));
-
-  // Bidding panel: always show during DEAL_BID or STIRRING
-  const isBiddingPhase = snapshot.phase === "DEAL_BID" ||
-    snapshot.phase === "STIRRING";
-  if (isBiddingPhase) {
-    container.appendChild(
-      renderBiddingDialog(
-        snapshot,
-        interactionMode,
-        undefined, // onBid — no longer used
-        ctx?.callbacks?.onStir,
-        ctx?.callbacks?.onPass,
-        ctx?.selectedCardIds,
-        undefined, // bidButtonState — no longer used
-        ctx?.stirButtonState,
-        ctx?.bidOptions,
-        ctx?.pendingBidIntent,
-        ctx?.callbacks?.onBidOptionSelect,
-      ),
-    );
-  }
 
   // Scoring overlay for WAITING phase
   if (snapshot.phase === "WAITING") {

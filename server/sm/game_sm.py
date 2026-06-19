@@ -33,7 +33,7 @@ class GameState(BaseModel):
     team0_level: Rank
     team1_level: Rank
     declarer_team: int | None
-    last_declarer_player: int | None
+    next_declarer_player: int | None
     winning_team: int | None
     round_number: int
 
@@ -45,7 +45,7 @@ def create_game() -> GameState:
         team0_level=Rank.TWO,
         team1_level=Rank.TWO,
         declarer_team=None,
-        last_declarer_player=None,
+        next_declarer_player=None,
         winning_team=None,
         round_number=0,
     )
@@ -96,7 +96,7 @@ def process_round_result(state: GameState, result: RoundResult) -> StateResult[G
             "team1_level": new_team1,
             "winning_team": winning,
             "declarer_team": None,
-            "last_declarer_player": None,
+            "next_declarer_player": None,
         }))
 
     # Game continues
@@ -104,6 +104,6 @@ def process_round_result(state: GameState, result: RoundResult) -> StateResult[G
         "team0_level": new_team0,
         "team1_level": new_team1,
         "declarer_team": result.next_declarer_team,
-        "last_declarer_player": result.next_declarer_player,
+        "next_declarer_player": result.next_declarer_player,
         "round_number": state.round_number + 1,
     }))

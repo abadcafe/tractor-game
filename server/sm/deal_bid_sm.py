@@ -14,9 +14,17 @@ from pydantic import BaseModel, ConfigDict
 
 from server.sm.card_model import Card, Rank, Suit
 from server.sm.comparator import bid_value
-from server.sm.constants import get_team_index, next_player_ccw
+from server.sm.constants import next_player_ccw
 from server.sm.result import Ok, Rejected, StateResult
 from server.sm.types import BidEvent
+
+_BID_SUIT_ORDER: tuple[Suit, ...] = (
+    Suit.SPADES,
+    Suit.HEARTS,
+    Suit.CLUBS,
+    Suit.DIAMONDS,
+)
+MAX_BID_ACTION_HINTS: int = 10
 
 
 # ---- Data Models ----
@@ -123,13 +131,13 @@ def deal_next_card(state: DealBidState) -> StateResult[DealBidState]:
 
 
 def get_bid_action_hints(state: DealBidState, player: int) -> list[list[Card]]:
-    """Compute complete accepted bid hints for one player.
+    """Compute accepted logical bid hints for one player.
 
     The returned options are advisory UI hints, so a non-empty result must
     match the same validation path used by real bid actions. Candidate card
-    groups are generated from the player's hand, then filtered through
-    reveal() against the full deal-bid state so declarer-team and current
-    bid-priority rules are respected.
+    groups are generated from the player's hand as logical bid options, then
+    filtered through reveal() against the full deal-bid state so current
+    bid-priority and card-ownership rules are respected.
     """
     if state.phase != "DEALING" or player < 0 or player >= 4:
         return []
@@ -142,20 +150,24 @@ def get_bid_action_hints(state: DealBidState, player: int) -> list[list[Card]]:
                 result.append(candidate)
             case Rejected():
                 continue
+    result.sort(key=lambda cards: _bid_hint_sort_key(cards, state.trump_rank))
     return result
 
 
+def _bid_hint_sort_key(cards: list[Card], trump_rank: Rank) -> tuple[int, tuple[str, ...]]:
+    return (bid_value(cards, trump_rank), tuple(sorted(card.id for card in cards)))
+
+
 def _get_bid_card_candidates(hand: list[Card], trump_rank: Rank) -> list[list[Card]]:
-    """Compute raw bid card groups from a player's hand.
+    """Compute logical bid card groups from a player's hand.
 
     Returns list of bid options where each option is 1 card (single) or
-    2 cards (pair). Singles are individual trump-rank cards (one per suit).
+    2 cards (pair). Singles are one canonical trump-rank card per suit.
     Pairs are two trump-rank cards of the same suit or two jokers of same type.
-    Non-trump-rank cards and single jokers are excluded (single jokers have
-    bid_value 0 and cannot be used to bid).
+    Non-trump-rank cards and single jokers are excluded.
 
-    Only includes options that have a non-zero bid_value:
-    - Singles: trump-rank cards (one per suit group; not jokers)
+    Only includes logical options that have a non-zero bid_value:
+    - Singles: one trump-rank card per suit
     - Pairs: two trump-rank cards of the same suit, or two jokers of same type
     """
     # Group trump-rank and joker cards
@@ -174,21 +186,21 @@ def _get_bid_card_candidates(hand: list[Card], trump_rank: Rank) -> list[list[Ca
 
     result: list[list[Card]] = []
 
-    # Add pairs from suit groups (two trump-rank cards of same suit)
-    for _suit, cards in suit_groups.items():
-        if len(cards) >= 2:
-            result.append(cards[:2])
-
-    # Add joker pairs
+    # Pairs: big joker, small joker, spades, hearts, clubs, diamonds.
     if len(big_jokers) >= 2:
         result.append(big_jokers[:2])
     if len(small_jokers) >= 2:
         result.append(small_jokers[:2])
+    for suit in _BID_SUIT_ORDER:
+        cards = suit_groups.get(suit, [])
+        if len(cards) >= 2:
+            result.append(cards[:2])
 
-    # Add singles (trump-rank cards, one per suit group)
-    for _suit, cards in suit_groups.items():
-        # Add first card as single (if no pair was added, or always add singles)
-        result.append([cards[0]])
+    # Singles: spades, hearts, clubs, diamonds.
+    for suit in _BID_SUIT_ORDER:
+        cards = suit_groups.get(suit, [])
+        if len(cards) >= 1:
+            result.append([cards[0]])
 
     return result
 
@@ -230,12 +242,6 @@ def reveal(state: DealBidState, event: BidEvent) -> StateResult[DealBidState]:
     if state.phase != "DEALING":
         return Rejected(f"叫牌只能在发牌阶段进行，当前阶段：{state.phase}")
 
-    # Precondition 6: subsequent rounds - only declarer team can reveal
-    if state.declarer_team is not None:
-        player_team = get_team_index(event.player)
-        if player_team != state.declarer_team:
-            return Rejected("非庄家方不能叫牌")
-
     player_idx = event.player
     hand = state.players_hand[player_idx]
 
@@ -264,7 +270,6 @@ def reveal(state: DealBidState, event: BidEvent) -> StateResult[DealBidState]:
         if len(event.cards) != event.count:
             return Rejected(f"牌张数量 {len(event.cards)} 与声明数量 {event.count} 不一致")
     elif event.kind == "joker":
-        # Must be a pair of jokers (same type), single joker rejected
         if event.count != 2:
             return Rejected("王叫牌必须出对子")
         if len(event.cards) != 2:
@@ -272,7 +277,6 @@ def reveal(state: DealBidState, event: BidEvent) -> StateResult[DealBidState]:
         for card in event.cards:
             if not card.is_joker:
                 return Rejected(f"牌 {card.id} 不是王")
-        # Both must be same joker type
         if event.cards[0].rank != event.cards[1].rank:
             return Rejected("两种王不能配对")
         if event.suit is not None:

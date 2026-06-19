@@ -8,6 +8,7 @@ No tests access Game private fields or patch Game's SM collaborators.
 
 from collections.abc import Sequence
 import json
+from typing import Literal
 
 import pytest
 
@@ -15,6 +16,8 @@ from server.actions import BidAction, NextRoundAction, PlayAction, SkipBidAction
 from server.game import Game
 from server.messages import PlayerMessage, StateMessage
 from server.player import Player
+from server.sm import round_sm, stirring_sm, trick_sm
+from server.sm.card_model import Card, Rank, Suit
 from server.sm.result import Ok, Rejected
 from server.snapshot import StateSnapshot
 
@@ -49,6 +52,24 @@ def _create_game_with_auto_players() -> Game:
 def _make_players() -> list[RecordingPlayer]:
     """Create 4 passive player instances for testing."""
     return [RecordingPlayer(index=i) for i in range(4)]
+
+
+def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
+    return Card(
+        id=f"D{deck}-{suit.value}-{rank.value}",
+        suit=suit,
+        rank=rank,
+        is_joker=suit == Suit.JOKER,
+        is_big_joker=rank == Rank.BIG_JOKER,
+        points=0,
+        deck=deck,
+    )
+
+
+def _game_with_round_state(state: round_sm.RoundState) -> Game:
+    game = _create_game_with_auto_players()
+    setattr(game, "_round_state", state)
+    return game
 
 
 def _raw_from_action(action: TestAction) -> dict[str, object]:
@@ -307,6 +328,171 @@ async def test_snapshot_action_hints_shape():
         if len(entry) > 0:
             from server.sm.card_model import Card
             assert isinstance(entry[0], Card)
+
+
+def test_snapshot_stir_action_hints_ordered_from_small_to_large() -> None:
+    """Stirring action_hints are sorted by the smallest legal stir first."""
+    hearts_pair = [_card(Suit.HEARTS, Rank.TWO, 1), _card(Suit.HEARTS, Rank.TWO, 2)]
+    spades_pair = [_card(Suit.SPADES, Rank.TWO, 1), _card(Suit.SPADES, Rank.TWO, 2)]
+    small_joker_pair = [
+        _card(Suit.JOKER, Rank.SMALL_JOKER, 1),
+        _card(Suit.JOKER, Rank.SMALL_JOKER, 2),
+    ]
+    players_hand = [
+        [],
+        [*small_joker_pair, *spades_pair, *hearts_pair],
+        [],
+        [],
+    ]
+    stirring = stirring_sm.StirringState(
+        phase="WAITING",
+        trump_suit=Suit.CLUBS,
+        trump_rank=Rank.TWO,
+        declarer_player=0,
+        current_player=1,
+        pass_set=frozenset(),
+        actions=(),
+        last_stir_player=None,
+        current_priority=201,
+        bottom_cards=[],
+        players_hand=players_hand,
+    )
+    state = round_sm.RoundState(
+        phase="STIRRING",
+        declarer_team=0,
+        declarer_player=0,
+        defender_team=1,
+        trump_suit=Suit.CLUBS,
+        trump_rank=Rank.TWO,
+        bid_winner=None,
+        players_hand=players_hand,
+        bottom_cards=[],
+        defender_points=0,
+        trick_history=[],
+        deal_bid_state=None,
+        stirring_state=stirring,
+        trick_state=None,
+        result=None,
+        team0_level=Rank.TWO,
+        team1_level=Rank.TWO,
+        start_player=0,
+        next_declarer_player=None,
+    )
+    game = _game_with_round_state(state)
+
+    snap = game.snapshot(1)
+
+    assert [[card.id for card in hint] for hint in snap.action_hints] == [
+        ["D1-hearts-2", "D2-hearts-2"],
+        ["D1-spades-2", "D2-spades-2"],
+        ["D1-joker-SJ", "D2-joker-SJ"],
+    ]
+
+
+def test_snapshot_play_leading_has_no_action_hints() -> None:
+    """PLAYING action_hints are empty while the player is leading."""
+    hands = [
+        [_card(Suit.HEARTS, Rank.THREE), _card(Suit.CLUBS, Rank.FIVE)],
+        [],
+        [],
+        [],
+    ]
+    trick = trick_sm.create_trick(trick_sm.TrickInput(
+        lead_player=0,
+        hands=hands,
+        trump_suit=Suit.SPADES,
+        trump_rank=Rank.TWO,
+        defender_points=0,
+        declarer_team=0,
+    ))
+    state = round_sm.RoundState(
+        phase="PLAYING",
+        declarer_team=0,
+        declarer_player=0,
+        defender_team=1,
+        trump_suit=Suit.SPADES,
+        trump_rank=Rank.TWO,
+        bid_winner=None,
+        players_hand=hands,
+        bottom_cards=[],
+        defender_points=0,
+        trick_history=[],
+        deal_bid_state=None,
+        stirring_state=None,
+        trick_state=trick,
+        result=None,
+        team0_level=Rank.TWO,
+        team1_level=Rank.TWO,
+        start_player=0,
+        next_declarer_player=None,
+    )
+    game = _game_with_round_state(state)
+
+    snap = game.snapshot(0)
+
+    assert snap.awaiting_action == "play"
+    assert snap.action_hints == []
+
+
+def test_snapshot_play_following_returns_smallest_hint_window() -> None:
+    """Following action_hints are sorted and truncated to the smallest hints."""
+    lead = _card(Suit.DIAMONDS, Rank.ACE)
+    follower_hand = [
+        _card(Suit.JOKER, Rank.SMALL_JOKER),
+        _card(Suit.SPADES, Rank.JACK),
+        _card(Suit.HEARTS, Rank.TEN),
+        _card(Suit.CLUBS, Rank.NINE),
+        _card(Suit.SPADES, Rank.EIGHT),
+        _card(Suit.HEARTS, Rank.SEVEN),
+        _card(Suit.CLUBS, Rank.SIX),
+        _card(Suit.HEARTS, Rank.FIVE),
+        _card(Suit.SPADES, Rank.FOUR),
+        _card(Suit.CLUBS, Rank.THREE),
+    ]
+    hands = [[lead], follower_hand, [], []]
+    trick = trick_sm.create_trick(trick_sm.TrickInput(
+        lead_player=0,
+        hands=hands,
+        trump_suit=None,
+        trump_rank=Rank.TWO,
+        defender_points=0,
+        declarer_team=0,
+    ))
+    played = trick_sm.play(trick, player=0, cards=[lead])
+    assert isinstance(played, Ok)
+    state = round_sm.RoundState(
+        phase="PLAYING",
+        declarer_team=0,
+        declarer_player=0,
+        defender_team=1,
+        trump_suit=None,
+        trump_rank=Rank.TWO,
+        bid_winner=None,
+        players_hand=played.value.hands,
+        bottom_cards=[],
+        defender_points=0,
+        trick_history=[],
+        deal_bid_state=None,
+        stirring_state=None,
+        trick_state=played.value,
+        result=None,
+        team0_level=Rank.TWO,
+        team1_level=Rank.TWO,
+        start_player=0,
+        next_declarer_player=None,
+    )
+    game = _game_with_round_state(state)
+
+    snap = game.snapshot(1)
+
+    assert snap.awaiting_action == "play"
+    assert [[card.id for card in hint] for hint in snap.action_hints] == [
+        ["D1-clubs-3"],
+        ["D1-spades-4"],
+        ["D1-hearts-5"],
+        ["D1-clubs-6"],
+        ["D1-hearts-7"],
+    ]
 
 
 @pytest.mark.asyncio

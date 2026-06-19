@@ -85,6 +85,19 @@ export function computeLegalCardIds(
   return legalCardIds;
 }
 
+/** Choose the first non-empty server-provided hint. */
+export function chooseFirstActionHint(
+  snap: StateSnapshot,
+): Card[] | null {
+  const hints = (snap.action_hints ?? []).filter((hint) =>
+    hint.length > 0
+  );
+  if (hints.length === 0) {
+    return null;
+  }
+  return hints[0];
+}
+
 /** Validate if current selection is still legal after state update. */
 export function isSelectionStillLegal(
   snap: StateSnapshot,
