@@ -63,6 +63,23 @@ function freshContainer(): Element {
   return doc!.querySelector("#app")!;
 }
 
+function callbacksStub(): ActionCallbacks {
+  return {
+    onCardClick: () => {},
+    onAction: () => {},
+    onBidOptionSelect: (_option: BidOption) => {},
+    onStir: () => {},
+    onPass: () => {},
+    onNewGame: () => {},
+  };
+}
+
+function countButtonsByText(container: Element, text: string): number {
+  return Array.from(container.querySelectorAll("button"))
+    .filter((button) => button.textContent === text)
+    .length;
+}
+
 Deno.test("test_render_playing_phase", () => {
   const container = freshContainer();
   const snap = makeSnapshot();
@@ -370,6 +387,155 @@ Deno.test("test_render_scoring_overlay_receives_callback", () => {
   assertNotEquals(nextButton, undefined);
   nextButton!.dispatchEvent(new Event("click", { bubbles: true }));
   assertEquals(nextRoundCalled, true);
+});
+
+Deno.test("test_render_waiting_has_single_next_round_button", () => {
+  const container = freshContainer();
+  const snap = makeSnapshot({
+    phase: "WAITING",
+    awaiting_action: "next_round",
+    trick: null,
+    scoring: {
+      declarer_team: 0,
+      defender_points: 30,
+      total_defender_points: 30,
+      bottom_card_bonus: 0,
+      bottom_cards: [],
+    },
+  });
+  const callbacks: ActionCallbacks = {
+    onCardClick: () => {},
+    onAction: () => {},
+    onBidOptionSelect: (_option: BidOption) => {},
+    onStir: () => {},
+    onPass: () => {},
+    onNewGame: () => {},
+  };
+
+  render(snap, container, "next_round", {
+    callbacks,
+    selectedCardIds: new Set(),
+    legalCardIds: new Set(),
+  });
+
+  const nextRoundButtons = Array.from(
+    container.querySelectorAll("button"),
+  )
+    .filter((button) => button.textContent === "下一轮");
+
+  assertEquals(nextRoundButtons.length, 1);
+  assertNotEquals(
+    container.querySelector(".scoring-overlay__next-round"),
+    null,
+  );
+  assertEquals(
+    container.querySelector(".hand-actions .hand-action-button"),
+    null,
+  );
+});
+
+Deno.test("test_render_primary_actions_are_not_duplicated", () => {
+  const callbacks = callbacksStub();
+
+  const playContainer = freshContainer();
+  render(makeSnapshot(), playContainer, "play", {
+    callbacks,
+    selectedCardIds: new Set(["D1-hearts-5"]),
+    legalCardIds: new Set(["D1-hearts-5"]),
+  });
+  assertEquals(countButtonsByText(playContainer, "出牌"), 1);
+
+  const discardContainer = freshContainer();
+  render(
+    makeSnapshot({
+      phase: "STIRRING",
+      awaiting_action: "discard",
+      stirring_state: {
+        phase: "EXCHANGING",
+        trump_suit: "spades",
+        current_player: 3,
+        declarer_player: 3,
+        exchanging_player: 3,
+        exchange_count: 2,
+      },
+    }),
+    discardContainer,
+    "discard",
+    {
+      callbacks,
+      selectedCardIds: new Set(["D1-hearts-5", "D1-spades-2"]),
+      legalCardIds: new Set(["D1-hearts-5", "D1-spades-2"]),
+    },
+  );
+  assertEquals(countButtonsByText(discardContainer, "换底牌"), 1);
+
+  const stirContainer = freshContainer();
+  render(
+    makeSnapshot({
+      phase: "STIRRING",
+      awaiting_action: "stir",
+      trick: null,
+      stirring_state: {
+        phase: "WAITING",
+        trump_suit: "spades",
+        current_player: 3,
+        declarer_player: 0,
+        exchanging_player: null,
+        exchange_count: null,
+      },
+    }),
+    stirContainer,
+    "stir",
+    {
+      callbacks,
+      selectedCardIds: new Set(["D1-spades-2"]),
+      legalCardIds: new Set(["D1-spades-2"]),
+      stirButtonState: { disabled: false },
+    },
+  );
+  assertEquals(countButtonsByText(stirContainer, "反主"), 1);
+  assertEquals(countButtonsByText(stirContainer, "不反"), 1);
+
+  const waitingContainer = freshContainer();
+  render(
+    makeSnapshot({
+      phase: "WAITING",
+      awaiting_action: "next_round",
+      trick: null,
+      scoring: {
+        declarer_team: 0,
+        defender_points: 30,
+        total_defender_points: 30,
+        bottom_card_bonus: 0,
+        bottom_cards: [],
+      },
+    }),
+    waitingContainer,
+    "next_round",
+    {
+      callbacks,
+      selectedCardIds: new Set(),
+      legalCardIds: new Set(),
+    },
+  );
+  assertEquals(countButtonsByText(waitingContainer, "下一轮"), 1);
+
+  const gameOverContainer = freshContainer();
+  render(
+    makeSnapshot({
+      phase: "GAME_OVER",
+      awaiting_action: null,
+      winning_team: 0,
+    }),
+    gameOverContainer,
+    null,
+    {
+      callbacks,
+      selectedCardIds: new Set(),
+      legalCardIds: new Set(),
+    },
+  );
+  assertEquals(countButtonsByText(gameOverContainer, "新游戏"), 1);
 });
 
 Deno.test("test_render_game_over_receives_callback", () => {

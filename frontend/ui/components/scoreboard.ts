@@ -111,13 +111,18 @@ function playerStatus(snapshot: StateSnapshot, player: number): string {
     snapshot.trick?.current_player === player
   ) {
     labels.push("待出牌");
-  } else if (
-    snapshot.phase === "STIRRING" &&
-    snapshot.stirring_state?.current_player === player
-  ) {
-    labels.push(
-      snapshot.awaiting_action === "discard" ? "换底牌" : "待反主",
-    );
+  } else if (snapshot.phase === "STIRRING" && snapshot.stirring_state) {
+    if (
+      snapshot.stirring_state.phase === "EXCHANGING" &&
+      snapshot.stirring_state.exchanging_player === player
+    ) {
+      labels.push("换底牌");
+    } else if (
+      snapshot.stirring_state.phase === "WAITING" &&
+      snapshot.stirring_state.current_player === player
+    ) {
+      labels.push("待反主");
+    }
   }
   return labels.length === 0 ? "在局" : labels.join(" / ");
 }

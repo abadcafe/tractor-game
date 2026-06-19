@@ -51,10 +51,10 @@ export function renderHandView(
   const showTools = interactionMode === "play" ||
     interactionMode === "discard" || interactionMode === "stir";
   const needsButton = interactionMode === "play" ||
-    interactionMode === "discard" || interactionMode === "next_round";
+    interactionMode === "discard";
   const needsStirButtons = interactionMode === "stir" &&
     (onStir !== undefined || onPass !== undefined);
-  const needsBidButtons = interactionMode === "bid" &&
+  const needsBidButtons = snapshot.phase === "DEAL_BID" &&
     bidOptions !== undefined &&
     bidOptions.length > 0 &&
     onBidOptionSelect !== undefined;
@@ -188,6 +188,7 @@ function renderBidActionPanel(
   onBidOptionSelect: (option: BidOption) => void,
 ): HTMLElement {
   const panel = el("div", { class: "action-panel action-panel--bid" });
+  const hasPendingBid = pendingBidIntent !== null;
   for (const option of bidOptions) {
     const className = [
       isSameBidOption(option, pendingBidIntent)
@@ -195,11 +196,17 @@ function renderBidActionPanel(
         : "btn-secondary hand-action-button",
       bidOptionColorClass(option),
     ].join(" ");
-    const button = el("button", {
+    const attrs: Record<string, string> = {
       class: className,
       title: bidOptionTitle(option),
-    }, option.label);
-    button.addEventListener("click", () => onBidOptionSelect(option));
+    };
+    if (hasPendingBid) {
+      attrs.disabled = "true";
+    }
+    const button = el("button", attrs, option.label);
+    if (!hasPendingBid) {
+      button.addEventListener("click", () => onBidOptionSelect(option));
+    }
     panel.appendChild(button);
   }
   return panel;
@@ -274,12 +281,6 @@ function renderActionPanel(
       button.setAttribute("title", `请选择 ${count} 张牌`);
     }
     button.addEventListener("click", () => onAction("discard"));
-    panel.appendChild(button);
-  } else if (interactionMode === "next_round") {
-    const button = el("button", {
-      class: "btn-primary hand-action-button",
-    }, "下一轮");
-    button.addEventListener("click", () => onAction("next_round"));
     panel.appendChild(button);
   }
 

@@ -68,10 +68,11 @@ def trump_order(card: Card, trump_suit: Suit | None, trump_rank: Rank) -> int:
     """Return the trump order value of a card.
 
     Higher value = stronger card. Ordering:
-      BJ=100, SJ=90, trump_rank+trump_suit=80, trump_rank+other=70+offset,
+      BJ=100, SJ=90, trump_rank+trump_suit=80, trump_rank+other=70,
       trump_suit_non_rank=45+RANK_ORDER, non_trump=RANK_ORDER-2.
 
-    When trump_suit is None, only jokers and trump_rank are trump (get high orders).
+    When trump_suit is None, only jokers and trump_rank are trump; all
+    trump-rank suits are equal at 70, so earlier play order breaks ties.
     """
     if card.rank == Rank.BIG_JOKER:
         return 100
@@ -80,8 +81,7 @@ def trump_order(card: Card, trump_suit: Suit | None, trump_rank: Rank) -> int:
     if card.rank == trump_rank:
         if trump_suit is not None and card.suit == trump_suit:
             return 80
-        # trump rank in other suit, or trump_suit is None
-        return 70 + SUIT_OFFSET.get(card.suit, 0)
+        return 70
     if trump_suit is not None and card.suit == trump_suit:
         return 45 + RANK_ORDER[card.rank]
     # Non-trump
@@ -95,7 +95,7 @@ def trump_rank_order(card: Card, trump_suit: Suit | None, trump_rank: Rank) -> i
     trump_order is for comparing play strength; trump_rank_order is for
     decompose's trump-group tractor detection (spec section 2.3).
 
-    When trump_suit is None, trump rank cards still get 70+suit_offset.
+    When trump_suit is None, all trump rank cards get the same order.
     """
     return trump_order(card, trump_suit, trump_rank)
 

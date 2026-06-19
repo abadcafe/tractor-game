@@ -35,12 +35,16 @@ type JsonPrimitive = str | int | float | bool | None
 type JsonValue = JsonPrimitive | list[JsonValue] | dict[str, JsonValue]
 type JsonObject = dict[str, JsonValue]
 type Severity = Literal["critical", "high", "medium", "low"]
-type UiActionKind = Literal["next_round", "stir_pass", "discard", "play"]
+type UiActionKind = Literal["bid", "next_round", "stir_pass", "discard", "play"]
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "test-results" / "playthrough"
 HUMAN_PLAYER = 3
 THIS_FILE = Path(__file__).name
+CLEAR_SELECTION_BUTTON = "清牌"
+BID_ACTION_BUTTON_SELECTOR = ".hand-actions .action-panel--bid button"
+NEXT_ROUND_BUTTON_SELECTOR = ".scoring-overlay__next-round"
+DEFAULT_MAX_SECONDS = 12 * 60 * 60
 
 RANK_ORDER: dict[str, int] = {
     "2": 0,
@@ -119,15 +123,12 @@ class BrowserTypeLike(Protocol):
         *,
         headless: bool,
         executable_path: str | None,
-        slow_mo: int,
         args: list[str],
     ) -> BrowserLike: ...
 
     def connect_over_cdp(
         self,
         endpoint_url: str,
-        *,
-        slow_mo: int | None = None,
     ) -> BrowserLike: ...
 
 
@@ -256,7 +257,6 @@ class Config:
     server_url: str
     port: int
     max_seconds: int
-    slow_mo_ms: int
     browser_executable: str | None
     cdp_url: str | None
     prefer_existing_browser: bool
@@ -549,20 +549,26 @@ def choose_discard_cards(state: JsonObject) -> tuple[str, ...]:
     return tuple(card_id(card) for card in chosen if card_id(card))
 
 
-def choose_play_cards(state: JsonObject) -> tuple[str, ...]:
-    candidates = choose_play_candidates(state)
-    if candidates:
-        return candidates[0]
-    return ()
+def action_hint_candidates(state: JsonObject) -> list[tuple[str, ...]]:
+    result: list[tuple[str, ...]] = []
+    for candidate in card_matrix(state.get("action_hints")):
+        card_ids = tuple(card_id(card) for card in candidate if card_id(card))
+        if card_ids:
+            result.append(card_ids)
+    return result
+
+
+def choose_bid_cards(state: JsonObject) -> tuple[str, ...]:
+    candidates = action_hint_candidates(state)
+    if not candidates:
+        return ()
+    return candidates[0]
 
 
 def choose_play_candidates(state: JsonObject) -> list[tuple[str, ...]]:
-    hints = card_matrix(state.get("action_hints"))
+    hints = action_hint_candidates(state)
     if hints:
-        return [
-            tuple(card_id(card) for card in candidate if card_id(card))
-            for candidate in hints
-        ]
+        return hints
     return pick_free_play_candidates(state)
 
 
@@ -669,6 +675,9 @@ def plan_action(
     if awaiting is None:
         awaiting = string_field(state, "awaiting_action")
 
+    if awaiting == "bid":
+        cards = choose_bid_cards(state)
+        return UiAction(kind="bid", card_ids=cards) if cards else None
     if awaiting == "next_round":
         return UiAction(kind="next_round")
     if awaiting == "stir":
@@ -693,7 +702,7 @@ def click_button(page: PageLike, name: str, timeout_ms: int = 5000) -> None:
 
 
 def click_clear_selection_if_available(page: PageLike) -> None:
-    locator = page.get_by_role("button", name="清选", exact=True)
+    locator = page.get_by_role("button", name=CLEAR_SELECTION_BUTTON, exact=True)
     try:
         if locator.count() > 0 and locator.first.is_enabled(timeout=500):
             locator.first.click(timeout=1000)
@@ -710,10 +719,27 @@ def click_cards(page: PageLike, card_ids: Sequence[str]) -> None:
         locator.click(timeout=3000)
 
 
+def click_first_bid_option(page: PageLike) -> None:
+    locator = page.locator(BID_ACTION_BUTTON_SELECTOR).first
+    locator.scroll_into_view_if_needed(timeout=3000)
+    locator.click(timeout=3000)
+
+
+def click_next_round(page: PageLike) -> None:
+    overlay_button = page.locator(NEXT_ROUND_BUTTON_SELECTOR)
+    if overlay_button.count() > 0:
+        overlay_button.first.scroll_into_view_if_needed(timeout=3000)
+        overlay_button.first.click(timeout=3000)
+        return
+    click_button(page, "下一轮")
+
+
 def perform_action(page: PageLike, action: UiAction, recorder: Recorder) -> bool:
     try:
-        if action.kind == "next_round":
-            click_button(page, "下一轮")
+        if action.kind == "bid":
+            click_first_bid_option(page)
+        elif action.kind == "next_round":
+            click_next_round(page)
         elif action.kind == "stir_pass":
             click_button(page, "不反")
         elif action.kind == "discard":
@@ -1049,10 +1075,7 @@ def setup_browser(config: Config, recorder: Recorder) -> BrowserSession:
     playwright = load_playwright_module().sync_playwright().start()
     cdp_url = choose_existing_cdp_url(config, recorder)
     if cdp_url is not None:
-        browser = playwright.chromium.connect_over_cdp(
-            cdp_url,
-            slow_mo=config.slow_mo_ms,
-        )
+        browser = playwright.chromium.connect_over_cdp(cdp_url)
         if browser.contexts:
             context = browser.contexts[0]
         else:
@@ -1072,7 +1095,6 @@ def setup_browser(config: Config, recorder: Recorder) -> BrowserSession:
     browser = playwright.chromium.launch(
         headless=False,
         executable_path=executable,
-        slow_mo=config.slow_mo_ms,
         args=[
             "--no-sandbox",
             "--disable-setuid-sandbox",
@@ -1166,7 +1188,6 @@ def run_playthrough(config: Config) -> None:
         last_phase: str | None = None
         last_phase_time = time.monotonic()
         last_screenshot_time = time.monotonic()
-        last_action_time = 0.0
         last_action_seq: int | None = None
         last_action: UiAction | None = None
         rejected_play_candidates: set[tuple[str, ...]] = set()
@@ -1206,16 +1227,23 @@ def run_playthrough(config: Config) -> None:
             defender_points = int_from_state(state, "defender_points", 0)
 
             for text in drain_browser_errors(page):
-                if last_action is not None and last_action.kind == "play":
-                    rejected_play_candidates.add(last_action.card_ids)
+                if last_action is not None:
                     last_action_seq = None
-                    if "出牌" in text or "play" in text.lower():
+                    if last_action.kind == "play":
+                        rejected_play_candidates.add(last_action.card_ids)
+                        if "出牌" in text or "play" in text.lower():
+                            recorder.event(
+                                "candidate_rejected",
+                                text,
+                                {"kind": last_action.kind, "card_ids": json_string_list(last_action.card_ids)},
+                            )
+                            continue
+                    if last_action.kind == "bid":
                         recorder.event(
-                            "candidate_rejected",
+                            "bid_error_toast",
                             text,
                             {"kind": last_action.kind, "card_ids": json_string_list(last_action.card_ids)},
                         )
-                        continue
                 recorder.bug("browser_error_toast", text, "medium", phase=phase)
 
             if team0_level != last_team0_level or team1_level != last_team1_level:
@@ -1280,12 +1308,11 @@ def run_playthrough(config: Config) -> None:
                 )
                 break
 
-            if seq is not None and seq != last_action_seq and time.monotonic() - last_action_time > 0.8:
+            if seq is not None and seq != last_action_seq:
                 action = plan_action(state_message, rejected_play_candidates)
                 if action is not None and perform_action(page, action, recorder):
                     last_action_seq = seq
                     last_action = action
-                    last_action_time = time.monotonic()
                     action_count += 1
 
             time.sleep(0.25)
@@ -1443,6 +1470,98 @@ def _load_report(path: Path) -> JsonObject:
     return parsed
 
 
+def _card(card_id_value: str, suit: str, rank: str) -> JsonObject:
+    return {"id": card_id_value, "suit": suit, "rank": rank}
+
+
+def _state_message(awaiting: str, state: JsonObject) -> JsonObject:
+    return {"seq": 1, "awaiting": awaiting, "state": state}
+
+
+def test_plan_action_bids_first_hint_candidate() -> None:
+    state: JsonObject = {
+        "action_hints": [
+            [_card("D1-spades-2", "spades", "2")],
+            [
+                _card("D1-hearts-2", "hearts", "2"),
+                _card("D2-hearts-2", "hearts", "2"),
+            ],
+        ],
+        "player_hand": [
+            _card("D1-spades-2", "spades", "2"),
+            _card("D1-hearts-2", "hearts", "2"),
+            _card("D2-hearts-2", "hearts", "2"),
+        ],
+    }
+
+    action = plan_action(_state_message("bid", state), set())
+
+    assert action == UiAction(kind="bid", card_ids=("D1-spades-2",))
+
+
+def test_plan_action_waits_for_frontend_auto_pass_when_bid_has_no_hints() -> None:
+    state: JsonObject = {
+        "action_hints": [],
+        "player_hand": [_card("D1-spades-7", "spades", "7")],
+    }
+
+    action = plan_action(_state_message("bid", state), set())
+
+    assert action is None
+
+
+def test_plan_action_uses_first_play_hint_candidate() -> None:
+    state: JsonObject = {
+        "action_hints": [
+            [_card("D1-diamonds-5", "diamonds", "5")],
+            [_card("D1-diamonds-K", "diamonds", "K")],
+        ],
+        "player_hand": [
+            _card("D1-diamonds-5", "diamonds", "5"),
+            _card("D1-diamonds-K", "diamonds", "K"),
+        ],
+    }
+
+    action = plan_action(_state_message("play", state), set())
+
+    assert action == UiAction(kind="play", card_ids=("D1-diamonds-5",))
+
+
+def test_plan_action_skips_rejected_play_hint_candidate() -> None:
+    state: JsonObject = {
+        "action_hints": [
+            [_card("D1-diamonds-5", "diamonds", "5")],
+            [_card("D1-diamonds-K", "diamonds", "K")],
+        ],
+        "player_hand": [
+            _card("D1-diamonds-5", "diamonds", "5"),
+            _card("D1-diamonds-K", "diamonds", "K"),
+        ],
+    }
+
+    action = plan_action(_state_message("play", state), {("D1-diamonds-5",)})
+
+    assert action == UiAction(kind="play", card_ids=("D1-diamonds-K",))
+
+
+def test_plan_action_falls_back_to_free_lead_when_play_has_no_hints() -> None:
+    state: JsonObject = {
+        "action_hints": [],
+        "player_hand": [
+            _card("D1-clubs-3", "clubs", "3"),
+            _card("D1-spades-A", "spades", "A"),
+        ],
+        "trick": {
+            "lead_player": 3,
+            "slots": [{}, {}, {}, {}],
+        },
+    }
+
+    action = plan_action(_state_message("play", state), set())
+
+    assert action == UiAction(kind="play", card_ids=("D1-clubs-3",))
+
+
 @pytest.mark.playthrough
 def test_visible_playwright_full_game_playthrough() -> None:
     if not _should_run_playthrough():
@@ -1459,8 +1578,7 @@ def test_visible_playwright_full_game_playthrough() -> None:
         output_dir=output_dir,
         server_url=f"http://127.0.0.1:{port}",
         port=port,
-        max_seconds=_env_int("TRACTOR_PLAYTHROUGH_MAX_SECONDS", 3600),
-        slow_mo_ms=_env_int("TRACTOR_PLAYTHROUGH_SLOW_MO_MS", 120),
+        max_seconds=_env_int("TRACTOR_PLAYTHROUGH_MAX_SECONDS", DEFAULT_MAX_SECONDS),
         browser_executable=os.environ.get("TRACTOR_PLAYTHROUGH_BROWSER"),
         cdp_url=os.environ.get("TRACTOR_PLAYTHROUGH_CDP_URL"),
         prefer_existing_browser=not _env_bool("TRACTOR_PLAYTHROUGH_NEW_BROWSER"),

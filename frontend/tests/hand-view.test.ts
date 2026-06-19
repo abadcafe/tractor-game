@@ -274,6 +274,12 @@ Deno.test("test_renderHandView_score_pile_shows_captured_point_cards", () => {
   const scoreCards = el.querySelectorAll(".score-pile-card");
   assertEquals(text.includes("捡分 15"), true);
   assertEquals(scoreCards.length, 2);
+  assertEquals(
+    Array.from(scoreCards).map((card) =>
+      card.getAttribute("data-rank") ?? ""
+    ),
+    ["5", "K"],
+  );
 });
 
 Deno.test("test_renderHandView_discard_button", () => {
@@ -387,7 +393,69 @@ Deno.test("test_renderHandView_bid_options_are_above_hand", () => {
   let selectedOption: BidOption | null = null;
   const el = renderHandView(
     snap,
-    "bid",
+    null,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    bidOptions,
+    null,
+    (option: BidOption) => {
+      selectedOption = option;
+    },
+  );
+
+  const bidPanel = el.querySelector(".hand-actions .action-panel--bid");
+  const handPanelButton = el.querySelector(".hand-panel button");
+  const buttons = Array.from(
+    el.querySelectorAll(".action-panel--bid button"),
+  );
+
+  assertNotEquals(bidPanel, null);
+  assertEquals(el.classList.contains("has-bid-actions"), true);
+  assertEquals(handPanelButton, null);
+  assertEquals(buttons.map((button) => button.textContent), [
+    "♠2",
+    "♥2",
+  ]);
+
+  buttons[0].dispatchEvent(new Event("click", { bubbles: true }));
+  assertEquals(selectedOption, bidOptions[0]);
+});
+
+Deno.test("test_renderHandView_bid_options_disabled_when_pending", () => {
+  const snap = makeSnapshot({
+    phase: "DEAL_BID",
+    awaiting_action: "bid",
+    action_hints: [],
+    trump_suit: null,
+  });
+  const bidOptions: BidOption[] = [
+    {
+      cardIds: ["D1-spades-2"],
+      label: "♠2",
+      trumpSuit: "spades",
+      priority: 103,
+    },
+    {
+      cardIds: ["D1-hearts-2"],
+      label: "♥2",
+      trumpSuit: "hearts",
+      priority: 102,
+    },
+  ];
+  let selectedOption: BidOption | null = null;
+  const el = renderHandView(
+    snap,
+    null,
     undefined,
     undefined,
     undefined,
@@ -407,23 +475,16 @@ Deno.test("test_renderHandView_bid_options_are_above_hand", () => {
     },
   );
 
-  const bidPanel = el.querySelector(".hand-actions .action-panel--bid");
-  const handPanelButton = el.querySelector(".hand-panel button");
   const buttons = Array.from(
     el.querySelectorAll(".action-panel--bid button"),
   );
 
-  assertNotEquals(bidPanel, null);
-  assertEquals(el.classList.contains("has-bid-actions"), true);
-  assertEquals(handPanelButton, null);
-  assertEquals(buttons.map((button) => button.textContent), [
-    "♠2",
-    "♥2",
-  ]);
+  assertEquals(buttons[0].hasAttribute("disabled"), true);
+  assertEquals(buttons[1].hasAttribute("disabled"), true);
   assertEquals(buttons[1].classList.contains("selected"), true);
 
   buttons[0].dispatchEvent(new Event("click", { bubbles: true }));
-  assertEquals(selectedOption, bidOptions[0]);
+  assertEquals(selectedOption, null);
 });
 
 Deno.test("test_renderHandView_bid_option_colors_match_suits_and_jokers", () => {

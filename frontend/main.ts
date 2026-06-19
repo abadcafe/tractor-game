@@ -18,7 +18,6 @@ import { StatePlaybackQueue } from "./engine/state-playback-queue.ts";
 import { render } from "./ui/renderer.ts";
 import { showErrorToast } from "./ui/error-toast.ts";
 import {
-  handleBidAction,
   handleDiscardAction,
   handlePassStirAction,
   handlePlayAction,
@@ -31,13 +30,46 @@ import {
   computeStirButtonState,
   isSelectionStillLegal,
 } from "./engine/ui-state-computer.ts";
-import { computeBidOptionsFromHints } from "./engine/bid-logic.ts";
+import {
+  computeBidOptionsFromHints,
+  computeBidPriority,
+  computeDealBidAction,
+} from "./engine/bid-logic.ts";
 
 const GAME_ID_STORAGE_KEY = "tractor-game-id";
 const DEAL_BID_PLAYBACK_INTERVAL_MS = 125;
 const DEFAULT_PLAYBACK_INTERVAL_MS = 500;
 const PREVIOUS_TRICK_PREVIEW_MS = 2000;
 const FAILED_THROW_PREVIEW_MS = 5000;
+
+function filterAllowedBidOptions(
+  options: BidOption[],
+  snapshot: StateSnapshot,
+): BidOption[] {
+  if (snapshot.phase !== "DEAL_BID") {
+    return [];
+  }
+  const handIds = new Set(snapshot.player_hand.map((card) => card.id));
+  const currentBidPriority = snapshot.bid_winner === null
+    ? 0
+    : computeBidPriority(snapshot.bid_winner.cards, snapshot.trump_rank);
+  return options.filter((option) =>
+    option.priority > currentBidPriority &&
+    option.cardIds.every((cardId) => handIds.has(cardId))
+  );
+}
+
+function containsBidOption(
+  options: BidOption[],
+  target: BidOption,
+): boolean {
+  const targetKey = bidOptionKey(target);
+  return options.some((option) => bidOptionKey(option) === targetKey);
+}
+
+function bidOptionKey(option: BidOption): string {
+  return [...option.cardIds].sort().join(",");
+}
 
 function main() {
   const containerEl = document.querySelector("#app");
@@ -69,7 +101,8 @@ function main() {
 
   // Auto-bid state
   let pendingBidIntent: BidOption | null = null;
-  let suppressBidError = false;
+  let visibleBidOptions: BidOption[] = [];
+  let pendingBidInFlight = false;
 
   // Shared render context
   const renderCtx: RenderContext = {
@@ -87,10 +120,26 @@ function main() {
       snap,
       effectiveInteractionMode,
     );
-    renderCtx.bidOptions = computeBidOptionsFromHints(
+    const currentBidOptions = computeBidOptionsFromHints(
       snap.action_hints ?? [],
       snap.trump_rank,
     );
+    if (snap.phase !== "DEAL_BID") {
+      visibleBidOptions = [];
+      pendingBidIntent = null;
+      pendingBidInFlight = false;
+    } else if (effectiveInteractionMode === "bid") {
+      visibleBidOptions = currentBidOptions;
+    }
+    visibleBidOptions = filterAllowedBidOptions(visibleBidOptions, snap);
+    if (
+      !pendingBidInFlight &&
+      pendingBidIntent !== null &&
+      !containsBidOption(visibleBidOptions, pendingBidIntent)
+    ) {
+      pendingBidIntent = null;
+    }
+    renderCtx.bidOptions = snap.phase === "DEAL_BID" ? visibleBidOptions : [];
     renderCtx.pendingBidIntent = pendingBidIntent;
     renderCtx.stirButtonState = computeStirButtonState(
       snap,
@@ -265,36 +314,18 @@ function main() {
     snapshot: StateSnapshot,
     interactionMode: InteractionMode,
   ) {
-    if (interactionMode !== "bid") return;
+    if (interactionMode !== "bid" || pendingBidInFlight) return;
     const seq = currentSeq();
 
-    if (pendingBidIntent) {
-      const currentHintIds = (snapshot.action_hints ?? []).map((
-        cards,
-      ) => cards.map((c) => c.id).sort().join(","));
-      const intentKey = [...pendingBidIntent.cardIds].sort().join(",");
-
-      if (currentHintIds.includes(intentKey)) {
-        const sent = sendAction({
-          type: "bid",
-          seq,
-          cards: pendingBidIntent.cardIds,
-        });
-        if (sent) {
-          suppressBidError = true;
-          reRender();
-        }
-        return;
+    const decision = computeDealBidAction(
+      snapshot.action_hints ?? [],
+      pendingBidIntent,
+      seq,
+    );
+    if (sendAction(decision.action)) {
+      if (decision.matchedPending) {
+        pendingBidInFlight = true;
       }
-      pendingBidIntent = null;
-    }
-
-    if ((snapshot.action_hints ?? []).length > 0) {
-      return;
-    }
-
-    // Auto-skip
-    if (sendAction({ type: "bid", seq, pass: true })) {
       reRender();
     }
   }
@@ -368,7 +399,14 @@ function main() {
     },
 
     onBidOptionSelect(option: BidOption) {
-      if (interactionBlocked()) return;
+      const snap = stateManager.get();
+      if (
+        snap?.phase !== "DEAL_BID" ||
+        pendingBidIntent !== null ||
+        !containsBidOption(visibleBidOptions, option)
+      ) {
+        return;
+      }
       pendingBidIntent = option;
       reRender();
     },
@@ -388,7 +426,7 @@ function main() {
     onNewGame() {
       selectedCardIds.clear();
       pendingBidIntent = null;
-      suppressBidError = false;
+      pendingBidInFlight = false;
       playbackQueue?.clear();
       actionPending = false;
       playbackCaughtUp = true;
@@ -425,11 +463,11 @@ function main() {
     undefined,
     () => wsClient.isReconnecting,
     (message) => {
-      // If suppressing bid errors, silently clear intent and don't show toast
-      if (suppressBidError) {
-        suppressBidError = false;
+      if (pendingBidInFlight) {
         pendingBidIntent = null;
+        pendingBidInFlight = false;
         reRender();
+        showErrorToast(`亮主失败：${message}`, container);
         return;
       }
       showErrorToast(message, container);
@@ -439,6 +477,10 @@ function main() {
   playbackQueue = new StatePlaybackQueue<ServerMessage>(
     (msg) => {
       actionPending = false;
+      if (msg.type === "state" && !msg.error && pendingBidInFlight) {
+        pendingBidInFlight = false;
+        pendingBidIntent = null;
+      }
       gameLoop.handleMessage(msg);
     },
     {

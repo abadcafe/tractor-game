@@ -80,3 +80,39 @@ Deno.test("test_renderScoreboard_has_no_operation_tabs_or_duplicate_table_info",
   assertEquals(text.includes("♥2"), false);
   assertEquals(text.includes("25"), false);
 });
+
+Deno.test("test_renderScoreboard_stirring_status_uses_stirring_phase", () => {
+  const exchangingSnap = makeSnapshot({
+    phase: "STIRRING",
+    awaiting_action: null,
+    stirring_state: {
+      phase: "EXCHANGING",
+      trump_suit: "spades",
+      current_player: 1,
+      declarer_player: 0,
+      exchanging_player: 1,
+      exchange_count: 8,
+    },
+  });
+  const exchangingEl = renderScoreboard(exchangingSnap);
+  const exchangingText = exchangingEl.textContent ?? "";
+  assertEquals(exchangingText.includes("换底牌"), true);
+  assertEquals(exchangingText.includes("待反主"), false);
+
+  const waitingSnap = makeSnapshot({
+    phase: "STIRRING",
+    awaiting_action: null,
+    stirring_state: {
+      phase: "WAITING",
+      trump_suit: "spades",
+      current_player: 2,
+      declarer_player: 0,
+      exchanging_player: null,
+      exchange_count: null,
+    },
+  });
+  const waitingEl = renderScoreboard(waitingSnap);
+  const waitingText = waitingEl.textContent ?? "";
+  assertEquals(waitingText.includes("待反主"), true);
+  assertEquals(waitingText.includes("换底牌"), false);
+});

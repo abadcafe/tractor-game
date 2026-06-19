@@ -47,6 +47,12 @@ function makeSnapshot(
   };
 }
 
+function renderedRanks(el: Element, selector: string): string[] {
+  return Array.from(el.querySelectorAll(selector)).map((card) =>
+    card.getAttribute("data-rank") ?? ""
+  );
+}
+
 Deno.test("test_renderTrickView_shows_played_cards", () => {
   const snap = makeSnapshot();
   const el = renderTrickView(snap);
@@ -229,6 +235,133 @@ Deno.test("test_renderTrickView_multiple_slots", () => {
   assertEquals(trickCards.length, 3);
   const labels = el.querySelectorAll(".trick-player-label");
   assertEquals(labels.length, 3);
+});
+
+Deno.test("test_renderTrickView_sorts_current_trick_cards_like_hand", () => {
+  const snap = makeSnapshot({
+    trump_rank: "4",
+    trump_suit: null,
+    trick: {
+      lead_player: 3,
+      slots: [
+        {
+          player: 0,
+          cards: [
+            { id: "D1-diamonds-6", suit: "diamonds", rank: "6" },
+            { id: "D1-diamonds-3", suit: "diamonds", rank: "3" },
+            { id: "D1-diamonds-10", suit: "diamonds", rank: "10" },
+          ],
+        },
+        {
+          player: 1,
+          cards: [
+            { id: "D1-diamonds-7", suit: "diamonds", rank: "7" },
+            { id: "D1-diamonds-5", suit: "diamonds", rank: "5" },
+            { id: "D1-diamonds-3", suit: "diamonds", rank: "3" },
+          ],
+        },
+        {
+          player: 2,
+          cards: [
+            { id: "D1-diamonds-2", suit: "diamonds", rank: "2" },
+            { id: "D2-diamonds-2", suit: "diamonds", rank: "2" },
+            { id: "D1-diamonds-6", suit: "diamonds", rank: "6" },
+          ],
+        },
+        {
+          player: 3,
+          cards: [
+            { id: "D1-diamonds-K", suit: "diamonds", rank: "K" },
+            { id: "D1-diamonds-A", suit: "diamonds", rank: "A" },
+            { id: "D2-diamonds-A", suit: "diamonds", rank: "A" },
+          ],
+        },
+      ],
+      current_player: 1,
+    },
+  });
+
+  const el = renderTrickView(snap);
+
+  assertEquals(
+    renderedRanks(el, ".trick-slot-south .trick-card"),
+    ["A", "A", "K"],
+  );
+  assertEquals(
+    renderedRanks(el, ".trick-slot-north .trick-card"),
+    ["10", "6", "3"],
+  );
+  assertEquals(
+    renderedRanks(el, ".trick-slot-west .trick-card"),
+    ["7", "5", "3"],
+  );
+  assertEquals(
+    renderedRanks(el, ".trick-slot-east .trick-card"),
+    ["6", "2", "2"],
+  );
+});
+
+Deno.test("test_renderTrickView_sorts_previous_trick_cards_like_hand", () => {
+  const snap = makeSnapshot({
+    trump_rank: "4",
+    trump_suit: null,
+  });
+  const el = renderTrickView(snap, {
+    lead_player: 3,
+    winner: 3,
+    points: 25,
+    slots: [
+      {
+        player: 0,
+        cards: [
+          { id: "D1-diamonds-6", suit: "diamonds", rank: "6" },
+          { id: "D1-diamonds-3", suit: "diamonds", rank: "3" },
+          { id: "D1-diamonds-10", suit: "diamonds", rank: "10" },
+        ],
+      },
+      {
+        player: 1,
+        cards: [
+          { id: "D1-diamonds-7", suit: "diamonds", rank: "7" },
+          { id: "D1-diamonds-5", suit: "diamonds", rank: "5" },
+          { id: "D1-diamonds-3", suit: "diamonds", rank: "3" },
+        ],
+      },
+      {
+        player: 2,
+        cards: [
+          { id: "D1-diamonds-2", suit: "diamonds", rank: "2" },
+          { id: "D2-diamonds-2", suit: "diamonds", rank: "2" },
+          { id: "D1-diamonds-6", suit: "diamonds", rank: "6" },
+        ],
+      },
+      {
+        player: 3,
+        cards: [
+          { id: "D1-diamonds-K", suit: "diamonds", rank: "K" },
+          { id: "D1-diamonds-A", suit: "diamonds", rank: "A" },
+          { id: "D2-diamonds-A", suit: "diamonds", rank: "A" },
+        ],
+      },
+    ],
+  });
+
+  assertEquals(
+    renderedRanks(el, ".trick-slot-north .trick-card"),
+    ["10", "6", "3"],
+  );
+  assertEquals(
+    renderedRanks(el, ".trick-slot-west .trick-card"),
+    ["7", "5", "3"],
+  );
+  assertEquals(
+    renderedRanks(el, ".trick-slot-east .trick-card"),
+    ["6", "2", "2"],
+  );
+  assertEquals(
+    renderedRanks(el, ".trick-slot-south .trick-card"),
+    ["A", "A", "K"],
+  );
 });
 
 Deno.test("test_renderTrickView_slot_with_empty_cards", () => {

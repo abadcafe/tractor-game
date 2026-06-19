@@ -1,4 +1,4 @@
-import type { StateSnapshot } from "../core/types.ts";
+import type { Card, StateSnapshot } from "../core/types.ts";
 import type { GameAction } from "./types.ts";
 import type { ClientAction } from "../core/protocol.ts";
 import {
@@ -21,9 +21,7 @@ export function handlePlayAction(
   selectedCardIds: Set<string>,
   seq: number,
 ): ActionResult {
-  const selectedCards = snap.player_hand.filter((c) =>
-    selectedCardIds.has(c.id)
-  );
+  const selectedCards = selectedCardsInSelectionOrder(snap, selectedCardIds);
   if (selectedCards.length === 0) {
     return { success: false, error: "请选择要出的牌" };
   }
@@ -43,9 +41,7 @@ export function handleDiscardAction(
   selectedCardIds: Set<string>,
   seq: number,
 ): ActionResult {
-  const selectedCards = snap.player_hand.filter((c) =>
-    selectedCardIds.has(c.id)
-  );
+  const selectedCards = selectedCardsInSelectionOrder(snap, selectedCardIds);
   const count = snap.stirring_state?.exchange_count ?? 0;
   if (validateDiscard(selectedCards, count)) {
     return {
@@ -122,4 +118,19 @@ export function handleStirAction(
 /** Handle a pass stir action (不反). */
 export function handlePassStirAction(seq: number): ActionResult {
   return { success: true, action: { type: "stir", seq, pass: true } };
+}
+
+function selectedCardsInSelectionOrder(
+  snap: StateSnapshot,
+  selectedCardIds: Set<string>,
+): Card[] {
+  const cardsById = new Map(snap.player_hand.map((card) => [card.id, card]));
+  const selectedCards: Card[] = [];
+  for (const cardId of selectedCardIds) {
+    const card = cardsById.get(cardId);
+    if (card !== undefined) {
+      selectedCards.push(card);
+    }
+  }
+  return selectedCards;
 }

@@ -13,7 +13,8 @@ Rules:
 - Each time trump suit is established or changed, the stirring player must
   pick up bottom cards and discard the same number back (EXCHANGING sub-phase).
 - After exchange, stirring continues (WAITING sub-phase).
-- All 4 pass → COMPLETE → PLAYING.
+- After an exchange, the exchanging player is skipped; if the other 3 pass,
+  stirring completes and play starts.
 """
 
 from typing import Literal
@@ -133,7 +134,7 @@ def create_stirring(input: StirInput) -> StirringState:
 def pass_stir(state: StirringState, player: int) -> StateResult[StirringState]:
     """Player passes. Add to pass_set and advance current_player.
 
-    If all 4 players have passed, phase becomes COMPLETE.
+    If every player has passed or been skipped for this stir cycle, phase becomes COMPLETE.
     Returns Rejected if player is not the current player or if in EXCHANGING sub-phase.
     """
     if state.phase == "EXCHANGING":
@@ -317,7 +318,7 @@ def stir_discard(
             trump_rank=state.trump_rank,
             declarer_player=state.declarer_player,
             current_player=next_player,
-            pass_set=frozenset(),
+            pass_set=frozenset({exchanging}),
             actions=state.actions,
             last_stir_player=state.last_stir_player,
             current_priority=state.current_priority,

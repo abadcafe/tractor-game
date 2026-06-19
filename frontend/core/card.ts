@@ -9,23 +9,9 @@ const SUIT_SYMBOLS: Record<string, string> = {
   joker: "🃏",
 };
 
-/** Map of suit name to Chinese display name. */
-const SUIT_NAMES_CN: Record<string, string> = {
-  spades: "黑桃",
-  hearts: "红桃",
-  clubs: "梅花",
-  diamonds: "方块",
-  joker: "🃏",
-};
-
 /** Returns the Unicode symbol for a given suit name. */
 export function suitSymbol(suit: string): string {
   return SUIT_SYMBOLS[suit] ?? suit;
-}
-
-/** Returns the Chinese display name for a given suit name. */
-export function suitDisplayName(suit: string): string {
-  return SUIT_NAMES_CN[suit] ?? suit;
 }
 
 /** Returns a display string for a card (symbol + rank, or joker label).
@@ -50,7 +36,11 @@ export function isTrumpRank(c: Card, rank: string): boolean {
 }
 
 /** Returns true if the card is a trump card. */
-function isTrump(c: Card, trumpSuit: string | null, trumpRank: string): boolean {
+function isTrump(
+  c: Card,
+  trumpSuit: string | null,
+  trumpRank: string,
+): boolean {
   if (isJoker(c)) return true;
   if (isTrumpRank(c, trumpRank)) return true;
   if (trumpSuit !== null && c.suit === trumpSuit) return true;
@@ -130,7 +120,8 @@ function compareTrump(
 /** Compare two non-trump cards. */
 function compareNonTrump(a: Card, b: Card): number {
   // 先按花色 黑桃>红桃>梅花>方块
-  const suitDiff = (SUIT_ORDER[a.suit] ?? 99) - (SUIT_ORDER[b.suit] ?? 99);
+  const suitDiff = (SUIT_ORDER[a.suit] ?? 99) -
+    (SUIT_ORDER[b.suit] ?? 99);
   if (suitDiff !== 0) return suitDiff;
   // 同花色按点数从大到小
   return (RANK_ORDER[b.rank] ?? -1) - (RANK_ORDER[a.rank] ?? -1);

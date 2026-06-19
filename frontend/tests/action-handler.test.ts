@@ -44,7 +44,7 @@ function makeSnapshot(
 Deno.test("handlePlayAction sends selected throw even when hints do not match", () => {
   const result = handlePlayAction(
     makeSnapshot(),
-    new Set(["D1-spades-K", "D1-spades-Q"]),
+    new Set(["D1-spades-Q", "D1-spades-K"]),
     12,
   );
 
@@ -54,7 +54,7 @@ Deno.test("handlePlayAction sends selected throw even when hints do not match", 
     throw new Error("expected play action");
   }
   assertEquals(result.action.seq, 12);
-  assertEquals(result.action.cards, ["D1-spades-K", "D1-spades-Q"]);
+  assertEquals(result.action.cards, ["D1-spades-Q", "D1-spades-K"]);
 });
 
 Deno.test("handleStirAction accepts selected cards from hints", () => {

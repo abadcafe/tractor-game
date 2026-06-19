@@ -14,7 +14,7 @@ export type InteractionMode = "bid" | "stir" | "discard" | "play" | "next_round"
 export interface BidOption {
   /** Card IDs to bid with. */
   cardIds: string[];
-  /** Human-readable label, e.g. "♠2对" or "大王对". */
+  /** Human-readable label, e.g. "♠♠2" or "大王对". */
   label: string;
   /** Resulting trump suit if this bid wins. null for joker bids. */
   trumpSuit: string | null;

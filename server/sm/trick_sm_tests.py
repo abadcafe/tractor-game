@@ -629,6 +629,54 @@ class TestPlayFollowTractorSuit:
 
 
 class TestPlayResolveNewComparison:
+    def test_no_trump_level_cards_tie_so_leader_wins(self) -> None:
+        """No-trump level cards in different suits are equal; first played wins."""
+        hands = [
+            [_card(Suit.HEARTS, Rank.TWO)],
+            [_card(Suit.CLUBS, Rank.TWO, 1)],
+            [_card(Suit.CLUBS, Rank.TWO, 2)],
+            [_card(Suit.SPADES, Rank.TWO)],
+        ]
+        state = create_trick(TrickInput(
+            lead_player=0,
+            hands=hands,
+            trump_suit=None,
+            trump_rank=Rank.TWO,
+            defender_points=0,
+            declarer_team=0,
+        ))
+        state = _play_unwrap(state, player=0, cards=hands[0])
+        state = _play_unwrap(state, player=1, cards=hands[1])
+        state = _play_unwrap(state, player=3, cards=hands[3])
+        state = _play_unwrap(state, player=2, cards=hands[2])
+
+        result = _get_result(state)
+        assert result.winner == 0
+
+    def test_off_suit_level_cards_tie_so_earlier_player_wins(self) -> None:
+        """With a trump suit, non-trump-suit level cards are equal."""
+        hands = [
+            [_card(Suit.SPADES, Rank.FIVE)],
+            [_card(Suit.CLUBS, Rank.FIVE, 1)],
+            [_card(Suit.CLUBS, Rank.FIVE, 2)],
+            [_card(Suit.DIAMONDS, Rank.FIVE)],
+        ]
+        state = create_trick(TrickInput(
+            lead_player=0,
+            hands=hands,
+            trump_suit=Suit.HEARTS,
+            trump_rank=Rank.FIVE,
+            defender_points=0,
+            declarer_team=0,
+        ))
+        state = _play_unwrap(state, player=0, cards=hands[0])
+        state = _play_unwrap(state, player=1, cards=hands[1])
+        state = _play_unwrap(state, player=3, cards=hands[3])
+        state = _play_unwrap(state, player=2, cards=hands[2])
+
+        result = _get_result(state)
+        assert result.winner == 0
+
     def test_resolve_equal_cards_keeps_earlier_play_order_winner(self) -> None:
         """Equal cards tie; the earlier play in the trick remains winning."""
         hands = [

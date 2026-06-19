@@ -155,7 +155,7 @@ Deno.test("test_handleMessage_exchange_our_turn", () => {
     phase: "STIRRING",
     awaiting_action: "discard",
     stirring_state: {
-      phase: "WAITING",
+      phase: "EXCHANGING",
       trump_suit: null,
       current_player: 3,
       declarer_player: 0,

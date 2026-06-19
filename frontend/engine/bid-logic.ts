@@ -1,4 +1,5 @@
 import type { Card } from "../core/types.ts";
+import type { ClientAction } from "../core/protocol.ts";
 import type { BidOption } from "./types.ts";
 import { suitSymbol } from "../core/card.ts";
 
@@ -15,6 +16,12 @@ const JOKER_RANK: Record<string, number> = {
   SJ: 4,
   BJ: 5,
 };
+
+export interface DealBidActionDecision {
+  action: ClientAction;
+  matchedPending: boolean;
+  stalePending: boolean;
+}
 
 /** Compute bid priority matching server-side bid_value logic.
  *  Value = count * 100 + card_rank (higher = stronger bid).
@@ -79,6 +86,26 @@ export function computeBidOptionsFromHints(
     .filter((option): option is BidOption => option !== null);
 }
 
+export function computeDealBidAction(
+  _hints: Card[][],
+  pendingBidIntent: BidOption | null,
+  seq: number,
+): DealBidActionDecision {
+  if (pendingBidIntent !== null) {
+    return {
+      action: { type: "bid", seq, cards: pendingBidIntent.cardIds },
+      matchedPending: true,
+      stalePending: false,
+    };
+  }
+
+  return {
+    action: { type: "bid", seq, pass: true },
+    matchedPending: false,
+    stalePending: false,
+  };
+}
+
 function formatBidOptionLabel(
   cards: Card[],
   trumpRank: string,
@@ -94,6 +121,6 @@ function formatBidOptionLabel(
   if (first.suit === "joker") {
     return first.rank === "BJ" ? "大王" : "小王";
   }
-  const suffix = cards.length === 2 ? "对" : "";
-  return `${suitSymbol(first.suit)}${trumpRank}${suffix}`;
+  const suitSymbols = suitSymbol(first.suit).repeat(cards.length);
+  return `${suitSymbols}${trumpRank}`;
 }

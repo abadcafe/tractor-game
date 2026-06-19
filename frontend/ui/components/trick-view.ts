@@ -6,7 +6,7 @@ import type {
   TrickSlot,
 } from "../../core/types.ts";
 import { el } from "../dom.ts";
-import { cardDisplay, suitSymbol } from "../../core/card.ts";
+import { cardDisplay, sortHand, suitSymbol } from "../../core/card.ts";
 import { SEAT_MAP } from "../../config.ts";
 
 /** Map player index to compass direction for trick grid positioning. */
@@ -42,9 +42,9 @@ export function renderTrickView(
   });
 
   const grid = showingPrevious
-    ? renderCompletedTrickGrid(previousTrickPreview)
+    ? renderCompletedTrickGrid(previousTrickPreview, snapshot)
     : showingScoringTrick
-    ? renderCompletedTrickGrid(scoringTrick)
+    ? renderCompletedTrickGrid(scoringTrick, snapshot)
     : renderCurrentTrickGrid(snapshot);
   if (grid !== null) {
     trickView.appendChild(grid);
@@ -106,13 +106,18 @@ function renderCurrentTrickGrid(
     if (isCurrent && !isLead) slotClass += " current";
     if (!slot) slotClass += " empty";
 
-    grid.appendChild(renderTrickSlot(player, slot, slotClass, isLead));
+    grid.appendChild(
+      renderTrickSlot(player, slot, slotClass, isLead, snapshot),
+    );
   }
 
   return grid;
 }
 
-function renderCompletedTrickGrid(trick: CompletedTrick): HTMLElement {
+function renderCompletedTrickGrid(
+  trick: CompletedTrick,
+  snapshot: StateSnapshot,
+): HTMLElement {
   const grid = el("div", { class: "trick-grid trick-grid--previous" });
   const slotsByPlayer = new Map(
     trick.slots.map((slot) => [slot.player, slot]),
@@ -125,7 +130,9 @@ function renderCompletedTrickGrid(trick: CompletedTrick): HTMLElement {
     const isLead = player === trick.lead_player;
     if (isLead) slotClass += " lead";
     if (player === trick.winner) slotClass += " winner";
-    grid.appendChild(renderTrickSlot(player, slot, slotClass, isLead));
+    grid.appendChild(
+      renderTrickSlot(player, slot, slotClass, isLead, snapshot),
+    );
   }
 
   return grid;
@@ -136,6 +143,7 @@ function renderTrickSlot(
   slot: TrickSlot | undefined,
   slotClass: string,
   isLead: boolean,
+  snapshot: StateSnapshot,
 ): HTMLElement {
   const slotEl = el("div", { class: slotClass });
   const seatInfo = SEAT_MAP[player];
@@ -151,11 +159,19 @@ function renderTrickSlot(
   }
 
   const cardsDiv = el("div", { class: "trick-cards" });
-  for (const card of slot?.cards ?? []) {
+  const cards = sortTrickSlotCards(slot?.cards ?? [], snapshot);
+  for (const card of cards) {
     cardsDiv.appendChild(renderTrickCard(card));
   }
   slotEl.appendChild(cardsDiv);
   return slotEl;
+}
+
+function sortTrickSlotCards(
+  cards: Card[],
+  snapshot: StateSnapshot,
+): Card[] {
+  return sortHand(cards, snapshot.trump_suit, snapshot.trump_rank);
 }
 
 function renderTrickCard(card: Card): HTMLElement {
