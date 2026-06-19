@@ -83,6 +83,10 @@ class StateSnapshot:
     clients must not treat that as "no legal action" and must still allow
     user input. The backend remains the authority for accepting or rejecting
     every submitted action.
+
+    bid_events is the deal-bid history. bid_winner is the current effective
+    trump declaration for display: the highest bid during DEAL_BID, then the
+    valid initial bid or latest successful stir after DEAL_BID.
     """
 
     phase: str

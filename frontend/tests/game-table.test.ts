@@ -197,6 +197,7 @@ Deno.test("test_renderGameTable_failed_throw_label_in_top_right_notice", () => {
 
 Deno.test("test_renderGameTable_shows_only_current_bid_winner_under_avatar", () => {
   const snap = makeSnapshot({
+    trump_suit: "spades",
     bid_events: [
       {
         player: 1,
@@ -230,4 +231,42 @@ Deno.test("test_renderGameTable_shows_only_current_bid_winner_under_avatar", () 
   assertEquals(markers.length, 1);
   assertEquals(markerText.includes("♠2"), true);
   assertEquals(markerText.includes("♠主"), true);
+});
+
+Deno.test("test_renderGameTable_uses_updated_bid_winner_after_stir", () => {
+  const snap = makeSnapshot({
+    phase: "WAITING",
+    trump_suit: "clubs",
+    trump_rank: "2",
+    bid_events: [
+      {
+        player: 2,
+        cards: [{ id: "D1-spades-2", suit: "spades", rank: "2" }],
+        kind: "trump_rank",
+        suit: "spades",
+        joker_type: null,
+        count: 1,
+      },
+    ],
+    bid_winner: {
+      player: 1,
+      cards: [
+        { id: "D1-clubs-2", suit: "clubs", rank: "2" },
+        { id: "D2-clubs-2", suit: "clubs", rank: "2" },
+      ],
+      kind: "trump_rank",
+      suit: "clubs",
+      joker_type: null,
+      count: 2,
+    },
+  });
+  const el = renderGameTable(snap);
+  const markers = el.querySelectorAll(".player-bid-marker");
+  const markerText = markers[0]?.textContent ?? "";
+  const tableText = el.textContent ?? "";
+
+  assertEquals(markers.length, 1);
+  assertEquals(markerText.includes("♣2 ♣2"), true);
+  assertEquals(markerText.includes("♣主"), true);
+  assertEquals(tableText.includes("♠2"), false);
 });

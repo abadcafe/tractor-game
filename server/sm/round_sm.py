@@ -55,6 +55,7 @@ class RoundState(BaseModel):
     defender_team: int | None
     trump_suit: Suit | None
     trump_rank: Rank
+    bid_winner: BidEvent | None
     players_hand: list[list[Card]]
     bottom_cards: list[Card]
     defender_points: int
@@ -96,6 +97,7 @@ def create_round(input: RoundInput) -> RoundState:
         defender_team=None,
         trump_suit=None,
         trump_rank=input.trump_rank,
+        bid_winner=None,
         players_hand=[[], [], [], []],
         bottom_cards=bottom_cards,
         defender_points=0,
@@ -130,6 +132,7 @@ def deal_next_card(state: RoundState) -> StateResult[RoundState]:
         case Ok(value=new_db):
             new_state = state.model_copy(update={
                 "deal_bid_state": new_db,
+                "bid_winner": new_db.bid_winner,
                 "players_hand": [list(h) for h in new_db.players_hand],
             })
 
@@ -158,7 +161,10 @@ def reveal(state: RoundState, event: BidEvent) -> StateResult[RoundState]:
 
     match db.reveal(state.deal_bid_state, event):
         case Ok(value=new_db):
-            return Ok(state.model_copy(update={"deal_bid_state": new_db}))
+            return Ok(state.model_copy(update={
+                "deal_bid_state": new_db,
+                "bid_winner": new_db.bid_winner,
+            }))
         case Rejected(reason=reason):
             return Rejected(reason)
 
@@ -182,6 +188,7 @@ def finalize_deal_bid(state: RoundState) -> StateResult[RoundState]:
             return Ok(_transition_to_stirring(
                 state.model_copy(update={
                     "deal_bid_state": new_db,
+                    "bid_winner": new_db.bid_winner,
                     "players_hand": [list(h) for h in new_db.players_hand],
                 }),
                 new_db,
@@ -264,6 +271,7 @@ def stir(state: RoundState, player_index: int, cards: list[Card]) -> StateResult
             new_state = state.model_copy(update={
                 "stirring_state": new_ss,
                 "trump_suit": new_ss.trump_suit,
+                "bid_winner": _bid_event_from_stir_cards(cur, cards),
             })
             return Ok(new_state)
         case Rejected(reason=reason):
@@ -384,6 +392,7 @@ def _transition_to_stirring(state: RoundState, deal_bid: db.DealBidState) -> Rou
     declarer_team = state.declarer_team
     declarer_player: int | None = None
     trump_suit: Suit | None = None
+    bid_winner: BidEvent | None = None
     defender_team: int | None = None
     initial_bid_cards: list[Card] = []
 
@@ -409,6 +418,7 @@ def _transition_to_stirring(state: RoundState, deal_bid: db.DealBidState) -> Rou
 
         trump_suit = deal_bid.bid_winner.suit if valid_winner else None
         initial_bid_cards = list(deal_bid.bid_winner.cards) if valid_winner else []
+        bid_winner = deal_bid.bid_winner if valid_winner else None
         defender_team = 1 - declarer_team
 
     elif deal_bid.phase == "NO_BID":
@@ -454,10 +464,34 @@ def _transition_to_stirring(state: RoundState, deal_bid: db.DealBidState) -> Rou
         "declarer_player": declarer_player,
         "defender_team": defender_team,
         "trump_suit": trump_suit,
+        "bid_winner": bid_winner,
         "players_hand": [list(h) for h in stirring_state.players_hand],
         "stirring_state": stirring_state,
         "deal_bid_state": deal_bid,
     })
+
+
+def _bid_event_from_stir_cards(player: int, cards: list[Card]) -> BidEvent:
+    """Convert validated stir cards into the current public bid winner."""
+    assert len(cards) > 0
+    first = cards[0]
+    if first.is_joker:
+        return BidEvent(
+            player=player,
+            cards=list(cards),
+            kind="joker",
+            suit=None,
+            joker_type="big" if first.is_big_joker else "small",
+            count=len(cards),
+        )
+    return BidEvent(
+        player=player,
+        cards=list(cards),
+        kind="trump_rank",
+        suit=first.suit,
+        joker_type=None,
+        count=len(cards),
+    )
 
 
 def _transition_to_playing(state: RoundState) -> RoundState:

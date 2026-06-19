@@ -484,6 +484,10 @@ class TestStirringPhase:
         assert isinstance(result, Ok)
         state = result.value
         assert state.trump_suit == target_suit
+        assert state.bid_winner is not None
+        assert state.bid_winner.player == cur
+        assert state.bid_winner.cards == pair
+        assert state.bid_winner.suit == target_suit
 
     def test_stir_cards_not_in_hand_rejected(self) -> None:
         """stir with cards not in current player's hand returns Rejected."""
@@ -1099,6 +1103,7 @@ def test_play_leading_accepts_legal_partial_throw_not_in_enumerated_hints() -> N
         defender_team=1,
         trump_suit=Suit.HEARTS,
         trump_rank=Rank.TWO,
+        bid_winner=None,
         players_hand=hands,
         bottom_cards=[],
         defender_points=0,
@@ -1148,6 +1153,7 @@ def test_play_leading_failed_throw_records_public_penalty_event() -> None:
         defender_team=1,
         trump_suit=Suit.HEARTS,
         trump_rank=Rank.TWO,
+        bid_winner=None,
         players_hand=hands,
         bottom_cards=[],
         defender_points=0,

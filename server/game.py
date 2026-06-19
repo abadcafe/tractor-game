@@ -493,10 +493,8 @@ class Game:
 
         # bid_events and bid_winner
         bid_events: list[BidEvent] = []
-        bid_winner: BidEvent | None = None
         if rs.deal_bid_state is not None:
             bid_events = list(rs.deal_bid_state.bid_events)
-            bid_winner = rs.deal_bid_state.bid_winner
 
         # stirring_state
         stirring_state_snap: StirringStateSnapshot | None = None
@@ -547,7 +545,7 @@ class Game:
             team0_level=gs.team0_level,
             team1_level=gs.team1_level,
             bid_events=bid_events,
-            bid_winner=bid_winner,
+            bid_winner=rs.bid_winner,
             stirring_state=stirring_state_snap,
             next_round_confirmed=sorted(self._next_round_confirmed),
         )

@@ -78,7 +78,7 @@ function renderScoringSummary(
     el(
       "div",
       { class: "scoring-overlay__meta" },
-      `牌分 ${scoring.defender_points} / 底牌 ${scoring.bottom_card_bonus}`,
+      `牌分 ${scoring.defender_points} / 抠底 ${scoring.bottom_card_bonus}`,
     ),
   );
   summary.appendChild(
@@ -126,10 +126,7 @@ function renderBottomCards(cards: Card[]): HTMLElement {
   bottom.appendChild(
     el("div", { class: "scoring-overlay__bottom-title" }, "底牌"),
   );
-  const cardsClass = cards.length > 12
-    ? "scoring-overlay__bottom-cards scoring-overlay__bottom-cards--many"
-    : "scoring-overlay__bottom-cards";
-  const cardsEl = el("div", { class: cardsClass });
+  const cardsEl = el("div", { class: "scoring-overlay__bottom-cards" });
   if (cards.length === 0) {
     cardsEl.appendChild(
       el("span", { class: "scoring-overlay__empty" }, "无底牌"),

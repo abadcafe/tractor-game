@@ -1890,8 +1890,8 @@ button {
   height: 100%;
   min-height: 0;
   display: grid;
-  grid-template-columns: 158px minmax(0, 1fr) 250px;
-  gap: 10px;
+  grid-template-columns: 136px minmax(0, 1fr) 258px;
+  gap: 8px;
   align-items: stretch;
   padding: 8px 12px;
   border: 0;
@@ -1941,9 +1941,11 @@ button {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 5px;
+  justify-items: center;
   padding: 6px 10px;
   border: 1px solid rgba(255, 223, 90, 0.38);
   background: rgba(255, 223, 90, 0.08);
+  text-align: center;
 }
 
 .scoring-overlay__bottom-title {
@@ -1958,7 +1960,7 @@ button {
   padding: 0;
   display: flex;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: center;
   overflow: hidden;
   border-radius: 0;
   background: transparent;
@@ -1970,10 +1972,6 @@ button {
   margin-right: -6px;
   border-radius: 4px;
   font-size: 13px;
-}
-
-.scoring-overlay__bottom-cards--many .scoring-bottom-card {
-  margin-right: -8px;
 }
 
 .scoring-overlay__bottom-cards .scoring-bottom-card:last-child {
@@ -1989,18 +1987,20 @@ button {
 .scoring-overlay__actions {
   display: grid;
   grid-template-rows: minmax(0, 1fr) 36px;
-  gap: 7px;
+  gap: 8px;
+  padding: 7px;
+  background: rgba(5, 45, 57, 0.22);
 }
 
 .confirm-grid {
   grid-template-columns: repeat(2, 1fr);
   margin: 0;
-  gap: 5px;
+  gap: 7px;
 }
 
 .confirm-slot {
   min-height: 24px;
-  padding: 3px 7px;
+  padding: 3px 8px;
   border-radius: 4px;
   font-size: 12px;
 }

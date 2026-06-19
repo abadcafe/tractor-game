@@ -93,8 +93,8 @@ Deno.test("test_renderScoringOverlay_bottom_cards_are_prominent_cards", () => {
   assertEquals(bottomCards.length, 3);
 });
 
-Deno.test("test_renderScoringOverlay_twenty_four_bottom_cards_use_dense_layout", () => {
-  const bottomCards = Array.from({ length: 24 }, (_, index) => ({
+Deno.test("test_renderScoringOverlay_eight_bottom_cards_use_centered_layout", () => {
+  const bottomCards = Array.from({ length: 8 }, (_, index) => ({
     id: `D${index}-hearts-5`,
     suit: "hearts" as const,
     rank: "5" as const,
@@ -112,12 +112,12 @@ Deno.test("test_renderScoringOverlay_twenty_four_bottom_cards_use_dense_layout",
   const cardsWrap = el.querySelector(".scoring-overlay__bottom-cards");
   const cards = el.querySelectorAll(".scoring-bottom-card");
 
-  assertEquals(cards.length, 24);
+  assertEquals(cards.length, 8);
   assertEquals(
     cardsWrap?.classList.contains(
       "scoring-overlay__bottom-cards--many",
     ),
-    true,
+    false,
   );
 });
 
