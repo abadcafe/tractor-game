@@ -156,10 +156,10 @@ def reveal(state: RoundState, event: BidEvent) -> StateResult[RoundState]:
     """
     if state.phase != "DEAL_BID":
         return Rejected(
-            f"叫牌只能在发牌阶段进行，当前阶段：{state.phase}"
+            f"抢主只能在发牌阶段进行，当前阶段：{state.phase}"
         )
     if state.deal_bid_state is None:
-        return Rejected("叫牌状态异常")
+        return Rejected("抢主状态异常")
 
     match db.reveal(state.deal_bid_state, event):
         case Ok(value=new_db):

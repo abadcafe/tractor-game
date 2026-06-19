@@ -240,7 +240,7 @@ def reveal(state: DealBidState, event: BidEvent) -> StateResult[DealBidState]:
 
     # Precondition 1: must be in DEALING phase
     if state.phase != "DEALING":
-        return Rejected(f"叫牌只能在发牌阶段进行，当前阶段：{state.phase}")
+        return Rejected(f"抢主只能在发牌阶段进行，当前阶段：{state.phase}")
 
     player_idx = event.player
     hand = state.players_hand[player_idx]
@@ -258,7 +258,7 @@ def reveal(state: DealBidState, event: BidEvent) -> StateResult[DealBidState]:
     # Precondition 2 & 3: validate card types
     if event.kind == "trump_rank":
         if event.suit is None:
-            return Rejected("主牌叫牌必须指定花色")
+            return Rejected("主牌抢主必须指定花色")
         # Each card must be trump_rank and same suit
         for card in event.cards:
             if card.rank != state.trump_rank:
@@ -266,31 +266,31 @@ def reveal(state: DealBidState, event: BidEvent) -> StateResult[DealBidState]:
             if card.suit != event.suit:
                 return Rejected(f"牌花色 {card.suit.value} 与声明花色 {event.suit.value} 不一致")
         if event.count not in (1, 2):
-            return Rejected(f"叫牌数量必须为1或2，实际 {event.count}")
+            return Rejected(f"抢主数量必须为1或2，实际 {event.count}")
         if len(event.cards) != event.count:
             return Rejected(f"牌张数量 {len(event.cards)} 与声明数量 {event.count} 不一致")
     elif event.kind == "joker":
         if event.count != 2:
-            return Rejected("王叫牌必须出对子")
+            return Rejected("王抢主必须出对子")
         if len(event.cards) != 2:
-            return Rejected(f"王叫牌必须出2张，实际 {len(event.cards)} 张")
+            return Rejected(f"王抢主必须出2张，实际 {len(event.cards)} 张")
         for card in event.cards:
             if not card.is_joker:
                 return Rejected(f"牌 {card.id} 不是王")
         if event.cards[0].rank != event.cards[1].rank:
             return Rejected("两种王不能配对")
         if event.suit is not None:
-            return Rejected("王叫牌不能指定花色")
+            return Rejected("王抢主不能指定花色")
 
     # Precondition 5: if bid_winner exists, new bid value must be strictly greater
     new_value = bid_value(event.cards, state.trump_rank)
     if new_value == 0:
-        return Rejected("叫牌无效：牌张价值为零")
+        return Rejected("抢主无效：牌张价值为零")
 
     if state.bid_winner is not None:
         current_value = bid_value(state.bid_winner.cards, state.trump_rank)
         if new_value <= current_value:
-            return Rejected("叫牌优先级不足")
+            return Rejected("抢主优先级不足")
 
     # Valid bid: update state
     new_bid_events = state.bid_events + [event]

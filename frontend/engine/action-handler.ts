@@ -84,10 +84,10 @@ export function handleBidAction(
       action: { type: "bid", seq, cards: cardIds },
     };
   }
-  return { success: false, error: "叫牌牌张无效" };
+  return { success: false, error: "抢主牌张无效" };
 }
 
-/** Handle a skip-bid action (不叫). */
+/** Handle a skip-bid action (不抢). */
 export function handleSkipBidAction(seq: number): ActionResult {
   return { success: true, action: { type: "bid", seq, pass: true } };
 }

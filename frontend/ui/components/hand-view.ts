@@ -237,7 +237,7 @@ function isSameBidOption(
 function bidOptionTitle(option: BidOption): string {
   return option.trumpSuit === null
     ? `${option.label}，无主`
-    : `${option.label}，亮${suitSymbol(option.trumpSuit)}主`;
+    : `${option.label}，抢${suitSymbol(option.trumpSuit)}主`;
 }
 
 function renderPreviousTrickButton(

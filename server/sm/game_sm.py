@@ -87,9 +87,15 @@ def process_round_result(state: GameState, result: RoundResult) -> StateResult[G
     new_team0 = result.team0_new_level
     new_team1 = result.team1_new_level
 
-    # Check game over: either team reaches ACE
-    if new_team0 == Rank.ACE or new_team1 == Rank.ACE:
-        winning = 0 if new_team0 == Rank.ACE else 1
+    team0_gain = _level_gain_for_team(result, 0)
+    team1_gain = _level_gain_for_team(result, 1)
+
+    # Check game over: a team must already be playing ACE and then gain again.
+    # Reaching ACE only schedules an ACE round; it is not a win yet.
+    team0_passed_ace = state.team0_level == Rank.ACE and team0_gain > 0
+    team1_passed_ace = state.team1_level == Rank.ACE and team1_gain > 0
+    if team0_passed_ace or team1_passed_ace:
+        winning = 0 if team0_passed_ace else 1
         return Ok(state.model_copy(update={
             "phase": "GAME_OVER",
             "team0_level": new_team0,
@@ -107,3 +113,12 @@ def process_round_result(state: GameState, result: RoundResult) -> StateResult[G
         "next_declarer_player": result.next_declarer_player,
         "round_number": state.round_number + 1,
     }))
+
+
+def _level_gain_for_team(result: RoundResult, team: int) -> int:
+    """Return the positive level gain awarded to *team* by a round result."""
+    if result.next_declarer_team != team:
+        return 0
+    if result.switch_declarer:
+        return result.defender_level_change
+    return result.declarer_level_change

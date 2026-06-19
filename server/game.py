@@ -177,7 +177,7 @@ class Game:
         if phase == "DEAL_BID" and isinstance(action, BidAction):
             assert rs is not None
             if player_index != self._bid_turn:
-                error_msg = f"不是你的叫牌回合（当前叫牌者：{self._bid_turn}）"
+                error_msg = f"不是你的抢主回合（当前抢主者：{self._bid_turn}）"
             else:
                 match self._convert_bid_action(player_index, action):
                     case Ok(value=bid_event):
@@ -213,7 +213,7 @@ class Game:
         elif phase == "DEAL_BID" and isinstance(action, SkipBidAction):
             assert rs is not None
             if player_index != self._bid_turn:
-                error_msg = f"不是你的叫牌回合（当前叫牌者：{self._bid_turn}）"
+                error_msg = f"不是你的抢主回合（当前抢主者：{self._bid_turn}）"
                 self._round_state = rs
                 await self._send_state_to_player(player_index, error=error_msg)
                 return

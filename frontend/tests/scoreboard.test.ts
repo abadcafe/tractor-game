@@ -76,7 +76,7 @@ Deno.test("test_renderScoreboard_has_no_operation_tabs_or_duplicate_table_info",
   assertEquals(text.includes("主牌"), false);
   assertEquals(text.includes("上一墩"), false);
   assertEquals(text.includes("底牌"), false);
-  assertEquals(text.includes("叫牌记录"), false);
+  assertEquals(text.includes("抢主记录"), false);
   assertEquals(text.includes("♥2"), false);
   assertEquals(text.includes("25"), false);
 });

@@ -104,12 +104,84 @@ class TestProcessRoundResult:
 
 
 class TestGameOver:
-    def test_game_over_team0(self) -> None:
-        """Game over when team 0 reaches ACE."""
+    def test_reaching_ace_does_not_end_game_team0(self) -> None:
+        """Reaching ACE schedules an ACE round; it does not end the game."""
         state = create_game()
         result = start_game(state)
         assert isinstance(result, Ok)
+        state = result.value.model_copy(update={"team0_level": Rank.KING})
+        rr = RoundResult(
+            team0_new_level=Rank.ACE,
+            team1_new_level=Rank.TEN,
+            next_declarer_team=0,
+            next_declarer_player=3,
+            total_defender_points=0,
+            declarer_level_change=3,
+            defender_level_change=0,
+            switch_declarer=False,
+            bottom_card_bonus=0,
+        )
+        result = process_round_result(state, rr)
+        assert isinstance(result, Ok)
         state = result.value
+        assert state.phase == "IN_ROUND"
+        assert state.winning_team is None
+        assert state.team0_level == Rank.ACE
+
+    def test_jumping_from_queen_to_ace_does_not_end_game(self) -> None:
+        """A big level jump that lands on ACE still requires playing ACE."""
+        state = create_game()
+        result = start_game(state)
+        assert isinstance(result, Ok)
+        state = result.value.model_copy(update={"team0_level": Rank.QUEEN})
+        rr = RoundResult(
+            team0_new_level=Rank.ACE,
+            team1_new_level=Rank.TEN,
+            next_declarer_team=0,
+            next_declarer_player=3,
+            total_defender_points=0,
+            declarer_level_change=3,
+            defender_level_change=0,
+            switch_declarer=False,
+            bottom_card_bonus=0,
+        )
+        result = process_round_result(state, rr)
+        assert isinstance(result, Ok)
+        state = result.value
+        assert state.phase == "IN_ROUND"
+        assert state.winning_team is None
+        assert state.team0_level == Rank.ACE
+
+    def test_reaching_ace_does_not_end_game_team1(self) -> None:
+        """A defender team that reaches ACE still has to pass ACE later."""
+        state = create_game()
+        result = start_game(state)
+        assert isinstance(result, Ok)
+        state = result.value.model_copy(update={"team1_level": Rank.KING})
+        rr = RoundResult(
+            team0_new_level=Rank.QUEEN,
+            team1_new_level=Rank.ACE,
+            next_declarer_team=1,
+            next_declarer_player=2,
+            total_defender_points=150,
+            declarer_level_change=0,
+            defender_level_change=2,
+            switch_declarer=True,
+            bottom_card_bonus=0,
+        )
+        result = process_round_result(state, rr)
+        assert isinstance(result, Ok)
+        state = result.value
+        assert state.phase == "IN_ROUND"
+        assert state.winning_team is None
+        assert state.team1_level == Rank.ACE
+
+    def test_game_over_team0_after_passing_ace(self) -> None:
+        """Game over when team 0 is already at ACE and gains again."""
+        state = create_game()
+        result = start_game(state)
+        assert isinstance(result, Ok)
+        state = result.value.model_copy(update={"team0_level": Rank.ACE})
         rr = RoundResult(
             team0_new_level=Rank.ACE,
             team1_new_level=Rank.TEN,
@@ -127,12 +199,12 @@ class TestGameOver:
         assert state.phase == "GAME_OVER"
         assert state.winning_team == 0
 
-    def test_game_over_team1(self) -> None:
-        """Game over when team 1 reaches ACE."""
+    def test_game_over_team1_after_passing_ace(self) -> None:
+        """Game over when team 1 is already at ACE and gains again."""
         state = create_game()
         result = start_game(state)
         assert isinstance(result, Ok)
-        state = result.value
+        state = result.value.model_copy(update={"team1_level": Rank.ACE})
         rr = RoundResult(
             team0_new_level=Rank.QUEEN,
             team1_new_level=Rank.ACE,
@@ -149,6 +221,28 @@ class TestGameOver:
         state = result.value
         assert state.phase == "GAME_OVER"
         assert state.winning_team == 1
+
+    def test_ace_without_level_gain_does_not_end_game(self) -> None:
+        """Playing an ACE round without gaining a level does not pass ACE."""
+        state = create_game()
+        result = start_game(state)
+        assert isinstance(result, Ok)
+        state = result.value.model_copy(update={"team1_level": Rank.ACE})
+        rr = RoundResult(
+            team0_new_level=Rank.TWO,
+            team1_new_level=Rank.ACE,
+            next_declarer_team=1,
+            next_declarer_player=1,
+            total_defender_points=80,
+            declarer_level_change=0,
+            defender_level_change=0,
+            switch_declarer=True,
+            bottom_card_bonus=0,
+        )
+        result = process_round_result(state, rr)
+        assert isinstance(result, Ok)
+        assert result.value.phase == "IN_ROUND"
+        assert result.value.winning_team is None
 
     def test_game_not_over_mid_game(self) -> None:
         """Game continues when neither team has reached ACE."""
@@ -228,7 +322,7 @@ class TestInvalidTransitions:
         state = create_game()
         result = start_game(state)
         assert isinstance(result, Ok)
-        state = result.value
+        state = result.value.model_copy(update={"team0_level": Rank.ACE})
         rr = RoundResult(
             team0_new_level=Rank.ACE,
             team1_new_level=Rank.TWO,
@@ -268,7 +362,7 @@ class TestInvalidTransitions:
         state = create_game()
         result = start_game(state)
         assert isinstance(result, Ok)
-        state = result.value
+        state = result.value.model_copy(update={"team0_level": Rank.ACE})
         rr = RoundResult(
             team0_new_level=Rank.ACE,
             team1_new_level=Rank.TWO,
@@ -300,8 +394,8 @@ class TestInvalidTransitions:
 
 
 class TestEdgeCases:
-    def test_game_over_both_teams_ace(self) -> None:
-        """When both teams reach ACE, team 0 wins (tie-breaker)."""
+    def test_both_teams_reaching_ace_does_not_end_game(self) -> None:
+        """If neither team has passed ACE, both teams at ACE can continue."""
         state = create_game()
         result = start_game(state)
         assert isinstance(result, Ok)
@@ -320,8 +414,8 @@ class TestEdgeCases:
         result = process_round_result(state, rr)
         assert isinstance(result, Ok)
         state = result.value
-        assert state.phase == "GAME_OVER"
-        assert state.winning_team == 0
+        assert state.phase == "IN_ROUND"
+        assert state.winning_team is None
         assert state.team0_level == Rank.ACE
         assert state.team1_level == Rank.ACE
 
@@ -345,10 +439,10 @@ class TestEdgeCases:
         )
         result = process_round_result(state, r1)
         assert isinstance(result, Ok)
-        state = result.value
+        state = result.value.model_copy(update={"team0_level": Rank.ACE})
         assert state.declarer_team == 0
         assert state.next_declarer_player == 3
-        # Second round ends the game
+        # Second round passes ACE and ends the game
         r2 = RoundResult(
             team0_new_level=Rank.ACE,
             team1_new_level=Rank.TWO,

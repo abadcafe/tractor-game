@@ -467,7 +467,7 @@ function main() {
         pendingBidIntent = null;
         pendingBidInFlight = false;
         reRender();
-        showErrorToast(`亮主失败：${message}`, container);
+        showErrorToast(`抢主失败：${message}`, container);
         return;
       }
       showErrorToast(message, container);

@@ -31,7 +31,7 @@ function getCurrentPlayer(snapshot: StateSnapshot): number | null {
 function actionText(snapshot: StateSnapshot): string {
   switch (snapshot.awaiting_action) {
     case "bid":
-      return "轮到你叫牌";
+      return "轮到你抢主";
     case "stir":
       return "轮到你反主";
     case "discard":
@@ -44,7 +44,7 @@ function actionText(snapshot: StateSnapshot): string {
       return "请确认下一轮";
   }
 
-  if (snapshot.phase === "DEAL_BID") return "发牌与叫牌进行中";
+  if (snapshot.phase === "DEAL_BID") return "发牌与抢主进行中";
   if (snapshot.phase === "STIRRING" && snapshot.stirring_state) {
     const player = snapshot.stirring_state.phase === "EXCHANGING"
       ? snapshot.stirring_state.exchanging_player
@@ -64,7 +64,7 @@ function actionText(snapshot: StateSnapshot): string {
 
 /** Phase labels in Chinese. */
 const PHASE_LABELS: Record<string, string> = {
-  DEAL_BID: "叫牌阶段",
+  DEAL_BID: "抢主阶段",
   STIRRING: "反主阶段",
   PLAYING: "出牌阶段",
   WAITING: "结算中",
@@ -218,7 +218,7 @@ function bidTrumpText(event: BidEvent): string {
   if (event.suit !== null) {
     return `${suitSymbol(event.suit)}主`;
   }
-  return "亮主";
+  return "抢主";
 }
 
 /**
