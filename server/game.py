@@ -607,10 +607,10 @@ class Game:
         if not lead_cards:
             return []
 
-        other_hands: list[Card] = []
+        other_players_hands: list[list[Card]] = []
         for i in range(4):
             if i != player_index:
-                other_hands.extend(rs.players_hand[i])
+                other_players_hands.append(list(rs.players_hand[i]))
 
         hints = play_rules.get_legal_plays(
             hand=player_hand,
@@ -618,7 +618,7 @@ class Game:
             lead_cards=lead_cards,
             trump_suit=rs.trump_suit,
             trump_rank=rs.trump_rank,
-            other_hands=other_hands,
+            other_players_hands=other_players_hands,
         )
         return play_rules.sort_play_action_hints(
             hints,

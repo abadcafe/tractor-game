@@ -167,7 +167,7 @@ class TestDecompose:
     def test_decompose_trump_group_cross_sub_type_tractor(self) -> None:
         """Trump group cross-sub-type tractor: hA hA + d5 d5 is tractor when heart trump, rank=5.
 
-        hA is at position 45+14=59, d5 is at 70+0=70. They are adjacent in the
+        hA is at position 45+14=59, d5 is at 70. They are adjacent in the
         trump_rank_order sequence because no trump card has a position value between
         59 and 70. Adjacent means "consecutive in the sorted list of position values"
         -- not "position values differ by 1".
@@ -191,10 +191,11 @@ class TestDecompose:
         assert subs[0].pair_count == 2
 
     def test_decompose_trump_group_suit_specific_rank_pairs(self) -> None:
-        """c5 c5 + sp5 sp5 -> tractor (adjacent in other-suit trump rank section).
+        """c5 c5 + sp5 sp5 -> tractor by same-rank suit structure.
 
-        c5=71, sp5=73. Is there a value 72? h5 would be 72 if heart weren't trump,
-        but heart IS trump so h5=80. So 72 doesn't exist. c5(71) and sp5(73) are adjacent.
+        This structural tractor rule still uses SUIT_OFFSET to decide same-rank
+        suit adjacency. It does not mean c5 and sp5 have different trick-winning
+        strength; they are equal during comparison.
         """
         cards = [
             _card(Suit.CLUBS, Rank.FIVE, 1), _card(Suit.CLUBS, Rank.FIVE, 2),
@@ -271,13 +272,13 @@ class TestIsLegalLead:
         """
         hand = [_card(Suit.SPADES, Rank.ACE), _card(Suit.SPADES, Rank.KING)]
         other_hands: list[Card] = []  # no other sp cards
-        assert is_legal_lead(hand, hand, Suit.HEARTS, Rank.TWO, other_hands) is True
+        assert is_legal_lead(hand, hand, Suit.HEARTS, Rank.TWO, [other_hands]) is True
 
     def test_is_legal_lead_throw_failed_single_still_submittable(self) -> None:
         """A failed throw attempt is still a submittable lead action."""
         hand = [_card(Suit.SPADES, Rank.KING), _card(Suit.SPADES, Rank.QUEEN)]
         other_hands = [_card(Suit.SPADES, Rank.ACE)]
-        result = is_legal_lead(hand, hand, Suit.HEARTS, Rank.TWO, other_hands)
+        result = is_legal_lead(hand, hand, Suit.HEARTS, Rank.TWO, [other_hands])
         assert result is True
 
     def test_resolve_lead_throw_forces_smallest_failed_subplay(self) -> None:
@@ -290,12 +291,74 @@ class TestIsLegalLead:
             hand,
             Suit.HEARTS,
             Rank.TWO,
-            other_hands,
+            [other_hands],
         )
 
         assert isinstance(result, Ok)
         assert result.value.attempted_cards == hand
         assert result.value.played_cards == [hand[1]]
+
+    def test_detect_throw_does_not_combine_pairs_across_players(self) -> None:
+        """A pair only exists when one opponent holds both cards."""
+        hand = [
+            _card(Suit.SPADES, Rank.KING, 1),
+            _card(Suit.SPADES, Rank.KING, 2),
+        ]
+        other_players_hands = [
+            [_card(Suit.SPADES, Rank.ACE, 1)],
+            [_card(Suit.SPADES, Rank.ACE, 2)],
+            [],
+        ]
+
+        throws = detect_throws(
+            hand,
+            Suit.HEARTS,
+            Rank.TWO,
+            other_players_hands,
+        )
+
+        assert len(throws) == 1
+        assert throws[0] == hand
+
+    def test_resolve_throw_akkqq_not_beaten_by_phantom_low_tractor(self) -> None:
+        """Scattered lower pairs across opponents cannot force AKKQQ to pick small."""
+        hand = [
+            _card(Suit.HEARTS, Rank.ACE, 1),
+            _card(Suit.HEARTS, Rank.KING, 1),
+            _card(Suit.HEARTS, Rank.KING, 2),
+            _card(Suit.HEARTS, Rank.QUEEN, 1),
+            _card(Suit.HEARTS, Rank.QUEEN, 2),
+        ]
+        other_players_hands = [
+            [
+                _card(Suit.HEARTS, Rank.NINE, 1),
+                _card(Suit.HEARTS, Rank.NINE, 2),
+                _card(Suit.HEARTS, Rank.EIGHT, 1),
+            ],
+            [
+                _card(Suit.HEARTS, Rank.ACE, 2),
+                _card(Suit.HEARTS, Rank.TEN, 1),
+                _card(Suit.HEARTS, Rank.TEN, 2),
+                _card(Suit.HEARTS, Rank.EIGHT, 2),
+            ],
+            [
+                _card(Suit.HEARTS, Rank.JACK, 1),
+                _card(Suit.HEARTS, Rank.JACK, 2),
+                _card(Suit.HEARTS, Rank.SEVEN, 1),
+                _card(Suit.HEARTS, Rank.SEVEN, 2),
+            ],
+        ]
+
+        result = resolve_lead_throw(
+            hand,
+            hand,
+            Suit.SPADES,
+            Rank.FIVE,
+            other_players_hands,
+        )
+
+        assert isinstance(result, Ok)
+        assert result.value.played_cards == hand
 
     def test_is_legal_lead_throw_pair_not_biggest_still_submittable(self) -> None:
         """A throw containing a non-biggest pair is still submittable."""
@@ -305,7 +368,7 @@ class TestIsLegalLead:
             _card(Suit.SPADES, Rank.ACE),
         ]
         other_hands = [_card(Suit.SPADES, Rank.KING, 1), _card(Suit.SPADES, Rank.KING, 2)]
-        result = is_legal_lead(hand, hand, Suit.HEARTS, Rank.TWO, other_hands)
+        result = is_legal_lead(hand, hand, Suit.HEARTS, Rank.TWO, [other_hands])
         assert result is True
 
     def test_is_legal_lead_not_in_hand(self) -> None:
@@ -339,7 +402,7 @@ class TestIsLegalLead:
             _card(Suit.SPADES, Rank.FIVE, 1), _card(Suit.SPADES, Rank.FIVE, 2),
             _card(Suit.SPADES, Rank.SIX, 1), _card(Suit.SPADES, Rank.SIX, 2),
         ]
-        result = is_legal_lead(hand, hand, Suit.HEARTS, Rank.TWO, other_hands)
+        result = is_legal_lead(hand, hand, Suit.HEARTS, Rank.TWO, [other_hands])
         assert result is True
 
     def test_is_legal_lead_throw_biggest_tractor(self) -> None:
@@ -351,7 +414,7 @@ class TestIsLegalLead:
             _card(Suit.SPADES, Rank.QUEEN),
         ]
         other_hands: list[Card] = []
-        result = is_legal_lead(hand, hand, Suit.HEARTS, Rank.TWO, other_hands)
+        result = is_legal_lead(hand, hand, Suit.HEARTS, Rank.TWO, [other_hands])
         assert result is True
 
 
@@ -762,7 +825,7 @@ class TestComparePlays:
 
         trump_suit=♥, trump_rank=5:
           ♥5 = 主花色级牌 (spec value=80)
-          ♠5 = 其他花色级牌 (spec value=73)
+          ♠5 = 其他花色级牌 (spec value=70)
         ♥5 should win.
         """
         a = [_card(Suit.HEARTS, Rank.FIVE)]
@@ -776,7 +839,7 @@ class TestComparePlays:
 
         trump_suit=♥, trump_rank=5:
           ♥5 = 80
-          ♦5 = 70 + 0 = 70
+          ♦5 = 70
         ♥5 should win.
         """
         a = [_card(Suit.HEARTS, Rank.FIVE)]
@@ -784,25 +847,31 @@ class TestComparePlays:
         result = compare_plays(a, b, Suit.DIAMONDS, Suit.HEARTS, Rank.FIVE)
         assert result > 0
 
-    def test_compare_plays_other_suit_level_ordering(self) -> None:
-        """Other-suit level cards ordered by SUIT_OFFSET: ♦ < ♣ < ♥ < ♠.
+    def test_compare_plays_other_suit_level_cards_tie(self) -> None:
+        """Other-suit level cards are equal; earlier play order wins the trick.
 
         trump_rank=5, trump_suit=♥:
-          ♣5 = 70 + 1 = 71
-          ♠5 = 70 + 3 = 73
-        ♠5 should beat ♣5.
+          ♣5 = 70
+          ♠5 = 70
         """
         a = [_card(Suit.SPADES, Rank.FIVE)]
         b = [_card(Suit.CLUBS, Rank.FIVE)]
         result = compare_plays(a, b, Suit.HEARTS, Suit.HEARTS, Rank.FIVE)
-        assert result > 0
+        assert result == 0
+
+    def test_compare_plays_no_trump_level_cards_tie(self) -> None:
+        """In no-trump rounds, all trump-rank suits are equal."""
+        a = [_card(Suit.SPADES, Rank.TWO)]
+        b = [_card(Suit.HEARTS, Rank.TWO)]
+        result = compare_plays(a, b, "trump", None, Rank.TWO)
+        assert result == 0
 
     def test_compare_plays_trump_pair_sub_type_diff(self) -> None:
         """Both trump pairs at same rank, different sub-types.
 
         trump_suit=♥, trump_rank=5:
           ♥5♥5 = 主花色级牌对子 (max rank = 80)
-          ♠5♠5 = 其他花色级牌对子 (max rank = 73)
+          ♠5♠5 = 其他花色级牌对子 (max rank = 70)
         ♥5♥5 should win.
         """
         a = [_card(Suit.HEARTS, Rank.FIVE, 1), _card(Suit.HEARTS, Rank.FIVE, 2)]
@@ -815,8 +884,8 @@ class TestComparePlays:
 
         trump_suit=♥, trump_rank=K:
           ♥A = 主花色非级牌 (spec value=45+14=59)
-          ♠K = 其他花色级牌 (spec value=70+3=73)
-        ♠K should win (73 > 59).
+          ♠K = 其他花色级牌 (spec value=70)
+        ♠K should win (70 > 59).
         """
         a = [_card(Suit.HEARTS, Rank.ACE)]
         b = [_card(Suit.SPADES, Rank.KING)]
@@ -829,7 +898,7 @@ class TestDetectThrows:
         """All spade cards are biggest -> one throw option with all spade cards."""
         hand = [_card(Suit.SPADES, Rank.ACE), _card(Suit.SPADES, Rank.KING)]
         other_hands: list[Card] = []
-        throws = detect_throws(hand, Suit.HEARTS, Rank.TWO, other_hands)
+        throws = detect_throws(hand, Suit.HEARTS, Rank.TWO, [other_hands])
         assert len(throws) == 1
         assert set(c.id for c in throws[0]) == {hand[0].id, hand[1].id}
 
@@ -840,21 +909,21 @@ class TestDetectThrows:
         """
         hand = [_card(Suit.SPADES, Rank.KING), _card(Suit.SPADES, Rank.QUEEN)]
         other_hands = [_card(Suit.SPADES, Rank.ACE)]
-        throws = detect_throws(hand, Suit.HEARTS, Rank.TWO, other_hands)
+        throws = detect_throws(hand, Suit.HEARTS, Rank.TWO, [other_hands])
         assert len(throws) == 0
 
     def test_detect_throws_pair_biggest(self) -> None:
         """Pair of spA-A is biggest pair -> throw option."""
         hand = [_card(Suit.SPADES, Rank.ACE, 1), _card(Suit.SPADES, Rank.ACE, 2)]
         other_hands: list[Card] = []
-        throws = detect_throws(hand, Suit.HEARTS, Rank.TWO, other_hands)
+        throws = detect_throws(hand, Suit.HEARTS, Rank.TWO, [other_hands])
         assert len(throws) == 1
 
     def test_detect_throws_pair_not_biggest(self) -> None:
         """Pair of spK-K but spA-A exists in other hands -> not biggest pair -> no throw."""
         hand = [_card(Suit.SPADES, Rank.KING, 1), _card(Suit.SPADES, Rank.KING, 2)]
         other_hands = [_card(Suit.SPADES, Rank.ACE, 1), _card(Suit.SPADES, Rank.ACE, 2)]
-        throws = detect_throws(hand, Suit.HEARTS, Rank.TWO, other_hands)
+        throws = detect_throws(hand, Suit.HEARTS, Rank.TWO, [other_hands])
         assert len(throws) == 0
 
     def test_detect_throws_tractor_biggest(self) -> None:
@@ -864,7 +933,7 @@ class TestDetectThrows:
             _card(Suit.SPADES, Rank.KING, 1), _card(Suit.SPADES, Rank.KING, 2),
         ]
         other_hands: list[Card] = []
-        throws = detect_throws(hand, Suit.HEARTS, Rank.TWO, other_hands)
+        throws = detect_throws(hand, Suit.HEARTS, Rank.TWO, [other_hands])
         assert len(throws) == 1
         assert len(throws[0]) == 4
 
@@ -877,7 +946,7 @@ class TestDetectThrows:
             _card(Suit.SPADES, Rank.JACK),
         ]
         other_hands: list[Card] = []
-        throws = detect_throws(hand, Suit.HEARTS, Rank.TWO, other_hands)
+        throws = detect_throws(hand, Suit.HEARTS, Rank.TWO, [other_hands])
         assert len(throws) == 1
         assert len(throws[0]) == 7
 
@@ -896,7 +965,7 @@ class TestDetectThrows:
         # heart is trump. hK hQ but other hand has hA (biggest trump single).
         hand = [_card(Suit.HEARTS, Rank.KING), _card(Suit.HEARTS, Rank.QUEEN)]
         other_hands = [_card(Suit.HEARTS, Rank.ACE)]
-        throws = detect_throws(hand, Suit.HEARTS, Rank.TWO, other_hands)
+        throws = detect_throws(hand, Suit.HEARTS, Rank.TWO, [other_hands])
         assert len(throws) == 0
 
     def test_detect_throws_multiple_suits(self) -> None:
@@ -943,7 +1012,7 @@ class TestDetectThrows:
             _card(Suit.SPADES, Rank.QUEEN),
         ]
         other_hands = [_card(Suit.SPADES, Rank.KING)]
-        throws = detect_throws(hand, Suit.HEARTS, Rank.TWO, other_hands)
+        throws = detect_throws(hand, Suit.HEARTS, Rank.TWO, [other_hands])
         assert len(throws) == 0
 
 

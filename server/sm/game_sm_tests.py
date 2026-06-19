@@ -409,7 +409,7 @@ def _play_first_legal(round_state: RoundState) -> RoundState:
         lead_cards=lead_cards,
         trump_suit=round_state.trump_suit,
         trump_rank=round_state.trump_rank,
-        other_hands=[],
+        other_players_hands=[],
     )
     assert len(legal_plays) > 0, f"No legal plays for player {cur}"
     return _unwrap_round(rn_play(round_state, player_index=cur, cards=legal_plays[0]))

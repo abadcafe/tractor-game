@@ -71,7 +71,7 @@ def _play_first_legal(state: RoundState) -> RoundState:
         lead_cards=lead_cards,
         trump_suit=state.trump_suit,
         trump_rank=state.trump_rank,
-        other_hands=[],
+        other_players_hands=[],
     )
     assert len(legal_plays) > 0, f"No legal plays for player {cur}"
     result = play(state, player_index=cur, cards=legal_plays[0])
@@ -133,11 +133,11 @@ def _complete_deal_bid_with_reveal(state: RoundState) -> RoundState:
 
 
 def _complete_stirring_all_pass(state: RoundState) -> RoundState:
-    """Complete stirring by handling initial EXCHANGING then having all players pass.
+    """Complete stirring by handling initial EXCHANGING then having others pass.
 
     The stirring phase starts in EXCHANGING sub-phase: the declarer must
-    exchange (stir_discard) bottom cards first. After that, all 4 players
-    pass, and stirring completes, transitioning directly to PLAYING.
+    exchange (stir_discard) bottom cards first. After that, the three
+    non-exchanging players pass, and stirring completes, transitioning directly to PLAYING.
     """
     assert state.phase == "STIRRING"
     assert state.stirring_state is not None
@@ -153,8 +153,8 @@ def _complete_stirring_all_pass(state: RoundState) -> RoundState:
         assert isinstance(result, Ok), f"stir_discard rejected: {result.reason}"
         state = result.value
 
-    # Step 2: All 4 players pass
-    for _ in range(4):
+    # Step 2: The three non-exchanging players pass.
+    for _ in range(3):
         if state.phase != "STIRRING":
             break
         if state.stirring_state is None:
@@ -463,7 +463,7 @@ class TestStirringPhase:
         assert isinstance(result, Ok)
         state = result.value
         assert state.stirring_state is not None
-        assert len(state.stirring_state.pass_set) == 1
+        assert len(state.stirring_state.pass_set) == 2
 
     def test_stir_during_stirring(self) -> None:
         """stir during STIRRING WAITING sub-phase changes trump suit."""
@@ -558,9 +558,8 @@ class TestStirringPhase:
         state = _complete_stirring_all_pass(state)
         assert state.phase == "PLAYING"
 
-    def test_stir_cannot_stir_own_trump(self) -> None:
-        """Regression for Bug 2: a player who just stirred cannot stir again
-        when the turn comes back to them.  This prevents infinite stir loops."""
+    def test_stirrer_is_skipped_after_exchange(self) -> None:
+        """A player who just stirred is skipped after exchanging bottom cards."""
         from collections import Counter
 
         random.seed(10)
@@ -611,7 +610,7 @@ class TestStirringPhase:
             assert isinstance(result, Ok), f"stir_discard rejected: {result.reason}"
             state = result.value
 
-        # Pass around until the turn comes back to the same player
+        # The other three players pass; the turn must not come back to the stirrer.
         for _ in range(3):
             if state.phase != "STIRRING":
                 break
@@ -632,13 +631,9 @@ class TestStirringPhase:
             assert isinstance(result, Ok), f"pass_stir rejected: {result.reason}"
             state = result.value
 
-        assert state.phase == "STIRRING"
+        assert state.phase == "PLAYING"
         assert state.stirring_state is not None
-        assert state.stirring_state.current_player == cur
-
-        # Second stir from the same player is rejected
-        result = stir(state, player_index=cur, cards=pair)
-        assert isinstance(result, Rejected)
+        assert state.stirring_state.current_player != cur
 
 
 

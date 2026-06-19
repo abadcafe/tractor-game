@@ -122,16 +122,16 @@ def play(state: TrickState, player: int, cards: list[Card]) -> StateResult[Trick
 
     # Validate lead legality
     if state.phase == "LEADING":
-        other_hands: list[Card] = []
+        other_players_hands: list[list[Card]] = []
         for i in range(4):
             if i != player:
-                other_hands.extend(state.hands[i])
+                other_players_hands.append(list(state.hands[i]))
         match resolve_lead_throw(
             hand,
             cards,
             state.trump_suit,
             state.trump_rank,
-            other_hands,
+            other_players_hands,
         ):
             case Ok(value=resolution):
                 actual_cards = list(resolution.played_cards)
