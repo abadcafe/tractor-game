@@ -10,9 +10,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from server.sm.card_model import Rank
-from server.sm.result import Ok, Rejected, StateResult
-from server.sm.scoring import RoundResult
+from .card_model import Rank
+from .result import Ok, Rejected, StateResult
+from .scoring import RoundResult
 
 
 class GameOverResult(BaseModel):

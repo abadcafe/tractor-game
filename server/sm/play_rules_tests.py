@@ -1,8 +1,8 @@
 """Tests for sm.play_rules module."""
 from typing import Literal
 
-from server.sm.card_model import Card, Suit, Rank
-from server.sm.play_rules import (
+from .card_model import Card, Suit, Rank
+from .play_rules import (
     can_win,
     compare_plays,
     decompose,
@@ -13,7 +13,7 @@ from server.sm.play_rules import (
     resolve_lead_throw,
     sort_play_action_hints,
 )
-from server.sm.result import Ok
+from .result import Ok
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:

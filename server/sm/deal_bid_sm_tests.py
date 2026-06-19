@@ -1,8 +1,8 @@
 """Tests for sm.deal_bid_sm module."""
-from server.sm.card_model import Card, Suit, Rank, create_decks
-from server.sm.result import Ok, Rejected
-from server.sm.types import BidEvent
-from server.sm.deal_bid_sm import (
+from .card_model import Card, Suit, Rank, create_decks
+from .result import Ok, Rejected
+from .types import BidEvent
+from .deal_bid_sm import (
     DealBidState, DealBidInput, DealBidResult,
     create_deal_bid, deal_next_card, reveal, finalize_dealing,
     get_bid_action_hints, MAX_BID_ACTION_HINTS,
@@ -588,7 +588,7 @@ class TestDealBidFullFlow:
 
     def test_deal_bid_bid_value_ordering(self) -> None:
         """Bid values: pair♠(203) > pair♥(202) > single♠(103) > single♦(100)."""
-        from server.sm.comparator import bid_value
+        from .comparator import bid_value
         c_d = Card(id="D1-diamonds-2", suit=Suit.DIAMONDS, rank=Rank.TWO, is_joker=False, is_big_joker=False, points=0, deck=1)
         c_s = Card(id="D1-spades-2", suit=Suit.SPADES, rank=Rank.TWO, is_joker=False, is_big_joker=False, points=0, deck=1)
         c_h1 = Card(id="D1-hearts-2", suit=Suit.HEARTS, rank=Rank.TWO, is_joker=False, is_big_joker=False, points=0, deck=1)

@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from server.sm.card_model import Card, Suit
+from .card_model import Card, Suit
 
 
 # ---- Enums ----

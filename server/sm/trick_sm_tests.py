@@ -1,12 +1,12 @@
 """Tests for sm.trick_sm module."""
 from typing import Literal
 
-from server.sm.card_model import Card, Suit, Rank
-from server.sm.trick_sm import (
+from .card_model import Card, Suit, Rank
+from .trick_sm import (
     TrickState, TrickInput, TrickResult,
     create_trick, play,
 )
-from server.sm.result import Ok, Rejected
+from .result import Ok, Rejected
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:

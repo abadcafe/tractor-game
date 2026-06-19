@@ -1,8 +1,8 @@
 """Tests for sm.comparator module."""
 from typing import Literal
 
-from server.sm.card_model import Card, Suit, Rank
-from server.sm.comparator import (
+from .card_model import Card, Suit, Rank
+from .comparator import (
     trump_order, effective_suit, sort_by_trump_order,
     is_trump_card, bid_value, trump_rank_order,
 )
@@ -161,7 +161,7 @@ class TestSortByTrumpOrder:
 class TestSUITOffset:
     def test_suit_offset_matches_spec(self) -> None:
         """SUIT_OFFSET must match spec section 2.3: diamond=0, club=1, heart=2, spade=3."""
-        from server.sm.comparator import SUIT_OFFSET
+        from .comparator import SUIT_OFFSET
         assert SUIT_OFFSET[Suit.DIAMONDS] == 0
         assert SUIT_OFFSET[Suit.CLUBS] == 1
         assert SUIT_OFFSET[Suit.HEARTS] == 2

@@ -21,12 +21,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from server.sm.card_model import Card, Suit, Rank
-from server.sm.comparator import bid_value
-from server.sm.constants import next_player_ccw
-from server.sm.result import Ok, Rejected, StateResult
-from server.sm.types import StirAction
-from server.sm import exchange_sm as exc
+from .card_model import Card, Suit, Rank
+from .comparator import bid_value
+from .constants import next_player_ccw
+from .result import Ok, Rejected, StateResult
+from .types import StirAction
+from . import exchange_sm as exc
 
 
 # ---- Priority Mapping ----

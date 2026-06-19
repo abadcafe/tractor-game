@@ -8,16 +8,16 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from server.sm.card_model import Card, Suit, Rank
-from server.sm.comparator import effective_suit
-from server.sm.constants import next_player_ccw, get_team_index
-from server.sm.play_rules import (
+from .card_model import Card, Suit, Rank
+from .comparator import effective_suit
+from .constants import next_player_ccw, get_team_index
+from .play_rules import (
     compare_plays,
     is_legal_follow,
     resolve_lead_throw,
 )
-from server.sm.result import Ok, Rejected, StateResult
-from server.sm.types import CompletedTrick, CompletedTrickSlot, FailedThrow
+from .result import Ok, Rejected, StateResult
+from .types import CompletedTrick, CompletedTrickSlot, FailedThrow
 
 
 # ---- Models ----

@@ -1,12 +1,12 @@
 """Tests for sm.exchange_sm module."""
 from typing import Literal
 
-from server.sm.card_model import Card, Suit, Rank
-from server.sm.exchange_sm import (
+from .card_model import Card, Suit, Rank
+from .exchange_sm import (
     ExchangeInput, ExchangeResult,
     create_exchange, discard,
 )
-from server.sm.result import Ok, Rejected
+from .result import Ok, Rejected
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:

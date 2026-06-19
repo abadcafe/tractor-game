@@ -15,18 +15,18 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from server.sm.card_model import Card, Rank, Suit, create_decks
-from server.sm.constants import (
+from .card_model import Card, Rank, Suit, create_decks
+from .constants import (
     BOTTOM_CARD_COUNT,
     get_team_index,
 )
-from server.sm import deal_bid_sm as db
-from server.sm import stirring_sm as stir_mod
-from server.sm import trick_sm as trick_mod
-from server.sm import scoring
-from server.sm.result import Ok, Rejected, StateResult
-from server.sm.types import BidEvent, CompletedTrick
-from server.sm.scoring import RoundResult
+from . import deal_bid_sm as db
+from . import stirring_sm as stir_mod
+from . import trick_sm as trick_mod
+from . import scoring
+from .result import Ok, Rejected, StateResult
+from .types import BidEvent, CompletedTrick
+from .scoring import RoundResult
 
 
 # ---- Data Models ----

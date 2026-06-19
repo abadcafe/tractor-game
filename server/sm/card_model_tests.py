@@ -1,6 +1,6 @@
 """Tests for sm.card_model module."""
 import pytest
-from server.sm.card_model import Card, Suit, Rank, create_decks, card_display
+from .card_model import Card, Suit, Rank, create_decks, card_display
 
 
 class TestCreateDecks:

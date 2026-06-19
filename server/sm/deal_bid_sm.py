@@ -12,11 +12,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from server.sm.card_model import Card, Rank, Suit
-from server.sm.comparator import bid_value
-from server.sm.constants import next_player_ccw
-from server.sm.result import Ok, Rejected, StateResult
-from server.sm.types import BidEvent
+from .card_model import Card, Rank, Suit
+from .comparator import bid_value
+from .constants import next_player_ccw
+from .result import Ok, Rejected, StateResult
+from .types import BidEvent
 
 _BID_SUIT_ORDER: tuple[Suit, ...] = (
     Suit.SPADES,

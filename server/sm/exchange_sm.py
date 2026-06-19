@@ -8,8 +8,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from server.sm.card_model import Card
-from server.sm.result import Ok, Rejected, StateResult
+from .card_model import Card
+from .result import Ok, Rejected, StateResult
 
 
 # ---- Models ----

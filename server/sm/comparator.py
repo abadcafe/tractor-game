@@ -3,7 +3,7 @@
 Provides trump ordering, effective suit determination, and play comparison.
 """
 
-from server.sm.card_model import Card, Suit, Rank
+from .card_model import Card, Suit, Rank
 
 # ---- Constants ----
 

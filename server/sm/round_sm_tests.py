@@ -4,15 +4,15 @@ from collections import Counter
 from typing import Literal
 
 import pytest
-from server.sm.card_model import Card, Suit, Rank
-from server.sm.types import BidEvent
-from server.sm.round_sm import (
+from .card_model import Card, Suit, Rank
+from .types import BidEvent
+from .round_sm import (
     RoundState, RoundInput, create_round,
     deal_next_card, reveal, pass_stir, stir, stir_discard, play,
     is_round_complete, get_round_result, finalize_deal_bid,
 )
-from server.sm import trick_sm as trick_mod
-from server.sm.result import Ok, Rejected
+from . import trick_sm as trick_mod
+from .result import Ok, Rejected
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
@@ -46,7 +46,7 @@ def _play_first_legal(state: RoundState) -> RoundState:
     Uses get_legal_plays to find a valid play instead of blindly playing
     hand[0], which may violate follow-suit rules and cause ValueError.
     """
-    from server.sm.play_rules import get_legal_plays
+    from .play_rules import get_legal_plays
 
     trick = state.trick_state
     assert trick is not None

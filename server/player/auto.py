@@ -1,26 +1,12 @@
-"""Player abstraction for the Tractor game.
-
-Defines the Player ABC, AutoPlayer (random AI), HumanPlayer (WebSocket-driven),
-and the GameView Protocol that describes the Game interface players rely on.
-
-Both Player subclasses are self-contained:
-- AutoPlayer: receives StateMessage → internal decision → game.receive(PlayerMessage)
-- HumanPlayer: receives WS JSON → wraps it as PlayerMessage → game.receive(...)
-
-Game.receive() owns seq validation before action parsing.
-"""
+"""Automatic player implementation."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 import random
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from itertools import combinations
-from typing import Protocol, TypeGuard
-
-from fastapi import WebSocket, WebSocketDisconnect
 
 from server.actions import (
     BidAction,
@@ -32,13 +18,13 @@ from server.actions import (
     StirAction,
 )
 from server.messages import PlayerMessage, StateMessage
+from server.player.base import GameView, Player
 from server.sm.card_model import Card, Rank, Suit
 from server.snapshot import StateSnapshot
 
 logger = logging.getLogger(__name__)
 
-# Type alias for AutoPlayer's internal action choices.
-PlayerAction = BidAction | SkipBidAction | StirAction | SkipStirAction | DiscardAction | PlayAction | NextRoundAction
+type PlayerAction = BidAction | SkipBidAction | StirAction | SkipStirAction | DiscardAction | PlayAction | NextRoundAction
 
 
 @dataclass(frozen=True)
@@ -68,54 +54,6 @@ class AutoDecisionKey:
     trick: TrickDecisionKey | None
     bid_winner_card_ids: tuple[str, ...]
     action_hint_card_ids: tuple[tuple[str, ...], ...]
-
-
-# ---- GameView Protocol (DIP: defined at the consumer, not the implementer) ----
-
-
-class GameView(Protocol):
-    """Protocol describing the Game interface that Player subclasses rely on.
-
-    Players submit raw PlayerMessage envelopes. Game.receive() owns seq
-    validation and action parsing.
-
-    Game structurally satisfies this Protocol; no explicit
-    inheritance declaration is needed.
-    """
-
-    async def receive(
-        self,
-        player_index: int,
-        message: PlayerMessage,
-    ) -> None: ...
-
-
-# ---- Player ABC ----
-
-
-class Player(ABC):
-    """Abstract base class for game players.
-
-    The game engine pushes StateMessage to each player via on_state().
-    Subclasses must submit follow-up PlayerMessage envelopes through
-    asyncio.create_task(game.receive(...)) so state transitions remain
-    serialized.
-    """
-
-    def __init__(self, index: int) -> None:
-        self.index = index
-
-    @abstractmethod
-    async def on_state(self, game: GameView, message: StateMessage) -> None:
-        """Called by Game when it pushes state to this player.
-
-        Args:
-            game: A GameView providing receive() to submit PlayerMessage.
-            message: The current player-facing state envelope.
-        """
-
-
-# ---- AutoPlayer ----
 
 
 class AutoPlayer(Player):
@@ -377,120 +315,3 @@ class AutoPlayer(Player):
         """Submit NextRoundAction."""
         action = NextRoundAction()
         self._submit_action(game, seq, action, snapshot)
-
-
-# ---- HumanPlayer ----
-
-
-class HumanPlayer(Player):
-    """Human player that manages its own WebSocket lifecycle.
-
-    Self-contained: receives WS messages and forwards PlayerMessage envelopes
-    to Game.receive(). Server's WS endpoint just
-    delegates to handle_connection(websocket, game).
-    """
-
-    def __init__(self, index: int) -> None:
-        super().__init__(index)
-        self._ws: WebSocket | None = None
-
-    async def on_state(self, game: GameView, message: StateMessage) -> None:
-        """Push state to the human player via WebSocket.
-
-        Catches any exception from send_json (e.g. WebSocket disconnected)
-        to prevent a broken connection from crashing the entire
-        _push_state_to_all() chain. The human player will receive fresh
-        state when they reconnect.
-        """
-        if self._ws is None:
-            return
-        try:
-            await self._ws.send_json(message.to_dict())
-        except (WebSocketDisconnect, OSError):
-            logger.debug("Failed to push state to human player %d (WS likely disconnected)", self.index, exc_info=True)
-
-    async def handle_connection(self, websocket: WebSocket, game: GameView) -> None:
-        """Take over the full WS connection lifecycle.
-
-        Handles: connection takeover, accept, receive loop, and cleanup.
-
-        Args:
-            websocket: The incoming WebSocket connection.
-            game: The GameView for the game this player belongs to.
-        """
-        # Connection takeover: close old connection if present
-        if self._ws is not None:
-            old_ws = self._ws
-            self._ws = None
-            try:
-                await old_ws.close()
-            except (WebSocketDisconnect, OSError):
-                logger.debug("Failed to close old WS for player %d during takeover", self.index, exc_info=True)
-
-        await websocket.accept()
-        self._ws = websocket
-
-        try:
-            while True:
-                try:
-                    raw = await websocket.receive_json()
-                except (WebSocketDisconnect, OSError):
-                    logger.debug("WS receive loop ended (client disconnected)")
-                    break
-
-                # receive_json() returns Any. Use _is_str_dict TypeGuard to narrow
-                # to dict[str, object] instead of dict[Unknown, Unknown].
-                if not _is_str_dict(raw):
-                    continue
-                await game.receive(self.index, PlayerMessage(seq=_message_seq(raw), raw=raw))
-
-        finally:
-            self._clear_ws_if_current(websocket)
-
-    def _clear_ws_if_current(self, ws: WebSocket) -> None:
-        """Clear the WebSocket reference only if it still points to the given instance.
-
-        Used in finally blocks to avoid clearing a connection that has already
-        been replaced by a new one (connection takeover).
-        """
-        if self._ws is ws:
-            self._ws = None
-
-    def is_connected(self) -> bool:
-        """Return True if this player has an active WebSocket connection."""
-        return self._ws is not None
-
-    async def close_ws(self) -> None:
-        """Close the WebSocket connection if active, then clear the reference.
-
-        Used when the game is being deleted or a connection is taken over.
-        """
-        if self._ws is not None:
-            ws = self._ws
-            self._ws = None
-            try:
-                await ws.close()
-            except (WebSocketDisconnect, OSError):
-                logger.debug("Failed to close WS for player %d (already disconnected)", self.index, exc_info=True)
-
-
-# ---- WS message parsing helpers ----
-
-
-def _is_str_dict(val: object) -> TypeGuard[dict[str, object]]:
-    """Narrow object to dict[str, object] — string keys, unknown values.
-
-    isinstance(val, dict) narrows to dict[Unknown, Unknown] which triggers
-    reportUnknownVariableType in strict mode. TypeGuard narrows to
-    dict[str, object] instead, which is properly typed.
-    """
-    return isinstance(val, dict)
-
-
-def _message_seq(raw: dict[str, object]) -> int:
-    seq_raw = raw.get("seq", 0)
-    if isinstance(seq_raw, bool):
-        return 0
-    if isinstance(seq_raw, int):
-        return seq_raw
-    return 0

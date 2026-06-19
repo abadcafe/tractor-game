@@ -2,9 +2,9 @@
 from typing import Literal
 
 import pytest
-from server.sm.card_model import Card, Suit, Rank
-from server.sm.types import CompletedTrick, CompletedTrickSlot
-from server.sm.scoring import calculate_score
+from .card_model import Card, Suit, Rank
+from .types import CompletedTrick, CompletedTrickSlot
+from .scoring import calculate_score
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:

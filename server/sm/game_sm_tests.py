@@ -1,8 +1,8 @@
 """Tests for sm.game_sm module."""
-from server.sm.card_model import Rank
-from server.sm.result import Ok, Rejected
-from server.sm.scoring import RoundResult
-from server.sm.game_sm import (
+from .card_model import Rank
+from .result import Ok, Rejected
+from .scoring import RoundResult
+from .game_sm import (
     create_game, start_game, process_round_result,
 )
 
@@ -465,13 +465,13 @@ class TestEdgeCases:
 # ---- Integration tests with real round_sm ----
 
 
-from server.sm.round_sm import (
+from .round_sm import (
     create_round, deal_next_card as rn_deal,
     pass_stir as rn_pass, stir_discard as rn_stir_discard,
     play as rn_play, is_round_complete, get_round_result, RoundInput, RoundState,
     finalize_deal_bid as rn_finalize,
 )
-from server.sm.play_rules import get_legal_plays
+from .play_rules import get_legal_plays
 
 
 def _unwrap_round(result: Ok[RoundState] | Rejected) -> RoundState:

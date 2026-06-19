@@ -7,10 +7,10 @@ and the legal play enumeration for leading and following.
 from dataclasses import dataclass
 from itertools import combinations, product as iterproduct
 
-from server.sm.card_model import Card, Suit, Rank, SUITED_RANKS
-from server.sm.comparator import SUIT_OFFSET, effective_suit, trump_order, trump_rank_order
-from server.sm.result import Ok, Rejected, StateResult
-from server.sm.types import SubPlay
+from .card_model import Card, Suit, Rank, SUITED_RANKS
+from .comparator import SUIT_OFFSET, effective_suit, trump_order, trump_rank_order
+from .result import Ok, Rejected, StateResult
+from .types import SubPlay
 
 MAX_PLAY_ACTION_HINTS: int = 5
 

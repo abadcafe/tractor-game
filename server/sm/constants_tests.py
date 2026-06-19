@@ -1,8 +1,8 @@
 """Tests for sm.constants module."""
 from types import MappingProxyType
 
-from server.sm.card_model import Rank
-from server.sm.constants import (
+from .card_model import Rank
+from .constants import (
     PLAYER_COUNT, BOTTOM_CARD_COUNT, TOTAL_CARDS,
     TEAM_0, TEAM_1, CCW_NEXT, LEVELS, TOTAL_POINTS,
     get_team_index, get_partner_index, next_player_ccw,

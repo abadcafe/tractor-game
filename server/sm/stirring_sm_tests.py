@@ -1,9 +1,9 @@
 """Tests for sm.stirring_sm module."""
 from typing import Literal
 
-from server.sm.card_model import Card, Suit, Rank
-from server.sm.result import Ok, Rejected
-from server.sm.stirring_sm import (
+from .card_model import Card, Suit, Rank
+from .result import Ok, Rejected
+from .stirring_sm import (
     StirInput,
     create_stirring, pass_stir, stir, stir_discard, get_stir_result,
 )
@@ -76,7 +76,7 @@ def _complete_initial_exchange(state: "StirringState") -> "StirringState":
 
 
 # Import StirringState for type hints
-from server.sm.stirring_sm import StirringState
+from .stirring_sm import StirringState
 
 
 class TestCreateStirring:
@@ -271,7 +271,7 @@ class TestPassStir:
         cur = state.current_player
         result = pass_stir(state, player=cur)
         assert isinstance(result, Ok)
-        from server.sm.constants import next_player_ccw
+        from .constants import next_player_ccw
         assert result.value.current_player == next_player_ccw(cur)
 
     def test_pass_stir_all_pass_complete(self) -> None:

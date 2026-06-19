@@ -3,8 +3,8 @@ from typing import Literal
 
 import pytest
 from pydantic import ValidationError
-from server.sm.card_model import Card, Suit, Rank
-from server.sm.types import (
+from .card_model import Card, Suit, Rank
+from .types import (
     BidEvent, StirAction, Player,
     CompletedTrick, CompletedTrickSlot, SubPlay,
 )
