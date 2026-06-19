@@ -9,5 +9,6 @@
 /node_modules/
 /static/
 /server/sessions/
+/test-results/
 *.pyc
 .env

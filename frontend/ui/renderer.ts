@@ -19,9 +19,20 @@ export function render(
 ): void {
   // Clear the container
   container.innerHTML = "";
+  container.classList.add("game-shell");
+  container.classList.toggle(
+    "game-shell--scoring",
+    snapshot.phase === "WAITING",
+  );
 
   // Always render: game table (includes trick view), hand view, scoreboard
-  container.appendChild(renderGameTable(snapshot));
+  container.appendChild(
+    renderGameTable(
+      snapshot,
+      ctx?.previousTrickPreview,
+      ctx?.failedThrowPreview,
+    ),
+  );
 
   container.appendChild(
     renderHandView(
@@ -31,13 +42,22 @@ export function render(
       ctx?.legalCardIds,
       ctx?.callbacks?.onCardClick,
       ctx?.callbacks?.onAction,
+      ctx?.callbacks?.onClearSelection,
+      ctx?.callbacks?.onUseHint,
+      ctx?.callbacks?.onToggleHandCompact,
+      ctx?.compactHand,
+      ctx?.callbacks?.onStir,
+      ctx?.callbacks?.onPass,
+      ctx?.stirButtonState,
+      ctx?.callbacks?.onShowPreviousTrick,
     ),
   );
 
   container.appendChild(renderScoreboard(snapshot));
 
   // Bidding panel: always show during DEAL_BID or STIRRING
-  const isBiddingPhase = snapshot.phase === "DEAL_BID" || snapshot.phase === "STIRRING";
+  const isBiddingPhase = snapshot.phase === "DEAL_BID" ||
+    snapshot.phase === "STIRRING";
   if (isBiddingPhase) {
     container.appendChild(
       renderBiddingDialog(

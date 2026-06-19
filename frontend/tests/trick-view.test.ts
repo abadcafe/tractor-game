@@ -10,7 +10,9 @@ const doc = new DOMParser().parseFromString(
 // @ts-ignore test setup
 globalThis.document = doc;
 
-function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
+function makeSnapshot(
+  overrides: Partial<StateSnapshot> = {},
+): StateSnapshot {
   return {
     phase: "PLAYING",
     player_hand: [],
@@ -23,10 +25,14 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     action_hints: [],
     trick: {
       lead_player: 0,
-      slots: [{ player: 0, cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }] }],
+      slots: [{
+        player: 0,
+        cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }],
+      }],
       current_player: 1,
     },
     trick_history: [],
+    failed_throw: null,
     bid_events: [],
     bid_winner: null,
     awaiting_action: null,
@@ -55,6 +61,83 @@ Deno.test("test_renderTrickView_empty_trick", () => {
   assertEquals(trickCards.length, 0);
 });
 
+Deno.test("test_renderTrickView_previous_trick_preview_shows_four_players", () => {
+  const snap = makeSnapshot();
+  const el = renderTrickView(snap, {
+    lead_player: 0,
+    winner: 2,
+    points: 15,
+    slots: [
+      {
+        player: 0,
+        cards: [{ id: "D1-clubs-5", suit: "clubs", rank: "5" }],
+      },
+      {
+        player: 1,
+        cards: [{ id: "D1-hearts-9", suit: "hearts", rank: "9" }],
+      },
+      {
+        player: 2,
+        cards: [{ id: "D1-spades-K", suit: "spades", rank: "K" }],
+      },
+      {
+        player: 3,
+        cards: [{ id: "D1-diamonds-A", suit: "diamonds", rank: "A" }],
+      },
+    ],
+  });
+
+  assertEquals((el.textContent ?? "").includes("上一墩 15 分"), false);
+  assertEquals(el.querySelectorAll(".trick-slot").length, 4);
+  assertEquals(el.querySelectorAll(".trick-card").length, 4);
+  assertEquals(el.querySelectorAll(".trick-slot.winner").length, 1);
+  assertEquals(
+    el.querySelectorAll(".trick-card-placeholder").length,
+    0,
+  );
+});
+
+Deno.test("test_renderTrickView_failed_throw_preview_shows_attempted_and_forced_cards", () => {
+  const snap = makeSnapshot();
+  const previousTrick = {
+    lead_player: 0,
+    winner: 0,
+    points: 0,
+    slots: [
+      {
+        player: 0,
+        cards: [{ id: "D1-clubs-5", suit: "clubs", rank: "5" }],
+      },
+      { player: 1, cards: [] },
+      { player: 2, cards: [] },
+      { player: 3, cards: [] },
+    ],
+  };
+  const el = renderTrickView(snap, previousTrick, {
+    player: 0,
+    attempted_cards: [
+      { id: "D1-spades-K", suit: "spades", rank: "K" },
+      { id: "D1-spades-Q", suit: "spades", rank: "Q" },
+    ],
+    forced_cards: [
+      { id: "D1-spades-Q", suit: "spades", rank: "Q" },
+    ],
+  });
+
+  const text = el.textContent ?? "";
+  assertEquals(text.includes("甩牌失败，捡小"), false);
+  assertEquals(text.includes("同伴甩牌失败"), true);
+  assertEquals(text.includes("暴露"), true);
+  assertEquals(text.includes("捡小"), true);
+  assertEquals(text.includes("上一墩"), false);
+  assertEquals(el.querySelectorAll(".failed-throw-preview").length, 1);
+  assertEquals(
+    el.querySelectorAll(".failed-throw-preview__cards .trick-card")
+      .length,
+    3,
+  );
+});
+
 Deno.test("test_renderTrickView_player_labels", () => {
   const snap = makeSnapshot();
   const el = renderTrickView(snap);
@@ -67,9 +150,18 @@ Deno.test("test_renderTrickView_multiple_slots", () => {
     trick: {
       lead_player: 0,
       slots: [
-        { player: 0, cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }] },
-        { player: 1, cards: [{ id: "D2-hearts-9", suit: "hearts", rank: "9" }] },
-        { player: 2, cards: [{ id: "D3-spades-J", suit: "spades", rank: "J" }] },
+        {
+          player: 0,
+          cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }],
+        },
+        {
+          player: 1,
+          cards: [{ id: "D2-hearts-9", suit: "hearts", rank: "9" }],
+        },
+        {
+          player: 2,
+          cards: [{ id: "D3-spades-J", suit: "spades", rank: "J" }],
+        },
       ],
       current_player: 3,
     },
@@ -99,7 +191,7 @@ Deno.test("test_renderTrickView_slot_with_empty_cards", () => {
   const trickCards = el.querySelectorAll(".trick-card");
   assertEquals(trickCards.length, 0);
   const labels = el.querySelectorAll(".trick-player-label");
-  assertEquals(labels.length, 1);
+  assertEquals(labels.length, 0);
 });
 
 Deno.test("test_renderTrickView_current_player_highlight", () => {
@@ -107,8 +199,14 @@ Deno.test("test_renderTrickView_current_player_highlight", () => {
     trick: {
       lead_player: 0,
       slots: [
-        { player: 0, cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }] },
-        { player: 1, cards: [{ id: "D2-hearts-9", suit: "hearts", rank: "9" }] },
+        {
+          player: 0,
+          cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }],
+        },
+        {
+          player: 1,
+          cards: [{ id: "D2-hearts-9", suit: "hearts", rank: "9" }],
+        },
       ],
       current_player: 1,
     },

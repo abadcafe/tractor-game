@@ -1,12 +1,20 @@
-import { assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  assertEquals,
+  assertNotEquals,
+} from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { DOMParser } from "jsr:@b-fuze/deno-dom@0.1.56";
 import { StateManager } from "../core/state.ts";
 import { GameLoop } from "../engine/game-loop.ts";
-import { validatePlay, validateBidCards } from "../engine/input-validator.ts";
+import { handlePlayAction } from "../engine/action-handler.ts";
+import { validateBidCards } from "../engine/input-validator.ts";
 import { render } from "../ui/renderer.ts";
 import type { StateSnapshot } from "../core/types.ts";
-import type { ServerMessage, ClientAction } from "../core/protocol.ts";
-import type { InteractionMode, GameAction, BidOption } from "../engine/types.ts";
+import type { ClientAction, ServerMessage } from "../core/protocol.ts";
+import type {
+  BidOption,
+  GameAction,
+  InteractionMode,
+} from "../engine/types.ts";
 import type { ActionCallbacks, RenderContext } from "../ui/types.ts";
 const HUMAN_PLAYER_INDEX = 3;
 
@@ -22,7 +30,9 @@ function freshContainer(): Element {
   return doc!.querySelector("#app")! as unknown as Element;
 }
 
-function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
+function makeSnapshot(
+  overrides: Partial<StateSnapshot> = {},
+): StateSnapshot {
   return {
     phase: "PLAYING",
     player_hand: [
@@ -39,6 +49,7 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     action_hints: [[{ id: "D1-hearts-5", suit: "hearts", rank: "5" }]],
     trick: null,
     trick_history: [],
+    failed_throw: null,
     bid_events: [],
     bid_winner: null,
     awaiting_action: "play",
@@ -79,7 +90,12 @@ Deno.test("test_integration_ws_to_render", () => {
   resetTrackingState();
   const container = freshContainer();
   const stateManager = new StateManager();
-  const gameLoop = new GameLoop(stateManager, trackingRender, container, 3);
+  const gameLoop = new GameLoop(
+    stateManager,
+    trackingRender,
+    container,
+    3,
+  );
 
   // Set up render context with callbacks so action buttons are rendered
   const callbacks: ActionCallbacks = {
@@ -90,12 +106,16 @@ Deno.test("test_integration_ws_to_render", () => {
     onPass: () => {},
     onNewGame: () => {},
   };
-  lastRenderedCtx = { callbacks, selectedCardIds: new Set(), legalCardIds: new Set() };
+  lastRenderedCtx = {
+    callbacks,
+    selectedCardIds: new Set(),
+    legalCardIds: new Set(),
+  };
 
   // Simulate WS message for PLAYING phase with human turn
   const msg: ServerMessage = {
     type: "state",
-    seq: 0,
+    seq: 1,
     awaiting: "play",
     state: makeSnapshot({ phase: "PLAYING", awaiting_action: "play" }),
   };
@@ -130,10 +150,9 @@ Deno.test("test_integration_play_action", () => {
     },
     onAction: (action: GameAction) => {
       if (action === "play") {
-        const selectedCards = snap.player_hand.filter((c) => selectedCardIds.has(c.id));
-        const matchedCards = validatePlay(selectedCards, snap.action_hints);
-        if (matchedCards) {
-          sentAction = { type: "play", seq: 0, cards: matchedCards.map((c) => c.id) };
+        const result = handlePlayAction(snap, selectedCardIds, 1);
+        if (result.success && result.action) {
+          sentAction = result.action;
         }
       }
     },
@@ -143,24 +162,35 @@ Deno.test("test_integration_play_action", () => {
     onNewGame: () => {},
   };
 
-  render(snap, container, "play", { callbacks, selectedCardIds, legalCardIds: new Set() });
+  render(snap, container, "play", {
+    callbacks,
+    selectedCardIds,
+    legalCardIds: new Set(),
+  });
 
   // Step 2: User selects a card by clicking the legal card (hearts-5)
   // Note: cards are sorted by trump rank first, so spades-2 comes before hearts-5
   const allCards = container.querySelectorAll(".hand-view .card");
-  const card = Array.from(allCards).find((c) => c.textContent?.includes("♥")) as unknown as HTMLElement;
+  const card = Array.from(allCards).find((c) =>
+    c.textContent?.includes("♥")
+  ) as unknown as HTMLElement;
   assertNotEquals(card, undefined);
   card.dispatchEvent(new Event("click", { bubbles: true })); // triggers onCardClick -> adds to selectedCardIds
 
   // Step 3: User clicks play button
-  const playButton = Array.from(container.querySelectorAll(".action-panel button"))
+  const playButton = Array.from(
+    container.querySelectorAll(".action-panel button"),
+  )
     .find((b) => b.textContent === "出牌");
   assertNotEquals(playButton, undefined);
   playButton!.dispatchEvent(new Event("click", { bubbles: true })); // triggers onAction("play")
 
   // Step 4: Verify the action was constructed correctly
   assertNotEquals(sentAction, null);
-  const action = sentAction as unknown as { type: "play"; cards: string[] };
+  const action = sentAction as unknown as {
+    type: "play";
+    cards: string[];
+  };
   assertEquals(action.type, "play");
   assertEquals(action.cards, ["D1-hearts-5"]);
 });
@@ -181,17 +211,29 @@ Deno.test("test_integration_bid_action", () => {
   const callbacks: ActionCallbacks = {
     onCardClick: () => {},
     onAction: () => {},
-    onBidOptionSelect: (option: BidOption) => { selectedBidOption = option; },
+    onBidOptionSelect: (option: BidOption) => {
+      selectedBidOption = option;
+    },
     onStir: () => {},
     onPass: () => {},
     onNewGame: () => {},
   };
 
   const bidOptions: BidOption[] = [
-    { cardIds: ["D1-spades-2"], label: "♠2", trumpSuit: "spades", priority: 1 },
+    {
+      cardIds: ["D1-spades-2"],
+      label: "♠2",
+      trumpSuit: "spades",
+      priority: 1,
+    },
   ];
 
-  render(snap, container, "bid", { callbacks, selectedCardIds: new Set(), legalCardIds: new Set(), bidOptions });
+  render(snap, container, "bid", {
+    callbacks,
+    selectedCardIds: new Set(),
+    legalCardIds: new Set(),
+    bidOptions,
+  });
 
   // Step 2: Verify bidding dialog is shown
   const bidEl = container.querySelector(".bidding-dialog");
@@ -213,7 +255,14 @@ Deno.test("test_integration_stir_action", () => {
   const snap = makeSnapshot({
     phase: "STIRRING",
     awaiting_action: "stir",
-    stirring_state: { phase: "WAITING", trump_suit: null, current_player: HUMAN_PLAYER_INDEX, declarer_player: 0, exchanging_player: null, exchange_count: null },
+    stirring_state: {
+      phase: "WAITING",
+      trump_suit: null,
+      current_player: HUMAN_PLAYER_INDEX,
+      declarer_player: 0,
+      exchanging_player: null,
+      exchange_count: null,
+    },
     player_hand: [
       { id: "D1-spades-2", suit: "spades", rank: "2" },
       { id: "D2-spades-2", suit: "spades", rank: "2" },
@@ -227,26 +276,35 @@ Deno.test("test_integration_stir_action", () => {
     onCardClick: () => {},
     onAction: () => {},
     onBidOptionSelect: (_option: BidOption) => {},
-    onStir: (cardIds: string[]) => { stirCardIds = cardIds; },
+    onStir: (cardIds: string[]) => {
+      stirCardIds = cardIds;
+    },
     onPass: () => {},
     onNewGame: () => {},
   };
 
-  render(snap, container, "stir", { callbacks, selectedCardIds: new Set(), legalCardIds: new Set() });
-
-  // Step 2: Verify bidding dialog is shown in stir mode
-  const bidEl = container.querySelector(".bidding-dialog");
-  assertNotEquals(bidEl, null);
-
-  // Step 3: User selects trump rank cards for stirring
   const selectedCards = snap.player_hand.filter((c) => c.rank === "2");
+  render(snap, container, "stir", {
+    callbacks,
+    selectedCardIds: new Set(selectedCards.map((card) => card.id)),
+    legalCardIds: new Set(selectedCards.map((card) => card.id)),
+    stirButtonState: { disabled: false },
+  });
 
-  // Step 4: Validate
+  // Step 2: Verify stir actions are rendered above the hand, not in the dialog
+  const bidEl = container.querySelector(".bidding-dialog");
+  assertEquals(bidEl, null);
+  const stirButton = Array.from(
+    container.querySelectorAll(".hand-actions button"),
+  ).find((button) => button.textContent === "反主");
+  assertNotEquals(stirButton, undefined);
+
+  // Step 3: Validate
   const valid = validateBidCards(selectedCards, snap.trump_rank);
   assertEquals(valid, true);
 
-  // Step 5: Construct action via onStir callback -- this sends { type: "stir" }, NOT { type: "bid" }
-  callbacks.onStir([selectedCards[0].id, selectedCards[1].id]);
+  // Step 4: Click the hand-level stir button.
+  stirButton!.dispatchEvent(new Event("click", { bubbles: true }));
   assertEquals(stirCardIds, ["D1-spades-2", "D2-spades-2"]);
 });
 
@@ -262,13 +320,15 @@ Deno.test("test_integration_error_message", () => {
     container,
     3,
     undefined,
-    (message) => { errorReceived = message; },
+    (message) => {
+      errorReceived = message;
+    },
   );
 
   // First, establish a state
   const stateMsg: ServerMessage = {
     type: "state",
-    seq: 0,
+    seq: 1,
     awaiting: "play",
     state: makeSnapshot(),
   };
@@ -277,7 +337,13 @@ Deno.test("test_integration_error_message", () => {
   assertNotEquals(stateBefore, null);
 
   // Now send a state message with an error
-  const errMsg: ServerMessage = { type: "state", seq: 1, awaiting: "play", state: makeSnapshot(), error: "无效的出牌" };
+  const errMsg: ServerMessage = {
+    type: "state",
+    seq: 1,
+    awaiting: "play",
+    state: makeSnapshot(),
+    error: "无效的出牌",
+  };
   gameLoop.handleMessage(errMsg);
 
   // Verify: state was updated (state messages always update, even with errors)
@@ -292,17 +358,29 @@ Deno.test("test_integration_stir_not_human_ignored", () => {
   resetTrackingState();
   const container = freshContainer();
   const stateManager = new StateManager();
-  const gameLoop = new GameLoop(stateManager, trackingRender, container, 3);
+  const gameLoop = new GameLoop(
+    stateManager,
+    trackingRender,
+    container,
+    3,
+  );
 
   // STIRRING phase, but NOT human's turn (awaiting is null since it's not our action)
   const msg: ServerMessage = {
     type: "state",
-    seq: 0,
+    seq: 1,
     awaiting: null,
     state: makeSnapshot({
       phase: "STIRRING",
       awaiting_action: null,
-      stirring_state: { phase: "WAITING", trump_suit: null, current_player: 1, declarer_player: 0, exchanging_player: null, exchange_count: null },
+      stirring_state: {
+        phase: "WAITING",
+        trump_suit: null,
+        current_player: 1,
+        declarer_player: 0,
+        exchanging_player: null,
+        exchange_count: null,
+      },
     }),
   };
   gameLoop.handleMessage(msg);
@@ -338,10 +416,16 @@ Deno.test("test_integration_card_selection_persists_across_renders", () => {
   };
 
   // First render -- no cards selected
-  render(snap, container, "play", { callbacks, selectedCardIds, legalCardIds: new Set() });
+  render(snap, container, "play", {
+    callbacks,
+    selectedCardIds,
+    legalCardIds: new Set(),
+  });
   let cards = container.querySelectorAll(".hand-view .card");
   // Cards are sorted by trump rank first: spades-2 (trump rank), hearts-5 (trump suit), clubs-3
-  const hearts5Card = Array.from(cards).find((c) => c.textContent?.includes("♥"))!;
+  const hearts5Card = Array.from(cards).find((c) =>
+    c.textContent?.includes("♥")
+  )!;
   assertEquals(hearts5Card.classList.contains("selected"), false);
 
   // Simulate clicking hearts-5 card
@@ -349,13 +433,21 @@ Deno.test("test_integration_card_selection_persists_across_renders", () => {
   assertEquals(selectedCardIds.has("D1-hearts-5"), true);
 
   // Re-render with same selectedCardIds -- selection should persist
-  render(snap, container, "play", { callbacks, selectedCardIds, legalCardIds: new Set() });
+  render(snap, container, "play", {
+    callbacks,
+    selectedCardIds,
+    legalCardIds: new Set(),
+  });
   cards = container.querySelectorAll(".hand-view .card");
-  const selectedCard = Array.from(cards).find((c) => c.classList.contains("selected"));
+  const selectedCard = Array.from(cards).find((c) =>
+    c.classList.contains("selected")
+  );
   assertNotEquals(selectedCard, undefined);
   assertEquals(selectedCard!.textContent?.includes("♥"), true);
   // Verify only one card is selected
-  const allSelected = Array.from(cards).filter((c) => c.classList.contains("selected"));
+  const allSelected = Array.from(cards).filter((c) =>
+    c.classList.contains("selected")
+  );
   assertEquals(allSelected.length, 1);
 });
 
@@ -375,12 +467,16 @@ Deno.test("test_integration_callback_triggers_send", () => {
   });
 
   let sentAction: ClientAction | null = null;
-  const mockSend = (action: ClientAction) => { sentAction = action; };
+  const mockSend = (action: ClientAction) => {
+    sentAction = action;
+  };
 
   const callbacks: ActionCallbacks = {
     onCardClick: () => {},
     onAction: (action: GameAction) => {
-      if (action === "next_round") mockSend({ type: "next_round", seq: 0 });
+      if (action === "next_round") {
+        mockSend({ type: "next_round", seq: 1 });
+      }
     },
     onBidOptionSelect: (_option: BidOption) => {},
     onStir: () => {},
@@ -388,10 +484,16 @@ Deno.test("test_integration_callback_triggers_send", () => {
     onNewGame: () => {},
   };
 
-  render(snap, container, "next_round", { callbacks, selectedCardIds: new Set(), legalCardIds: new Set() });
+  render(snap, container, "next_round", {
+    callbacks,
+    selectedCardIds: new Set(),
+    legalCardIds: new Set(),
+  });
 
   // Click the "next round" button
-  const nextButton = Array.from(container.querySelectorAll(".scoring-overlay button"))
+  const nextButton = Array.from(
+    container.querySelectorAll(".scoring-overlay button"),
+  )
     .find((b) => b.textContent === "下一轮");
   assertNotEquals(nextButton, undefined);
   nextButton!.dispatchEvent(new Event("click", { bubbles: true }));

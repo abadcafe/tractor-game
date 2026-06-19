@@ -1,4 +1,7 @@
-import { assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  assertEquals,
+  assertNotEquals,
+} from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { DOMParser } from "jsr:@b-fuze/deno-dom@0.1.56";
 import { renderHandView } from "../ui/components/hand-view.ts";
 import type { StateSnapshot } from "../core/types.ts";
@@ -11,7 +14,9 @@ const doc = new DOMParser().parseFromString(
 // @ts-ignore test setup
 globalThis.document = doc;
 
-function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
+function makeSnapshot(
+  overrides: Partial<StateSnapshot> = {},
+): StateSnapshot {
   return {
     phase: "PLAYING",
     player_hand: [
@@ -27,6 +32,7 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     action_hints: [[{ id: "D1-hearts-5", suit: "hearts", rank: "5" }]],
     trick: null,
     trick_history: [],
+    failed_throw: null,
     bid_events: [],
     bid_winner: null,
     awaiting_action: "play",
@@ -56,7 +62,9 @@ Deno.test("test_renderHandView_selected_card", () => {
   const cards = el.querySelectorAll(".card");
   // After sorting: spades-2 (trump rank) is first, hearts-5 (trump suit) is second
   // hearts-5 should be selected
-  const selectedCard = Array.from(cards).find((c) => c.classList.contains("selected"));
+  const selectedCard = Array.from(cards).find((c) =>
+    c.classList.contains("selected")
+  );
   assertNotEquals(selectedCard, undefined);
 });
 
@@ -72,23 +80,287 @@ Deno.test("test_renderHandView_legal_highlight", () => {
 Deno.test("test_renderHandView_play_button", () => {
   const snap = makeSnapshot();
   const onAction = (_action: string) => {};
-  const el = renderHandView(snap, "play", undefined, undefined, undefined, onAction);
+  const el = renderHandView(
+    snap,
+    "play",
+    undefined,
+    undefined,
+    undefined,
+    onAction,
+  );
   const buttons = el.querySelectorAll("button");
   const buttonTexts = Array.from(buttons).map((b) => b.textContent);
   assertEquals(buttonTexts.includes("出牌"), true);
+});
+
+Deno.test("test_renderHandView_previous_trick_button_above_hand", () => {
+  const snap = makeSnapshot({
+    trick_history: [{
+      lead_player: 0,
+      winner: 3,
+      points: 10,
+      slots: [
+        {
+          player: 0,
+          cards: [{ id: "D1-diamonds-3", suit: "diamonds", rank: "3" }],
+        },
+        {
+          player: 1,
+          cards: [{ id: "D1-diamonds-4", suit: "diamonds", rank: "4" }],
+        },
+        {
+          player: 2,
+          cards: [{ id: "D2-diamonds-K", suit: "diamonds", rank: "K" }],
+        },
+        {
+          player: 3,
+          cards: [{ id: "D1-diamonds-K", suit: "diamonds", rank: "K" }],
+        },
+      ],
+    }],
+  });
+  let called = false;
+  const el = renderHandView(
+    snap,
+    null,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    undefined,
+    undefined,
+    () => {
+      called = true;
+    },
+  );
+
+  const previousPanel = el.querySelector(
+    ".hand-actions .hand-panel__previous-trick",
+  );
+  const previousButton = Array.from(el.querySelectorAll("button")).find(
+    (
+      button,
+    ) => button.textContent === "上一墩",
+  );
+
+  assertNotEquals(previousPanel, null);
+  assertNotEquals(previousButton, undefined);
+
+  previousButton!.dispatchEvent(new Event("click", { bubbles: true }));
+  assertEquals(called, true);
+});
+
+Deno.test("test_renderHandView_previous_trick_button_hidden_without_history", () => {
+  const snap = makeSnapshot();
+  const el = renderHandView(
+    snap,
+    null,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    undefined,
+    undefined,
+    () => {},
+  );
+
+  const previousButton = Array.from(el.querySelectorAll("button")).find(
+    (
+      button,
+    ) => button.textContent === "上一墩",
+  );
+
+  assertEquals(previousButton, undefined);
+});
+
+Deno.test("test_renderHandView_actions_and_hint_tools_are_above_hand", () => {
+  const snap = makeSnapshot();
+  const el = renderHandView(
+    snap,
+    "play",
+    new Set(["D1-hearts-5"]),
+    undefined,
+    undefined,
+    () => {},
+    () => {},
+    () => {},
+  );
+
+  const handActions = el.querySelector(".hand-actions");
+  const handPanelButton = el.querySelector(".hand-panel button");
+  const summaryText = el.textContent ?? "";
+  const actionTools = el.querySelector(
+    ".hand-actions .hand-panel__tools",
+  );
+  const actionPanel = el.querySelector(
+    ".hand-actions .action-panel",
+  );
+  const actionPanelButtons = Array.from(
+    el.querySelectorAll(".action-panel button"),
+  ).map((button) => button.textContent);
+
+  assertNotEquals(handActions, null);
+  assertEquals(handPanelButton, null);
+  assertNotEquals(actionTools, null);
+  assertNotEquals(actionPanel, null);
+  assertEquals(summaryText.includes("自由出牌"), false);
+  assertEquals(summaryText.includes("服务器校验"), false);
+  assertEquals(actionTools?.textContent?.includes("提示"), true);
+  assertEquals(actionTools?.textContent?.includes("清牌"), true);
+  assertEquals(actionPanelButtons, ["出牌"]);
+});
+
+Deno.test("test_renderHandView_does_not_show_compact_sort_button", () => {
+  const snap = makeSnapshot();
+  const onAction = (_action: string) => {};
+  const el = renderHandView(
+    snap,
+    "play",
+    undefined,
+    undefined,
+    undefined,
+    onAction,
+    () => {},
+    () => {},
+    () => {},
+  );
+  const buttonTexts = Array.from(el.querySelectorAll("button")).map((
+    b,
+  ) => b.textContent);
+  assertEquals(buttonTexts.includes("理牌"), false);
+  assertEquals(buttonTexts.includes("展开"), false);
+});
+
+Deno.test("test_renderHandView_score_pile_shows_captured_point_cards", () => {
+  const snap = makeSnapshot({
+    defender_points: 15,
+    trick_history: [{
+      lead_player: 0,
+      winner: 1,
+      points: 15,
+      slots: [
+        {
+          player: 0,
+          cards: [{ id: "D1-clubs-5", suit: "clubs", rank: "5" }],
+        },
+        {
+          player: 1,
+          cards: [{ id: "D1-spades-2", suit: "spades", rank: "2" }],
+        },
+        {
+          player: 2,
+          cards: [{ id: "D1-hearts-K", suit: "hearts", rank: "K" }],
+        },
+        {
+          player: 3,
+          cards: [{ id: "D1-diamonds-4", suit: "diamonds", rank: "4" }],
+        },
+      ],
+    }],
+  });
+  const el = renderHandView(snap, "play");
+  const text = el.querySelector(".score-pile__label")?.textContent ??
+    "";
+  const scoreCards = el.querySelectorAll(".score-pile-card");
+  assertEquals(text.includes("捡分 15"), true);
+  assertEquals(scoreCards.length, 2);
 });
 
 Deno.test("test_renderHandView_discard_button", () => {
   const snap = makeSnapshot({
     phase: "STIRRING",
     awaiting_action: "discard",
-    stirring_state: { phase: "WAITING", trump_suit: null, current_player: 3, declarer_player: 0, exchanging_player: 3, exchange_count: 8 },
+    stirring_state: {
+      phase: "WAITING",
+      trump_suit: null,
+      current_player: 3,
+      declarer_player: 0,
+      exchanging_player: 3,
+      exchange_count: 8,
+    },
   });
   const onAction = (_action: string) => {};
-  const el = renderHandView(snap, "discard", undefined, undefined, undefined, onAction);
+  const el = renderHandView(
+    snap,
+    "discard",
+    undefined,
+    undefined,
+    undefined,
+    onAction,
+  );
   const buttons = el.querySelectorAll("button");
   const buttonTexts = Array.from(buttons).map((b) => b.textContent);
   assertEquals(buttonTexts.includes("换底牌"), true);
+});
+
+Deno.test("test_renderHandView_stir_buttons_are_above_hand", () => {
+  const snap = makeSnapshot({
+    phase: "STIRRING",
+    awaiting_action: "stir",
+    player_hand: [
+      { id: "D1-spades-2", suit: "spades", rank: "2" },
+      { id: "D2-spades-2", suit: "spades", rank: "2" },
+    ],
+    stirring_state: {
+      phase: "WAITING",
+      trump_suit: null,
+      current_player: 3,
+      declarer_player: 0,
+      exchanging_player: null,
+      exchange_count: null,
+    },
+  });
+  let stirCardIds: string[] | null = null;
+  let passCalled = false;
+  const el = renderHandView(
+    snap,
+    "stir",
+    new Set(["D1-spades-2", "D2-spades-2"]),
+    new Set(["D1-spades-2", "D2-spades-2"]),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    false,
+    (cardIds: string[]) => {
+      stirCardIds = cardIds;
+    },
+    () => {
+      passCalled = true;
+    },
+    { disabled: false },
+  );
+
+  const summaryActionPanel = el.querySelector(
+    ".hand-actions .action-panel--stir",
+  );
+  assertNotEquals(summaryActionPanel, null);
+
+  const stirButton = Array.from(el.querySelectorAll("button")).find((
+    button,
+  ) => button.textContent === "反主");
+  const passButton = Array.from(el.querySelectorAll("button")).find((
+    button,
+  ) => button.textContent === "不反");
+  assertNotEquals(stirButton, undefined);
+  assertNotEquals(passButton, undefined);
+
+  stirButton!.dispatchEvent(new Event("click", { bubbles: true }));
+  passButton!.dispatchEvent(new Event("click", { bubbles: true }));
+
+  assertEquals(stirCardIds, ["D1-spades-2", "D2-spades-2"]);
+  assertEquals(passCalled, true);
 });
 
 Deno.test("test_renderHandView_no_button_when_spectating", () => {
@@ -101,8 +373,16 @@ Deno.test("test_renderHandView_no_button_when_spectating", () => {
 Deno.test("test_renderHandView_card_click_callback", () => {
   const snap = makeSnapshot();
   let clickedCardId: string | null = null;
-  const onCardClick = (cardId: string) => { clickedCardId = cardId; };
-  const el = renderHandView(snap, "play", undefined, undefined, onCardClick);
+  const onCardClick = (cardId: string) => {
+    clickedCardId = cardId;
+  };
+  const el = renderHandView(
+    snap,
+    "play",
+    undefined,
+    undefined,
+    onCardClick,
+  );
   // Simulate clicking the first card (spades-2 after sorting)
   const firstCard = el.querySelector(".card") as HTMLElement;
   assertNotEquals(firstCard, null);
@@ -110,14 +390,49 @@ Deno.test("test_renderHandView_card_click_callback", () => {
   assertEquals(clickedCardId, "D1-spades-2");
 });
 
+Deno.test("test_renderHandView_play_mode_hint_cards_do_not_block_other_cards", () => {
+  const snap = makeSnapshot();
+  let clickedCardId: string | null = null;
+  const onCardClick = (cardId: string) => {
+    clickedCardId = cardId;
+  };
+  const legalCardIds = new Set(["D1-hearts-5"]);
+  const el = renderHandView(
+    snap,
+    "play",
+    undefined,
+    legalCardIds,
+    onCardClick,
+  );
+
+  const nonHintCard = Array.from(el.querySelectorAll(".card")).find(
+    (card) => card.getAttribute("data-card-id") === "D1-spades-2",
+  );
+  assertNotEquals(nonHintCard, undefined);
+  nonHintCard!.dispatchEvent(new Event("click", { bubbles: true }));
+
+  assertEquals(clickedCardId, "D1-spades-2");
+});
+
 Deno.test("test_renderHandView_action_button_callback", () => {
   const snap = makeSnapshot();
   let actionFired: string | null = null;
-  const onAction = (action: string) => { actionFired = action; };
-  const el = renderHandView(snap, "play", undefined, undefined, undefined, onAction);
+  const onAction = (action: string) => {
+    actionFired = action;
+  };
+  const el = renderHandView(
+    snap,
+    "play",
+    undefined,
+    undefined,
+    undefined,
+    onAction,
+  );
   // Find the play button and click it
   const buttons = el.querySelectorAll("button");
-  const playButton = Array.from(buttons).find((b) => b.textContent === "出牌");
+  const playButton = Array.from(buttons).find((b) =>
+    b.textContent === "出牌"
+  );
   assertNotEquals(playButton, undefined);
   playButton!.dispatchEvent(new Event("click", { bubbles: true }));
   assertEquals(actionFired, "play");

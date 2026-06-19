@@ -1,8 +1,11 @@
-import type { StateSnapshot, Card } from "../core/types.ts";
-import type { InteractionMode, StirButtonState, LevelChangeInfo } from "./types.ts";
+import type { Card, StateSnapshot } from "../core/types.ts";
+import type {
+  InteractionMode,
+  LevelChangeInfo,
+  StirButtonState,
+} from "./types.ts";
 import { computeBidPriority } from "./bid-logic.ts";
 import { computeLevelChange } from "./scoring-logic.ts";
-import { validatePlay } from "./input-validator.ts";
 
 /** Compute stir button state based on selected cards. */
 export function computeStirButtonState(
@@ -27,11 +30,30 @@ export function computeStirButtonState(
     return { disabled: true, title: "反主必须用对子" };
   }
 
+  const hints = snap.action_hints ?? [];
+  if (hints.length === 0) {
+    return { disabled: true, title: "没有可反的对子" };
+  }
+  if (!matchesHint(selectedCards, hints)) {
+    return { disabled: true, title: "优先级不足，不能反主" };
+  }
+
   return { disabled: false };
 }
 
+function matchesHint(selectedCards: Card[], hints: Card[][]): boolean {
+  const selectedKey = cardIdsKey(selectedCards);
+  return hints.some((hint) => cardIdsKey(hint) === selectedKey);
+}
+
+function cardIdsKey(cards: Card[]): string {
+  return cards.map((card) => card.id).sort().join("\n");
+}
+
 /** Compute level change info for scoring overlay. */
-export function computeLevelChangeInfo(totalPoints: number): LevelChangeInfo {
+export function computeLevelChangeInfo(
+  totalPoints: number,
+): LevelChangeInfo {
   return computeLevelChange(totalPoints);
 }
 
@@ -50,7 +72,9 @@ export function computeLegalCardIds(
         }
       }
     }
-  } else if (interactionMode === "play" || interactionMode === "discard") {
+  } else if (
+    interactionMode === "play" || interactionMode === "discard"
+  ) {
     for (const cards of snap.action_hints ?? []) {
       for (const card of cards) {
         legalCardIds.add(card.id);
@@ -71,13 +95,6 @@ export function isSelectionStillLegal(
   const handIds = new Set(snap.player_hand.map((c) => c.id));
   const allInHand = [...selectedCardIds].every((id) => handIds.has(id));
   if (!allInHand) return false;
-
-  const hints = snap.action_hints ?? [];
-  if (snap.phase === "PLAYING" && hints.length > 0) {
-    const selectedCards = snap.player_hand.filter((c) => selectedCardIds.has(c.id));
-    const matched = validatePlay(selectedCards, hints);
-    if (!matched) return false;
-  }
 
   return true;
 }

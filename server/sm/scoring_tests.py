@@ -245,6 +245,39 @@ class TestAmbushMultiplier:
         assert result.bottom_card_bonus == 30
         assert result.total_defender_points == 40
 
+    def test_ambush_single_heart_ace_adds_bottom_bonus(self) -> None:
+        """Defender winning last trick with a single high card gets bottom bonus."""
+        bottom = [
+            _card(Suit.SPADES, Rank.KING),
+            _card(Suit.HEARTS, Rank.FIVE),
+            _card(Suit.SPADES, Rank.FIVE),
+        ]
+        last_trick = CompletedTrick(
+            lead_player=0,
+            winner=1,
+            points=10,
+            slots=[
+                CompletedTrickSlot(player=0, cards=[_card(Suit.HEARTS, Rank.THREE)]),
+                CompletedTrickSlot(player=1, cards=[_card(Suit.HEARTS, Rank.ACE)]),
+                CompletedTrickSlot(player=3, cards=[_card(Suit.HEARTS, Rank.KING)]),
+                CompletedTrickSlot(player=2, cards=[_card(Suit.HEARTS, Rank.FOUR)]),
+            ],
+        )
+        result = calculate_score(
+            defender_points=30,
+            bottom_cards=bottom,
+            last_trick=last_trick,
+            declarer_team=0,
+            declarer_player=0,
+            team0_level=Rank.TWO,
+            team1_level=Rank.TWO,
+            trump_suit=Suit.SPADES,
+            trump_rank=Rank.FIVE,
+        )
+
+        assert result.bottom_card_bonus == 40
+        assert result.total_defender_points == 70
+
     def test_ambush_pair_x4(self) -> None:
         """Pair play ambush = x4."""
         bottom = [_card(Suit.SPADES, Rank.FIVE, 1), _card(Suit.SPADES, Rank.FIVE, 2)]

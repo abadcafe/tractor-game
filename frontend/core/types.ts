@@ -6,17 +6,24 @@ export interface Card {
 }
 
 /** One player's contribution in a trick slot. */
-interface TrickSlot {
+export interface TrickSlot {
   player: number;
   cards: Card[];
 }
 
 /** A completed trick in trick_history. */
-interface CompletedTrick {
+export interface CompletedTrick {
   lead_player: number;
   slots: TrickSlot[];
   winner: number;
   points: number;
+}
+
+/** Public event emitted when a throw attempt is forced to a smaller sub-play. */
+export interface FailedThrow {
+  player: number;
+  attempted_cards: Card[];
+  forced_cards: Card[];
 }
 
 /** A bid event during DEAL_BID phase. */
@@ -61,6 +68,7 @@ export interface StateSnapshot {
   } | null;
 
   trick_history: CompletedTrick[];
+  failed_throw: FailedThrow | null;
 
   bid_events: BidEvent[];
   bid_winner: BidEvent | null;

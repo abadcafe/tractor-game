@@ -63,9 +63,10 @@ async def client() -> AsyncGenerator[AsyncRestClient, None]:
 
 
 @pytest.fixture
-def sync_client() -> SyncServerClient:
+def sync_client() -> Generator[SyncServerClient, None, None]:
     """Synchronous test client using starlette TestClient (WebSocket support)."""
-    return TestClient(app)
+    with TestClient(app) as client:
+        yield client
 
 
 @pytest.fixture
@@ -171,36 +172,22 @@ async def test_delete_nonexistent_returns_200(client: AsyncRestClient, clean_reg
     assert data["ok"] is True
 
 
-def test_delete_game_with_active_ws(sync_client: SyncServerClient, clean_registry: None) -> None:
-    """DELETE a game that has an active WebSocket connection.
-
-    The server should return 200 with {"ok": true} even when a WebSocket
-    is connected. We use a background thread to call DELETE while the WS
-    is open. The key assertion is that DELETE returns 200 and the game is removed.
-    """
-    import threading
+def test_delete_game_after_ws_connection(sync_client: SyncServerClient, clean_registry: None) -> None:
+    """DELETE removes a game after a client has used seq=0 to fetch state."""
     from server.server import registry
 
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
-    result: dict[str, int | None] = {"status_code": None}
-
-    def do_delete() -> None:
-        resp = sync_client.delete(f"/api/game/{game_id}")
-        result["status_code"] = resp.status_code
 
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
         # Get initial state via seq=0 (no auto-push on connect)
-        ws.send_json({"type": "next_round", "seq": 0})
+        ws.send_json({"seq": 0})
         initial = ws.receive_json()
         assert _is_dict(initial)
         assert initial["type"] == "state"
-        # Start DELETE in a background thread
-        t = threading.Thread(target=do_delete)
-        t.start()
-        t.join(timeout=5.0)
 
-    assert result["status_code"] == 200
+    response = sync_client.delete(f"/api/game/{game_id}")
+    assert response.status_code == 200
     # Verify game is removed
     assert registry.get(game_id) is None
 
@@ -217,7 +204,7 @@ def test_human_player_index_is_3(sync_client: SyncServerClient, clean_registry: 
     assert create_resp.status_code == 201
     game_id = _game_id_from(create_resp)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
-        ws.send_json({"type": "next_round", "seq": 0})
+        ws.send_json({"seq": 0})
         data = ws.receive_json()
         assert _is_dict(data)
         assert data["type"] == "state"
@@ -229,13 +216,13 @@ def test_human_player_index_is_3(sync_client: SyncServerClient, clean_registry: 
 # ---- WebSocket: Connect ----
 
 
-def test_ws_connect_receives_state(sync_client: SyncServerClient, clean_registry: None) -> None:
+def test_ws_seq_zero_after_connect_receives_state(sync_client: SyncServerClient, clean_registry: None) -> None:
     """Connecting to a game via WebSocket and sending seq=0 should receive a state message."""
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
         # Client must send seq=0 to get initial state (no auto-push on connect)
-        ws.send_json({"type": "next_round", "seq": 0})
+        ws.send_json({"seq": 0})
         data = ws.receive_json()
         assert _is_dict(data)
         assert data["type"] == "state"
@@ -248,14 +235,11 @@ def test_ws_connect_nonexistent_rejected(sync_client: SyncServerClient, clean_re
             ws.receive_json()
 
 
-def test_ws_connect_game_over_receives_state_and_closes(sync_client: SyncServerClient, clean_registry: None) -> None:
-    """When connecting to a game that is over, the server should accept the
-    connection, push state with winning_team, then close.
-
-    Per spec section 5.3: "game 已结束: 接受连接，推送 state（含 winning_team），
-    立即断开". Since we cannot easily force GAME_OVER through the REST API alone,
-    we patch game.is_over() to return True, then verify the WS handler behavior.
-    """
+def test_ws_connect_game_over_uses_same_state_request_protocol(
+    sync_client: SyncServerClient,
+    clean_registry: None,
+) -> None:
+    """Even for an over game, the client asks for state with seq=0."""
     from server.server import registry
     from unittest.mock import patch
 
@@ -264,24 +248,13 @@ def test_ws_connect_game_over_receives_state_and_closes(sync_client: SyncServerC
     game_raw = registry.get(game_id)
     assert isinstance(game_raw, Game)
 
-    # Patch game.is_over() to return True so the WS handler enters the
-    # game-over connect branch
     with patch.object(game_raw, "is_over", return_value=True):
-        try:
-            with sync_client.websocket_connect(f"/game/{game_id}") as ws:
-                # The server should accept the connection, push state, then close
-                data = ws.receive_json()
-                assert _is_dict(data)
-                assert data["type"] == "state"
-                state = data.get("state")
-                if _is_dict(state) and "winning_team" in state:
-                    winning_team = state["winning_team"]
-                    assert isinstance(winning_team, int)
-        except Exception:
-            # The server may close the connection immediately after pushing state,
-            # which may be interpreted as an error. That's acceptable behavior
-            # -- the key requirement is that state was pushed before closing.
-            pass
+        with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+            ws.send_json({"seq": 0})
+            data = ws.receive_json()
+            assert _is_dict(data)
+            assert data["type"] == "state"
+            assert "state" in data
 
 
 def test_ws_connect_takeover_closes_old_connection(sync_client: SyncServerClient, clean_registry: None) -> None:
@@ -300,7 +273,7 @@ def test_ws_connect_takeover_closes_old_connection(sync_client: SyncServerClient
 
     # First connection
     with sync_client.websocket_connect(f"/game/{game_id}") as ws1:
-        ws1.send_json({"type": "next_round", "seq": 0})
+        ws1.send_json({"seq": 0})
         data1 = ws1.receive_json()
         assert _is_dict(data1)
         assert data1["type"] == "state"
@@ -308,7 +281,7 @@ def test_ws_connect_takeover_closes_old_connection(sync_client: SyncServerClient
 
         # Second connection should take over (old connection closed, new accepted)
         with sync_client.websocket_connect(f"/game/{game_id}") as ws2:
-            ws2.send_json({"type": "next_round", "seq": 0})
+            ws2.send_json({"seq": 0})
             data2 = ws2.receive_json()
             assert _is_dict(data2)
             assert data2["type"] == "state"
@@ -327,7 +300,7 @@ def test_ws_bid_action_receives_response(sync_client: SyncServerClient, clean_re
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
-        ws.send_json({"type": "next_round", "seq": 0})
+        ws.send_json({"seq": 0})
         initial = ws.receive_json()
         assert _is_dict(initial)
         assert initial["type"] == "state"
@@ -350,7 +323,7 @@ def test_ws_play_action_receives_response(sync_client: SyncServerClient, clean_r
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
-        ws.send_json({"type": "next_round", "seq": 0})
+        ws.send_json({"seq": 0})
         initial = ws.receive_json()
         assert _is_dict(initial)
         assert initial["type"] == "state"
@@ -372,7 +345,7 @@ def test_ws_next_round_action_receives_response(sync_client: SyncServerClient, c
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
-        ws.send_json({"type": "next_round", "seq": 0})
+        ws.send_json({"seq": 0})
         initial = ws.receive_json()
         assert _is_dict(initial)
         assert initial["type"] == "state"
@@ -394,7 +367,7 @@ def test_ws_stir_action_receives_response(sync_client: SyncServerClient, clean_r
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
-        ws.send_json({"type": "next_round", "seq": 0})
+        ws.send_json({"seq": 0})
         initial = ws.receive_json()
         assert _is_dict(initial)
         assert initial["type"] == "state"
@@ -416,7 +389,7 @@ def test_ws_discard_action_receives_response(sync_client: SyncServerClient, clea
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
-        ws.send_json({"type": "next_round", "seq": 0})
+        ws.send_json({"seq": 0})
         initial = ws.receive_json()
         assert _is_dict(initial)
         assert initial["type"] == "state"
@@ -446,7 +419,7 @@ def test_ws_invalid_action_returns_error(sync_client: SyncServerClient, clean_re
     game_id = _game_id_from(create_resp)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
         # Get initial state first
-        ws.send_json({"type": "next_round", "seq": 0})
+        ws.send_json({"seq": 0})
         initial = ws.receive_json()
         assert _is_dict(initial)
         assert initial["type"] == "state"
@@ -477,12 +450,12 @@ def test_reconnect_replaces_ws(sync_client: SyncServerClient, clean_registry: No
     game_id = _game_id_from(create_resp)
     # First connection
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
-        ws.send_json({"type": "next_round", "seq": 0})
+        ws.send_json({"seq": 0})
         data = ws.receive_json()
         assert _is_dict(data)
     # Second connection (reconnect)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
-        ws.send_json({"type": "next_round", "seq": 0})
+        ws.send_json({"seq": 0})
         raw = ws.receive_json()
         assert _is_dict(raw)
         assert raw["type"] == "state"
@@ -497,7 +470,7 @@ def test_seq_in_state_message(sync_client: SyncServerClient, clean_registry: Non
     game_id = _game_id_from(create_resp)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
         # Send action with seq=0 to get initial state
-        ws.send_json({"type": "next_round", "seq": 0})
+        ws.send_json({"seq": 0})
         data = ws.receive_json()
         assert _is_dict(data)
         assert data["type"] == "state"
@@ -506,29 +479,29 @@ def test_seq_in_state_message(sync_client: SyncServerClient, clean_registry: Non
         assert data["seq"] >= 1
 
 
-def test_seq_mismatch_returns_state_with_error(sync_client: SyncServerClient, clean_registry: None) -> None:
-    """When action seq doesn't match current state seq, server returns current state with error."""
+def test_seq_mismatch_returns_state_without_error(sync_client: SyncServerClient, clean_registry: None) -> None:
+    """When action seq doesn't match, server returns state and ignores the action."""
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
-        # Get initial state (seq=0 always mismatches)
-        ws.send_json({"type": "next_round", "seq": 0})
+        # Get initial state through the explicit seq=0 state request.
+        ws.send_json({"seq": 0})
         data = ws.receive_json()
         assert _is_dict(data)
         assert data["type"] == "state"
-        current_seq = data["seq"]
-        assert isinstance(current_seq, int)
-        assert current_seq >= 1
+        known_seq = data["seq"]
+        assert isinstance(known_seq, int)
+        assert known_seq >= 1
 
         # Send action with wrong seq (use a value far from current)
         ws.send_json({"type": "next_round", "seq": 99999})
         data = ws.receive_json()
         assert _is_dict(data)
         assert data["type"] == "state"
-        assert data.get("error") is not None
+        assert data.get("error") is None
         # Seq must be >= the previously observed seq
         assert isinstance(data["seq"], int)
-        assert data["seq"] >= current_seq
+        assert data["seq"] >= known_seq
 
 
 def test_error_merged_into_state(sync_client: SyncServerClient, clean_registry: None) -> None:
@@ -541,14 +514,14 @@ def test_error_merged_into_state(sync_client: SyncServerClient, clean_registry: 
     game_id = _game_id_from(create_resp)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
         # Get initial state
-        ws.send_json({"type": "next_round", "seq": 0})
+        ws.send_json({"seq": 0})
         data = ws.receive_json()
         assert _is_dict(data)
         assert data["type"] == "state"
         seq = data["seq"]
 
         # Send invalid action (unknown action type) with current seq.
-        # This is rejected by _parse_action regardless of phase, so it
+        # This is rejected by Game's player-message parser, so it
         # reliably produces an error.
         ws.send_json({"type": "nonexistent_action_xyz", "seq": seq})
         data = ws.receive_json()
@@ -568,8 +541,8 @@ def test_error_merged_into_state(sync_client: SyncServerClient, clean_registry: 
 def test_bid_pass_parsed_correctly(sync_client: SyncServerClient, clean_registry: None) -> None:
     """Sending a bid pass message (type=bid, pass=true) should be parsed
     as SkipBidAction and handled in DEAL_BID phase without crashing.
-    The server parses it as SkipBidAction via _parse_action(), and act()
-    now handles SkipBidAction during DEAL_BID by advancing the bid turn.
+    The server parses it as SkipBidAction after seq validation, and
+    handles SkipBidAction during DEAL_BID by advancing the bid turn.
     This test verifies the parsing and handling work (no crash) and the
     server responds with a state message (not a disconnect or raw error).
     """
@@ -577,7 +550,7 @@ def test_bid_pass_parsed_correctly(sync_client: SyncServerClient, clean_registry
     game_id = _game_id_from(create_resp)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
         # Get initial state
-        ws.send_json({"type": "next_round", "seq": 0})
+        ws.send_json({"seq": 0})
         data = ws.receive_json()
         assert _is_dict(data)
         assert data["type"] == "state"

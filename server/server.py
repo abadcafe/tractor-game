@@ -64,8 +64,8 @@ async def create_game():
     """Create a new game with 3 AI players and 1 human player.
 
     The game starts in WAITING phase. All players must confirm (next_round)
-    before the game begins. AutoPlayers confirm via run(); the human player
-    confirms when they connect via WebSocket.
+    before the game begins. AutoPlayers first request state via seq=0; the
+    human client does the same after opening its WebSocket.
     """
     auto_players: list[AutoPlayer] = [AutoPlayer(i) for i in range(3)]
     human = HumanPlayer(3)
@@ -74,14 +74,8 @@ async def create_game():
     game_id = registry.create(game)
     human_players[game_id] = human
 
-    def on_game_over(g: Game) -> None:
-        registry.delete(game_id)
-        human_players.pop(game_id, None)
-
-    game.set_on_game_over(on_game_over)
-
-    # Start each AutoPlayer independently — they send next_round to get
-    # into the game loop. HumanPlayer starts when their WS connects.
+    # Start each AutoPlayer independently. They send seq=0 to request the
+    # current state, then act only from received StateMessage pushes.
     for ap in auto_players:
         asyncio.create_task(ap.run(game))
 
@@ -95,12 +89,8 @@ async def list_games():
 
 @app.delete("/api/game/{game_id}")
 async def delete_game(game_id: str):
-    game = registry.get(game_id)
     human = human_players.pop(game_id, None)
     if human is not None and human.is_connected():
-        # Push final state before closing so client receives it
-        if game is not None:
-            await human.on_state(game, seq=game.current_seq)
         await human.close_ws()
     registry.delete(game_id)
     return {"ok": True}
@@ -114,8 +104,8 @@ async def websocket_game(websocket: WebSocket, game_id: str):
     """WebSocket endpoint for game interaction.
 
     Delegates entirely to HumanPlayer.handle_connection() which
-    manages the full WS lifecycle (accept, seq validation, action
-    parsing, game.act, cleanup).
+    manages the full WS lifecycle and forwards PlayerMessage envelopes
+    to Game.receive().
     """
     game = registry.get(game_id)
     if game is None:

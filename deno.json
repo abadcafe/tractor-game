@@ -1,7 +1,7 @@
 {
   "tasks": {
     "build": "rm -rf static && mkdir -p static && tsc --project frontend/tsconfig.json && cp frontend/index.html static/ && cp frontend/style.css static/",
-    "test": "deno test --allow-net frontend/tests/"
+    "test": "deno test --allow-net --allow-read=frontend/main.ts frontend/tests/"
   },
   "compilerOptions": {
     "lib": ["dom", "dom.iterable", "deno.ns"]

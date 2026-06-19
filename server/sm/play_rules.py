@@ -4,16 +4,26 @@ Implements the Shengji/Tractor play rules for singles, pairs, tractors, throws,
 and the legal play enumeration for leading and following.
 """
 
-from itertools import product as iterproduct
+from dataclasses import dataclass
+from itertools import combinations, product as iterproduct
 
 from server.sm.card_model import Card, Suit, Rank, SUITED_RANKS
 from server.sm.comparator import SUIT_OFFSET, effective_suit, trump_rank_order
+from server.sm.result import Ok, Rejected, StateResult
 from server.sm.types import SubPlay
 
 MAX_LEGAL_PLAY_HINTS = 5
 
 
 # ---- Helpers ----
+
+
+@dataclass(frozen=True, slots=True)
+class LeadThrowResolution:
+    """Resolved leading throw: attempted cards and actual played cards."""
+
+    attempted_cards: list[Card]
+    played_cards: list[Card]
 
 
 def _non_trump_rank_order(rank: Rank, trump_rank: Rank) -> int:
@@ -184,6 +194,9 @@ def _following_plays(
     # Separate hand into same effective suit vs other
     suit_cards = [c for c in hand if effective_suit(c, trump_suit, trump_rank) == lead_eff]
     other_cards = [c for c in hand if effective_suit(c, trump_suit, trump_rank) != lead_eff]
+
+    if not suit_cards:
+        return [list(cards) for cards in combinations(other_cards, lead_count)]
 
     # Compute lead pair count
     lead_subs = decompose(lead_cards, trump_suit, trump_rank)
@@ -807,6 +820,75 @@ def _is_biggest(
     return True
 
 
+def _throw_verification_order(
+    sub: SubPlay,
+    trump_suit: Suit | None,
+    trump_rank: Rank,
+) -> tuple[int, int]:
+    """Return low-to-high throw verification order for one sub-play."""
+    if not sub.cards:
+        return (sub.sub_level, 0)
+    rank_order = max(
+        _rank_order_for_suit(c.rank, sub.suit, trump_suit, trump_rank)
+        for c in sub.cards
+    )
+    return (sub.sub_level, rank_order)
+
+
+def _sorted_throw_subplays(
+    subs: list[SubPlay],
+    trump_suit: Suit | None,
+    trump_rank: Rank,
+) -> list[SubPlay]:
+    """Sort throw sub-plays from the smallest required fallback upward."""
+    return sorted(
+        subs,
+        key=lambda sub: _throw_verification_order(sub, trump_suit, trump_rank),
+    )
+
+
+def resolve_lead_throw(
+    hand: list[Card],
+    attempted_cards: list[Card],
+    trump_suit: Suit | None,
+    trump_rank: Rank,
+    other_hands: list[Card],
+) -> StateResult[LeadThrowResolution]:
+    """Resolve any leading play as a throw attempt.
+
+    If every sub-play can be thrown, all attempted cards are played. If a
+    sub-play cannot be thrown, the smallest failing sub-play is forced.
+    """
+    if not attempted_cards:
+        return Rejected("必须至少出一张牌")
+
+    hand_ids = {c.id for c in hand}
+    for c in attempted_cards:
+        if c.id not in hand_ids:
+            return Rejected("出的牌不在手牌中")
+
+    eff_suits = {effective_suit(c, trump_suit, trump_rank) for c in attempted_cards}
+    if len(eff_suits) != 1:
+        return Rejected("首出必须是同门花色或同为主牌")
+
+    subs = decompose(attempted_cards, trump_suit, trump_rank)
+    for sub in _sorted_throw_subplays(subs, trump_suit, trump_rank):
+        if not _is_biggest(sub, other_hands, trump_suit, trump_rank):
+            return Ok(
+                LeadThrowResolution(
+                    attempted_cards=list(attempted_cards),
+                    played_cards=list(sub.cards),
+                )
+            )
+
+    return Ok(
+        LeadThrowResolution(
+            attempted_cards=list(attempted_cards),
+            played_cards=list(attempted_cards),
+        )
+    )
+
+
 def is_legal_lead(
     hand: list[Card],
     played_cards: list[Card],
@@ -814,12 +896,12 @@ def is_legal_lead(
     trump_rank: Rank,
     other_hands: list[Card],
 ) -> bool:
-    """Verify that a leading play is legal per spec section 6.1.
+    """Verify that a leading play attempt can be submitted.
 
-    1. played_cards must be a subset of hand
-    2. All played cards must have the same effective suit
-    3. If decomposition yields multiple sub-plays (throw), verify each sub-play
-       is the biggest of its type using verify_throw logic (spec 7.3).
+    All leading plays are throw attempts. A failed throw is still accepted by
+    the protocol and resolved to the forced small sub-play by resolve_lead_throw.
+    This predicate only checks the input constraints that can still reject the
+    message: non-empty, in hand, and one effective suit.
     """
     if not played_cards:
         return False
@@ -834,15 +916,6 @@ def is_legal_lead(
     eff_suits = {effective_suit(c, trump_suit, trump_rank) for c in played_cards}
     if len(eff_suits) != 1:
         return False
-
-    # Step 3: decompose and verify throw if multi-sub-play
-    subs = decompose(played_cards, trump_suit, trump_rank)
-    if len(subs) > 1:
-        # Verify from lowest level to highest (spec 7.3)
-        sorted_subs = sorted(subs, key=lambda s: s.sub_level)
-        for sub in sorted_subs:
-            if not _is_biggest(sub, other_hands, trump_suit, trump_rank):
-                return False
 
     return True
 

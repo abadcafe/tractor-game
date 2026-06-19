@@ -11,9 +11,9 @@ export type ServerMessage = {
   error?: string;
 };
 
-/** Client -> Server WebSocket action.
- *  Each action may include `seq` for stale-action detection. */
+/** Client -> Server WebSocket action or state request. */
 export type ClientAction =
+  | { seq: 0; type?: undefined }
   | { type: "bid"; seq: number; cards: string[] }
   | { type: "bid"; seq: number; cards?: undefined; pass: true }
   | { type: "stir"; seq: number; cards: string[]; pass?: false }

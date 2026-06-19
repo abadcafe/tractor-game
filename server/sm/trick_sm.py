@@ -11,9 +11,13 @@ from pydantic import BaseModel, ConfigDict
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.comparator import effective_suit
 from server.sm.constants import next_player_ccw, get_team_index
-from server.sm.play_rules import is_legal_follow, is_legal_lead, compare_plays
+from server.sm.play_rules import (
+    compare_plays,
+    is_legal_follow,
+    resolve_lead_throw,
+)
 from server.sm.result import Ok, Rejected, StateResult
-from server.sm.types import CompletedTrick, CompletedTrickSlot
+from server.sm.types import CompletedTrick, CompletedTrickSlot, FailedThrow
 
 
 # ---- Models ----
@@ -59,6 +63,7 @@ class TrickState(BaseModel):
     declarer_team: int
     hands: list[list[Card]]
     result: TrickResult | None
+    failed_throw: FailedThrow | None
 
 
 # ---- Public API ----
@@ -78,6 +83,7 @@ def create_trick(input: TrickInput) -> TrickState:
         declarer_team=input.declarer_team,
         hands=[list(h) for h in input.hands],  # copy hands
         result=None,
+        failed_throw=None,
     )
 
 
@@ -111,14 +117,35 @@ def play(state: TrickState, player: int, cards: list[Card]) -> StateResult[Trick
     if not played_ids.issubset(hand_ids):
         return Rejected("出的牌不在手牌中")
 
+    actual_cards = list(cards)
+    failed_throw: FailedThrow | None = None
+
     # Validate lead legality
     if state.phase == "LEADING":
         other_hands: list[Card] = []
         for i in range(4):
             if i != player:
                 other_hands.extend(state.hands[i])
-        if not is_legal_lead(hand, cards, state.trump_suit, state.trump_rank, other_hands):
-            return Rejected("首出牌不符合规则")
+        match resolve_lead_throw(
+            hand,
+            cards,
+            state.trump_suit,
+            state.trump_rank,
+            other_hands,
+        ):
+            case Ok(value=resolution):
+                actual_cards = list(resolution.played_cards)
+            case Rejected(reason=reason):
+                return Rejected(reason)
+
+        attempted_ids = {c.id for c in cards}
+        actual_ids = {c.id for c in actual_cards}
+        if attempted_ids != actual_ids:
+            failed_throw = FailedThrow(
+                player=player,
+                attempted_cards=list(cards),
+                forced_cards=list(actual_cards),
+            )
 
     # Validate follow-suit if following
     if state.phase == "FOLLOWING":
@@ -127,8 +154,10 @@ def play(state: TrickState, player: int, cards: list[Card]) -> StateResult[Trick
             # Internal invariant: should never happen if play() is called correctly.
             # Kept as raise because it signals a code bug, not a race condition.
             raise ValueError("Lead cards must exist in FOLLOWING phase")
-        if not is_legal_follow(hand, cards, lead_cards, state.trump_suit, state.trump_rank):
-            return Rejected("必须跟牌")
+        if not is_legal_follow(hand, actual_cards, lead_cards, state.trump_suit, state.trump_rank):
+            return Rejected(
+                "必须跟牌"
+            )
 
     # Build new state (immutable)
     new_phase = state.phase
@@ -137,11 +166,12 @@ def play(state: TrickState, player: int, cards: list[Card]) -> StateResult[Trick
 
     # Update slots: copy and set player's slot
     new_slots = list(state.slots)
-    new_slots[player] = CompletedTrickSlot(player=player, cards=list(cards))
+    new_slots[player] = CompletedTrickSlot(player=player, cards=list(actual_cards))
 
     # Remove cards from hand
+    actual_played_ids = {c.id for c in actual_cards}
     new_hands = [list(h) for h in state.hands]
-    new_hands[player] = [c for c in hand if c.id not in played_ids]
+    new_hands[player] = [c for c in hand if c.id not in actual_played_ids]
 
     # Transition to FOLLOWING on first play
     if state.played == 0:
@@ -159,6 +189,7 @@ def play(state: TrickState, player: int, cards: list[Card]) -> StateResult[Trick
         declarer_team=state.declarer_team,
         hands=new_hands,
         result=state.result,
+        failed_throw=failed_throw,
     )
 
     # Resolve when all 4 have played
@@ -168,28 +199,42 @@ def play(state: TrickState, player: int, cards: list[Card]) -> StateResult[Trick
     return Ok(new_state)
 
 
+def _trick_play_order(lead_player: int) -> list[int]:
+    """Return the four players in the actual trick play order."""
+    order = [lead_player]
+    cur = lead_player
+    for _ in range(3):
+        cur = next_player_ccw(cur)
+        order.append(cur)
+    return order
+
+
 def _resolve(state: TrickState) -> TrickState:
     """Resolve the trick: determine winner, count points, build result.
 
     Returns a new TrickState in RESOLVED phase (immutable).
     """
+    slots_by_player: dict[int, CompletedTrickSlot] = {slot.player: slot for slot in state.slots}
+
     # Get lead cards for comparison
-    lead_slot = state.slots[state.lead_player]
+    lead_slot = slots_by_player.get(state.lead_player)
+    if lead_slot is None:
+        raise ValueError("Lead player's slot must exist at resolution")
     lead_cards = lead_slot.cards
     if len(lead_cards) == 0:
         raise ValueError("Lead cards must exist at resolution")
     lead_eff = effective_suit(lead_cards[0], state.trump_suit, state.trump_rank)
 
-    # Find winner by comparing each play against current best
+    # Find winner in real play order so equal-ranked plays keep the earlier winner.
     winner = state.lead_player
-    best_cards = state.slots[winner].cards
+    best_cards = lead_slot.cards
     if len(best_cards) == 0:
         raise ValueError("Winner's cards must exist at resolution")
 
-    for slot in state.slots:
-        p = slot.player
-        if p == winner:
-            continue
+    for p in _trick_play_order(state.lead_player)[1:]:
+        slot = slots_by_player.get(p)
+        if slot is None:
+            raise ValueError(f"Player {p}'s slot must exist at resolution")
         p_cards = slot.cards
         if len(p_cards) == 0:
             raise ValueError(f"Player {p}'s cards must exist at resolution")

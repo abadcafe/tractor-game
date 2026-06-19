@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import TypedDict
 
 from server.sm.card_model import Card, Rank, Suit
-from server.sm.types import BidEvent, CompletedTrick
+from server.sm.types import BidEvent, CompletedTrick, FailedThrow
 
 
 def _card_to_dict(card: Card) -> CardDict:
@@ -96,6 +96,7 @@ class StateSnapshot:
     defender_points: int
     trick: TrickSnapshot | None
     trick_history: list[CompletedTrick]
+    failed_throw: FailedThrow | None
     action_hints: list[list[Card]]
     awaiting_action: str | None
     scoring: ScoringSnapshot | None
@@ -176,6 +177,7 @@ class StateSnapshot:
                 }
                 for t in self.trick_history
             ],
+            "failed_throw": _serialize_failed_throw(self.failed_throw) if self.failed_throw is not None else None,
             "action_hints": [
                 [_card_to_dict(c) for c in entry]
                 for entry in self.action_hints
@@ -201,6 +203,15 @@ def _serialize_bid_event(event: BidEvent) -> BidEventDict:
         "suit": event.suit.value if event.suit is not None else None,
         "joker_type": event.joker_type,
         "count": event.count,
+    }
+
+
+def _serialize_failed_throw(event: FailedThrow) -> FailedThrowDict:
+    """Serialize a failed throw event to a JSON-serializable dict."""
+    return {
+        "player": event.player,
+        "attempted_cards": [_card_to_dict(c) for c in event.attempted_cards],
+        "forced_cards": [_card_to_dict(c) for c in event.forced_cards],
     }
 
 
@@ -244,6 +255,14 @@ class CompletedTrickDict(TypedDict):
     slots: list[CompletedTrickSlotDict]
     winner: int
     points: int
+
+
+class FailedThrowDict(TypedDict):
+    """Serialized public failed-throw event."""
+
+    player: int
+    attempted_cards: list[CardDict]
+    forced_cards: list[CardDict]
 
 
 class ScoringDict(TypedDict):
@@ -296,6 +315,7 @@ class SnapshotDict(TypedDict):
     defender_points: int
     trick: TrickDict | None
     trick_history: list[CompletedTrickDict]
+    failed_throw: FailedThrowDict | None
     action_hints: list[list[CardDict]]
     awaiting_action: str | None
     scoring: ScoringDict | None

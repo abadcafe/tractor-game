@@ -111,7 +111,7 @@ def test_full_game_flow(sync_client: SyncServerClient) -> None:
     game_id = _create_game_sync(sync_client)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
         # Client must send seq=0 to get initial state (no auto-push on connect)
-        ws.send_json({"type": "next_round", "seq": 0})
+        ws.send_json({"seq": 0})
         data = _as_dict(ws.receive_json())
         assert data["type"] == "state"
         state = _as_dict(data["state"])
@@ -125,12 +125,12 @@ def test_reconnect_mid_game(sync_client: SyncServerClient) -> None:
     game_id = _create_game_sync(sync_client)
     # First connection
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
-        ws.send_json({"type": "next_round", "seq": 0})
+        ws.send_json({"seq": 0})
         data1 = _as_dict(ws.receive_json())
         assert data1["type"] == "state"
     # Reconnect
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
-        ws.send_json({"type": "next_round", "seq": 0})
+        ws.send_json({"seq": 0})
         data2 = _as_dict(ws.receive_json())
         assert data2["type"] == "state"
         assert "phase" in _as_dict(data2["state"])
@@ -154,13 +154,13 @@ async def test_concurrent_games(client: AsyncRestClient) -> None:
 def test_invalid_action_returns_error(sync_client: SyncServerClient) -> None:
     """Test that invalid actions through WebSocket return error in state message.
 
-    Sends an unknown action type. The server's _parse_action rejects it
+    Sends an unknown action type. The server's player-message parser rejects it
     and returns a state message with an "error" field.
     """
     game_id = _create_game_sync(sync_client)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
         # Get initial state via seq=0
-        ws.send_json({"type": "next_round", "seq": 0})
+        ws.send_json({"seq": 0})
         initial = _as_dict(ws.receive_json())
         assert initial["type"] == "state"
         seq = initial["seq"]
@@ -176,7 +176,7 @@ def test_delete_game_disconnects_ws(sync_client: SyncServerClient) -> None:
     """Test that deleting a game while connected closes cleanly."""
     game_id = _create_game_sync(sync_client)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
-        ws.send_json({"type": "next_round", "seq": 0})
+        ws.send_json({"seq": 0})
         ws.receive_json()
     # Delete after disconnect is fine
     resp = sync_client.delete(f"/api/game/{game_id}")

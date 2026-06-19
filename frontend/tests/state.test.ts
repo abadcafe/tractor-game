@@ -1,4 +1,7 @@
-import { assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  assertEquals,
+  assertNotEquals,
+} from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { StateManager } from "../core/state.ts";
 import type { StateSnapshot } from "../core/types.ts";
 
@@ -15,6 +18,7 @@ function makeSnapshot(phase: string): StateSnapshot {
     action_hints: [],
     trick: null,
     trick_history: [],
+    failed_throw: null,
     bid_events: [],
     bid_winner: null,
     awaiting_action: null,

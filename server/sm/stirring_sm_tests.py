@@ -24,6 +24,7 @@ def _make_input(
     trump_suit: Suit | None = Suit.HEARTS,
     trump_rank: Rank = Rank.TWO,
     declarer_player: int = 0,
+    initial_bid_cards: list[Card] | None = None,
     bottom_cards: list[Card] | None = None,
     players_hand: list[list[Card]] | None = None,
 ) -> StirInput:
@@ -56,6 +57,7 @@ def _make_input(
     return StirInput(
         trump_suit=trump_suit,
         trump_rank=trump_rank,
+        initial_bid_cards=[] if initial_bid_cards is None else initial_bid_cards,
         declarer_player=declarer_player,
         bottom_cards=bottom_cards,
         players_hand=players_hand,
@@ -111,6 +113,49 @@ class TestCreateStirring:
         ))
         assert state.phase == "EXCHANGING"
         assert state.current_player == 0
+
+    def test_create_stirring_single_initial_bid_uses_single_priority(self) -> None:
+        """A single initial bid can be over-stirred by any trump-rank pair."""
+        initial_bid = [_card(Suit.SPADES, Rank.FIVE, 1)]
+        players_hand = [[], [], [], [
+            _card(Suit.DIAMONDS, Rank.FIVE, 1),
+            _card(Suit.DIAMONDS, Rank.FIVE, 2),
+        ]]
+        state = create_stirring(_make_input(
+            trump_suit=Suit.SPADES,
+            trump_rank=Rank.FIVE,
+            declarer_player=0,
+            initial_bid_cards=initial_bid,
+            players_hand=players_hand,
+        ))
+        state = _complete_initial_exchange(state)
+
+        result = stir(state, player=state.current_player, cards=players_hand[3])
+
+        assert isinstance(result, Ok)
+        assert result.value.trump_suit == Suit.DIAMONDS
+
+    def test_create_stirring_joker_initial_bid_uses_joker_priority(self) -> None:
+        """A big-joker initial bid is already max priority."""
+        initial_bid = [
+            _card(Suit.JOKER, Rank.BIG_JOKER, 1),
+            _card(Suit.JOKER, Rank.BIG_JOKER, 2),
+        ]
+        players_hand = [[], [], [], [
+            _card(Suit.SPADES, Rank.FIVE, 1),
+            _card(Suit.SPADES, Rank.FIVE, 2),
+        ]]
+        state = create_stirring(_make_input(
+            trump_suit=None,
+            trump_rank=Rank.FIVE,
+            declarer_player=0,
+            initial_bid_cards=initial_bid,
+            players_hand=players_hand,
+        ))
+
+        assert state.current_priority == 205
+        state = _complete_initial_exchange(state)
+        assert state.phase == "COMPLETE"
 
 
 class TestStirDiscard:

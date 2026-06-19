@@ -3,10 +3,16 @@ from typing import Literal
 
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.play_rules import (
+    can_win,
+    compare_plays,
+    decompose,
     detect_throws,
-    get_legal_plays, decompose, is_legal_lead,
-    is_legal_follow, can_win, compare_plays,
+    get_legal_plays,
+    is_legal_follow,
+    is_legal_lead,
+    resolve_lead_throw,
 )
+from server.sm.result import Ok
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
@@ -266,29 +272,40 @@ class TestIsLegalLead:
         other_hands: list[Card] = []  # no other sp cards
         assert is_legal_lead(hand, hand, Suit.HEARTS, Rank.TWO, other_hands) is True
 
-    def test_is_legal_lead_throw_invalid_single_not_biggest(self) -> None:
-        """Throw with a non-biggest single triggers failure.
-
-        spK spQ but other hand has spA -> spQ is not biggest (spA exists).
-        This IS a throw (2 singles = 2 sub-plays), so verification applies.
-        """
+    def test_is_legal_lead_throw_failed_single_still_submittable(self) -> None:
+        """A failed throw attempt is still a submittable lead action."""
         hand = [_card(Suit.SPADES, Rank.KING), _card(Suit.SPADES, Rank.QUEEN)]
         other_hands = [_card(Suit.SPADES, Rank.ACE)]
         result = is_legal_lead(hand, hand, Suit.HEARTS, Rank.TWO, other_hands)
-        assert result is False
+        assert result is True
 
-    def test_is_legal_lead_throw_pair_not_biggest(self) -> None:
-        """Throw with a non-biggest pair triggers failure."""
+    def test_resolve_lead_throw_forces_smallest_failed_subplay(self) -> None:
+        """Leading resolution accepts failed throws and returns forced cards."""
+        hand = [_card(Suit.SPADES, Rank.KING), _card(Suit.SPADES, Rank.QUEEN)]
+        other_hands = [_card(Suit.SPADES, Rank.ACE)]
+
+        result = resolve_lead_throw(
+            hand,
+            hand,
+            Suit.HEARTS,
+            Rank.TWO,
+            other_hands,
+        )
+
+        assert isinstance(result, Ok)
+        assert result.value.attempted_cards == hand
+        assert result.value.played_cards == [hand[1]]
+
+    def test_is_legal_lead_throw_pair_not_biggest_still_submittable(self) -> None:
+        """A throw containing a non-biggest pair is still submittable."""
         # Hand: pair spQ-Q + single spA. Other hand has pair spK-K.
         hand = [
             _card(Suit.SPADES, Rank.QUEEN, 1), _card(Suit.SPADES, Rank.QUEEN, 2),
             _card(Suit.SPADES, Rank.ACE),
         ]
         other_hands = [_card(Suit.SPADES, Rank.KING, 1), _card(Suit.SPADES, Rank.KING, 2)]
-        # decompose -> [pair spQ-Q, single spA]. Verify each is biggest:
-        # pair spQ-Q: is there a bigger sp pair? spK-K exists -> NO. Throw fails.
         result = is_legal_lead(hand, hand, Suit.HEARTS, Rank.TWO, other_hands)
-        assert result is False
+        assert result is True
 
     def test_is_legal_lead_not_in_hand(self) -> None:
         """Cards not in hand -> illegal."""
@@ -309,8 +326,8 @@ class TestIsLegalLead:
         played = hand[:]
         assert is_legal_lead(hand, played, Suit.DIAMONDS, Rank.TWO, []) is False
 
-    def test_is_legal_lead_throw_tractor_not_biggest(self) -> None:
-        """Throw containing a tractor that is not biggest -> fails."""
+    def test_is_legal_lead_throw_tractor_not_biggest_still_submittable(self) -> None:
+        """A throw containing a non-biggest tractor is still submittable."""
         # Hand: tractor sp3-3-4-4 + single spA. Other hand has tractor sp5-5-6-6.
         hand = [
             _card(Suit.SPADES, Rank.THREE, 1), _card(Suit.SPADES, Rank.THREE, 2),
@@ -322,7 +339,7 @@ class TestIsLegalLead:
             _card(Suit.SPADES, Rank.SIX, 1), _card(Suit.SPADES, Rank.SIX, 2),
         ]
         result = is_legal_lead(hand, hand, Suit.HEARTS, Rank.TWO, other_hands)
-        assert result is False
+        assert result is True
 
     def test_is_legal_lead_throw_biggest_tractor(self) -> None:
         """Throw with biggest tractor and biggest single -> legal."""
@@ -367,6 +384,25 @@ class TestIsLegalFollow:
         hand = [_card(Suit.SPADES, Rank.KING)]
         lead = [_card(Suit.HEARTS, Rank.QUEEN)]
         assert is_legal_follow(hand, [_card(Suit.SPADES, Rank.KING)], lead, Suit.SPADES, Rank.TWO) is True
+
+    def test_is_legal_follow_no_trump_rank_card_is_not_lead_suit(self) -> None:
+        """In no-trump, rank cards are trump and do not satisfy their printed suit."""
+        hand = [
+            _card(Suit.JOKER, Rank.SMALL_JOKER),
+            _card(Suit.HEARTS, Rank.FOUR),
+            _card(Suit.CLUBS, Rank.FOUR),
+            _card(Suit.DIAMONDS, Rank.FOUR),
+            _card(Suit.SPADES, Rank.TWO),
+            _card(Suit.HEARTS, Rank.JACK),
+            _card(Suit.HEARTS, Rank.FIVE),
+            _card(Suit.HEARTS, Rank.TWO),
+            _card(Suit.CLUBS, Rank.SIX),
+            _card(Suit.CLUBS, Rank.THREE),
+        ]
+        lead = [_card(Suit.DIAMONDS, Rank.ACE)]
+        played = [_card(Suit.HEARTS, Rank.FIVE)]
+
+        assert is_legal_follow(hand, played, lead, None, Rank.FOUR) is True
 
     # --- Pair following ---
     def test_is_legal_follow_pair_must_play_pair(self) -> None:
@@ -959,6 +995,27 @@ class TestGetLegalPlays:
         lead = [_card(Suit.HEARTS, Rank.QUEEN)]
         plays = get_legal_plays(hand, False, lead, Suit.SPADES, Rank.TWO, [])
         assert len(plays) >= 1
+
+    def test_following_single_no_trump_rank_card_hints_all_cards(self) -> None:
+        """No effective lead-suit card means every single card is a legal hint."""
+        hand = [
+            _card(Suit.JOKER, Rank.SMALL_JOKER),
+            _card(Suit.HEARTS, Rank.FOUR),
+            _card(Suit.CLUBS, Rank.FOUR),
+            _card(Suit.DIAMONDS, Rank.FOUR),
+            _card(Suit.SPADES, Rank.TWO),
+            _card(Suit.HEARTS, Rank.JACK),
+            _card(Suit.HEARTS, Rank.FIVE),
+            _card(Suit.HEARTS, Rank.TWO),
+            _card(Suit.CLUBS, Rank.SIX),
+            _card(Suit.CLUBS, Rank.THREE),
+        ]
+        lead = [_card(Suit.DIAMONDS, Rank.ACE)]
+
+        plays = get_legal_plays(hand, False, lead, None, Rank.FOUR, [])
+        play_ids = {play[0].id for play in plays}
+
+        assert play_ids == {card.id for card in hand}
 
     def test_following_pair_must_follow(self) -> None:
         """Following pair: must play pair of same suit if available."""

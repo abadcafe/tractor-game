@@ -1,7 +1,12 @@
 import type { StateSnapshot } from "../core/types.ts";
 import type { GameAction } from "./types.ts";
 import type { ClientAction } from "../core/protocol.ts";
-import { validatePlay, validateDiscard, validateBidCards, validateStirCards } from "./input-validator.ts";
+import {
+  validateBidCards,
+  validateDiscard,
+  validatePlay,
+  validateStirCards,
+} from "./input-validator.ts";
 
 /** Result of validating an action. */
 interface ActionResult {
@@ -16,25 +21,20 @@ export function handlePlayAction(
   selectedCardIds: Set<string>,
   seq: number,
 ): ActionResult {
-  const selectedCards = snap.player_hand.filter((c) => selectedCardIds.has(c.id));
+  const selectedCards = snap.player_hand.filter((c) =>
+    selectedCardIds.has(c.id)
+  );
   if (selectedCards.length === 0) {
     return { success: false, error: "请选择要出的牌" };
   }
-  const hints = snap.action_hints ?? [];
-  if (hints.length === 0) {
-    return {
-      success: true,
-      action: { type: "play", seq, cards: selectedCards.map((c) => c.id) },
-    };
-  }
-  const matchedCards = validatePlay(selectedCards, hints);
-  if (matchedCards) {
-    return {
-      success: true,
-      action: { type: "play", seq, cards: matchedCards.map((c) => c.id) },
-    };
-  }
-  return { success: false, error: "无效的出牌组合" };
+  return {
+    success: true,
+    action: {
+      type: "play",
+      seq,
+      cards: selectedCards.map((c) => c.id),
+    },
+  };
 }
 
 /** Handle a discard action: validate and construct the client action. */
@@ -43,12 +43,18 @@ export function handleDiscardAction(
   selectedCardIds: Set<string>,
   seq: number,
 ): ActionResult {
-  const selectedCards = snap.player_hand.filter((c) => selectedCardIds.has(c.id));
+  const selectedCards = snap.player_hand.filter((c) =>
+    selectedCardIds.has(c.id)
+  );
   const count = snap.stirring_state?.exchange_count ?? 0;
   if (validateDiscard(selectedCards, count)) {
     return {
       success: true,
-      action: { type: "discard", seq, cards: selectedCards.map((c) => c.id) },
+      action: {
+        type: "discard",
+        seq,
+        cards: selectedCards.map((c) => c.id),
+      },
     };
   }
   return { success: false, error: `请选择 ${count} 张牌弃掉` };
@@ -65,11 +71,22 @@ export function handleBidAction(
   cardIds: string[],
   seq: number,
 ): ActionResult {
-  const selectedCards = snap.player_hand.filter((c) => cardIds.includes(c.id));
+  const selectedCards = snap.player_hand.filter((c) =>
+    cardIds.includes(c.id)
+  );
   const hints = snap.action_hints ?? [];
-  const matchedCards = hints.length > 0 ? validatePlay(selectedCards, hints) : null;
-  if (matchedCards || (hints.length === 0 && validateBidCards(selectedCards, snap.trump_rank))) {
-    return { success: true, action: { type: "bid", seq, cards: cardIds } };
+  const matchedCards = hints.length > 0
+    ? validatePlay(selectedCards, hints)
+    : null;
+  if (
+    matchedCards ||
+    (hints.length === 0 &&
+      validateBidCards(selectedCards, snap.trump_rank))
+  ) {
+    return {
+      success: true,
+      action: { type: "bid", seq, cards: cardIds },
+    };
   }
   return { success: false, error: "叫牌牌张无效" };
 }
@@ -85,13 +102,21 @@ export function handleStirAction(
   cardIds: string[],
   seq: number,
 ): ActionResult {
-  const selectedCards = snap.player_hand.filter((c) => cardIds.includes(c.id));
+  const selectedCards = snap.player_hand.filter((c) =>
+    cardIds.includes(c.id)
+  );
   const hints = snap.action_hints ?? [];
-  const matchedCards = hints.length > 0 ? validatePlay(selectedCards, hints) : null;
-  if (matchedCards || (hints.length === 0 && validateStirCards(selectedCards, snap.trump_rank))) {
-    return { success: true, action: { type: "stir", seq, cards: cardIds } };
+  const matchedCards = validatePlay(selectedCards, hints);
+  if (matchedCards) {
+    return {
+      success: true,
+      action: { type: "stir", seq, cards: cardIds },
+    };
   }
-  return { success: false, error: "反主必须出对子" };
+  if (!validateStirCards(selectedCards, snap.trump_rank)) {
+    return { success: false, error: "反主必须出对子" };
+  }
+  return { success: false, error: "优先级不足，不能反主" };
 }
 
 /** Handle a pass stir action (不反). */

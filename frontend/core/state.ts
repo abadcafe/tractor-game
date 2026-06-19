@@ -3,7 +3,7 @@ import type { StateSnapshot } from "./types.ts";
 /**
  * Centralized game state storage.
  * Each StateManager instance manages its own state so tests can create independent instances.
- * Also tracks the latest server seq for stale-action detection.
+ * Also tracks the latest server seq for outgoing actions.
  */
 export class StateManager {
   private _snapshot: StateSnapshot | null = null;

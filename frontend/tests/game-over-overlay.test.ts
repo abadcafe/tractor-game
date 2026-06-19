@@ -1,4 +1,7 @@
-import { assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  assertEquals,
+  assertNotEquals,
+} from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { DOMParser } from "jsr:@b-fuze/deno-dom@0.1.56";
 import { renderGameOverOverlay } from "../ui/components/game-over-overlay.ts";
 import type { StateSnapshot } from "../core/types.ts";
@@ -10,7 +13,9 @@ const doc = new DOMParser().parseFromString(
 // @ts-ignore test setup
 globalThis.document = doc;
 
-function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
+function makeSnapshot(
+  overrides: Partial<StateSnapshot> = {},
+): StateSnapshot {
   return {
     phase: "GAME_OVER",
     player_hand: [],
@@ -23,6 +28,7 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     action_hints: [],
     trick: null,
     trick_history: [],
+    failed_throw: null,
     bid_events: [],
     bid_winner: null,
     awaiting_action: null,
@@ -68,7 +74,9 @@ Deno.test("test_renderGameOverOverlay_null_winning_team", () => {
 Deno.test("test_renderGameOverOverlay_new_game_button", () => {
   const snap = makeSnapshot();
   let newGameCalled = false;
-  const onNewGame = () => { newGameCalled = true; };
+  const onNewGame = () => {
+    newGameCalled = true;
+  };
   const el = renderGameOverOverlay(snap, onNewGame);
   const buttons = el.querySelectorAll("button");
   const buttonTexts = Array.from(buttons).map((b) => b.textContent);
@@ -85,10 +93,14 @@ Deno.test("test_renderGameOverOverlay_no_button_without_callback", () => {
 Deno.test("test_renderGameOverOverlay_new_game_callback", () => {
   const snap = makeSnapshot();
   let newGameCalled = false;
-  const onNewGame = () => { newGameCalled = true; };
+  const onNewGame = () => {
+    newGameCalled = true;
+  };
   const el = renderGameOverOverlay(snap, onNewGame);
   const buttons = el.querySelectorAll("button");
-  const newGameButton = Array.from(buttons).find((b) => b.textContent === "新游戏");
+  const newGameButton = Array.from(buttons).find((b) =>
+    b.textContent === "新游戏"
+  );
   assertNotEquals(newGameButton, undefined);
   newGameButton!.dispatchEvent(new Event("click", { bubbles: true }));
   assertEquals(newGameCalled, true);

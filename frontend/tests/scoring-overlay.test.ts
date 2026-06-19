@@ -1,4 +1,7 @@
-import { assertEquals, assertNotEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  assertEquals,
+  assertNotEquals,
+} from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { DOMParser } from "jsr:@b-fuze/deno-dom@0.1.56";
 import { renderScoringOverlay } from "../ui/components/scoring-overlay.ts";
 import type { StateSnapshot } from "../core/types.ts";
@@ -11,7 +14,9 @@ const doc = new DOMParser().parseFromString(
 // @ts-ignore test setup
 globalThis.document = doc;
 
-function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
+function makeSnapshot(
+  overrides: Partial<StateSnapshot> = {},
+): StateSnapshot {
   return {
     phase: "WAITING",
     player_hand: [],
@@ -24,6 +29,7 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     action_hints: [],
     trick: null,
     trick_history: [],
+    failed_throw: null,
     bid_events: [],
     bid_winner: null,
     awaiting_action: "next_round",
@@ -55,8 +61,64 @@ Deno.test("test_renderScoringOverlay_next_round_button", () => {
   const snap = makeSnapshot();
   const el = renderScoringOverlay(snap, "next_round");
   const buttons = el.querySelectorAll("button");
+  const actionButton = el.querySelector(
+    ".scoring-overlay__actions .scoring-overlay__next-round",
+  );
   const buttonTexts = Array.from(buttons).map((b) => b.textContent);
   assertEquals(buttonTexts.includes("下一轮"), true);
+  assertNotEquals(actionButton, null);
+});
+
+Deno.test("test_renderScoringOverlay_bottom_cards_are_prominent_cards", () => {
+  const snap = makeSnapshot({
+    scoring: {
+      declarer_team: 0,
+      defender_points: 30,
+      total_defender_points: 70,
+      bottom_card_bonus: 40,
+      bottom_cards: [
+        { id: "D1-hearts-5", suit: "hearts", rank: "5" },
+        { id: "D1-diamonds-10", suit: "diamonds", rank: "10" },
+        { id: "D1-spades-K", suit: "spades", rank: "K" },
+      ],
+    },
+  });
+  const el = renderScoringOverlay(snap, "next_round");
+  const bottom = el.querySelector(".scoring-overlay__bottom");
+  const bottomCards = el.querySelectorAll(".scoring-bottom-card");
+  const text = bottom?.textContent ?? "";
+
+  assertNotEquals(bottom, null);
+  assertEquals(text.includes("底牌"), true);
+  assertEquals(bottomCards.length, 3);
+});
+
+Deno.test("test_renderScoringOverlay_twenty_four_bottom_cards_use_dense_layout", () => {
+  const bottomCards = Array.from({ length: 24 }, (_, index) => ({
+    id: `D${index}-hearts-5`,
+    suit: "hearts" as const,
+    rank: "5" as const,
+  }));
+  const snap = makeSnapshot({
+    scoring: {
+      declarer_team: 0,
+      defender_points: 120,
+      total_defender_points: 240,
+      bottom_card_bonus: 120,
+      bottom_cards: bottomCards,
+    },
+  });
+  const el = renderScoringOverlay(snap, "next_round");
+  const cardsWrap = el.querySelector(".scoring-overlay__bottom-cards");
+  const cards = el.querySelectorAll(".scoring-bottom-card");
+
+  assertEquals(cards.length, 24);
+  assertEquals(
+    cardsWrap?.classList.contains(
+      "scoring-overlay__bottom-cards--many",
+    ),
+    true,
+  );
 });
 
 Deno.test("test_renderScoringOverlay_no_button_when_human_ready", () => {
@@ -69,10 +131,14 @@ Deno.test("test_renderScoringOverlay_no_button_when_human_ready", () => {
 Deno.test("test_renderScoringOverlay_next_round_callback", () => {
   const snap = makeSnapshot();
   let nextRoundCalled = false;
-  const onNextRound = () => { nextRoundCalled = true; };
+  const onNextRound = () => {
+    nextRoundCalled = true;
+  };
   const el = renderScoringOverlay(snap, "next_round", onNextRound);
   const buttons = el.querySelectorAll("button");
-  const nextButton = Array.from(buttons).find((b) => b.textContent === "下一轮");
+  const nextButton = Array.from(buttons).find((b) =>
+    b.textContent === "下一轮"
+  );
   assertNotEquals(nextButton, undefined);
   nextButton!.dispatchEvent(new Event("click", { bubbles: true }));
   assertEquals(nextRoundCalled, true);
@@ -97,7 +163,9 @@ Deno.test("test_renderScoringOverlay_next_round_button_no_callback", () => {
   // Provide "next_round" mode but no callback
   const el = renderScoringOverlay(snap, "next_round");
   const buttons = el.querySelectorAll("button");
-  const nextButton = Array.from(buttons).find((b) => b.textContent === "下一轮");
+  const nextButton = Array.from(buttons).find((b) =>
+    b.textContent === "下一轮"
+  );
   assertNotEquals(nextButton, undefined);
   // Clicking should not throw
   nextButton!.dispatchEvent(new Event("click", { bubbles: true }));

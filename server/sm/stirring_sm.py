@@ -18,7 +18,7 @@ Rules:
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from server.sm.card_model import Card, Suit, Rank
 from server.sm.comparator import bid_value
@@ -38,6 +38,10 @@ from server.sm import exchange_sm as exc
 _MAX_STIR_PRIORITY: int = 205
 
 
+def _empty_cards() -> list[Card]:
+    return []
+
+
 # ---- Input / Output Models ----
 
 
@@ -48,6 +52,7 @@ class StirInput(BaseModel):
 
     trump_suit: Suit | None
     trump_rank: Rank
+    initial_bid_cards: list[Card] = Field(default_factory=_empty_cards)
     declarer_player: int
     bottom_cards: list[Card]
     players_hand: list[list[Card]]
@@ -94,13 +99,11 @@ def create_stirring(input: StirInput) -> StirringState:
     cards and discard the same number back (first exchange after bid).
     current_player is set to declarer_player for the exchange.
     """
-    if input.trump_suit is not None:
-        initial_priority = bid_value(
-            _make_trump_pair(input.trump_suit, input.trump_rank),
-            input.trump_rank,
-        )
-    else:
-        initial_priority = 0
+    initial_priority = _initial_priority(
+        input.initial_bid_cards,
+        input.trump_suit,
+        input.trump_rank,
+    )
 
     # Create exchange state for the initial declarer
     declarer_hand = list(input.players_hand[input.declarer_player])
@@ -341,25 +344,36 @@ def get_stir_result(state: StirringState) -> StirResult:
     )
 
 
-def _make_trump_pair(suit: Suit, rank: Rank) -> list[Card]:
-    """Create a dummy pair of cards for priority comparison."""
-    return [
-        Card(
-            id=f"dummy-1-{suit.value}-{rank.value}",
-            suit=suit,
-            rank=rank,
-            is_joker=False,
-            is_big_joker=False,
-            points=0,
-            deck=1,
-        ),
-        Card(
-            id=f"dummy-2-{suit.value}-{rank.value}",
-            suit=suit,
-            rank=rank,
-            is_joker=False,
-            is_big_joker=False,
-            points=0,
-            deck=2,
-        ),
-    ]
+def _initial_priority(
+    initial_bid_cards: list[Card],
+    trump_suit: Suit | None,
+    trump_rank: Rank,
+) -> int:
+    """Return the priority that later stir actions must beat."""
+    if initial_bid_cards:
+        return bid_value(initial_bid_cards, trump_rank)
+    if trump_suit is None:
+        return 0
+    return bid_value(
+        _make_trump_cards(trump_suit, trump_rank, 2),
+        trump_rank,
+    )
+
+
+def _make_trump_cards(suit: Suit, rank: Rank, count: int) -> list[Card]:
+    """Create dummy trump-rank cards for priority comparison."""
+    result: list[Card] = []
+    deck_values: tuple[Literal[1], Literal[2]] = (1, 2)
+    for deck in deck_values[:count]:
+        result.append(
+            Card(
+                id=f"dummy-{deck}-{suit.value}-{rank.value}",
+                suit=suit,
+                rank=rank,
+                is_joker=False,
+                is_big_joker=False,
+                points=0,
+                deck=deck,
+            )
+        )
+    return result

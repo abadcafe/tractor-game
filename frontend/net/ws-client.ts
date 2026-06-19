@@ -4,7 +4,7 @@ import { WS_PATH } from "../config.ts";
 /**
  * WebSocket client that manages a single connection to the game server.
  * Supports automatic reconnection with exponential backoff.
- * Tracks seq from server for stale-action detection.
+ * Tracks seq from server for the action protocol.
  */
 export class WsClient {
   private _ws: WebSocket | null = null;
@@ -49,12 +49,18 @@ export class WsClient {
   }
 
   /** Send an action to the server. The seq is already included in the ClientAction. */
-  send(action: ClientAction): void {
+  send(action: ClientAction): boolean {
     if (this._ws && this._ws.readyState === WebSocket.OPEN) {
       this._ws.send(JSON.stringify(action));
-    } else {
-      console.warn("[WsClient] send() called but socket not open, action discarded:", action);
+      return true;
     }
+    console.warn("[WsClient] send() called but socket not open, action discarded:", action);
+    return false;
+  }
+
+  /** Request the current state when the client does not know the latest seq. */
+  requestState(): boolean {
+    return this.send({ seq: 0 });
   }
 
   /** Disconnect from the server and cancel any pending reconnection. */
@@ -85,6 +91,7 @@ export class WsClient {
       let settled = false;
 
       ws.addEventListener("open", () => {
+        this.requestState();
         if (!settled) {
           settled = true;
           this._reconnectAttempts = 0;

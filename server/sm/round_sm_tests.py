@@ -1,6 +1,7 @@
 """Tests for sm.round_sm module."""
 import random
 from collections import Counter
+from typing import Literal
 
 import pytest
 from server.sm.card_model import Card, Suit, Rank
@@ -10,7 +11,26 @@ from server.sm.round_sm import (
     deal_next_card, reveal, pass_stir, stir, stir_discard, play,
     is_round_complete, get_round_result, finalize_deal_bid,
 )
+from server.sm import trick_sm as trick_mod
 from server.sm.result import Ok, Rejected
+
+
+def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
+    """Create a card for deterministic round-state tests."""
+    points_map: dict[Rank, int] = {
+        Rank.FIVE: 5,
+        Rank.TEN: 10,
+        Rank.KING: 10,
+    }
+    return Card(
+        id=f"D{deck}-{suit.value}-{rank.value}",
+        suit=suit,
+        rank=rank,
+        is_joker=(suit == Suit.JOKER),
+        is_big_joker=(rank == Rank.BIG_JOKER),
+        points=points_map.get(rank, 0),
+        deck=deck,
+    )
 
 
 def _deal(state: RoundState) -> RoundState:
@@ -247,6 +267,50 @@ class TestDealBidPhase:
         assert state.phase == "STIRRING"
         assert state.declarer_player is not None
         assert state.trump_suit is not None
+
+    def test_deal_bid_single_winner_enters_stirring_with_single_priority(self) -> None:
+        """Deal-bid must preserve whether the winning bid was single or pair."""
+        bid_card = _card(Suit.SPADES, Rank.FIVE, 1)
+        over_stir_pair = [
+            _card(Suit.DIAMONDS, Rank.FIVE, 1),
+            _card(Suit.DIAMONDS, Rank.FIVE, 2),
+        ]
+        hands = [[bid_card], over_stir_pair, [], []]
+        state = create_round(RoundInput(
+            declarer_team=None, trump_rank=Rank.FIVE,
+            last_declarer_player=None,
+            team0_level=Rank.FIVE, team1_level=Rank.TWO,
+        ))
+        bid_event = BidEvent(
+            player=0,
+            cards=[bid_card],
+            kind="trump_rank",
+            suit=Suit.SPADES,
+            joker_type=None,
+            count=1,
+        )
+        assert state.deal_bid_state is not None
+        db_state = state.deal_bid_state.model_copy(update={
+            "all_dealt": True,
+            "bid_winner": bid_event,
+            "bid_events": [bid_event],
+            "players_hand": hands,
+        })
+        state = state.model_copy(update={
+            "deal_bid_state": db_state,
+            "players_hand": hands,
+        })
+
+        result = finalize_deal_bid(state)
+
+        assert isinstance(result, Ok)
+        state = result.value
+        assert state.stirring_state is not None
+        assert state.stirring_state.current_priority == 103
+        state = _complete_initial_exchange(state)
+        result = stir(state, player_index=1, cards=over_stir_pair)
+        assert isinstance(result, Ok)
+        assert result.value.trump_suit == Suit.DIAMONDS
 
     def test_deal_bid_to_stirring_no_bid(self) -> None:
         """After deal-bid with no bids, round enters STIRRING with empty trump."""
@@ -1006,3 +1070,104 @@ class TestPlayerIdentityValidation:
         discarded = ex.hand_after_pickup[:ex.count]
         result = stir_discard(state, player_index=exchanging, cards=discarded)
         assert isinstance(result, Ok)
+
+
+def test_play_leading_accepts_legal_partial_throw_not_in_enumerated_hints() -> None:
+    """Round play delegates leading validation to trick_sm, allowing partial throws."""
+    hands = [
+        [
+            _card(Suit.SPADES, Rank.ACE),
+            _card(Suit.SPADES, Rank.KING),
+            _card(Suit.SPADES, Rank.THREE),
+        ],
+        [_card(Suit.SPADES, Rank.QUEEN)],
+        [_card(Suit.HEARTS, Rank.THREE)],
+        [_card(Suit.CLUBS, Rank.THREE)],
+    ]
+    trick = trick_mod.create_trick(trick_mod.TrickInput(
+        lead_player=0,
+        hands=hands,
+        trump_suit=Suit.HEARTS,
+        trump_rank=Rank.TWO,
+        defender_points=0,
+        declarer_team=0,
+    ))
+    state = RoundState(
+        phase="PLAYING",
+        declarer_team=0,
+        declarer_player=0,
+        defender_team=1,
+        trump_suit=Suit.HEARTS,
+        trump_rank=Rank.TWO,
+        players_hand=hands,
+        bottom_cards=[],
+        defender_points=0,
+        trick_history=[],
+        deal_bid_state=None,
+        stirring_state=None,
+        trick_state=trick,
+        result=None,
+        team0_level=Rank.TWO,
+        team1_level=Rank.TWO,
+        start_player=0,
+        last_declarer_player=None,
+    )
+
+    result = play(
+        state,
+        player_index=0,
+        cards=[hands[0][0], hands[0][1]],
+    )
+
+    assert isinstance(result, Ok)
+    assert result.value.trick_state is not None
+    assert result.value.trick_state.played == 1
+    assert result.value.trick_state.failed_throw is None
+
+
+def test_play_leading_failed_throw_records_public_penalty_event() -> None:
+    """Round play advances failed throws and keeps attempted/forced cards public."""
+    hands = [
+        [_card(Suit.SPADES, Rank.KING), _card(Suit.SPADES, Rank.QUEEN)],
+        [_card(Suit.SPADES, Rank.ACE)],
+        [_card(Suit.HEARTS, Rank.THREE)],
+        [_card(Suit.CLUBS, Rank.THREE)],
+    ]
+    trick = trick_mod.create_trick(trick_mod.TrickInput(
+        lead_player=0,
+        hands=hands,
+        trump_suit=Suit.HEARTS,
+        trump_rank=Rank.TWO,
+        defender_points=0,
+        declarer_team=0,
+    ))
+    state = RoundState(
+        phase="PLAYING",
+        declarer_team=0,
+        declarer_player=0,
+        defender_team=1,
+        trump_suit=Suit.HEARTS,
+        trump_rank=Rank.TWO,
+        players_hand=hands,
+        bottom_cards=[],
+        defender_points=0,
+        trick_history=[],
+        deal_bid_state=None,
+        stirring_state=None,
+        trick_state=trick,
+        result=None,
+        team0_level=Rank.TWO,
+        team1_level=Rank.TWO,
+        start_player=0,
+        last_declarer_player=None,
+    )
+
+    result = play(state, player_index=0, cards=hands[0])
+
+    assert isinstance(result, Ok)
+    assert result.value.trick_state is not None
+    assert result.value.trick_state.slots[0].cards == [hands[0][1]]
+    assert result.value.players_hand[0] == [hands[0][0]]
+    assert result.value.trick_state.failed_throw is not None
+    assert result.value.trick_state.failed_throw.attempted_cards == hands[0]
+    assert result.value.trick_state.failed_throw.forced_cards == [hands[0][1]]

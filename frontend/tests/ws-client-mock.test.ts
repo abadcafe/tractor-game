@@ -1,11 +1,11 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { WsClient } from "../net/ws-client.ts";
-import type { ServerMessage, ClientAction } from "../core/protocol.ts";
+import type { ClientAction, ServerMessage } from "../core/protocol.ts";
 
 function makeStateMessage(): ServerMessage {
   return {
     type: "state",
-    seq: 0,
+    seq: 1,
     awaiting: null,
     state: {
       phase: "DEAL_BID",
@@ -19,6 +19,7 @@ function makeStateMessage(): ServerMessage {
       action_hints: [],
       trick: null,
       trick_history: [],
+      failed_throw: null,
       bid_events: [],
       bid_winner: null,
       awaiting_action: null,
@@ -31,6 +32,17 @@ function makeStateMessage(): ServerMessage {
       next_round_confirmed: [],
     },
   };
+}
+
+function sendStateOnRequest(
+  socket: WebSocket,
+  msg: ServerMessage = makeStateMessage(),
+): void {
+  socket.addEventListener("message", (event) => {
+    if (event.data === JSON.stringify({ seq: 0 })) {
+      socket.send(JSON.stringify(msg));
+    }
+  });
 }
 
 /** Helper: wait for a condition with polling, up to maxMs. */
@@ -54,7 +66,7 @@ Deno.test("test_connect_success", async () => {
     if (upgrade.toLowerCase() === "websocket") {
       const { socket, response } = Deno.upgradeWebSocket(req);
       socket.addEventListener("open", () => {
-        socket.send(JSON.stringify(makeStateMessage()));
+        sendStateOnRequest(socket);
       });
       return response;
     }
@@ -62,10 +74,14 @@ Deno.test("test_connect_success", async () => {
   });
 
   const addr = server.addr;
-  const port = typeof addr === "object" && "port" in addr ? addr.port : 0;
+  const port = typeof addr === "object" && "port" in addr
+    ? addr.port
+    : 0;
   const client = new WsClient();
   let received: ServerMessage | null = null;
-  client.onMessage((msg) => { received = msg; });
+  client.onMessage((msg) => {
+    received = msg;
+  });
 
   // connect takes gameId + wsHost, constructs URL internally
   await client.connect("test-id", `ws://localhost:${port}`);
@@ -78,8 +94,19 @@ Deno.test("test_connect_success", async () => {
   client.disconnect();
 });
 
+Deno.test("test_send_returns_false_when_socket_not_open", () => {
+  const client = new WsClient();
+  const action: ClientAction = {
+    type: "play",
+    seq: 1,
+    cards: ["D1-hearts-5"],
+  };
+
+  assertEquals(client.send(action), false);
+});
+
 Deno.test("test_send_action", async () => {
-  let receivedAction: string | null = null;
+  const receivedActions: string[] = [];
   let serverReady = false;
   const server = Deno.serve({ port: 0 }, (req) => {
     const upgrade = req.headers.get("upgrade") || "";
@@ -87,10 +114,14 @@ Deno.test("test_send_action", async () => {
       const { socket, response } = Deno.upgradeWebSocket(req);
       socket.addEventListener("open", () => {
         serverReady = true;
-        socket.send(JSON.stringify(makeStateMessage()));
       });
       socket.addEventListener("message", (e) => {
-        receivedAction = e.data as string;
+        if (typeof e.data === "string") {
+          receivedActions.push(e.data);
+        }
+        if (e.data === JSON.stringify({ seq: 0 })) {
+          socket.send(JSON.stringify(makeStateMessage()));
+        }
       });
       return response;
     }
@@ -98,18 +129,26 @@ Deno.test("test_send_action", async () => {
   });
 
   const addr = server.addr;
-  const port = typeof addr === "object" && "port" in addr ? addr.port : 0;
+  const port = typeof addr === "object" && "port" in addr
+    ? addr.port
+    : 0;
   const client = new WsClient();
   client.onMessage(() => {});
 
   await client.connect("test-id", `ws://localhost:${port}`);
   await waitFor(() => serverReady);
 
-  const action: ClientAction = { type: "bid", seq: 0, cards: ["D1-hearts-2"] };
-  client.send(action);
+  const action: ClientAction = {
+    type: "bid",
+    seq: 1,
+    cards: ["D1-hearts-2"],
+  };
+  assertEquals(client.send(action), true);
 
-  await waitFor(() => receivedAction !== null);
-  const parsed = JSON.parse(receivedAction!);
+  await waitFor(() => receivedActions.length >= 2);
+  const parsed = JSON.parse(
+    receivedActions[receivedActions.length - 1],
+  );
   assertEquals(parsed.type, "bid");
   assertEquals(parsed.cards, ["D1-hearts-2"]);
 
@@ -124,7 +163,7 @@ Deno.test("test_onMessage_receives_state", async () => {
     if (upgrade.toLowerCase() === "websocket") {
       const { socket, response } = Deno.upgradeWebSocket(req);
       socket.addEventListener("open", () => {
-        socket.send(JSON.stringify(msg));
+        sendStateOnRequest(socket, msg);
       });
       return response;
     }
@@ -132,11 +171,15 @@ Deno.test("test_onMessage_receives_state", async () => {
   });
 
   const addr = server.addr;
-  const port = typeof addr === "object" && "port" in addr ? addr.port : 0;
+  const port = typeof addr === "object" && "port" in addr
+    ? addr.port
+    : 0;
 
   const client = new WsClient();
   let received: ServerMessage | null = null;
-  client.onMessage((m) => { received = m; });
+  client.onMessage((m) => {
+    received = m;
+  });
 
   await client.connect("test-id", `ws://localhost:${port}`);
   await waitFor(() => received !== null);
@@ -157,8 +200,10 @@ Deno.test("test_onDisconnect_called", async () => {
     if (upgrade.toLowerCase() === "websocket") {
       const { socket, response } = Deno.upgradeWebSocket(req);
       socket.addEventListener("open", () => {
-        socket.send(JSON.stringify(makeStateMessage()));
-        setTimeout(() => socket.close(), 50);
+        sendStateOnRequest(socket);
+        socket.addEventListener("message", () => {
+          setTimeout(() => socket.close(), 50);
+        });
       });
       return response;
     }
@@ -166,12 +211,16 @@ Deno.test("test_onDisconnect_called", async () => {
   });
 
   const addr = server.addr;
-  const port = typeof addr === "object" && "port" in addr ? addr.port : 0;
+  const port = typeof addr === "object" && "port" in addr
+    ? addr.port
+    : 0;
 
   const client = new WsClient();
   let disconnected = false;
   client.onMessage(() => {});
-  client.onDisconnect(() => { disconnected = true; });
+  client.onDisconnect(() => {
+    disconnected = true;
+  });
 
   await client.connect("test-id", `ws://localhost:${port}`);
   await waitFor(() => disconnected);
@@ -190,7 +239,7 @@ Deno.test("test_connect_constructs_ws_url_from_game_id", async () => {
       requestedPath = new URL(req.url).pathname;
       const { socket, response } = Deno.upgradeWebSocket(req);
       socket.addEventListener("open", () => {
-        socket.send(JSON.stringify(makeStateMessage()));
+        sendStateOnRequest(socket);
       });
       return response;
     }
@@ -198,7 +247,9 @@ Deno.test("test_connect_constructs_ws_url_from_game_id", async () => {
   });
 
   const addr = server.addr;
-  const port = typeof addr === "object" && "port" in addr ? addr.port : 0;
+  const port = typeof addr === "object" && "port" in addr
+    ? addr.port
+    : 0;
   const client = new WsClient();
   client.onMessage(() => {});
 
@@ -222,10 +273,12 @@ Deno.test("test_reconnects_after_server_disconnect", async () => {
       const { socket, response } = Deno.upgradeWebSocket(req);
       socket.addEventListener("open", () => {
         connectionCount++;
-        socket.send(JSON.stringify(makeStateMessage()));
+        sendStateOnRequest(socket);
         // Close after first connection to trigger reconnect
         if (connectionCount === 1) {
-          setTimeout(() => socket.close(), 50);
+          socket.addEventListener("message", () => {
+            setTimeout(() => socket.close(), 50);
+          });
         }
       });
       return response;
@@ -234,10 +287,14 @@ Deno.test("test_reconnects_after_server_disconnect", async () => {
   });
 
   const addr = server.addr;
-  const port = typeof addr === "object" && "port" in addr ? addr.port : 0;
+  const port = typeof addr === "object" && "port" in addr
+    ? addr.port
+    : 0;
 
   const client = new WsClient();
-  client.onMessage((msg) => { latestReceived = msg; });
+  client.onMessage((msg) => {
+    latestReceived = msg;
+  });
   client.onDisconnect(() => {});
 
   await client.connect("test-id", `ws://localhost:${port}`);
@@ -272,7 +329,9 @@ Deno.test("test_reconnect_respects_max_retries", async () => {
   });
 
   const addr = server.addr;
-  const port = typeof addr === "object" && "port" in addr ? addr.port : 0;
+  const port = typeof addr === "object" && "port" in addr
+    ? addr.port
+    : 0;
 
   const client = new WsClient();
   client.onMessage(() => {});

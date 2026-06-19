@@ -1,4 +1,9 @@
-import type { StateSnapshot } from "../../core/types.ts";
+import type {
+  BidEvent,
+  CompletedTrick,
+  FailedThrow,
+  StateSnapshot,
+} from "../../core/types.ts";
 import { el } from "../dom.ts";
 import { SEAT_MAP } from "../../config.ts";
 import { renderTrickView } from "./trick-view.ts";
@@ -15,7 +20,9 @@ function getCurrentPlayer(snapshot: StateSnapshot): number | null {
   if (snapshot.awaiting_action === "stir" && snapshot.stirring_state) {
     return snapshot.stirring_state.current_player;
   }
-  if (snapshot.awaiting_action === "discard" && snapshot.stirring_state) {
+  if (
+    snapshot.awaiting_action === "discard" && snapshot.stirring_state
+  ) {
     return snapshot.stirring_state.exchanging_player;
   }
   return null;
@@ -28,7 +35,9 @@ function actionText(snapshot: StateSnapshot): string {
     case "stir":
       return "轮到你反主";
     case "discard":
-      return `请换底牌 ${snapshot.stirring_state?.exchange_count ?? ""} 张`.trim();
+      return `请换底牌 ${
+        snapshot.stirring_state?.exchange_count ?? ""
+      } 张`.trim();
     case "play":
       return "轮到你出牌";
     case "next_round":
@@ -40,7 +49,9 @@ function actionText(snapshot: StateSnapshot): string {
     const player = snapshot.stirring_state.phase === "EXCHANGING"
       ? snapshot.stirring_state.exchanging_player
       : snapshot.stirring_state.current_player;
-    const seat = player !== null && player !== undefined ? SEAT_MAP[player] : null;
+    const seat = player !== null && player !== undefined
+      ? SEAT_MAP[player]
+      : null;
     return seat ? `等待${seat.label}` : "等待反主";
   }
   if (snapshot.phase === "PLAYING" && snapshot.trick) {
@@ -63,7 +74,11 @@ const PHASE_LABELS: Record<string, string> = {
 /**
  * Render the game table with four player areas, trump/phase info bar, and trick view.
  */
-export function renderGameTable(snapshot: StateSnapshot): HTMLElement {
+export function renderGameTable(
+  snapshot: StateSnapshot,
+  previousTrickPreview?: CompletedTrick | null,
+  failedThrowPreview?: FailedThrow | null,
+): HTMLElement {
   const table = el("div", { class: "game-table" });
   const currentPlayer = getCurrentPlayer(snapshot);
 
@@ -81,37 +96,129 @@ export function renderGameTable(snapshot: StateSnapshot): HTMLElement {
     const area = el("div", attrs);
 
     const header = el("div", { class: "player-area__header" });
+    header.appendChild(
+      el(
+        "span",
+        { class: `player-avatar team${seat.team}` },
+        seat.label.slice(0, 1),
+      ),
+    );
     const labelClass = `player-label team${seat.team}`;
     header.appendChild(el("span", { class: labelClass }, seat.label));
     header.appendChild(
-      el("span", { class: `team-chip team${seat.team}` }, seat.team === 0 ? "我方" : "对方"),
+      el(
+        "span",
+        { class: `team-chip team${seat.team}` },
+        seat.team === 0 ? "我方" : "对方",
+      ),
     );
     area.appendChild(header);
 
-    const count = snapshot.player_hand_counts?.[i] ?? 0;
-    const countWrap = el("div", { class: "card-count-wrap" });
-    countWrap.appendChild(el("span", { class: "card-count" }, `${count}`));
-    countWrap.appendChild(el("span", { class: "card-count-label" }, "张"));
-    area.appendChild(countWrap);
+    const badges = el("div", { class: "player-badges" });
 
-    // Declarer marker
-    if (snapshot.declarer_player === i) {
-      const marker = el("span", { class: "declarer-marker" }, "庄");
-      area.appendChild(marker);
+    const bidMarker = renderBidMarker(snapshot.bid_winner, i);
+    if (bidMarker !== null) {
+      badges.appendChild(bidMarker);
     }
+
+    badges.appendChild(renderStatusBadge(snapshot, i));
+
+    if (snapshot.phase === "WAITING") {
+      const isReady = snapshot.next_round_confirmed.includes(i);
+      const status = badges.querySelector(".player-status-badge");
+      status?.appendChild(
+        el("span", { class: "status-separator" }, "·"),
+      );
+      status?.appendChild(
+        el(
+          "span",
+          { class: `ready-text ${isReady ? "ready" : "pending"}` },
+          isReady ? "OK" : "WAIT",
+        ),
+      );
+    }
+
+    area.appendChild(badges);
 
     table.appendChild(area);
   }
 
-  // Render trick view in center area (includes trump info)
-  table.appendChild(renderTrickView(snapshot));
+  table.appendChild(renderInfoBar(snapshot));
+  table.appendChild(
+    renderTableNotice(
+      snapshot,
+      previousTrickPreview,
+      failedThrowPreview,
+    ),
+  );
 
-  const status = el("div", { class: "table-status" });
-  status.appendChild(el("span", { class: "table-status__dot" }));
-  status.appendChild(el("span", { class: "table-status__text" }, actionText(snapshot)));
-  table.appendChild(status);
+  // Render trick view in center area.
+  table.appendChild(
+    renderTrickView(snapshot, previousTrickPreview, failedThrowPreview),
+  );
 
   return table;
+}
+
+function renderStatusBadge(
+  snapshot: StateSnapshot,
+  player: number,
+): HTMLElement {
+  const count = snapshot.player_hand_counts?.[player] ?? 0;
+  const badge = el("div", { class: "player-status-badge" });
+  badge.appendChild(el("span", { class: "card-count" }, `${count}张`));
+  if (snapshot.declarer_player === player) {
+    badge.appendChild(el("span", { class: "status-separator" }, "·"));
+    badge.appendChild(el("span", { class: "declarer-text" }, "庄"));
+  }
+  return badge;
+}
+
+function renderBidMarker(
+  bidWinner: BidEvent | null,
+  player: number,
+): HTMLElement | null {
+  if (bidWinner === null || bidWinner.player !== player) {
+    return null;
+  }
+  const className = bidWinner.suit === null
+    ? "player-bid-marker suit-joker"
+    : `player-bid-marker suit-${bidWinner.suit}`;
+  const marker = el("div", { class: className });
+  marker.appendChild(
+    el(
+      "span",
+      { class: "player-bid-marker__cards" },
+      bidCardsText(bidWinner),
+    ),
+  );
+  marker.appendChild(
+    el(
+      "span",
+      { class: "player-bid-marker__label" },
+      bidTrumpText(bidWinner),
+    ),
+  );
+  return marker;
+}
+
+function bidCardsText(event: BidEvent): string {
+  return event.cards.map((card) => {
+    if (card.suit === "joker") {
+      return card.rank === "BJ" ? "大王" : "小王";
+    }
+    return `${suitSymbol(card.suit)}${card.rank}`;
+  }).join(" ");
+}
+
+function bidTrumpText(event: BidEvent): string {
+  if (event.kind === "joker") {
+    return "无主";
+  }
+  if (event.suit !== null) {
+    return `${suitSymbol(event.suit)}主`;
+  }
+  return "亮主";
 }
 
 /**
@@ -125,9 +232,17 @@ export function renderInfoBar(snapshot: StateSnapshot): HTMLElement {
   trumpDiv.appendChild(el("span", {}, "主:"));
 
   if (snapshot.trump_suit) {
-    const suitSpan = el("span", { class: `trump-suit suit-${snapshot.trump_suit}` });
+    const suitSpan = el("span", {
+      class: `trump-suit suit-${snapshot.trump_suit}`,
+    });
     suitSpan.textContent = suitSymbol(snapshot.trump_suit);
     trumpDiv.appendChild(suitSpan);
+  } else if (
+    snapshot.phase === "DEAL_BID" || snapshot.phase === "STIRRING"
+  ) {
+    trumpDiv.appendChild(el("span", {}, "待定"));
+  } else {
+    trumpDiv.appendChild(el("span", {}, "无主"));
   }
 
   trumpDiv.appendChild(el("span", {}, `级牌 ${snapshot.trump_rank}`));
@@ -138,4 +253,31 @@ export function renderInfoBar(snapshot: StateSnapshot): HTMLElement {
   bar.appendChild(el("div", { class: "info-bar__phase" }, phaseLabel));
 
   return bar;
+}
+
+function renderTableNotice(
+  snapshot: StateSnapshot,
+  previousTrickPreview?: CompletedTrick | null,
+  failedThrowPreview?: FailedThrow | null,
+): HTMLElement {
+  const notice = el("div", { class: "table-notice" });
+  const primary = failedThrowPreview !== null &&
+      failedThrowPreview !== undefined
+    ? "甩牌失败，捡小"
+    : previousTrickPreview !== null &&
+        previousTrickPreview !== undefined
+    ? `上一墩 ${previousTrickPreview.points} 分`
+    : actionText(snapshot);
+
+  notice.appendChild(
+    el("div", { class: "table-notice__primary" }, primary),
+  );
+  notice.appendChild(
+    el(
+      "div",
+      { class: "table-notice__secondary" },
+      `捡分 ${snapshot.defender_points}`,
+    ),
+  );
+  return notice;
 }

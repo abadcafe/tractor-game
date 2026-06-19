@@ -1,4 +1,10 @@
-import type { StateSnapshot } from "../../core/types.ts";
+import type {
+  Card,
+  CompletedTrick,
+  FailedThrow,
+  StateSnapshot,
+  TrickSlot,
+} from "../../core/types.ts";
 import { el } from "../dom.ts";
 import { cardDisplay, suitSymbol } from "../../core/card.ts";
 import { SEAT_MAP } from "../../config.ts";
@@ -13,84 +19,170 @@ const PLAYER_TO_DIRECTION: Record<number, string> = {
 
 /**
  * Render the current trick area showing played cards with player labels,
- * plus trump/phase info bar.
+ * previous-trick preview, and failed-throw preview.
  */
-export function renderTrickView(snapshot: StateSnapshot): HTMLElement {
-  const trickView = el("div", { class: "trick-view" });
+export function renderTrickView(
+  snapshot: StateSnapshot,
+  previousTrickPreview?: CompletedTrick | null,
+  failedThrowPreview?: FailedThrow | null,
+): HTMLElement {
+  const showingFailedThrow = failedThrowPreview !== null &&
+    failedThrowPreview !== undefined;
+  const showingPrevious = !showingFailedThrow &&
+    previousTrickPreview !== null &&
+    previousTrickPreview !== undefined;
+  const trickView = el("div", {
+    class: trickViewClass(showingPrevious, showingFailedThrow),
+  });
 
-  // Always show trump info
-  const infoBar = el("div", { class: "info-bar" });
-
-  // Trump display
-  const trumpDiv = el("div", { class: "info-bar__trump" });
-  trumpDiv.appendChild(el("span", {}, "主:"));
-
-  if (snapshot.trump_suit) {
-    const suitSpan = el("span", { class: `trump-suit suit-${snapshot.trump_suit}` });
-    suitSpan.textContent = suitSymbol(snapshot.trump_suit);
-    trumpDiv.appendChild(suitSpan);
-  } else if (snapshot.phase === "DEAL_BID" || snapshot.phase === "STIRRING") {
-    trumpDiv.appendChild(el("span", {}, "待定"));
-  } else {
-    trumpDiv.appendChild(el("span", {}, "无主"));
-  }
-
-  trumpDiv.appendChild(el("span", {}, `级牌 ${snapshot.trump_rank}`));
-  infoBar.appendChild(trumpDiv);
-
-  // Phase display
-  const PHASE_LABELS: Record<string, string> = {
-    DEAL_BID: "叫牌阶段",
-    STIRRING: "反主阶段",
-    PLAYING: "出牌阶段",
-    WAITING: "结算中",
-    GAME_OVER: "游戏结束",
-  };
-  const phaseLabel = PHASE_LABELS[snapshot.phase] ?? snapshot.phase;
-  infoBar.appendChild(el("div", { class: "info-bar__phase" }, phaseLabel));
-  trickView.appendChild(infoBar);
-
-  // Render trick grid if there's a trick
-  if (snapshot.trick) {
-    const grid = el("div", { class: "trick-grid" });
-    const slotsByPlayer = new Map(snapshot.trick.slots.map((slot) => [slot.player, slot]));
-
-    for (const player of [0, 1, 2, 3]) {
-      const direction = PLAYER_TO_DIRECTION[player] ?? "north";
-      const isLead = player === snapshot.trick!.lead_player;
-      const isCurrent = player === snapshot.trick!.current_player;
-      const slot = slotsByPlayer.get(player);
-
-      let slotClass = `${slot ? "trick-slot" : "trick-placeholder-slot"} trick-slot-${direction}`;
-      if (isLead) slotClass += " lead";
-      if (isCurrent && !isLead) slotClass += " current";
-      if (!slot) slotClass += " empty";
-
-      const slotEl = el("div", { class: slotClass });
-
-      // Player label
-      const seatInfo = SEAT_MAP[player];
-      if (seatInfo && slot) {
-        slotEl.appendChild(el("span", { class: "trick-player-label" }, seatInfo.label));
-      } else if (seatInfo) {
-        slotEl.appendChild(el("span", { class: "trick-placeholder-label" }, seatInfo.label));
-      }
-
-      // Cards
-      const cardsDiv = el("div", { class: "trick-cards" });
-      for (const card of slot?.cards ?? []) {
-        cardsDiv.appendChild(el("span", { class: `trick-card suit-${card.suit}` }, cardDisplay(card)));
-      }
-      if (!slot) {
-        cardsDiv.appendChild(el("span", { class: "trick-card-placeholder" }, "等待"));
-      }
-      slotEl.appendChild(cardsDiv);
-
-      grid.appendChild(slotEl);
-    }
-
+  const grid = showingPrevious
+    ? renderCompletedTrickGrid(previousTrickPreview)
+    : renderCurrentTrickGrid(snapshot);
+  if (grid !== null) {
     trickView.appendChild(grid);
+  }
+  if (showingFailedThrow) {
+    trickView.appendChild(renderFailedThrowPreview(failedThrowPreview));
   }
 
   return trickView;
+}
+
+function trickViewClass(
+  showingPrevious: boolean,
+  showingFailedThrow: boolean,
+): string {
+  if (showingFailedThrow) {
+    return "trick-view showing-failed-throw";
+  }
+  if (showingPrevious) {
+    return "trick-view showing-previous";
+  }
+  return "trick-view";
+}
+
+function renderCurrentTrickGrid(
+  snapshot: StateSnapshot,
+): HTMLElement | null {
+  if (!snapshot.trick) {
+    return null;
+  }
+  const grid = el("div", { class: "trick-grid" });
+  const slotsByPlayer = new Map(
+    snapshot.trick.slots.map((slot) => [slot.player, slot]),
+  );
+
+  for (const player of [0, 1, 2, 3]) {
+    const direction = PLAYER_TO_DIRECTION[player] ?? "north";
+    const isLead = player === snapshot.trick.lead_player;
+    const isCurrent = player === snapshot.trick.current_player;
+    const slot = slotsByPlayer.get(player);
+
+    let slotClass = `${
+      slot ? "trick-slot" : "trick-placeholder-slot"
+    } trick-slot-${direction}`;
+    if (isLead) slotClass += " lead";
+    if (isCurrent && !isLead) slotClass += " current";
+    if (!slot) slotClass += " empty";
+
+    grid.appendChild(renderTrickSlot(player, slot, slotClass));
+  }
+
+  return grid;
+}
+
+function renderCompletedTrickGrid(trick: CompletedTrick): HTMLElement {
+  const grid = el("div", { class: "trick-grid trick-grid--previous" });
+  const slotsByPlayer = new Map(
+    trick.slots.map((slot) => [slot.player, slot]),
+  );
+
+  for (const player of [0, 1, 2, 3]) {
+    const direction = PLAYER_TO_DIRECTION[player] ?? "north";
+    const slot = slotsByPlayer.get(player);
+    let slotClass = `trick-slot trick-slot-${direction}`;
+    if (player === trick.lead_player) slotClass += " lead";
+    if (player === trick.winner) slotClass += " winner";
+    grid.appendChild(renderTrickSlot(player, slot, slotClass));
+  }
+
+  return grid;
+}
+
+function renderTrickSlot(
+  player: number,
+  slot: TrickSlot | undefined,
+  slotClass: string,
+): HTMLElement {
+  const slotEl = el("div", { class: slotClass });
+  const seatInfo = SEAT_MAP[player];
+  if (seatInfo && slot && slot.cards.length > 0) {
+    slotEl.appendChild(
+      el("span", { class: "trick-player-label" }, seatInfo.label),
+    );
+  }
+
+  const cardsDiv = el("div", { class: "trick-cards" });
+  for (const card of slot?.cards ?? []) {
+    cardsDiv.appendChild(renderTrickCard(card));
+  }
+  slotEl.appendChild(cardsDiv);
+  return slotEl;
+}
+
+function renderTrickCard(card: Card): HTMLElement {
+  return el("span", {
+    class: trickCardClass(card),
+    "data-rank": card.rank,
+    "data-suit-symbol": suitSymbol(card.suit),
+  }, cardDisplay(card));
+}
+
+function trickCardClass(card: Card): string {
+  let className = `trick-card suit-${card.suit}`;
+  if (card.rank === "5" || card.rank === "10" || card.rank === "K") {
+    className += " point-card";
+  }
+  return className;
+}
+
+function renderFailedThrowPreview(event: FailedThrow): HTMLElement {
+  const seatInfo = SEAT_MAP[event.player];
+  const playerLabel = seatInfo?.label ?? `玩家 ${event.player}`;
+  const preview = el("div", { class: "failed-throw-preview" });
+  preview.appendChild(
+    el(
+      "div",
+      { class: "failed-throw-preview__title" },
+      `${playerLabel}甩牌失败`,
+    ),
+  );
+  preview.appendChild(
+    renderFailedThrowRow("暴露", event.attempted_cards, false),
+  );
+  preview.appendChild(
+    renderFailedThrowRow("捡小", event.forced_cards, true),
+  );
+  return preview;
+}
+
+function renderFailedThrowRow(
+  label: string,
+  cards: Card[],
+  forced: boolean,
+): HTMLElement {
+  const row = el("div", {
+    class: forced
+      ? "failed-throw-preview__row failed-throw-preview__row--forced"
+      : "failed-throw-preview__row",
+  });
+  row.appendChild(
+    el("span", { class: "failed-throw-preview__label" }, label),
+  );
+  const cardsEl = el("div", { class: "failed-throw-preview__cards" });
+  for (const card of cards) {
+    cardsEl.appendChild(renderTrickCard(card));
+  }
+  row.appendChild(cardsEl);
+  return row;
 }

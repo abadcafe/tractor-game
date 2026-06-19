@@ -42,3 +42,26 @@ Deno.test("StatePlaybackQueue reports caught-up state while messages are buffere
   assertEquals(caughtUpChanges.includes(false), true);
   assertEquals(caughtUpChanges[caughtUpChanges.length - 1], true);
 });
+
+Deno.test("StatePlaybackQueue can choose cadence from the next message", async () => {
+  const rendered: number[] = [];
+  const times: number[] = [];
+  const queue = new StatePlaybackQueue<number>((message) => {
+    rendered.push(message);
+    times.push(performance.now());
+  }, {
+    minFrameMsForMessage(message) {
+      return message === 2 ? 45 : 15;
+    },
+  });
+
+  queue.enqueue(1);
+  queue.enqueue(2);
+  queue.enqueue(3);
+
+  await sleep(85);
+
+  assertEquals(rendered, [1, 2, 3]);
+  assertEquals(times[1] - times[0] >= 40, true);
+  assertEquals(times[2] - times[1] >= 10, true);
+});

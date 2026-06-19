@@ -1,9 +1,9 @@
 """Game aggregate root for the Tractor game.
 
 Wraps sm state machines, manages 4 Player instances, drives the sync
-round-robin bidding, and provides act(), snapshot(),
-is_over(), get_phase(), set_on_game_over(), get_player(), resolve_cards(),
-and current_seq interfaces.
+round-robin bidding, and provides receive(), snapshot(),
+is_over(), get_phase(), set_on_game_over(), get_player(), and
+resolve_cards() interfaces.
 
 Game lifecycle: WAITING (confirm to start) → DEAL_BID → STIRRING →
 PLAYING → WAITING (confirm for next round) → ... → GAME_OVER.
@@ -22,7 +22,7 @@ import asyncio
 import logging
 from collections import defaultdict
 from collections.abc import Sequence
-from typing import Callable
+from typing import Callable, TypeGuard
 
 from server.actions import (
     BidAction,
@@ -33,11 +33,12 @@ from server.actions import (
     SkipStirAction,
     StirAction,
 )
+from server.messages import PlayerMessage, StateMessage
 from server.player import Player
 from server.sm import deal_bid_sm, game_sm, play_rules, round_sm, stirring_sm
 from server.sm.comparator import bid_value
 from server.sm.card_model import Card, Rank, Suit
-from server.sm.result import Ok, Rejected
+from server.sm.result import Ok, Rejected, StateResult
 from server.sm.types import BidEvent
 from server.snapshot import (
     ScoringSnapshot,
@@ -65,21 +66,16 @@ class Game:
         self._players = list(players)
         self._on_game_over: Callable[['Game'], None] | None = None
         self._next_round_confirmed: set[int] = set()
-        self._seq: int = 0
+        self._seq: int = 1
         self._bid_turn: int = 0
         self._act_lock = asyncio.Lock()
-
-    @property
-    def current_seq(self) -> int:
-        """Current state sequence number."""
-        return self._seq
 
     async def _deal_one_and_push(self) -> None:
         """Deal one card and push to all players.
 
         The player who received the card sees awaiting_action='bid'
         and must act (bid or skip) before the next card is dealt.
-        Their act() calls this method again, forming the chain:
+        Their action message calls this method again, forming the chain:
         deal → bid/skip → deal → bid/skip → ...
         """
         rs = self._round_state
@@ -90,7 +86,7 @@ class Game:
             return
         if rs.deal_bid_state.all_dealt:
             # All 100 cards dealt — waiting for last recipient to act.
-            # Finalization happens in act() after their bid/skip.
+            # Finalization happens after their bid/skip.
             return
         # Remember who receives this card (deal_target before advance)
         recipient = rs.deal_bid_state.deal_target
@@ -125,21 +121,30 @@ class Game:
         self._bid_turn = 0
 
         # Deal the first card — the recipient must bid/skip before
-        # the next card is dealt. Their act() calls _deal_one_and_push.
+        # the next card is dealt. Their next action calls _deal_one_and_push.
         await self._deal_one_and_push()
 
-    async def act(self, player_index: int, seq: int, action: GameAction) -> None:
-        """Serialize player actions through the aggregate root.
+    async def receive(self, player_index: int, message: PlayerMessage) -> None:
+        """Receive one player message through the aggregate root.
 
-        AutoPlayer submits actions with create_task during state pushes. Without
-        this lock, those tasks can re-enter act() before the previous broadcast
-        has finished, producing stale cascades and out-of-order WS pushes.
+        Seq is the protocol gate. If it is unknown (0) or does not match the
+        current state seq, the server returns the current state without
+        interpreting any action fields.
         """
         async with self._act_lock:
-            await self._act_unlocked(player_index, seq, action)
+            if message.seq == 0 or message.seq != self._seq:
+                await self._send_state_to_player(player_index, error=None)
+                return
 
-    async def _act_unlocked(self, player_index: int, seq: int, action: GameAction) -> None:
-        """Unified action entry point. Dispatches based on current phase and action type.
+            parse_result = self._parse_player_message(player_index, message)
+            if isinstance(parse_result, Rejected):
+                await self._send_state_to_player(player_index, error=parse_result.reason)
+                return
+
+            await self._act_unlocked(player_index, parse_result.value)
+
+    async def _act_unlocked(self, player_index: int, action: GameAction) -> None:
+        """Dispatch an already seq-validated action by current phase.
 
         Two push paths, strictly separated:
         - State push: state changed → broadcast to all, seq increments
@@ -154,20 +159,11 @@ class Game:
         channel instead of exceptions.  Programming errors (e.g. player
         index out of range) propagate as IndexError from the underlying list.
 
-        seq validation: stale actions (seq != current _seq) are rejected
-        with a unicast error push. This prevents actions based on outdated
-        state from corrupting the game — a safety net for AutoPlayer's
-        create_task race window and any client-side stale actions.
+        Seq validation happens in receive() before action parsing.
         """
-        if seq != self._seq:
-            await self._players[player_index].on_state(
-                self, seq=self._seq, error=f"stale action: expected {self._seq}, got {seq}",
-            )
-            return
-
         rs = self._round_state
         phase = self.get_phase()
-        logger.debug("Game.act: player=%d action=%s phase=%s", player_index, type(action).__name__, phase)
+        logger.debug("Game.receive: player=%d action=%s phase=%s", player_index, type(action).__name__, phase)
 
         error_msg: str | None = None
 
@@ -190,7 +186,7 @@ class Game:
                 # Bid rejected — unicast error, no state change, no turn advance.
                 # The player must re-decide (choose different cards or pass).
                 self._round_state = rs
-                await self._players[player_index].on_state(self, seq=self._seq, error=error_msg)
+                await self._send_state_to_player(player_index, error=error_msg)
                 return
             # Bid succeeded — advance turn
             self._bid_turn = (self._bid_turn + 1) % 4
@@ -212,7 +208,7 @@ class Game:
             if player_index != self._bid_turn:
                 error_msg = f"不是你的叫牌回合（当前叫牌者：{self._bid_turn}）"
                 self._round_state = rs
-                await self._players[player_index].on_state(self, seq=self._seq, error=error_msg)
+                await self._send_state_to_player(player_index, error=error_msg)
                 return
             # Skip succeeded — advance turn
             self._bid_turn = (self._bid_turn + 1) % 4
@@ -328,7 +324,7 @@ class Game:
         if error_msg:
             # Unicast error to acting player. Error pushes do NOT
             # increment _seq because the game state has not changed.
-            await self._players[player_index].on_state(self, seq=self._seq, error=error_msg)
+            await self._send_state_to_player(player_index, error=error_msg)
         else:
             await self._push_state_to_all()
 
@@ -414,6 +410,7 @@ class Game:
                 defender_points=0,
                 trick=None,
                 trick_history=[],
+                failed_throw=None,
                 action_hints=[],
                 awaiting_action=awaiting_action,
                 scoring=None,
@@ -492,6 +489,7 @@ class Game:
                 slots=[TrickSlotSnapshot(player=slot.player, cards=slot.cards) for slot in ts.slots],
                 current_player=ts.cur,
             )
+        failed_throw = rs.trick_state.failed_throw if rs.phase == "PLAYING" and rs.trick_state is not None else None
 
         # bid_events and bid_winner
         bid_events: list[BidEvent] = []
@@ -541,6 +539,7 @@ class Game:
             defender_points=rs.defender_points,
             trick=trick,
             trick_history=list(rs.trick_history),
+            failed_throw=failed_throw,
             action_hints=action_hints,
             awaiting_action=awaiting_action,
             scoring=scoring_snap,
@@ -640,6 +639,58 @@ class Game:
         """
         return self._players[index]
 
+    def _parse_player_message(self, player_index: int, message: PlayerMessage) -> StateResult[GameAction]:
+        raw = message.raw
+        t = raw.get("type")
+        action_type: str | None = t if isinstance(t, str) else None
+        if action_type is None:
+            return Rejected(reason="missing action type")
+
+        pass_val_raw = raw.get("pass", False)
+        is_pass = isinstance(pass_val_raw, bool) and pass_val_raw
+
+        if action_type == "bid":
+            if is_pass:
+                return Ok(value=SkipBidAction())
+            return self._parse_card_action(player_index, raw.get("cards"), action_type)
+
+        if action_type == "stir":
+            if is_pass:
+                return Ok(value=SkipStirAction())
+            return self._parse_card_action(player_index, raw.get("cards"), action_type)
+
+        if action_type in ("discard", "play"):
+            return self._parse_card_action(player_index, raw.get("cards"), action_type)
+
+        if action_type == "next_round":
+            return Ok(value=NextRoundAction())
+
+        return Rejected(reason=f"unknown action type: {action_type}")
+
+    def _parse_card_action(
+        self,
+        player_index: int,
+        cards_raw: object,
+        action_type: str,
+    ) -> StateResult[GameAction]:
+        card_ids_result = _extract_card_ids(cards_raw)
+        if isinstance(card_ids_result, Rejected):
+            return card_ids_result
+        resolved_result = self.resolve_cards(player_index, card_ids_result.value)
+        if isinstance(resolved_result, Rejected):
+            return resolved_result
+
+        cards = resolved_result.value
+        if action_type == "bid":
+            return Ok(value=BidAction(cards=cards, count=len(cards)))
+        if action_type == "stir":
+            return Ok(value=StirAction(cards=cards))
+        if action_type == "discard":
+            return Ok(value=DiscardAction(cards=cards))
+        if action_type == "play":
+            return Ok(value=PlayAction(cards=cards))
+        return Rejected(reason=f"unknown card action type: {action_type}")
+
     def resolve_cards(self, player_index: int, card_ids: list[str]) -> Ok[list[Card]] | Rejected:
         """Resolve card ID strings to Card objects from the player's hand.
 
@@ -692,8 +743,47 @@ class Game:
             count=action.count,
         ))
 
+    def _state_message_for(self, player_index: int, error: str | None = None) -> StateMessage:
+        snapshot = self.snapshot(player_index)
+        return StateMessage(
+            seq=self._seq,
+            awaiting=snapshot.awaiting_action,
+            state=snapshot,
+            error=error,
+        )
+
+    async def _send_state_to_player(self, player_index: int, error: str | None = None) -> None:
+        await self._players[player_index].on_state(self, self._state_message_for(player_index, error=error))
+
     async def _push_state_to_all(self) -> None:
         """Push state to all players."""
         self._seq += 1
         for i in range(len(self._players)):
-            await self._players[i].on_state(self, seq=self._seq, error=None)
+            await self._players[i].on_state(self, self._state_message_for(i, error=None))
+
+
+def _is_str_dict(val: object) -> TypeGuard[dict[str, object]]:
+    return isinstance(val, dict)
+
+
+def _is_obj_list(val: object) -> TypeGuard[list[object]]:
+    return isinstance(val, list)
+
+
+def _extract_card_ids(cards_val: object) -> StateResult[list[str]]:
+    """Extract card IDs after seq validation has accepted the message."""
+    if not _is_obj_list(cards_val):
+        return Ok(value=[])
+    ids: list[str] = []
+    for item in cards_val:
+        if isinstance(item, str):
+            ids.append(item)
+        elif _is_str_dict(item):
+            id_val = item.get("id")
+            if isinstance(id_val, str):
+                ids.append(id_val)
+            else:
+                return Rejected(reason=f"Invalid card format: missing 'id' in {item}")
+        else:
+            return Rejected(reason=f"Invalid card format: {item}")
+    return Ok(value=ids)

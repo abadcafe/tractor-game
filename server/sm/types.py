@@ -88,6 +88,16 @@ class StirAction(BaseModel):
         return self
 
 
+class FailedThrow(BaseModel):
+    """Public event for a failed throw that forced a smaller sub-play."""
+
+    model_config = ConfigDict(frozen=True)
+
+    player: int
+    attempted_cards: list[Card]
+    forced_cards: list[Card]
+
+
 # ---- Player Model ----
 
 

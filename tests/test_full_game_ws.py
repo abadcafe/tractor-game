@@ -173,37 +173,37 @@ class WsGameDriver:
         self._client = sync_client
         self._ws: WebSocketTestSession | None = None
         self._ws_cm: WebSocketTestSession | None = None  # context manager for websocket_connect
-        self._current_seq: int = 0
+        self._known_seq: int = 0
         self.last_error: str | None = None
         self._game_id: str | None = None
         self._last_state_msg: dict[str, object] | None = None
 
     @property
-    def current_seq(self) -> int:
+    def known_seq(self) -> int:
         """Current state sequence number (read-only public accessor)."""
-        return self._current_seq
+        return self._known_seq
 
     def sync_seq(self, seq: int) -> None:
-        """Update _current_seq monotonically.
+        """Update _known_seq monotonically.
 
         Public accessor for seq synchronization from helper functions
         that need to keep the driver's seq in sync with server pushes.
         WebSocket buffers may still contain older state pushes; those must
         not move the client seq backwards or the next action becomes stale.
         """
-        if seq > self._current_seq:
-            self._current_seq = seq
+        if seq > self._known_seq:
+            self._known_seq = seq
 
     def connect(self, game_id: str) -> None:
         """Connect to a game via WebSocket.
 
         Does NOT automatically receive initial state.
-        Client must send an action with seq=0 to get the initial state.
+        Client must send a seq=0 state request to get the initial state.
         """
         self._game_id = game_id
         self._ws_cm = self._client.websocket_connect(f"/game/{game_id}")
         self._ws = self._ws_cm.__enter__()
-        self._current_seq = 0
+        self._known_seq = 0
         self.last_error = None
         print(f"  [WsGameDriver] connected to game {game_id}, seq=0", flush=True)
 
@@ -229,7 +229,7 @@ class WsGameDriver:
 
     def send_action(self, action: dict[str, object]) -> None:
         """Send an action with the current seq number."""
-        self.send_action_with_seq(action, self._current_seq)
+        self.send_action_with_seq(action, self._known_seq)
 
     def send_action_with_seq(self, action: dict[str, object], seq: int) -> None:
         """Send an action with an explicit sequence number."""
@@ -288,12 +288,12 @@ class WsGameDriver:
     def debug_context(self, label: str) -> str:
         """Return concise context for timeout failures."""
         if self._last_state_msg is None:
-            return f"{label}: no state received yet; current_seq={self._current_seq}"
+            return f"{label}: no state received yet; known_seq={self._known_seq}"
         state = _as_dict_or_none(self._last_state_msg.get("state"))
         if state is None:
-            return f"{label}: last state payload missing; current_seq={self._current_seq}"
+            return f"{label}: last state payload missing; known_seq={self._known_seq}"
         parts = [
-            f"{label}: current_seq={self._current_seq}",
+            f"{label}: known_seq={self._known_seq}",
             f"last_seq={self._last_state_msg.get('seq')}",
             f"phase={state.get('phase')}",
             f"awaiting={self._last_state_msg.get('awaiting')}",
@@ -319,7 +319,7 @@ class WsGameDriver:
     def receive_msg_safe(self) -> dict[str, object]:
         """Receive a message from the server.
 
-        Updates _current_seq if the message is a state message.
+        Updates _known_seq if the message is a state message.
         """
         msg = self.receive_msg()
         if msg.get("type") == "state":
@@ -335,11 +335,21 @@ class WsGameDriver:
         """
         return self.receive_msg_safe()
 
+    def request_state(self) -> dict[str, object]:
+        """Request the current state with seq=0."""
+        if self._ws is None:
+            raise RuntimeError("Not connected")
+        self._ws.send_json({"seq": 0})
+        msg = self.receive_msg(timeout=5)
+        assert msg.get("type") == "state"
+        self.sync_seq(_as_int(msg["seq"]))
+        return msg
+
     def drain_pending(self) -> None:
         """Drain any pending messages from the WS buffer.
 
         Reads messages until a read would block (no more messages available).
-        Updates _current_seq for each state message. This ensures the WS
+        Updates _known_seq for each state message. This ensures the WS
         buffer is clean before sending an action, so do_action doesn't
         read stale AutoPlayer cascade messages instead of our action's
         response.
@@ -351,14 +361,14 @@ class WsGameDriver:
         # AutoPlayer cascade messages have been consumed. If any remain,
         # it's because they arrived between our last read and now.
         # We can't detect this without a timeout, so this is a no-op.
-        # The do_action retry mechanism handles stale messages.
+        # The do_action path ignores same-seq sync responses.
         pass
 
     def do_action(self, action: dict[str, object]) -> dict[str, object] | None:
         """Send action and wait for response.
 
         Returns the response message dict on success, None on failure.
-        Updates _current_seq on success. Sets last_error on failure.
+        Updates _known_seq on success. Sets last_error on failure.
 
         Sends exactly once. This test driver only calls do_action after it
         has drained to the human player's turn, so automatic resends create
@@ -369,16 +379,16 @@ class WsGameDriver:
             raise RuntimeError("Not connected")
         deadline = time.monotonic() + 5
         self.last_error = None
-        seq_before = self._current_seq
+        seq_before = self._known_seq
         self.send_action(action)
         while True:
             if time.monotonic() > deadline:
-                print(f"  [do_action] TIMEOUT after 5s, seq stuck at {self._current_seq}", flush=True)
+                print(f"  [do_action] TIMEOUT after 5s, seq stuck at {self._known_seq}", flush=True)
                 return None
             try:
                 msg = self.receive_msg(verbose=False, timeout=max(0.001, deadline - time.monotonic()))
             except WsReceiveTimeout:
-                print(f"  [do_action] TIMEOUT waiting for WS message, seq stuck at {self._current_seq}", flush=True)
+                print(f"  [do_action] TIMEOUT waiting for WS message, seq stuck at {self._known_seq}", flush=True)
                 return None
             except Exception as e:
                 print(f"  [WsGameDriver] do_action: receive error: {type(e).__name__}: {e}", flush=True)
@@ -390,7 +400,7 @@ class WsGameDriver:
             error = msg.get("error")
             if error is not None:
                 self.last_error = _as_str(error)
-                print(f"  [do_action] rejected: error={self.last_error} seq={self._current_seq}", flush=True)
+                print(f"  [do_action] rejected: error={self.last_error} seq={self._known_seq}", flush=True)
                 return None
             if msg_seq > seq_before:
                 return msg
@@ -428,7 +438,7 @@ class WsGameDriver:
             if msg.get("type") == "state":
                 self.sync_seq(_as_int(msg["seq"]))
                 if msg.get("awaiting") == value:
-                    print(f"  [WsGameDriver] wait_for_awaiting: found {value} seq={self._current_seq}", flush=True)
+                    print(f"  [WsGameDriver] wait_for_awaiting: found {value} seq={self._known_seq}", flush=True)
                     return msg
         raise TimeoutError(f"awaiting='{value}' not reached within {timeout}s")
 
@@ -446,14 +456,13 @@ class WsGameDriver:
             raise RuntimeError("Not connected")
 
         deadline = time.monotonic() + 5
-        attempts = 0
         self.last_error = None
         self.send_action({"type": "stir", "pass": True})
         while time.monotonic() < deadline:
             try:
                 msg = self.receive_msg(verbose=False, timeout=max(0.001, deadline - time.monotonic()))
             except WsReceiveTimeout:
-                print(f"  [do_stir_pass] TIMEOUT waiting for WS message, seq stuck at {self._current_seq}", flush=True)
+                print(f"  [do_stir_pass] TIMEOUT waiting for WS message, seq stuck at {self._known_seq}", flush=True)
                 return None
             if msg.get("type") != "state":
                 continue
@@ -462,17 +471,13 @@ class WsGameDriver:
             error = msg.get("error")
             if error is not None:
                 self.last_error = _as_str(error)
-                if self.last_error.startswith("stale action:") and attempts < 4:
-                    attempts += 1
-                    self.send_action({"type": "stir", "pass": True})
-                    continue
                 return None
 
             state = _as_dict(msg["state"])
             if state.get("phase") != "STIRRING" or msg.get("awaiting") != "stir":
                 return msg
 
-        print(f"  [do_stir_pass] TIMEOUT after 5s, seq stuck at {self._current_seq}", flush=True)
+        print(f"  [do_stir_pass] TIMEOUT after 5s, seq stuck at {self._known_seq}", flush=True)
         return None
 
     def do_stir(self, card_ids: list[str]) -> dict[str, object] | None:
@@ -500,7 +505,7 @@ class WsGameDriver:
             try:
                 msg = self.receive_msg(verbose=False, timeout=max(0.001, deadline - time.monotonic()))
             except WsReceiveTimeout:
-                print(f"  [do_next_round] TIMEOUT waiting for WS message, seq stuck at {self._current_seq}", flush=True)
+                print(f"  [do_next_round] TIMEOUT waiting for WS message, seq stuck at {self._known_seq}", flush=True)
                 return None
             if msg.get("type") != "state":
                 continue
@@ -509,10 +514,6 @@ class WsGameDriver:
             error = msg.get("error")
             if error is not None:
                 self.last_error = _as_str(error)
-                if self.last_error.startswith("stale action:") and attempts < 4:
-                    attempts += 1
-                    self.send_action({"type": "next_round"})
-                    continue
                 return None
 
             state = _as_dict(msg["state"])
@@ -521,8 +522,12 @@ class WsGameDriver:
             confirmed = _as_list(state.get("next_round_confirmed", []))
             if 3 in confirmed:
                 return msg
+            if msg.get("awaiting") == "next_round" and attempts < 4:
+                attempts += 1
+                self.send_action({"type": "next_round"})
+                continue
 
-        print(f"  [do_next_round] TIMEOUT after 5s, seq stuck at {self._current_seq}", flush=True)
+        print(f"  [do_next_round] TIMEOUT after 5s, seq stuck at {self._known_seq}", flush=True)
         return None
 
 
@@ -571,52 +576,23 @@ def test_list_games(sync_client: SyncServerClient) -> None:
 
 
 def test_delete_game_closes_ws(sync_client: SyncServerClient) -> None:
-    """DELETE a game while WS connected: receive final state push, then WS closes."""
+    """DELETE a game while WS connected closes the connection without pushing state."""
     resp = sync_client.post("/api/game")
     data = resp.json()
     assert _is_dict(data)
     game_id = _as_str(data["game_id"])
 
-    # Step 1: Connect, get initial state, delete, verify final push.
-    # Step 2: Exit the context manager — its __exit__ may raise RuntimeError
-    # because the server already closed the WS during delete.
-    # We separate these so the test assertions are NOT swallowed by the
-    # RuntimeError from __exit__.
-    final_state_pushed = False
-    try:
-        with sync_client.websocket_connect(f"/game/{game_id}") as ws:
-            # Get initial state
-            ws.send_json({"type": "next_round", "seq": 0})
-            raw = ws.receive_json()
-            data_msg = _as_dict(raw)
-            assert data_msg["type"] == "state"
+    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        ws.send_json({"seq": 0})
+        raw = ws.receive_json()
+        data_msg = _as_dict(raw)
+        assert data_msg["type"] == "state"
 
-            # Delete the game (while WS is still connected)
-            resp = sync_client.delete(f"/api/game/{game_id}")
-            assert resp.status_code == 200
+        resp = sync_client.delete(f"/api/game/{game_id}")
+        assert resp.status_code == 200
 
-            # Should receive a final state push before close
-            final_raw = ws.receive_json()
-            final = _as_dict(final_raw)
-            assert final["type"] == "state"
-            final_state = _as_dict_or_none(final.get("state"))
-            assert final_state is not None
-            assert "phase" in final_state
-            final_state_pushed = True
-
-            # Verify WS actually closes after final state push
-            with pytest.raises((WebSocketDisconnect, Exception)):
-                # Try to receive another message -- should fail because WS is closed
-                ws.send_json({"type": "next_round", "seq": 0})
-                ws.receive_json()
-    except RuntimeError:
-        # Server-initiated close during delete causes __exit__ to fail
-        # when it tries to close the already-closed WS. This is expected.
-        # The assertion for final_state_pushed above ensures the test
-        # actually verified the final state push before this point.
-        pass
-
-    assert final_state_pushed, "Final state push was not received before WS closed"
+        with pytest.raises(_WS_ERRORS):
+            ws.receive_json()
 
 
 def test_connect_nonexistent_game(sync_client: SyncServerClient) -> None:
@@ -636,14 +612,14 @@ def test_connection_takeover(sync_client: SyncServerClient) -> None:
 
     # First connection: get state
     with sync_client.websocket_connect(f"/game/{game_id}") as ws1:
-        ws1.send_json({"type": "next_round", "seq": 0})
+        ws1.send_json({"seq": 0})
         raw1 = ws1.receive_json()
         data1 = _as_dict(raw1)
         assert data1["type"] == "state"
 
         # Second connection (should kick first)
         with sync_client.websocket_connect(f"/game/{game_id}") as ws2:
-            ws2.send_json({"type": "next_round", "seq": 0})
+            ws2.send_json({"seq": 0})
             raw2 = ws2.receive_json()
             data2 = _as_dict(raw2)
             assert data2["type"] == "state"
@@ -665,15 +641,15 @@ def test_reconnect_resumes_game(sync_client: SyncServerClient) -> None:
 
     # First connection: get state
     with sync_client.websocket_connect(f"/game/{game_id}") as ws1:
-        ws1.send_json({"type": "next_round", "seq": 0})
+        ws1.send_json({"seq": 0})
         raw1 = ws1.receive_json()
         data1 = _as_dict(raw1)
         assert data1["type"] == "state"
         seq1 = _as_int(data1["seq"])
 
-    # Reconnect: send seq=0 -> mismatch -> get current state
+    # Reconnect: send seq=0 to request the current state.
     with sync_client.websocket_connect(f"/game/{game_id}") as ws2:
-        ws2.send_json({"type": "next_round", "seq": 0})
+        ws2.send_json({"seq": 0})
         raw2 = ws2.receive_json()
         data2 = _as_dict(raw2)
         assert data2["type"] == "state"
@@ -683,15 +659,15 @@ def test_reconnect_resumes_game(sync_client: SyncServerClient) -> None:
         assert "phase" in state2
 
         # Verify subsequent action works with the correct seq from received state
-        current_seq = _as_int(data2["seq"])
-        ws2.send_json({"type": "next_round", "seq": current_seq})
+        known_seq = _as_int(data2["seq"])
+        ws2.send_json({"type": "next_round", "seq": known_seq})
         raw3 = ws2.receive_json()
         data3 = _as_dict(raw3)
         assert data3["type"] == "state"
         # Action with correct seq should either succeed (state changes) or
         # be accepted (no seq mismatch error). Either way, seq should advance
         # or stay the same (if no state change occurred).
-        assert _as_int(data3["seq"]) >= current_seq
+        assert _as_int(data3["seq"]) >= known_seq
 
 
 # ---- Scoring Helpers ----
@@ -788,7 +764,7 @@ def _recv_state(
     Returns (state_dict, raw_msg). Prints phase/awaiting for debugging.
     Skips non-state messages.
 
-    NOTE: Does NOT update driver._current_seq. See _recv_until_our_turn
+    NOTE: Does NOT update driver._known_seq. See _recv_until_our_turn
     for the rationale.
     """
     deadline = time.monotonic() + 5
@@ -833,7 +809,7 @@ def _recv_until_our_turn(
 
     Uses verbose=False for high-volume drains to reduce logging overhead.
 
-    Updates driver._current_seq on every state message. This gives
+    Updates driver._known_seq on every state message. This gives
     do_action a more recent seq to start with, reducing seq mismatch
     retries. The do_action retry mechanism handles any remaining
     seq drift from AutoPlayer cascade.
@@ -855,7 +831,7 @@ def _recv_until_our_turn(
         if msg.get("type") == "state":
             msg_seq = _as_int(msg["seq"])
             driver.sync_seq(msg_seq)
-            if msg_seq < driver.current_seq:
+            if msg_seq < driver.known_seq:
                 continue
             state = _as_dict(msg["state"])
             count += 1
@@ -1069,29 +1045,30 @@ def _send_wrong_actions(
     label: str,
     correct_action: dict[str, object],
 ) -> None:
-    """Send 1-3 bad requests before the real action and assert rejection.
+    """Send 1-3 bad requests before the real action and assert protocol behavior.
 
     The final injected request uses the exact correct payload with an old
-    seq when possible. That verifies stale-seq handling at the protocol
-    layer instead of being rejected earlier by action parsing.
+    seq when possible. That verifies seq-mismatch handling at the protocol
+    layer: the server returns current state and ignores action fields.
     """
-    count = 1 + (driver.current_seq % 3)
+    count = 1 + (driver.known_seq % 3)
     used_payloads: set[str] = set()
     for i in range(count):
-        seq_before = driver.current_seq
+        seq_before = driver.known_seq
         if i == count - 1 and seq_before > 0:
             wrong_action = correct_action
             assert _wrong_payload_key(wrong_action) not in used_payloads, (
-                f"{label}: duplicate wrong payload before stale injection: {wrong_action}"
+                f"{label}: duplicate wrong payload before seq-mismatch injection: {wrong_action}"
             )
             used_payloads.add(_wrong_payload_key(wrong_action))
             driver.send_action_with_seq(wrong_action, seq_before - 1)
+            _expect_seq_mismatch_response(driver, label, wrong_action, seq_before)
         else:
             pool_index = (seq_before + i) % len(_WRONG_ACTION_POOL)
             wrong_action = _pick_distinct_wrong_action(pool_index, used_payloads)
             used_payloads.add(_wrong_payload_key(wrong_action))
             driver.send_action(wrong_action)
-        _expect_error_response(driver, label, wrong_action, seq_before)
+            _expect_error_response(driver, label, wrong_action, seq_before)
 
 
 def _expect_error_response(
@@ -1100,6 +1077,12 @@ def _expect_error_response(
     wrong_action: dict[str, object],
     seq_before: int,
 ) -> None:
+    """Expect either parser rejection or a seq-mismatch state response.
+
+    AutoPlayers may advance the game between send and receive. If that happens,
+    the server must ignore the invalid action fields and return state without
+    error, which is valid protocol behavior.
+    """
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
         try:
@@ -1112,8 +1095,38 @@ def _expect_error_response(
         driver.sync_seq(msg_seq)
         if msg.get("error") is not None:
             return
+        if msg_seq > seq_before:
+            return
     raise TimeoutError(
         f"{label}: wrong action was not rejected within 3s; "
+        f"action={wrong_action} seq_before={seq_before}; {driver.debug_context(label)}"
+    )
+
+
+def _expect_seq_mismatch_response(
+    driver: WsGameDriver,
+    label: str,
+    wrong_action: dict[str, object],
+    seq_before: int,
+) -> None:
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        try:
+            msg = driver.receive_msg(verbose=False, timeout=max(0.001, deadline - time.monotonic()))
+        except WsReceiveTimeout as exc:
+            raise TimeoutError(driver.debug_context(f"{label}: seq-mismatch timeout")) from exc
+        if msg.get("type") != "state":
+            continue
+        msg_seq = _as_int(msg["seq"])
+        driver.sync_seq(msg_seq)
+        assert msg.get("error") is None, (
+            f"{label}: seq mismatch should not return error; "
+            f"action={wrong_action} seq_before={seq_before}; msg={msg}"
+        )
+        assert msg_seq >= seq_before
+        return
+    raise TimeoutError(
+        f"{label}: seq-mismatch action did not return state within 3s; "
         f"action={wrong_action} seq_before={seq_before}; {driver.debug_context(label)}"
     )
 
@@ -1623,19 +1636,6 @@ def _play_waiting(
         print(f"  [R{round_count}:WAITING] human confirm next_round", flush=True)
         _send_wrong_actions(driver, f"R{round_count}:WAITING before next_round", {"type": "next_round"})
         response = driver.do_next_round()
-        retry_count = 0
-        while (
-            response is None
-            and driver.last_error is not None
-            and driver.last_error.startswith("stale action:")
-            and retry_count < 4
-        ):
-            retry_count += 1
-            print(
-                f"  [R{round_count}:WAITING] retry next_round after stale seq: {driver.last_error}",
-                flush=True,
-            )
-            response = driver.do_next_round()
         if response is not None:
             state = _as_dict(response["state"])
             msg = response
@@ -1671,35 +1671,32 @@ def _verify_game_over(
         assert state["team0_level"] == expected_t0
         assert state["team1_level"] == expected_t1
 
-    # After GAME_OVER, the server's handle_connection exits. In the
-    # TestClient model, the WS send buffer still accepts messages but
-    # no one reads them. If we call receive_msg(), it will hang forever
-    # waiting for a server response that never comes.
-    # So we just close the driver immediately — we've already verified
-    # the GAME_OVER state above.
+    # Close the current connection and verify a fresh connection can
+    # recover the finished state with seq=0.
     print("  closing driver (GAME_OVER)", flush=True)
     driver.close()
     print("  driver closed", flush=True)
 
-    # Verify game is removed from registry after GAME_OVER
+    # Verify game remains in registry after GAME_OVER so a crashed client
+    # can reconnect and request the current state.
     print("  checking registry...", flush=True)
     resp = sync_client.get("/api/game")
     games_raw = resp.json()["games"]
     assert _is_list_of_dict(games_raw)
     game_ids = [g["game_id"] for g in games_raw]
-    assert game_id not in game_ids, (
-        f"Game {game_id} should be removed from registry after GAME_OVER"
+    assert game_id in game_ids, (
+        f"Game {game_id} should remain in registry after GAME_OVER"
     )
-    print("  game removed from registry", flush=True)
+    print("  game retained in registry", flush=True)
 
-    # Verify new connection to finished game returns close code 4404
-    print("  checking 4404 on reconnect...", flush=True)
-    with pytest.raises(WebSocketDisconnect) as exc_info:
-        with sync_client.websocket_connect(f"/game/{game_id}") as ws:
-            ws.receive_json()
-    assert exc_info.value.code == 4404, (
-        f"Expected close code 4404 for finished game, got {exc_info.value.code}"
-    )
+    print("  checking seq=0 reconnect...", flush=True)
+    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        ws.send_json({"seq": 0})
+        raw = ws.receive_json()
+        msg = _as_dict(raw)
+        assert msg["type"] == "state"
+        reconnect_state = _as_dict(msg["state"])
+        assert reconnect_state["phase"] == "GAME_OVER"
     print("  GAME_OVER verification complete", flush=True)
 
 
@@ -1729,29 +1726,27 @@ def test_full_game(sync_client: SyncServerClient) -> None:
         driver.connect(game_id)
         print(">>> connected <<<", flush=True)
 
-        # Game starts in WAITING phase. AutoPlayers (0-2) confirm automatically
-        # via run(). When we connect with seq=0 and send next_round,
-        # do_action handles seq mismatch internally: it gets the current seq (4,
-        # from 4 AutoPlayer confirmations), retries, and our next_round succeeds
-        # (we're the 4th confirmer). This starts the game → DEAL_BID.
-        #
-        # The returned message is the first state after our confirmation.
+        # Game starts in WAITING phase. AutoPlayers (0-2) request state with
+        # seq=0 and confirm automatically via run(). The human client must
+        # first request state with seq=0, then send next_round with the returned
+        # seq. seq=0 never carries an action.
         # AutoPlayer cascade may have already advanced the game further, so we
         # need to drain until we know the current phase.
+        print(">>> requesting initial state <<<", flush=True)
+        sync_msg = driver.request_state()
+        sync_state = _as_dict(sync_msg["state"])
+        print(
+            f"  initial sync: phase={sync_state.get('phase')} awaiting={sync_msg.get('awaiting')} seq={driver.known_seq}",
+            flush=True,
+        )
+
         print(">>> sending initial next_round <<<", flush=True)
-        result = driver.do_action({"type": "next_round"})
-        if result is not None:
-            # Our next_round succeeded (AutoPlayers already confirmed, we were
-            # the 4th). Game has started. result is the state push.
-            print(f"  next_round succeeded immediately, seq={driver.current_seq}", flush=True)
+        if sync_msg.get("awaiting") == "next_round":
+            result = driver.do_next_round()
+            assert result is not None, f"next_round should succeed with synced seq: error={driver.last_error}"
+            print(f"  next_round succeeded, seq={driver.known_seq}", flush=True)
         else:
-            # Seq mismatch but retry exhausted, or action rejected for other
-            # reason. Check last_error for details.
-            print(f"  next_round failed, error={driver.last_error}, seq={driver.current_seq}", flush=True)
-            # Send next_round again with the updated seq
-            result = driver.do_action({"type": "next_round"})
-            assert result is not None, f"next_round should succeed with correct seq: error={driver.last_error}"
-            print(f"  next_round succeeded on second try, seq={driver.current_seq}", flush=True)
+            result = sync_msg
 
         # Drain any AutoPlayer cascade pushes until we reach a stable state
         # where we know what phase we're in.
@@ -1760,7 +1755,7 @@ def test_full_game(sync_client: SyncServerClient) -> None:
         while True:
             cur_phase = state.get("phase", "?")
             cur_awaiting = msg.get("awaiting")
-            print(f"  initial state: phase={cur_phase} awaiting={cur_awaiting} seq={driver.current_seq}", flush=True)
+            print(f"  initial state: phase={cur_phase} awaiting={cur_awaiting} seq={driver.known_seq}", flush=True)
             if cur_phase in ("DEAL_BID", "STIRRING", "PLAYING", "GAME_OVER"):
                 break
             # Still in WAITING or transitional state — drain more

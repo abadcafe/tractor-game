@@ -116,6 +116,32 @@ class TestPlayLead:
         state = result.value
         assert state.phase == "FOLLOWING"
 
+    def test_play_failed_throw_forces_smallest_failed_subplay(self) -> None:
+        """Failed throw advances state, exposes attempted cards, and plays forced cards."""
+        hands = [
+            [_card(Suit.SPADES, Rank.KING), _card(Suit.SPADES, Rank.QUEEN)],
+            [_card(Suit.SPADES, Rank.ACE)],
+            [_card(Suit.HEARTS, Rank.THREE)],
+            [_card(Suit.CLUBS, Rank.THREE)],
+        ]
+        state = create_trick(TrickInput(
+            lead_player=0, hands=hands,
+            trump_suit=Suit.HEARTS, trump_rank=Rank.TWO,
+            defender_points=0, declarer_team=0,
+        ))
+
+        result = play(state, player=0, cards=hands[0])
+
+        assert isinstance(result, Ok)
+        state = result.value
+        assert state.phase == "FOLLOWING"
+        assert state.slots[0].cards == [hands[0][1]]
+        assert state.hands[0] == [hands[0][0]]
+        assert state.failed_throw is not None
+        assert state.failed_throw.player == 0
+        assert state.failed_throw.attempted_cards == hands[0]
+        assert state.failed_throw.forced_cards == [hands[0][1]]
+
 
 class TestPlayFollow:
     def test_play_follow_single(self) -> None:
@@ -603,6 +629,27 @@ class TestPlayFollowTractorSuit:
 
 
 class TestPlayResolveNewComparison:
+    def test_resolve_equal_cards_keeps_earlier_play_order_winner(self) -> None:
+        """Equal cards tie; the earlier play in the trick remains winning."""
+        hands = [
+            [_card(Suit.DIAMONDS, Rank.THREE, 1)],
+            [_card(Suit.DIAMONDS, Rank.FOUR, 1)],
+            [_card(Suit.DIAMONDS, Rank.KING, 2)],
+            [_card(Suit.DIAMONDS, Rank.KING, 1)],
+        ]
+        state = create_trick(TrickInput(
+            lead_player=0, hands=hands,
+            trump_suit=Suit.SPADES, trump_rank=Rank.TWO,
+            defender_points=0, declarer_team=0,
+        ))
+        state = _play_unwrap(state, player=0, cards=hands[0])
+        state = _play_unwrap(state, player=1, cards=hands[1])
+        state = _play_unwrap(state, player=3, cards=hands[3])
+        state = _play_unwrap(state, player=2, cards=hands[2])
+
+        result = _get_result(state)
+        assert result.winner == 3
+
     def test_resolve_pair_beats_single_same_suit(self) -> None:
         """When all 4 play pairs, the highest pair wins."""
         hands = [

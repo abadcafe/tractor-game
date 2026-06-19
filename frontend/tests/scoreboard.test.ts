@@ -10,7 +10,9 @@ const doc = new DOMParser().parseFromString(
 // @ts-ignore test setup
 globalThis.document = doc;
 
-function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
+function makeSnapshot(
+  overrides: Partial<StateSnapshot> = {},
+): StateSnapshot {
   return {
     phase: "PLAYING",
     player_hand: [],
@@ -23,6 +25,7 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     action_hints: [],
     trick: null,
     trick_history: [],
+    failed_throw: null,
     bid_events: [],
     bid_winner: null,
     awaiting_action: null,
@@ -45,9 +48,35 @@ Deno.test("test_renderScoreboard_shows_levels", () => {
   assertEquals(text.includes("5"), true);
 });
 
-Deno.test("test_renderScoreboard_shows_defender_points", () => {
-  const snap = makeSnapshot({ defender_points: 25 });
+Deno.test("test_renderScoreboard_has_chat_box_placeholder", () => {
+  const snap = makeSnapshot();
   const el = renderScoreboard(snap);
+  const input = el.querySelector(".scoreboard__chat-input");
+  assertEquals(input !== null, true);
+  assertEquals(input?.getAttribute("disabled"), "true");
+});
+
+Deno.test("test_renderScoreboard_has_no_operation_tabs_or_duplicate_table_info", () => {
+  const snap = makeSnapshot({
+    defender_points: 25,
+    bid_events: [{
+      player: 1,
+      cards: [{ id: "D1-hearts-2", suit: "hearts", rank: "2" }],
+      kind: "trump_rank",
+      suit: "hearts",
+      joker_type: null,
+      count: 1,
+    }],
+  });
+  const el = renderScoreboard(snap);
+  const buttons = el.querySelectorAll("button");
   const text = el.textContent ?? "";
-  assertEquals(text.includes("25"), true);
+  assertEquals(buttons.length, 0);
+  assertEquals(text.includes("防守方得分"), false);
+  assertEquals(text.includes("主牌"), false);
+  assertEquals(text.includes("上一墩"), false);
+  assertEquals(text.includes("底牌"), false);
+  assertEquals(text.includes("叫牌记录"), false);
+  assertEquals(text.includes("♥2"), false);
+  assertEquals(text.includes("25"), false);
 });

@@ -110,7 +110,7 @@ def deal_next_card(state: DealBidState) -> StateResult[DealBidState]:
     new_target = next_player_ccw(target)
 
     # After the last card, keep phase as DEALING so the recipient can act.
-    # Set all_dealt=True so Game.act() knows to finalize after their action.
+    # Set all_dealt=True so Game can finalize after their action.
     all_dealt = new_cursor >= 100
 
     return Ok(state.model_copy(update={

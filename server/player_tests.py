@@ -1,7 +1,7 @@
 """Tests for server/player.py -- Player, AutoPlayer, HumanPlayer, PlayerAction types."""
 
 import asyncio
-from typing import Literal
+from typing import Literal, TypeGuard
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,13 +10,18 @@ from server.actions import (
     BidAction, StirAction, SkipStirAction,
     DiscardAction, PlayAction, NextRoundAction,
 )
+from server.messages import StateMessage
 from server.player import AutoPlayer, HumanPlayer
 from server.snapshot import (
     ScoringSnapshot,
     StateSnapshot, StirringStateSnapshot, TrickSnapshot,
 )
 from server.sm.card_model import Card, Suit, Rank
-from server.sm.types import BidEvent, CompletedTrick
+from server.sm.types import BidEvent, CompletedTrick, FailedThrow
+
+
+def _is_object_list(value: object) -> TypeGuard[list[object]]:
+    return isinstance(value, list)
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1, suffix: str = "") -> Card:
@@ -47,6 +52,7 @@ def _make_snapshot(
     defender_points: int = 0,
     trick: TrickSnapshot | None = None,
     trick_history: list[CompletedTrick] | None = None,
+    failed_throw: FailedThrow | None = None,
     bid_events: list[BidEvent] | None = None,
     bid_winner: BidEvent | None = None,
     stirring_state: StirringStateSnapshot | None = None,
@@ -71,6 +77,7 @@ def _make_snapshot(
         defender_points=defender_points,
         trick=trick,
         trick_history=trick_history if trick_history is not None else [],
+        failed_throw=failed_throw,
         bid_events=bid_events if bid_events is not None else [],
         bid_winner=bid_winner,
         stirring_state=stirring_state,
@@ -86,8 +93,23 @@ def _make_game(snapshot: StateSnapshot | None = None) -> MagicMock:
     """Create a mock Game that returns the given snapshot."""
     game = MagicMock()
     game.snapshot = MagicMock(return_value=snapshot or _make_snapshot())
-    game.act = AsyncMock()
+    game.receive = AsyncMock()
     return game
+
+
+def _make_state_message(
+    snapshot: StateSnapshot | None = None,
+    *,
+    seq: int = 1,
+    error: str | None = None,
+) -> StateMessage:
+    state = snapshot or _make_snapshot()
+    return StateMessage(
+        seq=seq,
+        awaiting=state.awaiting_action,
+        state=state,
+        error=error,
+    )
 
 
 # ---- PlayerAction types ----山水
@@ -142,9 +164,9 @@ async def test_auto_player_play_when_current():
     )
     game = _make_game(snap)
     player = AutoPlayer(index=1)
-    await player.on_state(game)
+    await player.on_state(game, _make_state_message(snap))
     await asyncio.sleep(0.05)
-    game.act.assert_awaited()
+    game.receive.assert_awaited()
 
 
 @pytest.mark.asyncio
@@ -159,10 +181,10 @@ async def test_auto_player_play_from_action_hints():
     )
     game = _make_game(snap)
     player = AutoPlayer(index=0)
-    await player.on_state(game)
+    await player.on_state(game, _make_state_message(snap))
     await asyncio.sleep(0.05)
-    game.act.assert_awaited()
-    call_args = game.act.call_args
+    game.receive.assert_awaited()
+    call_args = game.receive.call_args
     assert call_args[0][0] == 0  # player_index
 
 
@@ -184,50 +206,16 @@ async def test_auto_player_error_skips_failed_hint_candidate():
         return seq[0]
 
     with patch("server.player.random.choice", side_effect=choose_first):
-        await player.on_state(game)
+        await player.on_state(game, _make_state_message(snap))
         await asyncio.sleep(0.05)
-        first_action = game.act.call_args[0][2]
-        assert isinstance(first_action, PlayAction)
-        assert first_action.cards == [card1]
+        first_message = game.receive.call_args[0][1]
+        assert first_message.raw == {"type": "play", "cards": [card1.id]}
 
-        game.act.reset_mock()
-        await player.on_state(game, error="rejected")
+        game.receive.reset_mock()
+        await player.on_state(game, _make_state_message(snap, error="rejected"))
         await asyncio.sleep(0.05)
-        second_action = game.act.call_args[0][2]
-        assert isinstance(second_action, PlayAction)
-        assert second_action.cards == [card2]
-
-
-@pytest.mark.asyncio
-async def test_auto_player_stale_error_does_not_skip_hint_candidate():
-    """A stale seq rejection does not prove the selected cards were illegal."""
-    card1 = _card(Suit.SPADES, Rank.ACE, 1)
-    card2 = _card(Suit.HEARTS, Rank.ACE, 1)
-    snap = _make_snapshot(
-        phase="PLAYING",
-        awaiting_action="play",
-        player_hand=[card1, card2],
-        action_hints=[[card1], [card2]],
-    )
-    game = _make_game(snap)
-    player = AutoPlayer(index=0)
-
-    def choose_first(seq: list[list[Card]]) -> list[Card]:
-        return seq[0]
-
-    with patch("server.player.random.choice", side_effect=choose_first):
-        await player.on_state(game)
-        await asyncio.sleep(0.05)
-        first_action = game.act.call_args[0][2]
-        assert isinstance(first_action, PlayAction)
-        assert first_action.cards == [card1]
-
-        game.act.reset_mock()
-        await player.on_state(game, error="stale action: expected 3, got 2")
-        await asyncio.sleep(0.05)
-        second_action = game.act.call_args[0][2]
-        assert isinstance(second_action, PlayAction)
-        assert second_action.cards == [card1]
+        second_message = game.receive.call_args[0][1]
+        assert second_message.raw == {"type": "play", "cards": [card2.id]}
 
 
 @pytest.mark.asyncio
@@ -239,9 +227,9 @@ async def test_auto_player_ignores_when_not_awaiting():
     )
     game = _make_game(snap)
     player = AutoPlayer(index=0)
-    await player.on_state(game)
+    await player.on_state(game, _make_state_message(snap))
     await asyncio.sleep(0.05)
-    game.act.assert_not_awaited()
+    game.receive.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -253,9 +241,9 @@ async def test_auto_player_ignores_stirring_when_not_awaiting():
     )
     game = _make_game(snap)
     player = AutoPlayer(index=0)
-    await player.on_state(game)
+    await player.on_state(game, _make_state_message(snap))
     await asyncio.sleep(0.05)
-    game.act.assert_not_awaited()
+    game.receive.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -267,9 +255,9 @@ async def test_auto_player_ignores_discard_when_not_awaiting():
     )
     game = _make_game(snap)
     player = AutoPlayer(index=0)
-    await player.on_state(game)
+    await player.on_state(game, _make_state_message(snap))
     await asyncio.sleep(0.05)
-    game.act.assert_not_awaited()
+    game.receive.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -281,11 +269,12 @@ async def test_auto_player_next_round():
     )
     game = _make_game(snap)
     player = AutoPlayer(index=0)
-    await player.on_state(game)
+    await player.on_state(game, _make_state_message(snap))
     await asyncio.sleep(0.05)
-    game.act.assert_awaited()
-    call_args = game.act.call_args
-    assert isinstance(call_args[0][2], NextRoundAction)
+    game.receive.assert_awaited()
+    call_args = game.receive.call_args
+    message = call_args[0][1]
+    assert message.raw == {"type": "next_round"}
 
 
 @pytest.mark.asyncio
@@ -297,9 +286,9 @@ async def test_auto_player_submits_next_round_even_when_other_player():
     )
     game = _make_game(snap)
     player = AutoPlayer(index=0)
-    await player.on_state(game)
+    await player.on_state(game, _make_state_message(snap))
     await asyncio.sleep(0.05)
-    game.act.assert_awaited()
+    game.receive.assert_awaited()
 
 
 @pytest.mark.asyncio
@@ -322,11 +311,12 @@ async def test_auto_player_discard_when_current():
     )
     game = _make_game(snap)
     player = AutoPlayer(index=0)
-    await player.on_state(game)
+    await player.on_state(game, _make_state_message(snap))
     await asyncio.sleep(0.05)
-    game.act.assert_awaited()
-    call_args = game.act.call_args
-    assert isinstance(call_args[0][2], DiscardAction)
+    game.receive.assert_awaited()
+    call_args = game.receive.call_args
+    message = call_args[0][1]
+    assert message.raw["type"] == "discard"
 
 
 @pytest.mark.asyncio
@@ -342,12 +332,11 @@ async def test_auto_player_stir_when_current():
     game = _make_game(snap)
     player = AutoPlayer(index=0)
     with patch("server.player.random.random", return_value=0.4):
-        await player.on_state(game)
+        await player.on_state(game, _make_state_message(snap))
     await asyncio.sleep(0.05)
-    game.act.assert_awaited()
-    action = game.act.call_args[0][2]
-    assert isinstance(action, StirAction)
-    assert action.cards == [card1, card2]
+    game.receive.assert_awaited()
+    message = game.receive.call_args[0][1]
+    assert message.raw == {"type": "stir", "cards": [card1.id, card2.id]}
 
 
 @pytest.mark.asyncio
@@ -360,11 +349,11 @@ async def test_auto_player_stir_pass():
     )
     game = _make_game(snap)
     player = AutoPlayer(index=0)
-    await player.on_state(game)
+    await player.on_state(game, _make_state_message(snap))
     await asyncio.sleep(0.05)
-    game.act.assert_awaited()
-    action = game.act.call_args[0][2]
-    assert isinstance(action, SkipStirAction)
+    game.receive.assert_awaited()
+    message = game.receive.call_args[0][1]
+    assert message.raw == {"type": "stir", "pass": True}
 
 
 @pytest.mark.asyncio
@@ -380,11 +369,11 @@ async def test_auto_player_stir_randomly_skips_hint():
     game = _make_game(snap)
     player = AutoPlayer(index=0)
     with patch("server.player.random.random", return_value=0.6):
-        await player.on_state(game)
+        await player.on_state(game, _make_state_message(snap))
     await asyncio.sleep(0.05)
-    game.act.assert_awaited()
-    action = game.act.call_args[0][2]
-    assert isinstance(action, SkipStirAction)
+    game.receive.assert_awaited()
+    message = game.receive.call_args[0][1]
+    assert message.raw == {"type": "stir", "pass": True}
 
 
 @pytest.mark.asyncio
@@ -400,7 +389,7 @@ async def test_auto_player_bid_during_dealing():
     )
     game = _make_game(snap)
     player = AutoPlayer(index=0)
-    await player.on_state(game)
+    await player.on_state(game, _make_state_message(snap))
     await asyncio.sleep(0.05)
     # May bid or skip (random), but should not error
 
@@ -417,29 +406,27 @@ async def test_auto_player_ignores_dealing_if_no_trump_rank():
     )
     game = _make_game(snap)
     player = AutoPlayer(index=0)
-    await player.on_state(game)
+    await player.on_state(game, _make_state_message(snap))
     await asyncio.sleep(0.05)
     # Should send SkipBidAction (not no action)
-    game.act.assert_awaited()
-    from server.actions import SkipBidAction
-    call_args = game.act.call_args
-    assert isinstance(call_args[0][2], SkipBidAction)
+    game.receive.assert_awaited()
+    call_args = game.receive.call_args
+    message = call_args[0][1]
+    assert message.raw == {"type": "bid", "pass": True}
 
 
 # ---- HumanPlayer ----
 
 
 @pytest.mark.asyncio
-async def test_human_player_handle_connection_sends_state():
-    """HumanPlayer.handle_connection accepts WS, binds it, and processes messages."""
+async def test_human_player_handle_connection_accepts_ws():
+    """HumanPlayer.handle_connection accepts WS and waits for player messages."""
     from fastapi import WebSocketDisconnect
     ws = AsyncMock()
     # receive_json raises after one iteration to end the loop
     ws.receive_json = AsyncMock(side_effect=WebSocketDisconnect())
     snap = _make_snapshot()
     game = _make_game(snap)
-    game.is_over = MagicMock(return_value=False)
-    game.current_seq = 1
     player = HumanPlayer(index=0)
 
     await player.handle_connection(ws, game)
@@ -454,8 +441,6 @@ async def test_human_player_connection_takeover():
     new_ws = AsyncMock()
     snap = _make_snapshot()
     game = _make_game(snap)
-    game.is_over = MagicMock(return_value=False)
-    game.current_seq = 1
     # Set up old connection via handle_connection with a WS that disconnects
     old_ws.receive_json = AsyncMock(side_effect=WebSocketDisconnect())
     player = HumanPlayer(index=0)
@@ -475,7 +460,7 @@ async def test_human_player_does_not_send_when_no_ws():
     game = _make_game(snap)
     player = HumanPlayer(index=0)
     # Should not raise
-    await player.on_state(game)
+    await player.on_state(game, _make_state_message(snap))
 
 
 def test_human_player_is_connected_false():
@@ -505,15 +490,14 @@ async def test_auto_player_stir_only_uses_same_suit_pairs():
     player = AutoPlayer(index=0)
 
     with patch("server.player.random.random", return_value=0.4):
-        await player.on_state(game)
+        await player.on_state(game, _make_state_message(snap))
 
     await asyncio.sleep(0.05)
-    game.act.assert_awaited()
-    call_args = game.act.call_args
-    action = call_args[0][2]
+    game.receive.assert_awaited()
+    call_args = game.receive.call_args
+    message = call_args[0][1]
 
-    assert isinstance(action, StirAction)
-    assert action.cards == [card_hearts_2_d1, card_hearts_2_d2]
+    assert message.raw == {"type": "stir", "cards": [card_hearts_2_d1.id, card_hearts_2_d2.id]}
 
 
 # ---- Stirring exchange count typed access ----
@@ -548,11 +532,13 @@ async def test_auto_player_discard_with_stirring_exchange_count():
     player = AutoPlayer(index=0)
 
     # Must not raise AttributeError
-    await player.on_state(game)
+    await player.on_state(game, _make_state_message(snap))
     await asyncio.sleep(0.05)
 
-    game.act.assert_awaited()
-    call_args = game.act.call_args
-    action = call_args[0][2]
-    assert isinstance(action, DiscardAction)
-    assert len(action.cards) == 3
+    game.receive.assert_awaited()
+    call_args = game.receive.call_args
+    message = call_args[0][1]
+    assert message.raw["type"] == "discard"
+    cards = message.raw["cards"]
+    assert _is_object_list(cards)
+    assert len(cards) == 3

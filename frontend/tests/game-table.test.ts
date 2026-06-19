@@ -11,7 +11,9 @@ const doc = new DOMParser().parseFromString(
 // @ts-ignore test setup
 globalThis.document = doc;
 
-function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
+function makeSnapshot(
+  overrides: Partial<StateSnapshot> = {},
+): StateSnapshot {
   return {
     phase: "PLAYING",
     player_hand: [],
@@ -24,6 +26,7 @@ function makeSnapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
     action_hints: [],
     trick: null,
     trick_history: [],
+    failed_throw: null,
     bid_events: [],
     bid_winner: null,
     awaiting_action: null,
@@ -45,12 +48,14 @@ Deno.test("test_renderGameTable_shows_four_players", () => {
   assertEquals(players.length, 4);
 });
 
-Deno.test("test_renderGameTable_declarer_marker", () => {
+Deno.test("test_renderGameTable_declarer_in_status_badge", () => {
   const snap = makeSnapshot({ declarer_player: 3 });
   const el = renderGameTable(snap);
-  const markers = el.querySelectorAll(".declarer-marker");
-  assertEquals(markers.length, 1);
-  assertEquals(markers[0].textContent, "庄");
+  const southStatus = el.querySelector(
+    '.player-area[data-position="南"] .player-status-badge',
+  );
+  assertEquals(southStatus !== null, true);
+  assertEquals((southStatus?.textContent ?? "").includes("庄"), true);
 });
 
 Deno.test("test_renderGameTable_current_player_highlight", () => {
@@ -63,6 +68,33 @@ Deno.test("test_renderGameTable_current_player_highlight", () => {
   assertEquals(current.length, 1);
 });
 
+Deno.test("test_renderGameTable_player_status_badges_are_grouped", () => {
+  const snap = makeSnapshot({
+    phase: "WAITING",
+    declarer_player: 1,
+    next_round_confirmed: [1],
+    player_hand_counts: [0, 0, 0, 0],
+    bid_winner: {
+      player: 1,
+      cards: [{ id: "D1-spades-2", suit: "spades", rank: "2" }],
+      kind: "trump_rank",
+      suit: "spades",
+      joker_type: null,
+      count: 1,
+    },
+  });
+  const el = renderGameTable(snap);
+  const west = el.querySelector('.player-area[data-position="西"]');
+  const badges = west?.querySelector(".player-badges");
+  const text = badges?.textContent ?? "";
+
+  assertEquals(badges !== null, true);
+  assertEquals(text.includes("♠2"), true);
+  assertEquals(text.includes("0张"), true);
+  assertEquals(text.includes("庄"), true);
+  assertEquals(text.includes("OK"), true);
+});
+
 Deno.test("test_renderGameTable_player_labels", () => {
   const snap = makeSnapshot();
   const el = renderGameTable(snap);
@@ -72,4 +104,130 @@ Deno.test("test_renderGameTable_player_labels", () => {
   assertEquals(labelTexts.includes("同伴"), true);
   assertEquals(labelTexts.includes("左家"), true);
   assertEquals(labelTexts.includes("右家"), true);
+});
+
+Deno.test("test_renderGameTable_global_info_bar_in_table", () => {
+  const snap = makeSnapshot({
+    phase: "PLAYING",
+    trump_suit: "spades",
+    trump_rank: "2",
+  });
+  const el = renderGameTable(snap);
+  const infoBar = el.querySelector(".info-bar");
+  const trickInfo = el.querySelector(".trick-view .info-bar");
+  const text = infoBar?.textContent ?? "";
+
+  assertEquals(infoBar !== null, true);
+  assertEquals(trickInfo, null);
+  assertEquals(text.includes("主:"), true);
+  assertEquals(text.includes("♠"), true);
+  assertEquals(text.includes("级牌 2"), true);
+  assertEquals(text.includes("出牌阶段"), true);
+});
+
+Deno.test("test_renderGameTable_status_notice_in_top_right_not_bottom_bar", () => {
+  const snap = makeSnapshot({
+    awaiting_action: "play",
+    defender_points: 25,
+    trick: { lead_player: 0, slots: [], current_player: 3 },
+  });
+  const el = renderGameTable(snap);
+  const notice = el.querySelector(".table-notice");
+  const bottomStatus = el.querySelector(".table-status");
+  const text = notice?.textContent ?? "";
+
+  assertEquals(notice !== null, true);
+  assertEquals(bottomStatus, null);
+  assertEquals(text.includes("轮到你出牌"), true);
+  assertEquals(text.includes("捡分 25"), true);
+});
+
+Deno.test("test_renderGameTable_previous_trick_label_in_top_right_notice", () => {
+  const snap = makeSnapshot();
+  const el = renderGameTable(snap, {
+    lead_player: 0,
+    winner: 2,
+    points: 5,
+    slots: [
+      {
+        player: 0,
+        cards: [{ id: "D1-clubs-5", suit: "clubs", rank: "5" }],
+      },
+      {
+        player: 1,
+        cards: [{ id: "D1-hearts-9", suit: "hearts", rank: "9" }],
+      },
+      {
+        player: 2,
+        cards: [{ id: "D1-spades-K", suit: "spades", rank: "K" }],
+      },
+      {
+        player: 3,
+        cards: [{ id: "D1-diamonds-A", suit: "diamonds", rank: "A" }],
+      },
+    ],
+  });
+  const notice = el.querySelector(".table-notice");
+  const trickText = el.querySelector(".trick-view")?.textContent ?? "";
+  const noticeText = notice?.textContent ?? "";
+
+  assertEquals(noticeText.includes("上一墩 5 分"), true);
+  assertEquals(trickText.includes("上一墩"), false);
+});
+
+Deno.test("test_renderGameTable_failed_throw_label_in_top_right_notice", () => {
+  const snap = makeSnapshot();
+  const el = renderGameTable(snap, null, {
+    player: 3,
+    attempted_cards: [
+      { id: "D1-spades-K", suit: "spades", rank: "K" },
+      { id: "D1-spades-Q", suit: "spades", rank: "Q" },
+    ],
+    forced_cards: [
+      { id: "D1-spades-Q", suit: "spades", rank: "Q" },
+    ],
+  });
+  const noticeText = el.querySelector(".table-notice")?.textContent ??
+    "";
+  const trickText = el.querySelector(".trick-view")?.textContent ?? "";
+
+  assertEquals(noticeText.includes("甩牌失败，捡小"), true);
+  assertEquals(trickText.includes("甩牌失败，捡小"), false);
+});
+
+Deno.test("test_renderGameTable_shows_only_current_bid_winner_under_avatar", () => {
+  const snap = makeSnapshot({
+    bid_events: [
+      {
+        player: 1,
+        cards: [{ id: "D1-hearts-2", suit: "hearts", rank: "2" }],
+        kind: "trump_rank",
+        suit: "hearts",
+        joker_type: null,
+        count: 1,
+      },
+      {
+        player: 2,
+        cards: [{ id: "D1-spades-2", suit: "spades", rank: "2" }],
+        kind: "trump_rank",
+        suit: "spades",
+        joker_type: null,
+        count: 1,
+      },
+    ],
+    bid_winner: {
+      player: 2,
+      cards: [{ id: "D1-spades-2", suit: "spades", rank: "2" }],
+      kind: "trump_rank",
+      suit: "spades",
+      joker_type: null,
+      count: 1,
+    },
+  });
+  const el = renderGameTable(snap);
+  const markers = el.querySelectorAll(".player-bid-marker");
+  const markerText = markers[0]?.textContent ?? "";
+  assertEquals(markers.length, 1);
+  assertEquals(markerText.includes("♠2"), true);
+  assertEquals(markerText.includes("♠主"), true);
 });

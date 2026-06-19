@@ -8,6 +8,7 @@ export class StatePlaybackQueue<T> {
     private readonly onMessage: (message: T) => void,
     private readonly options: {
       minFrameMs?: number;
+      minFrameMsForMessage?: (message: T) => number;
       onCaughtUpChange?: (caughtUp: boolean) => void;
       now?: () => number;
     } = {},
@@ -36,8 +37,11 @@ export class StatePlaybackQueue<T> {
   private schedule(): void {
     if (this.timer !== null || this.pending.length === 0) return;
 
+    const next = this.pending[0];
+    if (next === undefined) return;
+
     const now = this.options.now?.() ?? performance.now();
-    const minFrameMs = this.options.minFrameMs ?? 500;
+    const minFrameMs = this.minFrameMsFor(next);
     const elapsed = this.lastRenderedAt === 0
       ? minFrameMs
       : now - this.lastRenderedAt;
@@ -60,5 +64,11 @@ export class StatePlaybackQueue<T> {
 
   private notifyCaughtUp(): void {
     this.options.onCaughtUpChange?.(this.isCaughtUp());
+  }
+
+  private minFrameMsFor(message: T): number {
+    return this.options.minFrameMsForMessage?.(message) ??
+      this.options.minFrameMs ??
+      500;
   }
 }

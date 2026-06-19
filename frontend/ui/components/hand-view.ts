@@ -1,6 +1,17 @@
-import type { StateSnapshot, Card } from "../../core/types.ts";
-import type { InteractionMode, GameAction } from "../../engine/types.ts";
-import { cardDisplay, sortHand, isJoker, isTrumpRank } from "../../core/card.ts";
+import type { Card, StateSnapshot } from "../../core/types.ts";
+import type {
+  GameAction,
+  InteractionMode,
+  StirButtonState,
+} from "../../engine/types.ts";
+import {
+  cardDisplay,
+  isJoker,
+  isTrumpRank,
+  sortHand,
+  suitSymbol,
+} from "../../core/card.ts";
+import { SEAT_MAP } from "../../config.ts";
 import { el } from "../dom.ts";
 
 /**
@@ -14,34 +25,108 @@ export function renderHandView(
   legalCardIds?: Set<string>,
   onCardClick?: (cardId: string) => void,
   onAction?: (action: GameAction) => void,
+  onClearSelection?: () => void,
+  onUseHint?: () => void,
+  onToggleCompact?: () => void,
+  compactHand?: boolean,
+  onStir?: (cardIds: string[]) => void,
+  onPass?: () => void,
+  stirButtonState?: StirButtonState,
+  onShowPreviousTrick?: () => void,
 ): HTMLElement {
-  const container = el("div", { class: "hand-panel" });
-
-  const summary = el("div", { class: "hand-panel__summary" });
-  summary.appendChild(el("span", { class: "hand-panel__title" }, "手牌"));
-  summary.appendChild(el("span", { class: "hand-panel__count" }, `${snapshot.player_hand.length} 张`));
-  const hint = interactionHint(interactionMode, snapshot.action_hints ?? []);
-  if (hint) {
-    summary.appendChild(el("span", { class: "hand-panel__hint" }, hint));
-  }
-  container.appendChild(summary);
-
-  const handView = el("div", { class: "hand-view" });
-
-  // Sort hand per spec
+  const actionHints = snapshot.action_hints ?? [];
+  const selectedCount = selectedCardIds?.size ?? 0;
   const sortedHand = sortHand(
     snapshot.player_hand,
     snapshot.trump_suit,
     snapshot.trump_rank,
   );
+  const selectedStirCardIds = sortedHand
+    .filter((card) => selectedCardIds?.has(card.id) ?? false)
+    .map((card) => card.id);
+  const showTools = interactionMode === "play" ||
+    interactionMode === "discard" || interactionMode === "stir";
+  const needsButton = interactionMode === "play" ||
+    interactionMode === "discard" || interactionMode === "next_round";
+  const needsStirButtons = interactionMode === "stir" &&
+    (onStir !== undefined || onPass !== undefined);
+  const canShowPreviousTrick = snapshot.trick_history.length > 0 &&
+    onShowPreviousTrick !== undefined;
+  const hasControls = (needsButton && onAction !== undefined) ||
+    needsStirButtons || showTools || canShowPreviousTrick;
+
+  const container = el("div", {
+    class: `hand-area${compactHand ? " compact" : ""}${
+      hasControls ? " has-actions" : ""
+    }`,
+  });
+
+  if (hasControls) {
+    const controls = el("div", { class: "hand-actions" });
+    if (canShowPreviousTrick) {
+      controls.appendChild(
+        renderPreviousTrickButton(onShowPreviousTrick),
+      );
+    }
+    if (needsButton && onAction) {
+      controls.appendChild(
+        renderActionPanel(
+          snapshot,
+          interactionMode,
+          selectedCount,
+          onAction,
+        ),
+      );
+    }
+    if (needsStirButtons) {
+      controls.appendChild(
+        renderStirActionPanel(
+          selectedStirCardIds,
+          onStir,
+          onPass,
+          stirButtonState,
+        ),
+      );
+    }
+    if (showTools) {
+      controls.appendChild(
+        renderHandTools(
+          selectedCount,
+          actionHints.length > 0,
+          onClearSelection,
+          onUseHint,
+        ),
+      );
+    }
+    container.appendChild(controls);
+  }
+
+  const panel = el("div", {
+    class: `hand-panel${compactHand ? " compact" : ""}`,
+  });
+
+  const handView = el("div", {
+    class: `hand-view${compactHand ? " compact" : ""}`,
+  });
+  const hasActionHints = actionHints.length > 0;
+  const constrainedCardIds = hasActionHints ? legalCardIds : undefined;
 
   // Render each card
   for (const card of sortedHand) {
-    const cardSpan = el("span", { class: `card suit-${card.suit}` });
+    const cardSpan = el("span", {
+      class: handCardClass(
+        card,
+        snapshot.trump_suit,
+        snapshot.trump_rank,
+      ),
+      "data-card-id": card.id,
+      "data-rank": card.rank,
+      "data-suit-symbol": suitSymbol(card.suit),
+    });
     cardSpan.textContent = cardDisplay(card);
 
     // Highlight legal cards
-    if (legalCardIds?.has(card.id)) {
+    if (constrainedCardIds?.has(card.id)) {
       cardSpan.classList.add("legal");
     }
 
@@ -55,7 +140,11 @@ export function renderHandView(
       cardSpan.classList.add("selected");
     }
 
-    const canSelect = canSelectCard(card.id, interactionMode, legalCardIds);
+    const canSelect = canSelectCard(
+      card.id,
+      interactionMode,
+      constrainedCardIds,
+    );
     if (!canSelect) {
       cardSpan.classList.add("not-selectable");
     }
@@ -67,58 +156,178 @@ export function renderHandView(
     handView.appendChild(cardSpan);
   }
 
-  container.appendChild(handView);
+  panel.appendChild(handView);
 
-  // Action buttons below hand
-  const needsButton = interactionMode === "play" || interactionMode === "discard" || interactionMode === "next_round";
-  if (needsButton && onAction) {
-    const panel = el("div", { class: "action-panel" });
-    const selectedCount = selectedCardIds?.size ?? 0;
-
-    if (interactionMode === "play") {
-      const button = el("button", { class: "btn-primary" }, "出牌");
-      if (selectedCount === 0) {
-        button.setAttribute("disabled", "true");
-        button.setAttribute("title", "请先选择要出的牌");
-      }
-      button.addEventListener("click", () => onAction("play"));
-      panel.appendChild(button);
-    } else if (interactionMode === "discard") {
-      const button = el("button", { class: "btn-warning" }, "换底牌");
-      const count = snapshot.stirring_state?.exchange_count ?? 0;
-      if (count > 0 && selectedCount !== count) {
-        button.setAttribute("disabled", "true");
-        button.setAttribute("title", `请选择 ${count} 张牌`);
-      }
-      button.addEventListener("click", () => onAction("discard"));
-      panel.appendChild(button);
-    } else if (interactionMode === "next_round") {
-      const button = el("button", { class: "btn-primary" }, "下一轮");
-      button.addEventListener("click", () => onAction("next_round"));
-      panel.appendChild(button);
-    }
-
-    container.appendChild(panel);
-  }
+  panel.appendChild(renderScorePile(snapshot));
+  container.appendChild(panel);
 
   return container;
 }
 
-function interactionHint(interactionMode: InteractionMode, actionHints: Card[][]): string {
-  switch (interactionMode) {
-    case "bid":
-      return "选择级牌或王叫牌";
-    case "stir":
-      return "选择对子反主";
-    case "discard":
-      return "选择要放入底牌的牌";
-    case "play":
-      return actionHints.length > 0 ? "绿色边框为提示出牌" : "自由出牌，服务器校验";
-    case "next_round":
-      return "本轮结束";
-    default:
-      return "等待其他玩家";
+function renderPreviousTrickButton(
+  onShowPreviousTrick: () => void,
+): HTMLElement {
+  const panel = el("div", { class: "hand-panel__previous-trick" });
+  const button = el("button", {
+    class: "btn-secondary hand-action-button",
+    title: "查看上一墩",
+  }, "上一墩");
+  button.addEventListener("click", () => onShowPreviousTrick());
+  panel.appendChild(button);
+  return panel;
+}
+
+function renderActionPanel(
+  snapshot: StateSnapshot,
+  interactionMode: InteractionMode,
+  selectedCount: number,
+  onAction: (action: GameAction) => void,
+): HTMLElement {
+  const panel = el("div", { class: "action-panel" });
+
+  if (interactionMode === "play") {
+    const button = el("button", {
+      class: "btn-primary hand-action-button",
+    }, "出牌");
+    if (selectedCount === 0) {
+      button.setAttribute("disabled", "true");
+      button.setAttribute("title", "请先选择要出的牌");
+    }
+    button.addEventListener("click", () => onAction("play"));
+    panel.appendChild(button);
+  } else if (interactionMode === "discard") {
+    const button = el("button", {
+      class: "btn-warning hand-action-button",
+    }, "换底牌");
+    const count = snapshot.stirring_state?.exchange_count ?? 0;
+    if (count > 0 && selectedCount !== count) {
+      button.setAttribute("disabled", "true");
+      button.setAttribute("title", `请选择 ${count} 张牌`);
+    }
+    button.addEventListener("click", () => onAction("discard"));
+    panel.appendChild(button);
+  } else if (interactionMode === "next_round") {
+    const button = el("button", {
+      class: "btn-primary hand-action-button",
+    }, "下一轮");
+    button.addEventListener("click", () => onAction("next_round"));
+    panel.appendChild(button);
   }
+
+  return panel;
+}
+
+function renderStirActionPanel(
+  selectedCardIds: string[],
+  onStir?: (cardIds: string[]) => void,
+  onPass?: () => void,
+  stirButtonState?: StirButtonState,
+): HTMLElement {
+  const panel = el("div", { class: "action-panel action-panel--stir" });
+
+  const stirButton = el("button", {
+    class: "btn-warning hand-action-button",
+  }, "反主");
+  const stirDisabled = stirButtonState?.disabled ?? true;
+  if (stirDisabled || onStir === undefined) {
+    stirButton.setAttribute("disabled", "true");
+  }
+  if (stirButtonState?.title) {
+    stirButton.setAttribute("title", stirButtonState.title);
+  }
+  stirButton.addEventListener("click", () => {
+    if (!stirDisabled && onStir !== undefined) {
+      onStir(selectedCardIds);
+    }
+  });
+  panel.appendChild(stirButton);
+
+  const passButton = el("button", {
+    class: "btn-secondary hand-action-button",
+  }, "不反");
+  if (onPass === undefined) {
+    passButton.setAttribute("disabled", "true");
+  }
+  passButton.addEventListener("click", () => onPass?.());
+  panel.appendChild(passButton);
+
+  return panel;
+}
+
+function renderHandTools(
+  selectedCount: number,
+  hasActionHints: boolean,
+  onClearSelection?: () => void,
+  onUseHint?: () => void,
+): HTMLElement {
+  const tools = el("div", { class: "hand-panel__tools" });
+
+  const hintButton = el("button", {
+    class: "btn-info hand-action-button",
+  }, "提示");
+  if (!hasActionHints || !onUseHint) {
+    hintButton.setAttribute("disabled", "true");
+  }
+  hintButton.addEventListener("click", () => onUseHint?.());
+  tools.appendChild(hintButton);
+
+  const clearButton = el("button", {
+    class: "btn-secondary hand-action-button",
+  }, "清牌");
+  if (selectedCount === 0 || !onClearSelection) {
+    clearButton.setAttribute("disabled", "true");
+  }
+  clearButton.addEventListener("click", () => onClearSelection?.());
+  tools.appendChild(clearButton);
+
+  return tools;
+}
+
+function renderScorePile(snapshot: StateSnapshot): HTMLElement {
+  const scorePile = el("div", { class: "score-pile" });
+  scorePile.appendChild(
+    el(
+      "span",
+      { class: "score-pile__label" },
+      `捡分 ${snapshot.defender_points}`,
+    ),
+  );
+
+  const cardsWrap = el("div", { class: "score-pile__cards" });
+  for (const card of defenderPointCards(snapshot)) {
+    cardsWrap.appendChild(
+      el("span", {
+        class: scorePileCardClass(card),
+        "data-rank": card.rank,
+        "data-suit-symbol": suitSymbol(card.suit),
+      }, cardDisplay(card)),
+    );
+  }
+  scorePile.appendChild(cardsWrap);
+  return scorePile;
+}
+
+function defenderPointCards(snapshot: StateSnapshot): Card[] {
+  if (snapshot.declarer_team === null) {
+    return [];
+  }
+  const cards: Card[] = [];
+  for (const trick of snapshot.trick_history) {
+    const winnerTeam = SEAT_MAP[trick.winner]?.team;
+    if (
+      winnerTeam === undefined || winnerTeam === snapshot.declarer_team
+    ) {
+      continue;
+    }
+    for (const slot of trick.slots) {
+      for (const card of slot.cards) {
+        if (isPointCard(card)) {
+          cards.push(card);
+        }
+      }
+    }
+  }
+  return cards;
 }
 
 function canSelectCard(
@@ -132,6 +341,9 @@ function canSelectCard(
   if (interactionMode === "discard") {
     return true;
   }
+  if (interactionMode === "play") {
+    return true;
+  }
   if (!legalCardIds || legalCardIds.size === 0) {
     return true;
   }
@@ -139,9 +351,36 @@ function canSelectCard(
 }
 
 /** Check if a card is a trump card (for visual highlighting). */
-function isTrumpCard(c: Card, trumpSuit: string | null, trumpRank: string): boolean {
+function isTrumpCard(
+  c: Card,
+  trumpSuit: string | null,
+  trumpRank: string,
+): boolean {
   if (isJoker(c)) return true;
   if (isTrumpRank(c, trumpRank)) return true;
   if (trumpSuit !== null && c.suit === trumpSuit) return true;
   return false;
+}
+
+function handCardClass(
+  card: Card,
+  trumpSuit: string | null,
+  trumpRank: string,
+): string {
+  let className = `card suit-${card.suit}`;
+  if (isPointCard(card)) className += " point-card";
+  if (isTrumpCard(card, trumpSuit, trumpRank)) {
+    className += " trump-card";
+  }
+  return className;
+}
+
+function isPointCard(card: Card): boolean {
+  return card.rank === "5" || card.rank === "10" || card.rank === "K";
+}
+
+function scorePileCardClass(card: Card): string {
+  let className = `score-pile-card trick-card suit-${card.suit}`;
+  if (isPointCard(card)) className += " point-card";
+  return className;
 }
