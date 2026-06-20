@@ -5,8 +5,21 @@ and Game (to dispatch actions). Depends only on Card.
 """
 
 from dataclasses import dataclass
+from typing import Literal
 
 from server.sm.card_model import Card
+
+type GameActionKind = Literal[
+    "bid",
+    "skip_bid",
+    "stir",
+    "skip_stir",
+    "discard",
+    "play",
+    "next_round",
+]
+
+type CardActionKind = Literal["bid", "stir", "discard", "play"]
 
 
 @dataclass

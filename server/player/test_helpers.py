@@ -7,13 +7,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 from server.messages import StateMessage
 from server.snapshot import (
+    AwaitingAction,
     ScoringSnapshot,
     StateSnapshot,
     StirringStateSnapshot,
     TrickSnapshot,
 )
 from server.sm.card_model import Card, Rank, Suit
-from server.sm.types import BidEvent, CompletedTrick, FailedThrow
+from server.sm.types import BidEvent, CompletedTrick, FailedThrow, PublicGamePhase
 
 
 def is_object_list(value: object) -> TypeGuard[list[object]]:
@@ -35,8 +36,8 @@ def card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1, suffix: str = "") -> C
 
 def make_snapshot(
     *,
-    phase: str = "PLAYING",
-    awaiting_action: str | None = "play",
+    phase: PublicGamePhase = "PLAYING",
+    awaiting_action: AwaitingAction | None = "play",
     action_hints: list[list[Card]] | None = None,
     trump_rank: Rank = Rank.TWO,
     trump_suit: Suit | None = None,

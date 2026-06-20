@@ -8,13 +8,31 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from itertools import combinations, product as iterproduct
 
+from server.result import Ok, Rejected
+
 from .card_model import Card, Suit, Rank, SUITED_RANKS
 from .comparator import SUIT_OFFSET, effective_suit, trump_order, trump_rank_order
-from .result import Ok, Rejected, StateResult
-from .types import SubPlay
+from .rejections import (
+    CardNotInHandRejected,
+    CardsNotInHandRejected,
+    EmptyFollowRejected,
+    EmptyLeadRejected,
+    EmptyPlayRejected,
+    IllegalFollowShapeRejected,
+    MixedLeadSuitRejected,
+    MustExhaustLeadSuitRejected,
+    MustExhaustTrumpRejected,
+    MustFollowHigherPatternRejected,
+    MustFollowLeadSuitRejected,
+    MustFollowPairsRejected,
+    MustFollowTrumpRejected,
+    TooManyPlayHintsRejected,
+    WrongFollowCountRejected,
+)
+from .types import EffectiveSuit, PlayShapeInfo, SubPlay
 
 MAX_PLAY_ACTION_HINTS: int = 5
-TOO_MANY_PLAY_HINTS: str = "too many play hints"
+TOO_MANY_PLAY_HINTS: str = TooManyPlayHintsRejected.reason_text
 
 type PlayActionHintSortKey = tuple[int, int, tuple[int, ...], tuple[str, ...]]
 
@@ -64,7 +82,7 @@ def _trump_rank_order(rank: Rank) -> int:
 
 
 def _rank_order_for_suit(
-    rank: Rank, suit: Suit | str, trump_suit: Suit | None, trump_rank: Rank
+    rank: Rank, suit: EffectiveSuit, trump_suit: Suit | None, trump_rank: Rank
 ) -> int:
     """Return the rank ordering for a card's rank within its effective suit group.
 
@@ -82,9 +100,9 @@ def _rank_order_for_suit(
 
 def _group_cards_by_effective_suit(
     hand: list[Card], trump_suit: Suit | None, trump_rank: Rank
-) -> dict[str | Suit, list[Card]]:
+) -> dict[EffectiveSuit, list[Card]]:
     """Partition cards by effective suit."""
-    groups: dict[str | Suit, list[Card]] = {}
+    groups: dict[EffectiveSuit, list[Card]] = {}
     for card in hand:
         eff = effective_suit(card, trump_suit, trump_rank)
         groups.setdefault(eff, []).append(card)
@@ -211,7 +229,7 @@ def _collect_bounded_follow_hints(
         seen.add(key)
         result.append(candidate)
         if len(result) > max_hints:
-            return Rejected(TOO_MANY_PLAY_HINTS)
+            return TooManyPlayHintsRejected()
     return Ok(result)
 
 
@@ -642,7 +660,7 @@ def decompose(
 
 def can_win(
     played_cards: list[Card],
-    lead_eff: Suit | str,
+    lead_eff: EffectiveSuit,
     trump_suit: Suit | None,
     trump_rank: Rank,
 ) -> bool:
@@ -728,7 +746,7 @@ def _compare_same_suit(
 def compare_plays(
     a_cards: list[Card],
     b_cards: list[Card],
-    lead_eff: Suit | str,
+    lead_eff: EffectiveSuit,
     trump_suit: Suit | None,
     trump_rank: Rank,
 ) -> int:
@@ -872,7 +890,7 @@ def _is_biggest(
 
 def _card_order_for_effective_suit(
     card: Card,
-    suit: Suit | str,
+    suit: EffectiveSuit,
     trump_suit: Suit | None,
     trump_rank: Rank,
 ) -> int:
@@ -927,23 +945,25 @@ def resolve_lead_throw(
     trump_suit: Suit | None,
     trump_rank: Rank,
     other_players_hands: list[list[Card]],
-) -> StateResult[LeadThrowResolution]:
+) -> Ok[LeadThrowResolution] | Rejected:
     """Resolve any leading play as a throw attempt.
 
     If every sub-play can be thrown, all attempted cards are played. If a
     sub-play cannot be thrown, the smallest failing sub-play is forced.
     """
     if not attempted_cards:
-        return Rejected("必须至少出一张牌")
+        return EmptyPlayRejected()
 
     hand_ids = {c.id for c in hand}
     for c in attempted_cards:
         if c.id not in hand_ids:
-            return Rejected("出的牌不在手牌中")
+            return CardsNotInHandRejected()
 
-    eff_suits = {effective_suit(c, trump_suit, trump_rank) for c in attempted_cards}
+    eff_suits: set[EffectiveSuit] = {
+        effective_suit(c, trump_suit, trump_rank) for c in attempted_cards
+    }
     if len(eff_suits) != 1:
-        return Rejected("首出必须是同门花色或同为主牌")
+        return MixedLeadSuitRejected(eff_suits)
 
     subs = decompose(attempted_cards, trump_suit, trump_rank)
     for sub in _sorted_throw_subplays(subs, trump_suit, trump_rank):
@@ -1050,11 +1070,127 @@ def is_legal_follow(
     )
 
 
+def illegal_follow_rejection(
+    hand: list[Card],
+    played_cards: list[Card],
+    lead_cards: list[Card],
+    trump_suit: Suit | None,
+    trump_rank: Rank,
+) -> Rejected:
+    """Return a structured rejection for an illegal following play."""
+    if is_legal_follow(hand, played_cards, lead_cards, trump_suit, trump_rank):
+        return IllegalFollowShapeRejected(_play_shape_info(lead_cards, trump_suit, trump_rank))
+
+    if not lead_cards:
+        return EmptyLeadRejected()
+
+    lead_count = len(lead_cards)
+    if len(played_cards) != lead_count:
+        return WrongFollowCountRejected(lead_count)
+
+    if not played_cards:
+        return EmptyFollowRejected()
+
+    hand_ids = {card.id for card in hand}
+    for card in played_cards:
+        if card.id not in hand_ids:
+            return CardNotInHandRejected(card.id, current=True)
+
+    lead_eff = effective_suit(lead_cards[0], trump_suit, trump_rank)
+    suit_in_hand = [card for card in hand if effective_suit(card, trump_suit, trump_rank) == lead_eff]
+    suit_in_played = [
+        card for card in played_cards
+        if effective_suit(card, trump_suit, trump_rank) == lead_eff
+    ]
+
+    if len(suit_in_hand) >= lead_count and len(suit_in_played) != lead_count:
+        if lead_eff == "trump":
+            return MustFollowTrumpRejected()
+        return MustFollowLeadSuitRejected(lead_eff)
+
+    if len(suit_in_hand) < lead_count and len(suit_in_played) < len(suit_in_hand):
+        if lead_eff == "trump":
+            return MustExhaustTrumpRejected(len(suit_in_hand))
+        return MustExhaustLeadSuitRejected(lead_eff, len(suit_in_hand))
+
+    pair_reason = _explain_follow_pair_priority(
+        suit_in_hand,
+        suit_in_played,
+        lead_cards,
+        trump_suit,
+        trump_rank,
+    )
+    if pair_reason is not None:
+        return pair_reason
+
+    return IllegalFollowShapeRejected(_play_shape_info(lead_cards, trump_suit, trump_rank))
+
+
+def _explain_follow_pair_priority(
+    hand_suit_cards: list[Card],
+    played_suit_cards: list[Card],
+    lead_cards: list[Card],
+    trump_suit: Suit | None,
+    trump_rank: Rank,
+) -> Rejected | None:
+    hand_subs = decompose(hand_suit_cards, trump_suit, trump_rank) if hand_suit_cards else []
+    played_subs = decompose(played_suit_cards, trump_suit, trump_rank) if played_suit_cards else []
+    lead_subs = decompose(lead_cards, trump_suit, trump_rank)
+    lead_pair_count = sum(sub.pair_count for sub in lead_subs)
+    hand_avail_pair_count = sum(sub.pair_count for sub in hand_subs)
+    played_pair_count = sum(sub.pair_count for sub in played_subs)
+
+    pair_floor = min(hand_avail_pair_count, lead_pair_count)
+    if pair_floor > 0 and played_pair_count < pair_floor:
+        return MustFollowPairsRejected(
+            lead_pair_count=lead_pair_count,
+            lead_suit=effective_suit(lead_cards[0], trump_suit, trump_rank),
+            hand_pair_count=hand_avail_pair_count,
+            pair_floor=pair_floor,
+        )
+
+    if not _verify_follow_sub_play_priority(
+        hand_suit_cards,
+        played_suit_cards,
+        lead_cards,
+        effective_suit(lead_cards[0], trump_suit, trump_rank),
+        trump_suit,
+        trump_rank,
+    ):
+        return MustFollowHigherPatternRejected(_play_shape_info(lead_cards, trump_suit, trump_rank))
+    return None
+
+
+def _play_shape_info(
+    cards: list[Card],
+    trump_suit: Suit | None,
+    trump_rank: Rank,
+) -> PlayShapeInfo:
+    if not cards:
+        return PlayShapeInfo(kind="empty", suit=None, card_count=0)
+    suit = effective_suit(cards[0], trump_suit, trump_rank)
+    subs = decompose(cards, trump_suit, trump_rank)
+    if len(cards) == 1:
+        return PlayShapeInfo(kind="single", suit=suit, card_count=1)
+    if len(subs) == 1:
+        sub = subs[0]
+        if sub.pair_count >= 2:
+            return PlayShapeInfo(
+                kind="tractor",
+                suit=suit,
+                card_count=len(cards),
+                pair_count=sub.pair_count,
+            )
+        if sub.pair_count == 1:
+            return PlayShapeInfo(kind="pair", suit=suit, card_count=len(cards), pair_count=1)
+    return PlayShapeInfo(kind="cards", suit=suit, card_count=len(cards))
+
+
 def _verify_follow_sub_play_priority(
     hand_suit_cards: list[Card],
     played_suit_cards: list[Card],
     lead_cards: list[Card],
-    lead_eff: Suit | str,
+    lead_eff: EffectiveSuit,
     trump_suit: Suit | None,
     trump_rank: Rank,
 ) -> bool:

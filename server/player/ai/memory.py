@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import assert_never
 
-from server.sm.card_model import card_display
+from server.sm.card_model import Suit, card_display
 from server.sm.types import CompletedTrick
-from server.snapshot import StateSnapshot
+from server.snapshot import SerializedSuit, StateSnapshot
 
 type AITrickKey = tuple[int, int, int, tuple[tuple[int, tuple[str, ...]], ...]]
 
@@ -30,7 +31,7 @@ class AITrickRecord:
 class AIBidRecord:
     player: int
     cards: tuple[str, ...]
-    suit: str | None
+    suit: SerializedSuit | None
     count: int
 
 
@@ -73,7 +74,7 @@ class AIMemory:
             AIBidRecord(
                 player=event.player,
                 cards=tuple(card_display(card) for card in event.cards),
-                suit=event.suit.value if event.suit is not None else None,
+                suit=_suit_value(event.suit),
                 count=event.count,
             )
             for event in snapshot.bid_events
@@ -124,6 +125,23 @@ class AIMemory:
                     f"attempted={list(item.attempted_cards)}, forced={list(item.forced_cards)}"
                 )
         return "\n".join(lines)
+
+
+def _suit_value(suit: Suit | None) -> SerializedSuit | None:
+    if suit is None:
+        return None
+    match suit:
+        case Suit.HEARTS:
+            return "hearts"
+        case Suit.SPADES:
+            return "spades"
+        case Suit.DIAMONDS:
+            return "diamonds"
+        case Suit.CLUBS:
+            return "clubs"
+        case Suit.JOKER:
+            return "joker"
+    assert_never(suit)
 
 
 def _trick_key(trick: CompletedTrick) -> AITrickKey:

@@ -9,7 +9,7 @@ import logging
 import httpx
 import pytest
 
-from server.sm.result import Ok, Rejected
+from server.result import Ok, Rejected
 
 from . import ai, auto, base
 from .ai import config as ai_config
@@ -30,6 +30,7 @@ from .ai.openai_client import (
     chat_completion_message_log,
     extract_chat_completion_tool_call,
 )
+from .ai.rejections import AIToolRejected
 from .ai.tools import allowed_tool_specs, tool_call_to_message
 from .test_helpers import card, make_game, make_snapshot, make_state_message
 from server.sm.card_model import Rank, Suit
@@ -433,8 +434,12 @@ async def test_ai_player_records_server_rejection_in_debug_transcript() -> None:
     transcript = player.transcript()
     assert len(transcript) == 1
     assert transcript[0]["tool_result"] is not None
-    assert "game" in transcript[0]["tool_result"]
-    assert "illegal play" in transcript[0]["tool_result"]
+    tool_result = _json_object(transcript[0]["tool_result"])
+    assert tool_result["status"] == "rejected"
+    assert tool_result["error_type"] == "rule"
+    assert tool_result["reason"] == "illegal play"
+    assert "repair" in tool_result
+    assert "stage" not in tool_result
     game.receive.assert_not_awaited()
 
 
@@ -474,14 +479,18 @@ async def test_ai_player_repairs_server_rejected_tool_call() -> None:
     assert second_message.raw == {"type": "play", "cards": [repaired_card.id]}
     assert len(client.prompts) == 2
     assert "illegal play" in client.prompts[1].user
+    assert "error_type: rule" in client.prompts[1].user
 
     transcript = player.transcript()
     assert len(transcript) == 2
     assert transcript[0]["attempt"] == 1
     assert transcript[1]["attempt"] == 2
     assert transcript[0]["tool_result"] is not None
-    assert "game" in transcript[0]["tool_result"]
-    assert "illegal play" in transcript[0]["tool_result"]
+    tool_result = _json_object(transcript[0]["tool_result"])
+    assert tool_result["status"] == "rejected"
+    assert tool_result["error_type"] == "rule"
+    assert tool_result["reason"] == "illegal play"
+    assert "stage" not in tool_result
 
 
 @pytest.mark.asyncio
@@ -518,7 +527,9 @@ async def test_ai_player_repairs_play_not_matching_action_hint() -> None:
         "cards": [hint_card_1.id, hint_card_2.id],
     }
     assert len(client.prompts) == 2
-    assert "play_cards card_ids do not match action_hints" in client.prompts[1].user
+    assert "error_type: format" in client.prompts[1].user
+    assert "card_ids 必须完整等于 action_hints 里的某一组" in client.prompts[1].user
+    assert "legal_action_hint_groups" in client.prompts[1].user
 
 
 @pytest.mark.asyncio
@@ -551,7 +562,8 @@ async def test_ai_player_repairs_invalid_card_id_once() -> None:
     assert game.receive.call_args[0][1].seq == 9
     assert game.receive.call_args[0][1].raw == {"type": "play", "cards": [valid_card.id]}
     assert len(client.prompts) == 2
-    assert "card id not in hand" in client.prompts[1].user
+    assert f"牌 {invalid_card_id} 不在你的当前手牌里" in client.prompts[1].user
+    assert "error_type: format" in client.prompts[1].user
     assert valid_card.id in client.prompts[1].user
 
 
@@ -679,7 +691,10 @@ def test_ai_play_tool_rejects_partial_action_hint() -> None:
     )
 
     assert isinstance(result, Rejected)
-    assert result.reason == "play_cards card_ids do not match action_hints"
+    assert isinstance(result, AIToolRejected)
+    assert result.feedback.error_type == "format"
+    assert result.reason == "card_ids 必须完整等于 action_hints 里的某一组：不能只选其中一部分，也不能混合多组。"
+    assert result.feedback.repair == "从 legal_action_hint_groups 中复制一整组 card_ids。"
 
 
 def test_openai_client_always_disables_thinking() -> None:

@@ -6,12 +6,13 @@ team levels, round results, and game-over determination.
 
 from __future__ import annotations
 
-from typing import Literal
-
 from pydantic import BaseModel, ConfigDict
 
+from server.result import Ok, Rejected
+
 from .card_model import Rank
-from .result import Ok, Rejected, StateResult
+from .rejections import CannotProcessRoundResultRejected, CannotStartGameRejected
+from .types import GamePhase
 from .scoring import RoundResult
 
 
@@ -29,7 +30,7 @@ class GameState(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    phase: Literal["IDLE", "IN_ROUND", "GAME_OVER"]
+    phase: GamePhase
     team0_level: Rank
     team1_level: Rank
     declarer_team: int | None
@@ -51,7 +52,7 @@ def create_game() -> GameState:
     )
 
 
-def start_game(state: GameState) -> StateResult[GameState]:
+def start_game(state: GameState) -> Ok[GameState] | Rejected:
     """Start the game, transitioning IDLE -> IN_ROUND.
 
     Sets both team levels to TWO and round_number to 1.
@@ -59,9 +60,7 @@ def start_game(state: GameState) -> StateResult[GameState]:
     Returns Ok(new_state) on success, Rejected(reason) if not in IDLE phase.
     """
     if state.phase != "IDLE":
-        return Rejected(
-            f"不能在 {state.phase} 阶段开始游戏，需要 IDLE 阶段"
-        )
+        return CannotStartGameRejected(state.phase)
     return Ok(state.model_copy(update={
         "phase": "IN_ROUND",
         "team0_level": Rank.TWO,
@@ -70,7 +69,7 @@ def start_game(state: GameState) -> StateResult[GameState]:
     }))
 
 
-def process_round_result(state: GameState, result: RoundResult) -> StateResult[GameState]:
+def process_round_result(state: GameState, result: RoundResult) -> Ok[GameState] | Rejected:
     """Process a round result and update game state.
 
     Updates team levels from the result. If either team reaches ACE,
@@ -80,9 +79,7 @@ def process_round_result(state: GameState, result: RoundResult) -> StateResult[G
     Returns Ok(new_state) on success, Rejected(reason) if not in IN_ROUND phase.
     """
     if state.phase != "IN_ROUND":
-        return Rejected(
-            f"不能在 {state.phase} 阶段处理回合结果，需要 IN_ROUND 阶段"
-        )
+        return CannotProcessRoundResultRejected(state.phase)
 
     new_team0 = result.team0_new_level
     new_team1 = result.team1_new_level

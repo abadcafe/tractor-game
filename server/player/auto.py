@@ -20,7 +20,8 @@ from server.actions import (
 from server.messages import PlayerMessage, StateMessage
 from server.player.base import GameView, Player
 from server.sm.card_model import Card, Rank, Suit
-from server.snapshot import StateSnapshot
+from server.sm.types import PublicGamePhase
+from server.snapshot import AwaitingAction, StateSnapshot
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +49,8 @@ class TrickDecisionKey:
 class AutoDecisionKey:
     """Player-facing state identity for suppressing repeated failed card actions."""
 
-    phase: str
-    awaiting_action: str | None
+    phase: PublicGamePhase
+    awaiting_action: AwaitingAction | None
     hand_card_ids: tuple[str, ...]
     trick: TrickDecisionKey | None
     bid_winner_card_ids: tuple[str, ...]

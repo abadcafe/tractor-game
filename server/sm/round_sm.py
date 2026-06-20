@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import random
 
-from typing import Literal
-
 from pydantic import BaseModel, ConfigDict
+
+from server.result import Ok, Rejected
 
 from .card_model import Card, Rank, Suit, create_decks
 from .constants import (
@@ -24,8 +24,21 @@ from . import deal_bid_sm as db
 from . import stirring_sm as stir_mod
 from . import trick_sm as trick_mod
 from . import scoring
-from .result import Ok, Rejected, StateResult
-from .types import BidEvent, CompletedTrick
+from .rejections import (
+    BidNotAllowedInRoundPhaseRejected,
+    CardNotInHandRejected,
+    DealCardNotAllowedInRoundPhaseRejected,
+    DiscardNotAllowedInRoundPhaseRejected,
+    FinalizeDealNotAllowedInRoundPhaseRejected,
+    PlayNotAllowedInRoundPhaseRejected,
+    RoundMissingDealBidStateRejected,
+    RoundMissingStirringStateRejected,
+    RoundMissingTrickStateRejected,
+    SkipStirNotAllowedInRoundPhaseRejected,
+    StirNotAllowedInRoundPhaseRejected,
+    WrongTurnRejected,
+)
+from .types import BidEvent, CompletedTrick, RoundPhase
 from .scoring import RoundResult
 
 
@@ -49,7 +62,7 @@ class RoundState(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    phase: Literal["DEAL_BID", "STIRRING", "PLAYING", "SCORING", "WAITING"]
+    phase: RoundPhase
     declarer_team: int | None
     declarer_player: int | None
     defender_team: int | None
@@ -117,7 +130,7 @@ def create_round(input: RoundInput) -> RoundState:
     )
 
 
-def deal_next_card(state: RoundState) -> StateResult[RoundState]:
+def deal_next_card(state: RoundState) -> Ok[RoundState] | Rejected:
     """Deal the next card during DEAL_BID phase.
 
     Delegates to deal_bid.deal_next_card. After dealing, syncs players_hand.
@@ -126,11 +139,9 @@ def deal_next_card(state: RoundState) -> StateResult[RoundState]:
     Returns Ok(new_state) on success, Rejected(reason) on invalid state.
     """
     if state.phase != "DEAL_BID":
-        return Rejected(
-            f"发牌只能在发牌阶段进行，当前阶段：{state.phase}"
-        )
+        return DealCardNotAllowedInRoundPhaseRejected(state.phase)
     if state.deal_bid_state is None:
-        return Rejected("发牌状态异常")
+        return RoundMissingDealBidStateRejected()
 
     match db.deal_next_card(state.deal_bid_state):
         case Ok(value=new_db):
@@ -145,11 +156,11 @@ def deal_next_card(state: RoundState) -> StateResult[RoundState]:
                 return Ok(_transition_to_stirring(new_state, new_db))
 
             return Ok(new_state)
-        case Rejected(reason=reason):
-            return Rejected(reason)
+        case Rejected() as rejected:
+            return rejected
 
 
-def reveal(state: RoundState, event: BidEvent) -> StateResult[RoundState]:
+def reveal(state: RoundState, event: BidEvent) -> Ok[RoundState] | Rejected:
     """Reveal (bid) a card during DEAL_BID phase.
 
     Delegates to deal_bid.reveal.
@@ -157,11 +168,9 @@ def reveal(state: RoundState, event: BidEvent) -> StateResult[RoundState]:
     Returns Ok(new_state) on success, Rejected(reason) on invalid input.
     """
     if state.phase != "DEAL_BID":
-        return Rejected(
-            f"抢主只能在发牌阶段进行，当前阶段：{state.phase}"
-        )
+        return BidNotAllowedInRoundPhaseRejected(state.phase)
     if state.deal_bid_state is None:
-        return Rejected("抢主状态异常")
+        return RoundMissingDealBidStateRejected()
 
     match db.reveal(state.deal_bid_state, event):
         case Ok(value=new_db):
@@ -169,11 +178,11 @@ def reveal(state: RoundState, event: BidEvent) -> StateResult[RoundState]:
                 "deal_bid_state": new_db,
                 "bid_winner": new_db.bid_winner,
             }))
-        case Rejected(reason=reason):
-            return Rejected(reason)
+        case Rejected() as rejected:
+            return rejected
 
 
-def finalize_deal_bid(state: RoundState) -> StateResult[RoundState]:
+def finalize_deal_bid(state: RoundState) -> Ok[RoundState] | Rejected:
     """Finalize deal-bid after all cards dealt and last recipient has acted.
 
     Delegates to deal_bid.finalize_dealing, then transitions to STIRRING.
@@ -181,11 +190,9 @@ def finalize_deal_bid(state: RoundState) -> StateResult[RoundState]:
     Returns Ok(new_state) on success, Rejected(reason) on invalid state.
     """
     if state.phase != "DEAL_BID":
-        return Rejected(
-            f"只能在发牌阶段结束发牌，当前阶段：{state.phase}"
-        )
+        return FinalizeDealNotAllowedInRoundPhaseRejected(state.phase)
     if state.deal_bid_state is None:
-        return Rejected("发牌状态异常")
+        return RoundMissingDealBidStateRejected()
 
     match db.finalize_dealing(state.deal_bid_state):
         case Ok(value=new_db):
@@ -197,11 +204,11 @@ def finalize_deal_bid(state: RoundState) -> StateResult[RoundState]:
                 }),
                 new_db,
             ))
-        case Rejected(reason=reason):
-            return Rejected(reason)
+        case Rejected() as rejected:
+            return rejected
 
 
-def pass_stir(state: RoundState, player_index: int) -> StateResult[RoundState]:
+def pass_stir(state: RoundState, player_index: int) -> Ok[RoundState] | Rejected:
     """Pass during STIRRING phase.
 
     Delegates to stirring.pass_stir. If stirring completes, transitions to PLAYING.
@@ -209,17 +216,13 @@ def pass_stir(state: RoundState, player_index: int) -> StateResult[RoundState]:
     Returns Ok(new_state) on success, Rejected(reason) on invalid input.
     """
     if state.phase != "STIRRING":
-        return Rejected(
-            f"不能在 {state.phase} 阶段跳过反主"
-        )
+        return SkipStirNotAllowedInRoundPhaseRejected(state.phase)
     if state.stirring_state is None:
-        return Rejected("反主状态异常")
+        return RoundMissingStirringStateRejected()
 
     cur = state.stirring_state.current_player
     if player_index != cur:
-        return Rejected(
-            f"不是你的回合，当前是玩家 {cur} 的回合"
-        )
+        return WrongTurnRejected(cur)
     match stir_mod.pass_stir(state.stirring_state, cur):
         case Ok(value=new_ss):
             if new_ss.phase == "COMPLETE":
@@ -236,11 +239,11 @@ def pass_stir(state: RoundState, player_index: int) -> StateResult[RoundState]:
                 "stirring_state": new_ss,
                 "trump_suit": new_ss.trump_suit,
             }))
-        case Rejected(reason=reason):
-            return Rejected(reason)
+        case Rejected() as rejected:
+            return rejected
 
 
-def stir(state: RoundState, player_index: int, cards: list[Card]) -> StateResult[RoundState]:
+def stir(state: RoundState, player_index: int, cards: list[Card]) -> Ok[RoundState] | Rejected:
     """Stir (change trump suit) during STIRRING phase.
 
     Validates cards are in the current player's hand, then delegates
@@ -249,26 +252,20 @@ def stir(state: RoundState, player_index: int, cards: list[Card]) -> StateResult
     Returns Ok(new_state) on success, Rejected(reason) on invalid input.
     """
     if state.phase != "STIRRING":
-        return Rejected(
-            f"不能在 {state.phase} 阶段反主"
-        )
+        return StirNotAllowedInRoundPhaseRejected(state.phase)
     if state.stirring_state is None:
-        return Rejected("反主状态异常")
+        return RoundMissingStirringStateRejected()
 
     cur = state.stirring_state.current_player
     if player_index != cur:
-        return Rejected(
-            f"不是你的回合，当前是玩家 {cur} 的回合"
-        )
+        return WrongTurnRejected(cur)
     hand = state.players_hand[cur]
 
     # Validate cards are in player's hand
     hand_ids = {c.id for c in hand}
     for card in cards:
         if card.id not in hand_ids:
-            return Rejected(
-                f"牌 {card.id} 不在玩家 {cur} 的手牌中"
-            )
+            return CardNotInHandRejected(card.id, player_index=cur)
 
     match stir_mod.stir(state.stirring_state, cur, cards):
         case Ok(value=new_ss):
@@ -278,13 +275,13 @@ def stir(state: RoundState, player_index: int, cards: list[Card]) -> StateResult
                 "bid_winner": _bid_event_from_stir_cards(cur, cards),
             })
             return Ok(new_state)
-        case Rejected(reason=reason):
-            return Rejected(reason)
+        case Rejected() as rejected:
+            return rejected
 
 
 def stir_discard(
     state: RoundState, player_index: int, cards: list[Card]
-) -> StateResult[RoundState]:
+) -> Ok[RoundState] | Rejected:
     """Discard bottom cards during STIRRING EXCHANGING sub-phase.
 
     The player who just established/changed the trump must pick up bottom
@@ -294,11 +291,9 @@ def stir_discard(
     Returns Ok(new_state) on success, Rejected(reason) on invalid input.
     """
     if state.phase != "STIRRING":
-        return Rejected(
-            f"不能在 {state.phase} 阶段换底牌"
-        )
+        return DiscardNotAllowedInRoundPhaseRejected(state.phase)
     if state.stirring_state is None:
-        return Rejected("反主状态异常")
+        return RoundMissingStirringStateRejected()
 
     match stir_mod.stir_discard(state.stirring_state, player_index, cards):
         case Ok(value=new_ss):
@@ -311,11 +306,11 @@ def stir_discard(
             if new_ss.phase == "COMPLETE":
                 return Ok(_transition_to_playing(new_state))
             return Ok(new_state)
-        case Rejected(reason=reason):
-            return Rejected(reason)
+        case Rejected() as rejected:
+            return rejected
 
 
-def play(state: RoundState, player_index: int, cards: list[Card]) -> StateResult[RoundState]:
+def play(state: RoundState, player_index: int, cards: list[Card]) -> Ok[RoundState] | Rejected:
     """Play cards during PLAYING phase.
 
     Validates that player_index matches the current player, then delegates
@@ -326,23 +321,19 @@ def play(state: RoundState, player_index: int, cards: list[Card]) -> StateResult
     Returns Ok(new_state) on success, Rejected(reason) on invalid input.
     """
     if state.phase != "PLAYING":
-        return Rejected(
-            f"不能在 {state.phase} 阶段出牌"
-        )
+        return PlayNotAllowedInRoundPhaseRejected(state.phase)
     if state.trick_state is None:
-        return Rejected("出牌状态异常")
+        return RoundMissingTrickStateRejected()
 
     cur = state.trick_state.cur
     if player_index != cur:
-        return Rejected(
-            f"不是你的回合，当前是玩家 {cur} 的回合"
-        )
+        return WrongTurnRejected(cur)
 
     match trick_mod.play(state.trick_state, cur, cards):
         case Ok(value=new_trick):
             pass  # proceed below
-        case Rejected(reason=reason):
-            return Rejected(reason)
+        case Rejected() as rejected:
+            return rejected
 
     # Sync hands from trick to round state
     new_hands = [list(h) for h in new_trick.hands]

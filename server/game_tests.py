@@ -18,7 +18,8 @@ from server.messages import PlayerMessage, StateMessage
 from server.player import Player
 from server.sm import deal_bid_sm, round_sm, stirring_sm, trick_sm
 from server.sm.card_model import Card, Rank, Suit
-from server.sm.result import Ok, Rejected
+from server.result import Ok, Rejected
+from server.sm.rejections import CardNotInHandRejected
 from server.sm.types import BidEvent
 from server.snapshot import StateSnapshot
 
@@ -925,6 +926,7 @@ async def test_resolve_cards_rejects_on_unknown_id():
     game = await _start_game(_make_players())
     result = game.resolve_cards(player_index=0, card_ids=["NONEXISTENT-CARD-ID"])
     assert isinstance(result, Rejected)
+    assert isinstance(result, CardNotInHandRejected)
 
 
 # ---- Bug 1 regression: bid must not trigger _push_state_to_all cascade ----

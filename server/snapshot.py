@@ -8,10 +8,94 @@ Depends only on card_model and sm types.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TypedDict
+from typing import Literal, TypedDict, assert_never
 
 from server.sm.card_model import Card, Rank, Suit
-from server.sm.types import BidEvent, CompletedTrick, FailedThrow
+from server.sm.types import (
+    BidEvent,
+    CompletedTrick,
+    FailedThrow,
+    PublicGamePhase,
+    StirringPhase,
+)
+
+type AwaitingAction = Literal["bid", "stir", "discard", "play", "next_round"]
+type SerializedSuit = Literal["hearts", "spades", "diamonds", "clubs", "joker"]
+type SerializedRank = Literal[
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "10",
+    "J",
+    "Q",
+    "K",
+    "A",
+    "SJ",
+    "BJ",
+]
+type BidEventKind = Literal["trump_rank", "joker"]
+type JokerType = Literal["big", "small"]
+
+
+def _suit_value(suit: Suit) -> SerializedSuit:
+    match suit:
+        case Suit.HEARTS:
+            return "hearts"
+        case Suit.SPADES:
+            return "spades"
+        case Suit.DIAMONDS:
+            return "diamonds"
+        case Suit.CLUBS:
+            return "clubs"
+        case Suit.JOKER:
+            return "joker"
+    assert_never(suit)
+
+
+def _rank_value(rank: Rank) -> SerializedRank:
+    match rank:
+        case Rank.TWO:
+            return "2"
+        case Rank.THREE:
+            return "3"
+        case Rank.FOUR:
+            return "4"
+        case Rank.FIVE:
+            return "5"
+        case Rank.SIX:
+            return "6"
+        case Rank.SEVEN:
+            return "7"
+        case Rank.EIGHT:
+            return "8"
+        case Rank.NINE:
+            return "9"
+        case Rank.TEN:
+            return "10"
+        case Rank.JACK:
+            return "J"
+        case Rank.QUEEN:
+            return "Q"
+        case Rank.KING:
+            return "K"
+        case Rank.ACE:
+            return "A"
+        case Rank.SMALL_JOKER:
+            return "SJ"
+        case Rank.BIG_JOKER:
+            return "BJ"
+    assert_never(rank)
+
+
+def _optional_suit_value(suit: Suit | None) -> SerializedSuit | None:
+    if suit is None:
+        return None
+    return _suit_value(suit)
 
 
 def _card_to_dict(card: Card) -> CardDict:
@@ -22,8 +106,8 @@ def _card_to_dict(card: Card) -> CardDict:
     """
     return {
         "id": card.id,
-        "suit": card.suit.value,
-        "rank": card.rank.value,
+        "suit": _suit_value(card.suit),
+        "rank": _rank_value(card.rank),
     }
 
 
@@ -62,7 +146,7 @@ class ScoringSnapshot:
 class StirringStateSnapshot:
     """Snapshot of the stirring (炒地皮) phase state."""
 
-    phase: str
+    phase: StirringPhase
     trump_suit: Suit | None
     current_player: int
     declarer_player: int
@@ -92,7 +176,7 @@ class StateSnapshot:
     valid initial bid or latest successful stir after DEAL_BID.
     """
 
-    phase: str
+    phase: PublicGamePhase
     player_hand: list[Card]
     player_hand_counts: list[int]
     bottom_cards: list[Card]
@@ -106,7 +190,7 @@ class StateSnapshot:
     defender_point_cards: list[Card]
     failed_throw: FailedThrow | None
     action_hints: list[list[Card]]
-    awaiting_action: str | None
+    awaiting_action: AwaitingAction | None
     scoring: ScoringSnapshot | None
     winning_team: int | None
     team0_level: Rank
@@ -152,7 +236,7 @@ class StateSnapshot:
         if self.stirring_state is not None:
             stirring_dict = {
                 "phase": self.stirring_state.phase,
-                "trump_suit": self.stirring_state.trump_suit.value if self.stirring_state.trump_suit is not None else None,
+                "trump_suit": _optional_suit_value(self.stirring_state.trump_suit),
                 "current_player": self.stirring_state.current_player,
                 "declarer_player": self.stirring_state.declarer_player,
                 "exchanging_player": self.stirring_state.exchanging_player,
@@ -164,8 +248,8 @@ class StateSnapshot:
             "player_hand": [_card_to_dict(c) for c in self.player_hand],
             "player_hand_counts": self.player_hand_counts,
             "bottom_cards": [_card_to_dict(c) for c in self.bottom_cards],
-            "trump_suit": self.trump_suit.value if self.trump_suit is not None else None,
-            "trump_rank": self.trump_rank.value,
+            "trump_suit": _optional_suit_value(self.trump_suit),
+            "trump_rank": _rank_value(self.trump_rank),
             "declarer_team": self.declarer_team,
             "declarer_player": self.declarer_player,
             "defender_points": self.defender_points,
@@ -183,8 +267,8 @@ class StateSnapshot:
             "awaiting_action": self.awaiting_action,
             "scoring": scoring_dict,
             "winning_team": self.winning_team,
-            "team0_level": self.team0_level.value,
-            "team1_level": self.team1_level.value,
+            "team0_level": _rank_value(self.team0_level),
+            "team1_level": _rank_value(self.team1_level),
             "bid_events": [_serialize_bid_event(e) for e in self.bid_events],
             "bid_winner": _serialize_bid_event(self.bid_winner) if self.bid_winner is not None else None,
             "stirring_state": stirring_dict,
@@ -198,7 +282,7 @@ def _serialize_bid_event(event: BidEvent) -> BidEventDict:
         "player": event.player,
         "cards": [_card_to_dict(c) for c in event.cards],
         "kind": event.kind,
-        "suit": event.suit.value if event.suit is not None else None,
+        "suit": _optional_suit_value(event.suit),
         "joker_type": event.joker_type,
         "count": event.count,
     }
@@ -236,8 +320,8 @@ class CardDict(TypedDict):
     """Serialized Card: {"id", "suit", "rank"}."""
 
     id: str
-    suit: str
-    rank: str
+    suit: SerializedSuit
+    rank: SerializedRank
 
 
 class TrickSlotDict(TypedDict):
@@ -292,8 +376,8 @@ class ScoringDict(TypedDict):
 class StirringStateDict(TypedDict):
     """Serialized stirring phase state."""
 
-    phase: str
-    trump_suit: str | None
+    phase: StirringPhase
+    trump_suit: SerializedSuit | None
     current_player: int
     declarer_player: int
     exchanging_player: int | None
@@ -305,9 +389,9 @@ class BidEventDict(TypedDict):
 
     player: int
     cards: list[CardDict]
-    kind: str
-    suit: str | None
-    joker_type: str | None
+    kind: BidEventKind
+    suit: SerializedSuit | None
+    joker_type: JokerType | None
     count: int
 
 
@@ -319,12 +403,12 @@ class SnapshotDict(TypedDict):
     action.
     """
 
-    phase: str
+    phase: PublicGamePhase
     player_hand: list[CardDict]
     player_hand_counts: list[int]
     bottom_cards: list[CardDict]
-    trump_suit: str | None
-    trump_rank: str
+    trump_suit: SerializedSuit | None
+    trump_rank: SerializedRank
     declarer_team: int | None
     declarer_player: int | None
     defender_points: int
@@ -333,11 +417,11 @@ class SnapshotDict(TypedDict):
     defender_point_cards: list[CardDict]
     failed_throw: FailedThrowDict | None
     action_hints: list[list[CardDict]]
-    awaiting_action: str | None
+    awaiting_action: AwaitingAction | None
     scoring: ScoringDict | None
     winning_team: int | None
-    team0_level: str
-    team1_level: str
+    team0_level: SerializedRank
+    team1_level: SerializedRank
     bid_events: list[BidEventDict]
     bid_winner: BidEventDict | None
     stirring_state: StirringStateDict | None

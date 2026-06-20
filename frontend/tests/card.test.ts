@@ -5,9 +5,9 @@ import {
   isTrumpRank,
   suitSymbol,
 } from "../core/card.ts";
-import type { Card } from "../core/types.ts";
+import type { Card, Rank, Suit } from "../core/types.ts";
 
-function makeCard(suit: string, rank: string): Card {
+function makeCard(suit: Suit, rank: Rank): Card {
   return { id: `D1-${suit}-${rank}`, suit, rank };
 }
 

@@ -1,8 +1,37 @@
 /** A single card from the backend. Matches _card_to_dict() output. */
+export type Suit = "hearts" | "spades" | "diamonds" | "clubs" | "joker";
+export type Rank =
+  | "2"
+  | "3"
+  | "4"
+  | "5"
+  | "6"
+  | "7"
+  | "8"
+  | "9"
+  | "10"
+  | "J"
+  | "Q"
+  | "K"
+  | "A"
+  | "SJ"
+  | "BJ";
+export type PublicGamePhase =
+  | "DEAL_BID"
+  | "STIRRING"
+  | "PLAYING"
+  | "SCORING"
+  | "WAITING"
+  | "GAME_OVER";
+export type StirringPhase = "WAITING" | "EXCHANGING" | "COMPLETE";
+export type AwaitingAction = "bid" | "stir" | "discard" | "play" | "next_round";
+export type BidEventKind = "trump_rank" | "joker";
+export type JokerType = "big" | "small";
+
 export interface Card {
   id: string;
-  suit: string;
-  rank: string;
+  suit: Suit;
+  rank: Rank;
 }
 
 /** One player's contribution in a trick slot. */
@@ -30,23 +59,23 @@ export interface FailedThrow {
 export interface BidEvent {
   player: number;
   cards: Card[];
-  kind: "trump_rank" | "joker";
-  suit: string | null;
-  joker_type: "big" | "small" | null;
+  kind: BidEventKind;
+  suit: Suit | null;
+  joker_type: JokerType | null;
   count: number;
 }
 
 /** Full game state snapshot pushed by the server.
  *  Matches server/snapshot.py SnapshotDict exactly. */
 export interface StateSnapshot {
-  phase: "DEAL_BID" | "STIRRING" | "PLAYING" | "WAITING" | "GAME_OVER";
+  phase: PublicGamePhase;
 
   player_hand: Card[];
   player_hand_counts: number[];
   bottom_cards: Card[];
 
-  trump_rank: string;
-  trump_suit: string | null;
+  trump_rank: Rank;
+  trump_suit: Suit | null;
 
   declarer_team: number | null;
   declarer_player: number | null;
@@ -74,11 +103,11 @@ export interface StateSnapshot {
   bid_events: BidEvent[];
   bid_winner: BidEvent | null;
 
-  awaiting_action: string | null;
+  awaiting_action: AwaitingAction | null;
 
   stirring_state: {
-    phase: string;
-    trump_suit: string | null;
+    phase: StirringPhase;
+    trump_suit: Suit | null;
     current_player: number;
     declarer_player: number;
     exchanging_player: number | null;
@@ -95,7 +124,7 @@ export interface StateSnapshot {
 
   winning_team: number | null;
 
-  team0_level: string;
-  team1_level: string;
+  team0_level: Rank;
+  team1_level: Rank;
   next_round_confirmed: number[];
 }

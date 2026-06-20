@@ -1,4 +1,4 @@
-import type { Card } from "../core/types.ts";
+import type { Card, Rank } from "../core/types.ts";
 import { isJoker, isTrumpRank } from "../core/card.ts";
 
 /**
@@ -47,7 +47,7 @@ export function validateDiscard(
  */
 export function validateBidCards(
   selectedCards: Card[],
-  trumpRank: string,
+  trumpRank: Rank,
 ): boolean {
   if (selectedCards.length === 0 || selectedCards.length > 2) {
     return false;
@@ -72,7 +72,7 @@ export function validateBidCards(
  */
 export function validateStirCards(
   selectedCards: Card[],
-  trumpRank: string,
+  trumpRank: Rank,
 ): boolean {
   if (selectedCards.length !== 2) {
     return false;

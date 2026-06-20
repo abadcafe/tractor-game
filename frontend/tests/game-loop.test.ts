@@ -5,6 +5,13 @@ import type { ServerMessage } from "../core/protocol.ts";
 import type { InteractionMode } from "../engine/types.ts";
 import { StateManager } from "../core/state.ts";
 
+type MalformedStateSnapshot = Omit<StateSnapshot, "awaiting_action"> & {
+  awaiting_action: string | null;
+};
+type MalformedServerMessage = Omit<ServerMessage, "state"> & {
+  state: MalformedStateSnapshot;
+};
+
 function makeSnapshot(
   overrides: Partial<StateSnapshot> = {},
 ): StateSnapshot {
@@ -289,11 +296,15 @@ Deno.test("test_handleMessage_unknown_awaiting_returns_null", () => {
   lastInteractionMode = null;
   const stateManager = new StateManager();
   const loop = new GameLoop(stateManager, mockRender, mockContainer);
-  const msg = makeStateMsg({
-    phase: "PLAYING",
-    awaiting_action: "unknown_action",
-  });
-  loop.handleMessage(msg);
+  const malformedMsg: MalformedServerMessage = {
+    type: "state",
+    seq: 1,
+    state: {
+      ...makeSnapshot({ phase: "PLAYING" }),
+      awaiting_action: "unknown_action",
+    },
+  };
+  loop.handleMessage(malformedMsg as unknown as ServerMessage);
   assertEquals(lastInteractionMode, null);
 });
 

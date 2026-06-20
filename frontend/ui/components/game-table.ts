@@ -2,6 +2,7 @@ import type {
   BidEvent,
   CompletedTrick,
   FailedThrow,
+  PublicGamePhase,
   StateSnapshot,
 } from "../../core/types.ts";
 import { el } from "../dom.ts";
@@ -63,10 +64,11 @@ function actionText(snapshot: StateSnapshot): string {
 }
 
 /** Phase labels in Chinese. */
-const PHASE_LABELS: Record<string, string> = {
+const PHASE_LABELS: Record<PublicGamePhase, string> = {
   DEAL_BID: "抢主阶段",
   STIRRING: "反主阶段",
   PLAYING: "出牌阶段",
+  SCORING: "结算中",
   WAITING: "结算中",
   GAME_OVER: "游戏结束",
 };

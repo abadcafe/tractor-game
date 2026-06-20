@@ -1,12 +1,14 @@
 /** Types exported from engine layer to UI layer. */
 
+import type { AwaitingAction, Suit } from "../core/types.ts";
+
 /** Action type for onAction callback. */
 export type GameAction = "play" | "discard" | "next_round";
 
 /** Interaction mode computed by GameLoop from awaiting_action.
  *  Passed to renderer so it knows which buttons/dialogs to show.
  *  null = spectator mode (no interaction). */
-export type InteractionMode = "bid" | "stir" | "discard" | "play" | "next_round" | null;
+export type InteractionMode = AwaitingAction | null;
 
 /** A single bid option computed from the player's hand.
  *  Displayed as a clickable pill in the bidding panel.
@@ -17,7 +19,7 @@ export interface BidOption {
   /** Human-readable label, e.g. "♠♠2" or "大王对". */
   label: string;
   /** Resulting trump suit if this bid wins. null for joker bids. */
-  trumpSuit: string | null;
+  trumpSuit: Suit | null;
   /** Bid priority (higher = stronger). */
   priority: number;
 }

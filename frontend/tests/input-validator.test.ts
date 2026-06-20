@@ -4,9 +4,9 @@ import {
   validateDiscard,
   validatePlay,
 } from "../engine/input-validator.ts";
-import type { Card } from "../core/types.ts";
+import type { Card, Rank, Suit } from "../core/types.ts";
 
-function makeCard(id: string, suit: string, rank: string): Card {
+function makeCard(id: string, suit: Suit, rank: Rank): Card {
   return { id, suit, rank };
 }
 

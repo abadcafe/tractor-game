@@ -7,7 +7,7 @@ from server.player.ai.client import AIToolCall
 from server.player.ai.tools import tool_call_to_message
 from server.sm.card_model import Card
 from server.sm.comparator import bid_value
-from server.sm.result import Ok, Rejected
+from server.result import Ok, Rejected
 from server.snapshot import StateSnapshot
 
 type LocalDecision = Ok[PlayerMessage] | Rejected | None
@@ -19,23 +19,23 @@ def local_message(seq: int, snapshot: StateSnapshot) -> LocalDecision:
     if awaiting == "next_round":
         return tool_call_to_message(seq, snapshot, AIToolCall(
             name="confirm_next_round",
-            arguments={"reason": "local confirm"},
+            arguments={"reason": "本地确认"},
         ))
     if awaiting == "bid":
         if snapshot.action_hints:
             cards = _smallest_bid_hint(snapshot)
             return tool_call_to_message(seq, snapshot, AIToolCall(
                 name="bid_trump",
-                arguments={"card_ids": [card.id for card in cards], "reason": "local smallest bid hint"},
+                arguments={"card_ids": [card.id for card in cards], "reason": "本地选择最小抢主提示"},
             ))
         return tool_call_to_message(seq, snapshot, AIToolCall(
             name="pass_bid",
-            arguments={"reason": "local pass bid"},
+            arguments={"reason": "本地不抢"},
         ))
     if awaiting == "stir" and not snapshot.action_hints:
         return tool_call_to_message(seq, snapshot, AIToolCall(
             name="pass_stir",
-            arguments={"reason": "local pass stir without hints"},
+            arguments={"reason": "本地不反"},
         ))
     return None
 

@@ -14,7 +14,9 @@ from .play_rules import (
     sort_play_action_hints,
     TOO_MANY_PLAY_HINTS,
 )
-from .result import Ok, Rejected
+from server.result import Ok, Rejected
+
+from .rejections import TooManyPlayHintsRejected
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
@@ -1137,6 +1139,7 @@ class TestGetLegalPlayHints:
         )
 
         assert isinstance(result, Rejected)
+        assert isinstance(result, TooManyPlayHintsRejected)
         assert result.reason == TOO_MANY_PLAY_HINTS
 
     def test_following_empty_lead_cards(self) -> None:

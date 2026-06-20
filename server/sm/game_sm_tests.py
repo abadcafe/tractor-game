@@ -2,7 +2,7 @@
 from itertools import combinations
 
 from .card_model import Rank
-from .result import Ok, Rejected
+from server.result import Ok, Rejected
 from .scoring import RoundResult
 from .game_sm import (
     create_game, start_game, process_round_result,
@@ -493,7 +493,7 @@ def _completed_trick_key(trick: CompletedTrick | None) -> CompletedTrickKey | No
 
 
 def _unwrap_round(result: Ok[RoundState] | Rejected) -> RoundState:
-    """Unwrap a StateResult[RoundState], asserting Ok."""
+    """Unwrap an Ok[RoundState] | Rejected result, asserting Ok."""
     assert isinstance(result, Ok), f"Expected Ok, got Rejected: {result.reason}"
     return result.value
 

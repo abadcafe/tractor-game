@@ -1,4 +1,4 @@
-import type { Card, StateSnapshot } from "../../core/types.ts";
+import type { Card, Rank, StateSnapshot, Suit } from "../../core/types.ts";
 import type {
   BidOption,
   GameAction,
@@ -521,8 +521,8 @@ function canSelectCard(
 /** Check if a card is a trump card (for visual highlighting). */
 function isTrumpCard(
   c: Card,
-  trumpSuit: string | null,
-  trumpRank: string,
+  trumpSuit: Suit | null,
+  trumpRank: Rank,
 ): boolean {
   if (isJoker(c)) return true;
   if (isTrumpRank(c, trumpRank)) return true;
@@ -532,8 +532,8 @@ function isTrumpCard(
 
 function handCardClass(
   card: Card,
-  trumpSuit: string | null,
-  trumpRank: string,
+  trumpSuit: Suit | null,
+  trumpRank: Rank,
 ): string {
   let className = `card suit-${card.suit}`;
   if (isPointCard(card)) className += " point-card";

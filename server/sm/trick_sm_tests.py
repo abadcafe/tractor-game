@@ -6,7 +6,9 @@ from .trick_sm import (
     TrickState, TrickInput, TrickResult,
     create_trick, play,
 )
-from .result import Ok, Rejected
+from server.result import Ok, Rejected
+
+from .rejections import MustFollowLeadSuitRejected
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
@@ -366,6 +368,8 @@ class TestPlayValidation:
         # Player 1 tries to play ♠Q (off-suit) -- should be rejected
         result = play(state, player=1, cards=[hands[1][1]])
         assert isinstance(result, Rejected)
+        assert isinstance(result, MustFollowLeadSuitRejected)
+        assert result.reason == "必须跟首出花色：首出是红桃，你手里还有红桃。"
         # ♠Q -- illegal
         # Player 1 plays ♥K (correct follow-suit) -- should succeed
         result = play(state, player=1, cards=[hands[1][0]])  # ♥K -- legal
@@ -482,6 +486,8 @@ class TestPlayFollowPairSuit:
         # Player 1 tries to play ♠Q pair (off-suit) -- should be rejected
         result = play(state, player=1, cards=hands[1][2:4])
         assert isinstance(result, Rejected)
+        assert isinstance(result, MustFollowLeadSuitRejected)
+        assert result.reason == "必须跟首出花色：首出是红桃，你手里还有红桃。"
         # Player 1 plays ♥K pair (correct follow-suit) -- should succeed
         result = play(state, player=1, cards=hands[1][:2])
         assert isinstance(result, Ok)

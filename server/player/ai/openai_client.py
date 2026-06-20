@@ -23,11 +23,31 @@ from server.player.ai.client import (
     AIToolSpec,
     JSONObject,
     JSONValue,
+    OpenAIAPIKeyMissingRejected,
+    OpenAIChoiceCountRejected,
+    OpenAIChoiceNotObjectRejected,
+    OpenAIChoicesMissingRejected,
+    OpenAIFunctionCallArgumentsInvalidJSONRejected,
+    OpenAIFunctionCallArgumentsNotJSONObjectRejected,
+    OpenAIFunctionCallMissingNameOrArgumentsRejected,
+    OpenAIHTTPStatusRejected,
+    OpenAIInvalidJSONRejected,
+    OpenAIMessageMissingRejected,
+    OpenAINetworkRejected,
+    OpenAIRequestNotAttemptedRejected,
+    OpenAIRequestTimedOutRejected,
+    OpenAIResponseLengthRejected,
+    OpenAIResponseNotJSONObjectRejected,
+    OpenAIToolCallCountRejected,
+    OpenAIToolCallMissingFunctionRejected,
+    OpenAIToolCallNotFunctionRejected,
+    OpenAIToolCallNotObjectRejected,
+    OpenAIToolCallsMissingRejected,
     is_json_value,
     is_json_object,
 )
 from server.player.ai.config import AIConfig
-from server.sm.result import Ok, Rejected
+from server.result import Ok, Rejected
 
 logger = logging.getLogger(__name__)
 
@@ -51,12 +71,13 @@ class OpenAIChatCompletionsClient(AIClient):
         tools: list[AIToolSpec],
     ) -> Ok[AIDecision] | Rejected:
         if self.config.api_key is None:
+            rejection = OpenAIAPIKeyMissingRejected()
             return AIClientRejected(
-                "TRACTOR_AI_API_KEY or OPENAI_API_KEY is not set",
+                rejection.reason,
                 api=AIAPIInteraction(
                     error=_api_error_content(
                         title="API CONFIG ERROR",
-                        reason="TRACTOR_AI_API_KEY or OPENAI_API_KEY is not set",
+                        reason=rejection.reason,
                     ),
                 ),
             )
@@ -126,7 +147,7 @@ class OpenAIChatCompletionsClient(AIClient):
         max_attempts = max(self.config.max_retries, 0) + 1
         api_request = _api_request_content(endpoint, payload)
         api_errors: list[str] = []
-        last_reason = "OpenAI-compatible request was not attempted"
+        last_rejection: Rejected = OpenAIRequestNotAttemptedRejected()
 
         async with httpx.AsyncClient(
             timeout=self.config.timeout_seconds,
@@ -152,17 +173,17 @@ class OpenAIChatCompletionsClient(AIClient):
                             error=_combine_api_errors(api_errors, final_reason=None),
                         ),
                     ))
-                last_reason = result.reason
+                last_rejection = result
                 if retryable and attempt < max_attempts:
                     await asyncio.sleep(self.config.retry_delay_seconds)
                 else:
                     break
 
         return AIClientRejected(
-            last_reason,
+            last_rejection.reason,
             api=AIAPIInteraction(
                 request=api_request,
-                error=_combine_api_errors(api_errors, final_reason=last_reason),
+                error=_combine_api_errors(api_errors, final_reason=last_rejection.reason),
             ),
         )
 
@@ -198,7 +219,7 @@ class OpenAIChatCompletionsClient(AIClient):
                 attempt,
                 max_attempts,
             )
-            return (Rejected("OpenAI-compatible request timed out"), True, None, error_content)
+            return (OpenAIRequestTimedOutRejected(), True, None, error_content)
         except httpx.RequestError as exc:
             duration_ms = _elapsed_ms(started_at)
             error_content = _api_request_error_content(
@@ -215,7 +236,7 @@ class OpenAIChatCompletionsClient(AIClient):
                 max_attempts,
                 exc,
             )
-            return (Rejected("OpenAI-compatible network error"), True, None, error_content)
+            return (OpenAINetworkRejected(), True, None, error_content)
 
         duration_ms = _elapsed_ms(started_at)
         try:
@@ -237,7 +258,7 @@ class OpenAIChatCompletionsClient(AIClient):
                 status_code,
                 _truncate(exc.response.text),
             )
-            rejection = Rejected(f"OpenAI-compatible HTTP error {status_code}")
+            rejection = OpenAIHTTPStatusRejected(status_code)
             return (rejection, _retryable_status(status_code), None, error_content)
 
         response_body = response.text
@@ -259,11 +280,12 @@ class OpenAIChatCompletionsClient(AIClient):
                 body=response_body,
             )
             logger.warning("AI OpenAI-compatible returned invalid JSON: %s", _truncate(response_body))
+            rejection = OpenAIInvalidJSONRejected()
             return (
-                Rejected("OpenAI-compatible returned invalid JSON"),
+                rejection,
                 False,
                 response_content,
-                _api_error_content(title="API JSON ERROR", reason="OpenAI-compatible returned invalid JSON"),
+                _api_error_content(title="API JSON ERROR", reason=rejection.reason),
             )
 
         if not is_json_object(parsed):
@@ -275,13 +297,14 @@ class OpenAIChatCompletionsClient(AIClient):
                 status_code=response.status_code,
                 body=parsed if is_json_value(parsed) else response_body,
             )
+            rejection = OpenAIResponseNotJSONObjectRejected()
             return (
-                Rejected("OpenAI-compatible response is not a JSON object"),
+                rejection,
                 False,
                 response_content,
                 _api_error_content(
                     title="API SHAPE ERROR",
-                    reason="OpenAI-compatible response is not a JSON object",
+                    reason=rejection.reason,
                 ),
             )
         response_content = _api_response_content(
@@ -336,12 +359,8 @@ def extract_chat_completion_tool_call(response: JSONObject) -> Ok[AIToolCall] | 
     tool_calls = message.get("tool_calls")
     if not _is_object_list(tool_calls):
         if _extract_finish_reason(response) == "length":
-            return Rejected(
-                "OpenAI-compatible response hit max_tokens before tool call "
-                "(finish_reason=length); increase TRACTOR_AI_MAX_OUTPUT_TOKENS "
-                "or disable thinking",
-            )
-        return Rejected("OpenAI-compatible message has no tool_calls list")
+            return OpenAIResponseLengthRejected()
+        return OpenAIToolCallsMissingRejected()
     calls: list[AIToolCall] = []
     for item in tool_calls:
         call_result = _extract_one_tool_call(item)
@@ -349,7 +368,7 @@ def extract_chat_completion_tool_call(response: JSONObject) -> Ok[AIToolCall] | 
             return call_result
         calls.append(call_result.value)
     if len(calls) != 1:
-        return Rejected(f"OpenAI-compatible returned {len(calls)} tool calls; expected exactly one")
+        return OpenAIToolCallCountRejected(len(calls))
     return Ok(calls[0])
 
 
@@ -387,15 +406,15 @@ def assistant_content(response: JSONObject) -> str | None:
 def _extract_message(response: JSONObject) -> Ok[dict[str, object]] | Rejected:
     choices = response.get("choices")
     if not _is_object_list(choices):
-        return Rejected("OpenAI-compatible response has no choices list")
+        return OpenAIChoicesMissingRejected()
     if len(choices) != 1:
-        return Rejected(f"OpenAI-compatible returned {len(choices)} choices; expected exactly one")
+        return OpenAIChoiceCountRejected(len(choices))
     choice = choices[0]
     if not _is_object_dict(choice):
-        return Rejected("OpenAI-compatible choice is not an object")
+        return OpenAIChoiceNotObjectRejected()
     message = choice.get("message")
     if not _is_object_dict(message):
-        return Rejected("OpenAI-compatible choice has no message object")
+        return OpenAIMessageMissingRejected()
     return Ok(message)
 
 
@@ -414,22 +433,22 @@ def _extract_finish_reason(response: JSONObject) -> str | None:
 
 def _extract_one_tool_call(item: object) -> Ok[AIToolCall] | Rejected:
     if not _is_object_dict(item):
-        return Rejected("OpenAI-compatible tool_call is not an object")
+        return OpenAIToolCallNotObjectRejected()
     if item.get("type") != "function":
-        return Rejected("OpenAI-compatible tool_call is not a function call")
+        return OpenAIToolCallNotFunctionRejected()
     function = item.get("function")
     if not _is_object_dict(function):
-        return Rejected("OpenAI-compatible tool_call missing function object")
+        return OpenAIToolCallMissingFunctionRejected()
     name = function.get("name")
     arguments_raw = function.get("arguments")
     if not isinstance(name, str) or not isinstance(arguments_raw, str):
-        return Rejected("OpenAI-compatible function call missing name or arguments")
+        return OpenAIFunctionCallMissingNameOrArgumentsRejected()
     try:
         arguments_obj: object = json.loads(arguments_raw)
     except JSONDecodeError:
-        return Rejected("OpenAI-compatible function call arguments are not valid JSON")
+        return OpenAIFunctionCallArgumentsInvalidJSONRejected()
     if not is_json_object(arguments_obj):
-        return Rejected("OpenAI-compatible function call arguments are not a JSON object")
+        return OpenAIFunctionCallArgumentsNotJSONObjectRejected()
     return Ok(AIToolCall(name=name, arguments=arguments_obj))
 
 

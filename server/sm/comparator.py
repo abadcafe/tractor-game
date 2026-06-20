@@ -4,6 +4,7 @@ Provides trump ordering, effective suit determination, and play comparison.
 """
 
 from .card_model import Card, Suit, Rank
+from .types import EffectiveSuit
 
 # ---- Constants ----
 
@@ -105,7 +106,7 @@ def trump_rank_order(card: Card, trump_suit: Suit | None, trump_rank: Rank) -> i
 
 def effective_suit(
     card: Card, trump_suit: Suit | None, trump_rank: Rank
-) -> Suit | str:
+) -> EffectiveSuit:
     """Return the effective suit of a card.
 
     Returns "trump" if the card is a trump card, otherwise the card's actual suit.

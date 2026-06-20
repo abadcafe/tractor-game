@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Self
 
 type AIProvider = Literal["openai"]
 
@@ -26,7 +26,7 @@ class AIConfig:
     log_tool_use: bool
 
     @classmethod
-    def from_env(cls) -> "AIConfig":
+    def from_env(cls) -> Self:
         return cls(
             provider="openai",
             base_url=os.environ.get("TRACTOR_AI_BASE_URL", "https://api.openai.com/v1"),

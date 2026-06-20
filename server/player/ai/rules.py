@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Self
 
 from server.snapshot import StateSnapshot
 
@@ -13,12 +14,12 @@ class RuleBook:
     sections: dict[str, str]
 
     @classmethod
-    def from_default(cls) -> "RuleBook":
+    def from_default(cls) -> Self:
         path = Path(__file__).with_name("rules.md")
         return cls.from_markdown(path.read_text(encoding="utf-8"))
 
     @classmethod
-    def from_markdown(cls, text: str) -> "RuleBook":
+    def from_markdown(cls, text: str) -> Self:
         sections: dict[str, list[str]] = {}
         current: str | None = None
         for line in text.splitlines():

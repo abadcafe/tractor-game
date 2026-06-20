@@ -4,20 +4,21 @@ Manages one trick: leading player plays, then 3 followers in CCW order.
 After all 4 play, determine winner and points.
 """
 
-from typing import Literal
-
 from pydantic import BaseModel, ConfigDict
+
+from server.result import Ok, Rejected
 
 from .card_model import Card, Suit, Rank
 from .comparator import effective_suit
 from .constants import next_player_ccw, get_team_index
 from .play_rules import (
     compare_plays,
+    illegal_follow_rejection,
     is_legal_follow,
     resolve_lead_throw,
 )
-from .result import Ok, Rejected, StateResult
-from .types import CompletedTrick, CompletedTrickSlot, FailedThrow
+from .rejections import CardsNotInHandRejected, EmptyPlayRejected, TrickResolvedRejected, WrongTurnRejected
+from .types import CompletedTrick, CompletedTrickSlot, FailedThrow, TrickPhase
 
 
 # ---- Models ----
@@ -52,7 +53,7 @@ class TrickState(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    phase: Literal["LEADING", "FOLLOWING", "RESOLVED"]
+    phase: TrickPhase
     lead_player: int
     slots: list[CompletedTrickSlot]
     played: int
@@ -87,7 +88,7 @@ def create_trick(input: TrickInput) -> TrickState:
     )
 
 
-def play(state: TrickState, player: int, cards: list[Card]) -> StateResult[TrickState]:
+def play(state: TrickState, player: int, cards: list[Card]) -> Ok[TrickState] | Rejected:
     """Play cards for the current player.
 
     Validates:
@@ -99,23 +100,23 @@ def play(state: TrickState, player: int, cards: list[Card]) -> StateResult[Trick
     """
     # Validate it's this player's turn
     if player != state.cur:
-        return Rejected(f"不是你的回合，当前是玩家 {state.cur} 的回合")
+        return WrongTurnRejected(state.cur)
 
     # Validate phase is not already resolved
     if state.phase == "RESOLVED":
-        return Rejected("该轮已结束")
+        return TrickResolvedRejected()
 
     hand = state.hands[player]
 
     # Validate at least one card is being played
     if not cards:
-        return Rejected("必须至少出一张牌")
+        return EmptyPlayRejected()
 
     # Validate cards are in player's hand
     played_ids = {c.id for c in cards}
     hand_ids = {c.id for c in hand}
     if not played_ids.issubset(hand_ids):
-        return Rejected("出的牌不在手牌中")
+        return CardsNotInHandRejected()
 
     actual_cards = list(cards)
     failed_throw: FailedThrow | None = None
@@ -135,8 +136,8 @@ def play(state: TrickState, player: int, cards: list[Card]) -> StateResult[Trick
         ):
             case Ok(value=resolution):
                 actual_cards = list(resolution.played_cards)
-            case Rejected(reason=reason):
-                return Rejected(reason)
+            case Rejected() as rejected:
+                return rejected
 
         attempted_ids = {c.id for c in cards}
         actual_ids = {c.id for c in actual_cards}
@@ -155,8 +156,12 @@ def play(state: TrickState, player: int, cards: list[Card]) -> StateResult[Trick
             # Kept as raise because it signals a code bug, not a race condition.
             raise ValueError("Lead cards must exist in FOLLOWING phase")
         if not is_legal_follow(hand, actual_cards, lead_cards, state.trump_suit, state.trump_rank):
-            return Rejected(
-                "必须跟牌"
+            return illegal_follow_rejection(
+                hand,
+                actual_cards,
+                lead_cards,
+                state.trump_suit,
+                state.trump_rank,
             )
 
     # Build new state (immutable)
@@ -236,8 +241,8 @@ def _auto_complete_last_trick(state: TrickState) -> TrickState:
         match play(next_state, player, cards):
             case Ok(value=played_state):
                 next_state = played_state
-            case Rejected(reason=reason):
-                raise RuntimeError(f"auto-complete last trick rejected for player {player}: {reason}")
+            case Rejected() as rejected:
+                raise RuntimeError(f"auto-complete last trick rejected for player {player}: {rejected.reason}")
     if next_state.phase != "RESOLVED":
         raise RuntimeError("auto-complete last trick did not resolve")
     return next_state

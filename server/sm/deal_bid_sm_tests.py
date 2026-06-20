@@ -1,6 +1,6 @@
 """Tests for sm.deal_bid_sm module."""
 from .card_model import Card, Suit, Rank, create_decks
-from .result import Ok, Rejected
+from server.result import Ok, Rejected
 from .types import BidEvent
 from .deal_bid_sm import (
     DealBidState, DealBidInput, DealBidResult,

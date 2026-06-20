@@ -1,7 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { DOMParser } from "jsr:@b-fuze/deno-dom@0.1.56";
 import { renderTrickView } from "../ui/components/trick-view.ts";
-import type { StateSnapshot } from "../core/types.ts";
+import type { CompletedTrick, StateSnapshot } from "../core/types.ts";
 
 const doc = new DOMParser().parseFromString(
   `<html><body><div id="app"></div></body></html>`,
@@ -162,7 +162,7 @@ Deno.test("test_renderTrickView_previous_trick_preview_shows_four_players", () =
 
 Deno.test("test_renderTrickView_failed_throw_preview_shows_attempted_and_forced_cards", () => {
   const snap = makeSnapshot();
-  const previousTrick = {
+  const previousTrick: CompletedTrick = {
     lead_player: 0,
     winner: 0,
     points: 0,

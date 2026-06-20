@@ -2,8 +2,9 @@
 from typing import Literal
 
 from .card_model import Card, Suit, Rank
-from .result import Ok, Rejected
+from server.result import Ok, Rejected
 from .stirring_sm import (
+    StirringState,
     StirInput,
     create_stirring, pass_stir, stir, stir_discard, get_stir_result,
 )
@@ -64,7 +65,7 @@ def _make_input(
     )
 
 
-def _complete_initial_exchange(state: "StirringState") -> "StirringState":
+def _complete_initial_exchange(state: StirringState) -> StirringState:
     """Complete the initial EXCHANGING sub-phase by discarding bottom cards."""
     assert state.phase == "EXCHANGING"
     assert state.exchange_state is not None
@@ -73,11 +74,6 @@ def _complete_initial_exchange(state: "StirringState") -> "StirringState":
     result = stir_discard(state, player=state.exchanging_player, cards=discards)
     assert isinstance(result, Ok), f"stir_discard rejected: {result.reason}"
     return result.value
-
-
-# Import StirringState for type hints
-from .stirring_sm import StirringState
-
 
 class TestCreateStirring:
     def test_create_stirring_starts_in_exchanging(self) -> None:

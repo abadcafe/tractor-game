@@ -21,7 +21,7 @@ class TranscriptRecordDict(TypedDict):
     tool_result: str | None
 
 
-def _empty_records() -> list["TranscriptRecord"]:
+def _empty_records() -> list[TranscriptRecord]:
     return []
 
 

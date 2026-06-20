@@ -1,10 +1,13 @@
-import type { Card } from "../core/types.ts";
+import type { Card, Rank, Suit } from "../core/types.ts";
 import type { ClientAction } from "../core/protocol.ts";
 import type { BidOption } from "./types.ts";
 import { suitSymbol } from "../core/card.ts";
 
+type JokerRank = Extract<Rank, "SJ" | "BJ">;
+type NonJokerSuit = Exclude<Suit, "joker">;
+
 /** Suit rank values matching server-side bid_value ordering. */
-const SUIT_RANK: Record<string, number> = {
+const SUIT_RANK: Record<NonJokerSuit, number> = {
   diamonds: 0,
   clubs: 1,
   hearts: 2,
@@ -12,10 +15,14 @@ const SUIT_RANK: Record<string, number> = {
 };
 
 /** Joker rank values matching server-side bid_value ordering. */
-const JOKER_RANK: Record<string, number> = {
+const JOKER_RANK: Record<JokerRank, number> = {
   SJ: 4,
   BJ: 5,
 };
+
+function isJokerRank(rank: Rank): rank is JokerRank {
+  return rank === "SJ" || rank === "BJ";
+}
 
 export interface DealBidActionDecision {
   action: ClientAction;
@@ -29,20 +36,20 @@ export interface DealBidActionDecision {
  */
 export function computeBidPriority(
   cards: Card[],
-  trumpRank: string,
+  trumpRank: Rank,
 ): number {
   if (cards.length === 0) return 0;
 
   // All cards must be trump rank or jokers
   const allValid = cards.every(
-    (c) => c.rank === trumpRank || c.rank === "SJ" || c.rank === "BJ",
+    (c) => c.rank === trumpRank || isJokerRank(c.rank),
   );
   if (!allValid) return 0;
 
   const count = cards.length;
 
   if (
-    count === 1 && (cards[0].rank === "SJ" || cards[0].rank === "BJ")
+    count === 1 && isJokerRank(cards[0].rank)
   ) {
     return 0;
   }
@@ -50,40 +57,43 @@ export function computeBidPriority(
   // Pair of jokers
   if (
     count === 2 &&
-    cards.every((c) => c.rank === "SJ" || c.rank === "BJ")
+    cards.every((c) => isJokerRank(c.rank))
   ) {
     if (cards[0].rank !== cards[1].rank) return 0;
-    return count * 100 + (JOKER_RANK[cards[0].rank] ?? 0);
+    const rank = cards[0].rank;
+    if (!isJokerRank(rank)) return 0;
+    return count * 100 + JOKER_RANK[rank];
   }
 
   // All must be same suit (no mixed joker + rank)
-  if (cards.some((c) => c.rank === "SJ" || c.rank === "BJ")) return 0;
+  if (cards.some((c) => isJokerRank(c.rank))) return 0;
   const suits = new Set(cards.map((c) => c.suit));
   if (suits.size !== 1) return 0;
 
   const suit = cards[0].suit;
-  return count * 100 + (SUIT_RANK[suit] ?? 0);
+  if (suit === "joker") return 0;
+  return count * 100 + SUIT_RANK[suit];
 }
 
 /** Convert complete backend action hints into bid options for display. */
 export function computeBidOptionsFromHints(
   hints: Card[][],
-  trumpRank: string,
+  trumpRank: Rank,
 ): BidOption[] {
-  return hints
-    .map((cards) => {
-      const priority = computeBidPriority(cards, trumpRank);
-      if (priority <= 0) return null;
-      return {
-        cardIds: cards.map((c) => c.id),
-        label: formatBidOptionLabel(cards, trumpRank),
-        trumpSuit: cards[0]?.suit === "joker"
-          ? null
-          : cards[0]?.suit ?? null,
-        priority,
-      } satisfies BidOption;
-    })
-    .filter((option): option is BidOption => option !== null);
+  const options: BidOption[] = [];
+  for (const cards of hints) {
+    const first = cards[0];
+    if (!first) continue;
+    const priority = computeBidPriority(cards, trumpRank);
+    if (priority <= 0) continue;
+    options.push({
+      cardIds: cards.map((c) => c.id),
+      label: formatBidOptionLabel(cards, trumpRank),
+      trumpSuit: first.suit === "joker" ? null : first.suit,
+      priority,
+    });
+  }
+  return options;
 }
 
 export function computeDealBidAction(
@@ -108,7 +118,7 @@ export function computeDealBidAction(
 
 function formatBidOptionLabel(
   cards: Card[],
-  trumpRank: string,
+  trumpRank: Rank,
 ): string {
   if (cards.length === 2 && cards.every((c) => c.rank === "BJ")) {
     return "大王对";

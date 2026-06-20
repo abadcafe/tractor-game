@@ -1,7 +1,7 @@
-import type { Card } from "./types.ts";
+import type { Card, Rank, Suit } from "./types.ts";
 
 /** Map of suit name to display symbol. */
-const SUIT_SYMBOLS: Record<string, string> = {
+const SUIT_SYMBOLS: Record<Suit, string> = {
   hearts: "♥",
   spades: "♠",
   diamonds: "♦",
@@ -10,8 +10,8 @@ const SUIT_SYMBOLS: Record<string, string> = {
 };
 
 /** Returns the Unicode symbol for a given suit name. */
-export function suitSymbol(suit: string): string {
-  return SUIT_SYMBOLS[suit] ?? suit;
+export function suitSymbol(suit: Suit): string {
+  return SUIT_SYMBOLS[suit];
 }
 
 /** Returns a display string for a card (symbol + rank, or joker label).
@@ -31,15 +31,15 @@ export function isJoker(c: Card): boolean {
 }
 
 /** Returns true if the card matches the given trump rank (jokers never match). */
-export function isTrumpRank(c: Card, rank: string): boolean {
+export function isTrumpRank(c: Card, rank: Rank): boolean {
   return !isJoker(c) && c.rank === rank;
 }
 
 /** Returns true if the card is a trump card. */
 function isTrump(
   c: Card,
-  trumpSuit: string | null,
-  trumpRank: string,
+  trumpSuit: Suit | null,
+  trumpRank: Rank,
 ): boolean {
   if (isJoker(c)) return true;
   if (isTrumpRank(c, trumpRank)) return true;
@@ -50,7 +50,7 @@ function isTrump(
 // --- Card sorting ---
 
 /** Rank order for sorting (higher = stronger). */
-const RANK_ORDER: Record<string, number> = {
+const RANK_ORDER: Record<Rank, number> = {
   "2": 0,
   "3": 1,
   "4": 2,
@@ -69,7 +69,7 @@ const RANK_ORDER: Record<string, number> = {
 };
 
 /** Suit order: 黑桃 > 红桃 > 梅花 > 方块. */
-const SUIT_ORDER: Record<string, number> = {
+const SUIT_ORDER: Record<Suit, number> = {
   spades: 0,
   hearts: 1,
   clubs: 2,
@@ -82,8 +82,8 @@ const SUIT_ORDER: Record<string, number> = {
  */
 function trumpSortPriority(
   c: Card,
-  trumpSuit: string | null,
-  trumpRank: string,
+  trumpSuit: Suit | null,
+  trumpRank: Rank,
 ): number {
   if (c.rank === "BJ") return 0; // 大王
   if (c.rank === "SJ") return 1; // 小王
@@ -100,8 +100,8 @@ function trumpSortPriority(
 function compareTrump(
   a: Card,
   b: Card,
-  trumpSuit: string | null,
-  trumpRank: string,
+  trumpSuit: Suit | null,
+  trumpRank: Rank,
 ): number {
   const pa = trumpSortPriority(a, trumpSuit, trumpRank);
   const pb = trumpSortPriority(b, trumpSuit, trumpRank);
@@ -132,8 +132,8 @@ function compareNonTrump(a: Card, b: Card): number {
  */
 export function sortHand(
   hand: Card[],
-  trumpSuit: string | null,
-  trumpRank: string,
+  trumpSuit: Suit | null,
+  trumpRank: Rank,
 ): Card[] {
   return [...hand].sort((a, b) => {
     const aTrump = isTrump(a, trumpSuit, trumpRank);

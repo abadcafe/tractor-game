@@ -13,7 +13,7 @@ from .round_sm import (
     is_round_complete, get_round_result, finalize_deal_bid,
 )
 from . import trick_sm as trick_mod
-from .result import Ok, Rejected
+from server.result import Ok, Rejected
 
 type CompletedTrickKey = tuple[int, int, int, tuple[tuple[int, tuple[str, ...]], ...]]
 

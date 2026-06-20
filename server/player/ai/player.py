@@ -22,6 +22,11 @@ from server.player.ai.context import build_decision_prompt
 from server.player.ai.local_actions import local_message
 from server.player.ai.memory import AIMemory
 from server.player.ai.openai_client import OpenAIChatCompletionsClient
+from server.player.ai.rejections import (
+    AIRejectionFeedback,
+    feedback_from_rejected,
+    rule_feedback,
+)
 from server.player.ai.rules import RuleBook
 from server.player.ai.transcript import (
     AITranscript,
@@ -30,7 +35,7 @@ from server.player.ai.transcript import (
 )
 from server.player.ai.tools import allowed_tool_specs, tool_call_to_message
 from server.player.base import GameView, Player
-from server.sm.result import Ok, Rejected
+from server.result import Ok, Rejected
 from server.snapshot import StateSnapshot
 
 
@@ -110,7 +115,7 @@ class AIPlayer(Player):
             rules=self._rules,
         )
         if repair_reason is not None:
-            prompt = _repair_prompt(prompt, snapshot, repair_reason)
+            prompt = _repair_prompt(prompt, snapshot, rule_feedback(repair_reason))
         max_attempts = max(self._config.decision_retries, 0) + 1
         for attempt in range(start_attempt, max_attempts + 1):
             decision_result_from_client = await self._client.decide(prompt, tools)
@@ -145,6 +150,7 @@ class AIPlayer(Player):
                 self._clear_pending(message.seq)
                 return
 
+            feedback = feedback_from_rejected(decision_result)
             record = self._transcript.add_record(
                 player_index=self.index,
                 seq=message.seq,
@@ -152,11 +158,11 @@ class AIPlayer(Player):
                 api_request=decision.api.request,
                 api_response=decision.api.response,
                 api_error=decision.api.error,
-                tool_result=_rejected_tool_result(decision.tool_call, "local", decision_result.reason),
+                tool_result=_rejected_tool_result(decision.tool_call, feedback),
             )
             self._transcript_records_by_seq[message.seq] = record
             if attempt < max_attempts:
-                prompt = _repair_prompt(prompt, snapshot, decision_result.reason)
+                prompt = _repair_prompt(prompt, snapshot, feedback)
             else:
                 await self._submit_if_ok(game, decision_result)
         self._clear_pending(message.seq)
@@ -244,7 +250,6 @@ def _client_rejection_api_error(rejection: Rejected) -> str:
 def _accepted_tool_result(call: AIToolCall, message: PlayerMessage) -> str:
     return _json_text({
         "status": "accepted",
-        "stage": "local",
         "tool_call": _tool_call_payload(call),
         "message": {
             "seq": message.seq,
@@ -253,20 +258,23 @@ def _accepted_tool_result(call: AIToolCall, message: PlayerMessage) -> str:
     })
 
 
-def _rejected_tool_result(call: AIToolCall, stage: str, reason: str) -> str:
+def _rejected_tool_result(call: AIToolCall, feedback: AIRejectionFeedback) -> str:
     return _json_text({
         "status": "rejected",
-        "stage": stage,
-        "reason": reason,
+        "error_type": feedback.error_type,
+        "reason": feedback.reason,
+        "repair": feedback.repair,
         "tool_call": _tool_call_payload(call),
     })
 
 
 def _server_rejection_tool_result(reason: str, *, previous: str | None) -> str:
+    feedback = rule_feedback(reason)
     payload: JSONObject = {
         "status": "rejected",
-        "stage": "game",
-        "reason": reason,
+        "error_type": feedback.error_type,
+        "reason": feedback.reason,
+        "repair": feedback.repair,
     }
     if previous is not None:
         payload["previous_tool_result"] = _raw_json_value(previous)
@@ -305,19 +313,20 @@ def _raw_json_value(raw: str) -> JSONValue:
 def _repair_prompt(
     prompt: AIDecisionPrompt,
     snapshot: StateSnapshot,
-    rejection_reason: str,
+    feedback: AIRejectionFeedback,
 ) -> AIDecisionPrompt:
     legal_ids = ", ".join(card.id for card in snapshot.player_hand)
     if not legal_ids:
-        legal_ids = "none"
+        legal_ids = "无"
     hint_groups = _hint_groups_text(snapshot)
     repair_text = "\n".join([
-        "上一次 tool call 被本地拒绝。",
-        f"- rejection_reason: {rejection_reason}",
-        f"- legal_card_ids_from_current_hand: {legal_ids}",
+        "上一次动作被拒绝。",
+        f"- error_type: {feedback.error_type}",
+        f"- reason: {feedback.reason}",
+        f"- repair: {feedback.repair}",
+        f"- 当前手牌 card_ids: {legal_ids}",
         hint_groups,
-        "请重新调用一个允许的 tool。card_ids 必须只从 legal_card_ids 或 action_hints 中逐字复制。",
-        "如果 legal_action_hint_groups 非空，card_ids 必须完整等于其中一个 hint 组，不能只取其中一部分。",
+        "请重新调用一个允许的工具。",
     ])
     return AIDecisionPrompt(
         system=prompt.system,
@@ -327,7 +336,7 @@ def _repair_prompt(
 
 def _hint_groups_text(snapshot: StateSnapshot) -> str:
     if not snapshot.action_hints:
-        return "- legal_action_hint_groups: none"
+        return "- legal_action_hint_groups: 无"
     groups: list[str] = []
     for index, hint in enumerate(snapshot.action_hints):
         groups.append(f"hint {index}: [{', '.join(card.id for card in hint)}]")

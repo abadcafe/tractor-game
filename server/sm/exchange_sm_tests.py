@@ -6,7 +6,7 @@ from .exchange_sm import (
     ExchangeInput, ExchangeResult,
     create_exchange, discard,
 )
-from .result import Ok, Rejected
+from server.result import Ok, Rejected
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:

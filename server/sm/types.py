@@ -4,14 +4,24 @@ Defines Pydantic models for bid events, stir actions, sub-plays,
 player representation, and completed trick data.
 """
 
-from typing import Literal
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from .card_model import Card, Suit
 
 
-# ---- Enums ----
+# ---- State / domain aliases ----
+
+type GamePhase = Literal["IDLE", "IN_ROUND", "GAME_OVER"]
+type RoundPhase = Literal["DEAL_BID", "STIRRING", "PLAYING", "SCORING", "WAITING"]
+type DealBidPhase = Literal["DEALING", "COMPLETE", "NO_BID"]
+type StirringPhase = Literal["WAITING", "EXCHANGING", "COMPLETE"]
+type ExchangePhase = Literal["PICKED_UP", "COMPLETE"]
+type TrickPhase = Literal["LEADING", "FOLLOWING", "RESOLVED"]
+type PublicGamePhase = RoundPhase | Literal["GAME_OVER"]
+type EffectiveSuit = Suit | Literal["trump"]
+type PlayShapeKind = Literal["empty", "single", "pair", "tractor", "cards"]
 
 
 # ---- Action / Event Models ----
@@ -27,10 +37,10 @@ class SubPlay(BaseModel):
 
     pair_count: int
     cards: list[Card]
-    suit: Suit | str
+    suit: EffectiveSuit
 
     @model_validator(mode="after")
-    def _validate_pair_count_and_cards(self) -> "SubPlay":
+    def _validate_pair_count_and_cards(self) -> Self:
         if self.pair_count < 0:
             raise ValueError("pair_count must be >= 0")
         if len(self.cards) > 0:
@@ -51,6 +61,17 @@ class SubPlay(BaseModel):
         return self.pair_count + 1
 
 
+class PlayShapeInfo(BaseModel):
+    """Structured description of a played shape for rejection text."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: PlayShapeKind
+    suit: EffectiveSuit | None
+    card_count: int
+    pair_count: int | None = None
+
+
 class BidEvent(BaseModel):
     """Records a bid event: revealing cards from hand during bidding."""
 
@@ -64,7 +85,7 @@ class BidEvent(BaseModel):
     count: int
 
     @model_validator(mode="after")
-    def _validate_suit_kind_consistency(self) -> "BidEvent":
+    def _validate_suit_kind_consistency(self) -> Self:
         if self.kind == "trump_rank" and self.suit is None:
             raise ValueError("suit must be set when kind='trump_rank'")
         if self.kind == "joker" and self.suit is not None:
@@ -82,7 +103,7 @@ class StirAction(BaseModel):
     new_suit: Suit | None
 
     @model_validator(mode="after")
-    def _validate_suit_kind_consistency(self) -> "StirAction":
+    def _validate_suit_kind_consistency(self) -> Self:
         if self.kind == "pass" and self.new_suit is not None:
             raise ValueError("new_suit must be None when kind='pass'")
         return self

@@ -4,12 +4,13 @@ The declarer picks up the 8 bottom cards, then discards 8 cards from their
 combined hand. The discarded cards become the new bottom cards used for scoring.
 """
 
-from typing import Literal
-
 from pydantic import BaseModel, ConfigDict
 
+from server.result import Ok, Rejected
+
 from .card_model import Card
-from .result import Ok, Rejected, StateResult
+from .rejections import CardNotInHandRejected, DuplicateCardRejected, InvalidExchangeCountRejected
+from .types import ExchangePhase
 
 
 # ---- Models ----
@@ -39,7 +40,7 @@ class ExchangeState(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    phase: Literal["PICKED_UP", "COMPLETE"]
+    phase: ExchangePhase
     hand_after_pickup: list[Card]
     count: int
     declarer_player: int
@@ -61,28 +62,26 @@ def create_exchange(input: ExchangeInput) -> ExchangeState:
     )
 
 
-def discard(state: ExchangeState, cards: list[Card]) -> StateResult[ExchangeState]:
+def discard(state: ExchangeState, cards: list[Card]) -> Ok[ExchangeState] | Rejected:
     """Validate and discard cards from hand_after_pickup.
 
     Returns Ok(new_state) on success, Rejected(reason) on invalid input.
     """
     if len(cards) != state.count:
-        return Rejected(
-            f"埋牌数量错误：需要 {state.count} 张，实际 {len(cards)} 张"
-        )
+        return InvalidExchangeCountRejected(required_count=state.count, actual_count=len(cards))
 
     hand_ids = {c.id for c in state.hand_after_pickup}
     discard_ids = [c.id for c in cards]
 
     for cid in discard_ids:
         if cid not in hand_ids:
-            return Rejected(f"牌 {cid} 不在手牌中")
+            return CardNotInHandRejected(cid)
 
     # Check for duplicate card IDs in input
     seen: set[str] = set()
     for cid in discard_ids:
         if cid in seen:
-            return Rejected(f"牌 {cid} 重复出现")
+            return DuplicateCardRejected(cid)
         seen.add(cid)
 
     discard_set = set(discard_ids)

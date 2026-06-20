@@ -350,12 +350,12 @@ function toolResultSummary(value: unknown): string {
   const record = recordValue(value);
   if (record === null) return "invalid tool result";
   const status = summaryText(record.status) ?? "unknown";
-  const stage = summaryText(record.stage);
+  const errorType = summaryText(record.error_type);
   const toolCall = recordValue(record.tool_call);
   const name = summaryText(toolCall?.name);
   const reason = summaryText(record.reason);
   const cardCount = toolCardCount(toolCall, recordValue(record.message));
-  const statusText = status === "rejected" && stage !== null ? `rejected(${stage})` : status;
+  const statusText = status === "rejected" && errorType !== null ? `rejected(${errorType})` : status;
   if (status === "accepted") {
     return summaryParts([
       statusText,
@@ -483,8 +483,9 @@ function renderParsedToolResult(value: unknown, path: Path): HTMLElement {
   const root = parsedRoot();
   root.appendChild(sectionBlock("RESULT SUMMARY", kvGrid([
     ["status", valueAt(value, "status")],
-    ["stage", valueAt(value, "stage")],
+    ["error_type", valueAt(value, "error_type")],
     ["reason", valueAt(value, "reason")],
+    ["repair", valueAt(value, "repair")],
   ]), [...path, "summary"]));
   const toolCall = valueAt(value, "tool_call");
   const message = valueAt(value, "message");
@@ -574,11 +575,18 @@ function formatApiError(value: unknown): string {
 function formatToolResult(value: unknown): string {
   const lines = [
     `status: ${textValue(valueAt(value, "status"))}`,
-    `stage: ${textValue(valueAt(value, "stage"))}`,
   ];
+  const errorType = valueAt(value, "error_type");
+  if (errorType !== undefined && errorType !== null) {
+    lines.push(`error_type: ${textValue(errorType)}`);
+  }
   const reason = valueAt(value, "reason");
   if (reason !== undefined && reason !== null) {
     lines.push(`reason: ${textValue(reason)}`);
+  }
+  const repair = valueAt(value, "repair");
+  if (repair !== undefined && repair !== null) {
+    lines.push(`repair: ${textValue(repair)}`);
   }
   const toolCall = valueAt(value, "tool_call");
   if (toolCall !== undefined && toolCall !== null) {

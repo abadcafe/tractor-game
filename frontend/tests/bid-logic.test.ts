@@ -1,12 +1,12 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import type { Card } from "../core/types.ts";
+import type { Card, Rank, Suit } from "../core/types.ts";
 import {
   computeBidOptionsFromHints,
   computeBidPriority,
   computeDealBidAction,
 } from "../engine/bid-logic.ts";
 
-function card(id: string, suit: string, rank: string): Card {
+function card(id: string, suit: Suit, rank: Rank): Card {
   return { id, suit, rank };
 }
 
