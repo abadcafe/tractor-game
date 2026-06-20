@@ -102,7 +102,6 @@ def make_state_message(
     state = snapshot or make_snapshot()
     return StateMessage(
         seq=seq,
-        awaiting=state.awaiting_action,
         state=state,
         error=error,
     )

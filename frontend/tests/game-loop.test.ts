@@ -37,12 +37,10 @@ function makeSnapshot(
 
 function makeStateMsg(
   overrides: Partial<StateSnapshot> = {},
-  awaiting: string | null = null,
 ): ServerMessage {
   return {
     type: "state",
     seq: 1,
-    awaiting,
     state: makeSnapshot(overrides),
   };
 }
@@ -83,7 +81,7 @@ Deno.test("test_handleMessage_deal_bid_our_turn_shows_bidding", () => {
   const msg = makeStateMsg({
     phase: "DEAL_BID",
     awaiting_action: "bid",
-  }, "bid");
+  });
   loop.handleMessage(msg);
   assertEquals(lastRenderedSnapshot !== null, true);
   assertEquals(lastRenderedSnapshot!.phase, "DEAL_BID");
@@ -95,10 +93,7 @@ Deno.test("test_handleMessage_deal_bid_not_our_turn_shows_null", () => {
   lastInteractionMode = null;
   const stateManager = new StateManager();
   const loop = new GameLoop(stateManager, mockRender, mockContainer);
-  const msg = makeStateMsg(
-    { phase: "DEAL_BID", awaiting_action: null },
-    null,
-  );
+  const msg = makeStateMsg({ phase: "DEAL_BID", awaiting_action: null });
   loop.handleMessage(msg);
   assertEquals(lastRenderedSnapshot !== null, true);
   assertEquals(lastInteractionMode, null);
@@ -120,7 +115,7 @@ Deno.test("test_handleMessage_stirring_our_turn", () => {
       exchanging_player: null,
       exchange_count: null,
     },
-  }, "stir");
+  });
   loop.handleMessage(msg);
   assertEquals(lastInteractionMode, "stir");
 });
@@ -141,7 +136,7 @@ Deno.test("test_handleMessage_stirring_not_our_turn", () => {
       exchanging_player: null,
       exchange_count: null,
     },
-  }, null);
+  });
   loop.handleMessage(msg);
   assertEquals(lastInteractionMode, null);
 });
@@ -162,7 +157,7 @@ Deno.test("test_handleMessage_exchange_our_turn", () => {
       exchanging_player: 3,
       exchange_count: 8,
     },
-  }, "discard");
+  });
   loop.handleMessage(msg);
   assertEquals(lastInteractionMode, "discard");
 });
@@ -175,7 +170,7 @@ Deno.test("test_handleMessage_playing_our_turn", () => {
   const msg = makeStateMsg({
     phase: "PLAYING",
     awaiting_action: "play",
-  }, "play");
+  });
   loop.handleMessage(msg);
   assertEquals(lastInteractionMode, "play");
 });
@@ -188,7 +183,7 @@ Deno.test("test_handleMessage_playing_not_our_turn", () => {
   const msg = makeStateMsg({
     phase: "PLAYING",
     awaiting_action: null,
-  }, null);
+  });
   loop.handleMessage(msg);
   assertEquals(lastInteractionMode, null);
 });
@@ -208,7 +203,7 @@ Deno.test("test_handleMessage_waiting_next_round", () => {
       bottom_card_bonus: 0,
       bottom_cards: [],
     },
-  }, "next_round");
+  });
   loop.handleMessage(msg);
   assertEquals(lastInteractionMode, "next_round");
 });
@@ -222,7 +217,7 @@ Deno.test("test_handleMessage_game_over_no_interaction", () => {
     phase: "GAME_OVER",
     winning_team: 0,
     awaiting_action: null,
-  }, null);
+  });
   loop.handleMessage(msg);
   assertEquals(lastRenderedSnapshot!.phase, "GAME_OVER");
   // GAME_OVER has no awaiting action -> null interaction mode
@@ -247,7 +242,6 @@ Deno.test("test_handleMessage_error_shows_error_and_updates_state", () => {
   const msg: ServerMessage = {
     type: "state",
     seq: 1,
-    awaiting: null,
     state: makeSnapshot({ phase: "PLAYING" }),
     error: "something went wrong",
   };
@@ -267,7 +261,6 @@ Deno.test("test_handleMessage_updates_state_manager", () => {
   const msg: ServerMessage = {
     type: "state",
     seq: 1,
-    awaiting: "play",
     state: snap,
   };
   loop.handleMessage(msg);
@@ -283,7 +276,6 @@ Deno.test("test_handleMessage_error_stores_error_message", () => {
   const msg: ServerMessage = {
     type: "state",
     seq: 1,
-    awaiting: null,
     state: makeSnapshot({ phase: "PLAYING" }),
     error: "something went wrong",
   };
@@ -299,7 +291,7 @@ Deno.test("test_handleMessage_unknown_awaiting_returns_null", () => {
   const msg = makeStateMsg({
     phase: "PLAYING",
     awaiting_action: "unknown_action",
-  }, "unknown_action");
+  });
   loop.handleMessage(msg);
   assertEquals(lastInteractionMode, null);
 });
@@ -319,7 +311,7 @@ Deno.test("test_handleMessage_reconnecting_disables_interaction", () => {
   const msg = makeStateMsg({
     phase: "PLAYING",
     awaiting_action: "play",
-  }, "play");
+  });
   loop.handleMessage(msg);
   // While reconnecting, interaction should be disabled
   assertEquals(lastInteractionMode, null);
@@ -329,7 +321,7 @@ Deno.test("test_handleMessage_reconnecting_disables_interaction", () => {
   const msg2 = makeStateMsg({
     phase: "PLAYING",
     awaiting_action: "play",
-  }, "play");
+  });
   loop.handleMessage(msg2);
   assertEquals(lastInteractionMode, "play");
 });
@@ -342,7 +334,6 @@ Deno.test("test_handleMessage_seq_stored_in_state_manager", () => {
   const msg: ServerMessage = {
     type: "state",
     seq: 42,
-    awaiting: "play",
     state: makeSnapshot({ phase: "PLAYING" }),
   };
   loop.handleMessage(msg);

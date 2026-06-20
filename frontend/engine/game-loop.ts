@@ -52,7 +52,7 @@ export class GameLoop {
         this.onError?.(msg.error);
       }
 
-      const interactionMode = this.computeInteractionMode(msg.state, msg.awaiting);
+      const interactionMode = this.computeInteractionMode(msg.state);
       this.renderFn(msg.state, this.container, interactionMode);
     }
   }
@@ -65,27 +65,26 @@ export class GameLoop {
   }
 
   /**
-   * Compute the interaction mode from the state snapshot and awaiting value.
+   * Compute the interaction mode from the state snapshot.
    *
-   * Uses the `awaiting` field from the server message as the authoritative
-   * source for what action the human player should take. This correctly
+   * Uses state.awaiting_action as the authoritative source for what action
+   * the human player should take. This correctly
    * handles:
-   * - DEAL_BID: only shows "bid" when awaiting="bid" (human's turn)
-   * - STIRRING: shows "stir" or "discard" based on awaiting
-   * - PLAYING: shows "play" when awaiting="play"
+   * - DEAL_BID: only shows "bid" when awaiting_action="bid" (human's turn)
+   * - STIRRING: shows "stir" or "discard" based on awaiting_action
+   * - PLAYING: shows "play" when awaiting_action="play"
    * - WAITING: shows "next_round"
    * - GAME_OVER: null (no interaction needed)
    * - Reconnecting: null (all interaction disabled)
    */
-  private computeInteractionMode(state: StateSnapshot, awaiting: string | null): InteractionMode {
+  private computeInteractionMode(state: StateSnapshot): InteractionMode {
     // Disable all interaction while reconnecting
     if (this.isReconnecting()) {
       return null;
     }
 
-    // Use awaiting as authoritative source
-    if (awaiting !== null) {
-      switch (awaiting) {
+    if (state.awaiting_action !== null) {
+      switch (state.awaiting_action) {
         case "bid":
           return "bid";
         case "stir":

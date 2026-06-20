@@ -6,7 +6,6 @@ import type { StateSnapshot } from "./types.ts";
 export type ServerMessage = {
   type: "state";
   seq: number;
-  awaiting: string | null;
   state: StateSnapshot;
   error?: string;
 };

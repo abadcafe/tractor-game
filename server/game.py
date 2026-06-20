@@ -763,7 +763,6 @@ class Game:
         snapshot = self.snapshot(player_index)
         return StateMessage(
             seq=self._seq,
-            awaiting=snapshot.awaiting_action,
             state=snapshot,
             error=error,
         )

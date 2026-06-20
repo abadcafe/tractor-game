@@ -228,7 +228,7 @@ INJECTED_SCRIPT = r"""
           const state = message.state || {};
           record("state", {
             seq: message.seq,
-            awaiting: message.awaiting,
+            awaiting: state.awaiting_action,
             phase: state.phase,
             current_player: state.trick ? state.trick.current_player : null
           });
@@ -671,9 +671,7 @@ def plan_action(
     if state is None:
         return None
 
-    awaiting = string_field(state_message, "awaiting")
-    if awaiting is None:
-        awaiting = string_field(state, "awaiting_action")
+    awaiting = string_field(state, "awaiting_action")
 
     if awaiting == "bid":
         cards = choose_bid_cards(state)
@@ -1268,7 +1266,7 @@ def run_playthrough(config: Config) -> None:
                     phase,
                     {
                         "seq": seq,
-                        "awaiting": string_field(state_message, "awaiting"),
+                        "awaiting": string_field(state, "awaiting_action"),
                         "team0_level": team0_level,
                         "team1_level": team1_level,
                         "defender_points": defender_points,
@@ -1475,7 +1473,7 @@ def _card(card_id_value: str, suit: str, rank: str) -> JsonObject:
 
 
 def _state_message(awaiting: str, state: JsonObject) -> JsonObject:
-    return {"seq": 1, "awaiting": awaiting, "state": state}
+    return {"seq": 1, "state": {**state, "awaiting_action": awaiting}}
 
 
 def test_plan_action_bids_first_hint_candidate() -> None:

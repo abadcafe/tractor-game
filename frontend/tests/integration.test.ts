@@ -116,7 +116,6 @@ Deno.test("test_integration_ws_to_render", () => {
   const msg: ServerMessage = {
     type: "state",
     seq: 1,
-    awaiting: "play",
     state: makeSnapshot({ phase: "PLAYING", awaiting_action: "play" }),
   };
   gameLoop.handleMessage(msg);
@@ -331,7 +330,6 @@ Deno.test("test_integration_error_message", () => {
   const stateMsg: ServerMessage = {
     type: "state",
     seq: 1,
-    awaiting: "play",
     state: makeSnapshot(),
   };
   gameLoop.handleMessage(stateMsg);
@@ -342,7 +340,6 @@ Deno.test("test_integration_error_message", () => {
   const errMsg: ServerMessage = {
     type: "state",
     seq: 1,
-    awaiting: "play",
     state: makeSnapshot(),
     error: "无效的出牌",
   };
@@ -367,11 +364,10 @@ Deno.test("test_integration_stir_not_human_ignored", () => {
     3,
   );
 
-  // STIRRING phase, but NOT human's turn (awaiting is null since it's not our action)
+  // STIRRING phase, but NOT human's turn.
   const msg: ServerMessage = {
     type: "state",
     seq: 1,
-    awaiting: null,
     state: makeSnapshot({
       phase: "STIRRING",
       awaiting_action: null,

@@ -6,7 +6,6 @@ function makeStateMessage(): ServerMessage {
   return {
     type: "state",
     seq: 1,
-    awaiting: null,
     state: {
       phase: "DEAL_BID",
       player_hand: [],

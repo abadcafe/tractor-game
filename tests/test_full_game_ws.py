@@ -110,6 +110,14 @@ def _as_str_or_none(val: object) -> str | None:
     return val
 
 
+def _awaiting(msg: dict[str, object]) -> str | None:
+    """Return the player-facing awaiting_action from a state message."""
+    state = _as_dict_or_none(msg.get("state"))
+    if state is None:
+        return None
+    return _as_str_or_none(state.get("awaiting_action"))
+
+
 def _is_list_of_dict(val: object) -> TypeGuard[list[dict[str, object]]]:
     """Narrow object to list[dict[str, object]]."""
     if not _is_list(val):
@@ -280,7 +288,7 @@ class WsGameDriver:
             extra = ""
             if err is not None:
                 extra = f" ERROR={err}"
-            print(f"  [WsGameDriver] recv: type={result.get('type')} seq={result.get('seq')} awaiting={result.get('awaiting')}{extra}", flush=True)
+            print(f"  [WsGameDriver] recv: type={result.get('type')} seq={result.get('seq')} awaiting={_awaiting(result)}{extra}", flush=True)
         if result.get("type") == "state":
             self._last_state_msg = result
         return result
@@ -296,7 +304,7 @@ class WsGameDriver:
             f"{label}: known_seq={self._known_seq}",
             f"last_seq={self._last_state_msg.get('seq')}",
             f"phase={state.get('phase')}",
-            f"awaiting={self._last_state_msg.get('awaiting')}",
+            f"awaiting={_awaiting(self._last_state_msg)}",
             f"hand_count={len(_as_list(state.get('player_hand', [])))}",
         ]
         stirring = _as_dict_or_none(state.get("stirring_state"))
@@ -437,7 +445,7 @@ class WsGameDriver:
             msg = self.receive_msg(verbose=False, timeout=max(0.001, deadline - time.monotonic()))
             if msg.get("type") == "state":
                 self.sync_seq(_as_int(msg["seq"]))
-                if msg.get("awaiting") == value:
+                if _awaiting(msg) == value:
                     print(f"  [WsGameDriver] wait_for_awaiting: found {value} seq={self._known_seq}", flush=True)
                     return msg
         raise TimeoutError(f"awaiting='{value}' not reached within {timeout}s")
@@ -474,7 +482,7 @@ class WsGameDriver:
                 return None
 
             state = _as_dict(msg["state"])
-            if state.get("phase") != "STIRRING" or msg.get("awaiting") != "stir":
+            if state.get("phase") != "STIRRING" or _awaiting(msg) != "stir":
                 return msg
 
         print(f"  [do_stir_pass] TIMEOUT after 5s, seq stuck at {self._known_seq}", flush=True)
@@ -522,7 +530,7 @@ class WsGameDriver:
             confirmed = _as_list(state.get("next_round_confirmed", []))
             if 3 in confirmed:
                 return msg
-            if msg.get("awaiting") == "next_round" and attempts < 4:
+            if _awaiting(msg) == "next_round" and attempts < 4:
                 attempts += 1
                 self.send_action({"type": "next_round"})
                 continue
@@ -775,7 +783,7 @@ def _recv_state(
             raise TimeoutError(driver.debug_context(label)) from exc
         if msg.get("type") == "state":
             state = _as_dict(msg["state"])
-            awaiting = msg.get("awaiting")
+            awaiting = _awaiting(msg)
             phase = state.get("phase", "?")
             seq = msg.get("seq", "?")
             # Show trick current_player when in PLAYING
@@ -835,7 +843,7 @@ def _recv_until_our_turn(
                 continue
             state = _as_dict(msg["state"])
             count += 1
-            awaiting = msg.get("awaiting")
+            awaiting = _awaiting(msg)
             cur_phase = state.get("phase", "?")
             seq_val = msg_seq
 
@@ -1180,7 +1188,7 @@ def _play_deal_bid(
     prev_bid_events_count: int = len(_as_list(state.get("bid_events", [])))
 
     while True:
-        if msg.get("awaiting") == "bid":
+        if _awaiting(msg) == "bid":
             # Try to bid from action_hints if available and we
             # haven't already bid this round
             bid_action_accepted = False
@@ -1207,7 +1215,7 @@ def _play_deal_bid(
                     if state["phase"] != "DEAL_BID":
                         print(f"[round {round_count}] DEAL_BID -> {state['phase']}", flush=True)
                         break
-                    if msg.get("awaiting") == "bid":
+                    if _awaiting(msg) == "bid":
                         continue
                 else:
                     # Bid failed (rejected by server), fall through to pass
@@ -1223,7 +1231,7 @@ def _play_deal_bid(
                     if state["phase"] != "DEAL_BID":
                         print(f"[round {round_count}] DEAL_BID -> {state['phase']}", flush=True)
                         break
-                    if msg.get("awaiting") == "bid":
+                    if _awaiting(msg) == "bid":
                         continue
             # Fall through to drain
 
@@ -1265,14 +1273,14 @@ def _play_stirring(
             break
 
         # Handle EXCHANGING sub-phase (discard bottom cards)
-        if msg.get("awaiting") == "discard":
+        if _awaiting(msg) == "discard":
             state, msg = _play_stirring_exchange(driver, state, round_count)
             if state["phase"] != "STIRRING":
                 break
             continue
 
         # Handle WAITING sub-phase (stir/pass)
-        if msg.get("awaiting") == "stir":
+        if _awaiting(msg) == "stir":
             _send_wrong_actions(driver, f"R{round_count}:STIR before pass", {"type": "stir", "pass": True})
             response = driver.do_stir_pass()
             if response is not None:
@@ -1280,7 +1288,7 @@ def _play_stirring(
                 msg = response
                 if state["phase"] != "STIRRING":
                     break
-                if msg.get("awaiting") in ("stir", "discard"):
+                if _awaiting(msg) in ("stir", "discard"):
                     continue
 
         state, msg = _recv_until_our_turn(
@@ -1329,7 +1337,7 @@ def _play_stirring_exchange(
         if response is not None:
             state = _as_dict(response["state"])
             msg = response
-            print(f"  [R{round_count}:STIR-EXCH] discard response: phase={state.get('phase')} awaiting={response.get('awaiting')}", flush=True)
+            print(f"  [R{round_count}:STIR-EXCH] discard response: phase={state.get('phase')} awaiting={_awaiting(response)}", flush=True)
         else:
             print(f"  [R{round_count}:STIR-EXCH] discard failed, draining to get current state", flush=True)
             state, msg = _recv_until_our_turn(
@@ -1447,7 +1455,7 @@ def _play_playing(
     # didn't produce a response with awaiting="play" (e.g., when the
     # human is not the declarer and the phase transition happened in the
     # background).
-    if msg.get("awaiting") != "play" and state.get("phase") == "PLAYING":
+    if _awaiting(msg) != "play" and state.get("phase") == "PLAYING":
         state, msg = _recv_until_our_turn(
             driver, f"R{round_count}:PLAY", "PLAYING", {"play"},
             timeout=5,
@@ -1461,7 +1469,7 @@ def _play_playing(
         assert "trick" in state
         assert "trick_history" in state
         assert "defender_points" in state
-        assert "action_hints" in state or msg.get("awaiting") != "play"
+        assert "action_hints" in state or _awaiting(msg) != "play"
 
         ts_raw = _as_str_or_none(state.get("trump_suit"))
         if ts_raw is not None:
@@ -1474,7 +1482,7 @@ def _play_playing(
             prev_trick_count = cur_trick_count
             print(f"  [R{round_count}:PLAY] trick {cur_trick_count} completed", flush=True)
 
-        if msg.get("awaiting") == "play":
+        if _awaiting(msg) == "play":
             legal = state.get("action_hints", [])
             legal_list = _as_list(legal)
             if legal_list:
@@ -1520,11 +1528,11 @@ def _play_playing(
                     _verify_trick_invariants(state, current_trump_suit)
                     prev_trick_count = cur_trick_count
                     print(f"  [R{round_count}:PLAY] trick {cur_trick_count} completed", flush=True)
-                if msg.get("awaiting") == "play":
+                if _awaiting(msg) == "play":
                     continue  # Still our turn (e.g., won trick -> lead next)
                 # Action failed or not our turn — fall through to drain
             else:
-                print(f"  [R{round_count}:PLAY] no legal actions!? awaiting={msg.get('awaiting')}", flush=True)
+                print(f"  [R{round_count}:PLAY] no legal actions!? awaiting={_awaiting(msg)}", flush=True)
 
         # Not our turn — drain AutoPlayer cascade until our turn or phase change.
         # Process trick completions during drain.
@@ -1542,7 +1550,7 @@ def _play_playing(
                 _verify_trick_invariants(state, current_trump_suit)
                 prev_trick_count = cur_trick_count
                 print(f"  [R{round_count}:PLAY] trick {cur_trick_count} completed", flush=True)
-            if msg.get("awaiting") == "play":
+            if _awaiting(msg) == "play":
                 break  # Our turn now — go back to top of outer loop
             # Shouldn't happen (_recv_until_our_turn guarantees one of the
             # conditions), but just in case, keep draining
@@ -1570,7 +1578,7 @@ def _play_waiting(
     end of PLAYING, so the WAITING state already contains the updated levels.
     We need the pre-update levels to compute the expected change.
     """
-    print(f"[round {round_count}] === WAITING (round complete) === phase={state.get('phase')} awaiting={msg.get('awaiting')}", flush=True)
+    print(f"[round {round_count}] === WAITING (round complete) === phase={state.get('phase')} awaiting={_awaiting(msg)}", flush=True)
     _verify_common_fields(state, "WAITING")
     assert "scoring" in state
     assert "bottom_cards" in state
@@ -1632,7 +1640,7 @@ def _play_waiting(
     # messages until the phase actually changes. If our confirmation
     # hasn't been processed yet, the server will process it on the
     # next event loop tick (triggered by receive_msg()'s portal.call).
-    if msg.get("awaiting") == "next_round":
+    if _awaiting(msg) == "next_round":
         print(f"  [R{round_count}:WAITING] human confirm next_round", flush=True)
         _send_wrong_actions(driver, f"R{round_count}:WAITING before next_round", {"type": "next_round"})
         response = driver.do_next_round()
@@ -1736,12 +1744,12 @@ def test_full_game(sync_client: SyncServerClient) -> None:
         sync_msg = driver.request_state()
         sync_state = _as_dict(sync_msg["state"])
         print(
-            f"  initial sync: phase={sync_state.get('phase')} awaiting={sync_msg.get('awaiting')} seq={driver.known_seq}",
+            f"  initial sync: phase={sync_state.get('phase')} awaiting={_awaiting(sync_msg)} seq={driver.known_seq}",
             flush=True,
         )
 
         print(">>> sending initial next_round <<<", flush=True)
-        if sync_msg.get("awaiting") == "next_round":
+        if _awaiting(sync_msg) == "next_round":
             result = driver.do_next_round()
             assert result is not None, f"next_round should succeed with synced seq: error={driver.last_error}"
             print(f"  next_round succeeded, seq={driver.known_seq}", flush=True)
@@ -1754,7 +1762,7 @@ def test_full_game(sync_client: SyncServerClient) -> None:
         msg = result
         while True:
             cur_phase = state.get("phase", "?")
-            cur_awaiting = msg.get("awaiting")
+            cur_awaiting = _awaiting(msg)
             print(f"  initial state: phase={cur_phase} awaiting={cur_awaiting} seq={driver.known_seq}", flush=True)
             if cur_phase in ("DEAL_BID", "STIRRING", "PLAYING", "GAME_OVER"):
                 break

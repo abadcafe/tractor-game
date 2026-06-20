@@ -24,7 +24,6 @@ class StateMessageDict(TypedDict):
 
     type: Literal["state"]
     seq: int
-    awaiting: str | None
     state: SnapshotDict
     error: NotRequired[str]
 
@@ -34,7 +33,6 @@ class StateMessage:
     """Server-to-player state envelope."""
 
     seq: int
-    awaiting: str | None
     state: StateSnapshot
     error: str | None = None
 
@@ -42,7 +40,6 @@ class StateMessage:
         result: StateMessageDict = {
             "type": "state",
             "seq": self.seq,
-            "awaiting": self.awaiting,
             "state": self.state.to_dict(),
         }
         if self.error is not None:
