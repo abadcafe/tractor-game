@@ -1,7 +1,7 @@
 """Round state machine for 升级 (Shengji/Tractor).
 
 Orchestrates one round by serially executing sub-state machines and
-threading intermediate data: DealBid -> Stirring (with embedded Exchange) -> Trick x 25 -> Scoring.
+threading intermediate data: DealBid -> Stirring (with embedded Exchange) -> Tricks -> Scoring.
 
 Exposes sub-state-machine operations through its own API, delegating
 to the sub-state machines while managing phase transitions.
@@ -59,7 +59,8 @@ class RoundState(BaseModel):
     players_hand: list[list[Card]]
     bottom_cards: list[Card]
     defender_points: int
-    trick_history: list[CompletedTrick]
+    last_completed_trick: CompletedTrick | None
+    defender_point_cards: list[Card]
     deal_bid_state: db.DealBidState | None
     stirring_state: stir_mod.StirringState | None
     trick_state: trick_mod.TrickState | None
@@ -103,7 +104,8 @@ def create_round(input: RoundInput) -> RoundState:
         players_hand=[[], [], [], []],
         bottom_cards=bottom_cards,
         defender_points=0,
-        trick_history=[],
+        last_completed_trick=None,
+        defender_point_cards=[],
         deal_bid_state=deal_bid_state,
         stirring_state=None,
         trick_state=None,
@@ -318,8 +320,8 @@ def play(state: RoundState, player_index: int, cards: list[Card]) -> StateResult
 
     Validates that player_index matches the current player, then delegates
     leading and following legality to trick.play.
-    When trick resolves, records result and starts next trick.
-    After 25 tricks, transitions to SCORING -> COMPLETE.
+    When trick resolves, records the last completed trick and starts the
+    next trick. Once all hands are empty, transitions to SCORING -> COMPLETE.
 
     Returns Ok(new_state) on success, Rejected(reason) on invalid input.
     """
@@ -346,24 +348,21 @@ def play(state: RoundState, player_index: int, cards: list[Card]) -> StateResult
     new_hands = [list(h) for h in new_trick.hands]
 
     if new_trick.phase == "RESOLVED" and new_trick.result is not None:
-        # Record the completed trick
-        completed_tricks = list(state.trick_history) + [
-            new_trick.result.completed_trick
-        ]
+        completed_trick = new_trick.result.completed_trick
+        defender_point_cards = list(state.defender_point_cards)
+        if state.defender_team is not None:
+            defender_point_cards.extend(
+                _defender_point_cards(completed_trick, state.defender_team)
+            )
         new_state = state.model_copy(update={
             "trick_state": new_trick,
             "players_hand": new_hands,
-            "trick_history": completed_tricks,
+            "last_completed_trick": completed_trick,
+            "defender_point_cards": defender_point_cards,
             "defender_points": new_trick.result.updated_defender_points,
         })
 
-        # If all hands are empty, round is over (can happen before 25 tricks
-        # when players play pairs/tractors).
         if all(len(h) == 0 for h in new_hands):
-            return Ok(_transition_to_scoring(new_state))
-
-        trick_count = len(new_state.trick_history)
-        if trick_count >= 25:
             return Ok(_transition_to_scoring(new_state))
 
         # Start next trick: winner leads
@@ -519,21 +518,29 @@ def _start_next_trick(state: RoundState, lead_player: int) -> RoundState:
     })
 
 
+def _defender_point_cards(trick: CompletedTrick, defender_team: int) -> list[Card]:
+    if get_team_index(trick.winner) != defender_team:
+        return []
+    result: list[Card] = []
+    for slot in trick.slots:
+        for card in slot.cards:
+            if card.points > 0:
+                result.append(card)
+    return result
+
+
 def _transition_to_scoring(state: RoundState) -> RoundState:
     """Transition from PLAYING to SCORING -> COMPLETE."""
     declarer_team = state.declarer_team
     declarer_player = state.declarer_player
     assert declarer_team is not None
     assert declarer_player is not None
-
-    assert state.trick_history, "trick_history must be non-empty after 25 tricks"
-
-    last_trick = state.trick_history[-1]
+    assert state.last_completed_trick is not None
 
     result = scoring.calculate_score(
         defender_points=state.defender_points,
         bottom_cards=state.bottom_cards,
-        last_trick=last_trick,
+        last_trick=state.last_completed_trick,
         declarer_team=declarer_team,
         declarer_player=declarer_player,
         team0_level=state.team0_level,

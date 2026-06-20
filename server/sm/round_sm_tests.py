@@ -5,7 +5,7 @@ from typing import Literal
 
 import pytest
 from .card_model import Card, Suit, Rank
-from .types import BidEvent
+from .types import BidEvent, CompletedTrick
 from .round_sm import (
     RoundState, RoundInput, create_round,
     deal_next_card, reveal, pass_stir, stir, stir_discard, play,
@@ -13,6 +13,22 @@ from .round_sm import (
 )
 from . import trick_sm as trick_mod
 from .result import Ok, Rejected
+
+type CompletedTrickKey = tuple[int, int, int, tuple[tuple[int, tuple[str, ...]], ...]]
+
+
+def _completed_trick_key(trick: CompletedTrick | None) -> CompletedTrickKey | None:
+    if trick is None:
+        return None
+    return (
+        trick.lead_player,
+        trick.winner,
+        trick.points,
+        tuple(
+            (slot.player, tuple(card.id for card in slot.cards))
+            for slot in trick.slots
+        ),
+    )
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
@@ -674,14 +690,14 @@ class TestPlayingPhase:
             state = _play_first_legal(state)
 
         # After the trick, a new trick should have started (or we moved to scoring)
-        assert len(state.trick_history) == 1
+        assert state.last_completed_trick is not None
         assert state.defender_points >= 0
         if state.phase == "PLAYING":
             # New trick started: lead player is the winner of the first trick
             new_trick = state.trick_state
             assert new_trick is not None
             assert new_trick.phase == "LEADING"
-            winner = state.trick_history[0].winner
+            winner = state.last_completed_trick.winner
             assert new_trick.lead_player == winner
 
     def test_playing_all_tricks_to_scoring(self) -> None:
@@ -701,7 +717,7 @@ class TestPlayingPhase:
         state = _complete_stirring_all_pass(state)
         # Play tricks until phase changes from PLAYING or no progress
         max_iterations = 30
-        prev_history_len = 0
+        prev_completed_trick_key: CompletedTrickKey | None = None
         for _ in range(max_iterations):
             if state.phase != "PLAYING":
                 break
@@ -716,11 +732,12 @@ class TestPlayingPhase:
                 if trick is None:
                     break
             # Check for no progress (all hands empty, trick can't resolve)
-            if len(state.trick_history) == prev_history_len:
+            completed_trick_key = _completed_trick_key(state.last_completed_trick)
+            if completed_trick_key == prev_completed_trick_key:
                 break
-            prev_history_len = len(state.trick_history)
+            prev_completed_trick_key = completed_trick_key
         # Game should have progressed through at least some tricks
-        assert len(state.trick_history) >= 1
+        assert state.last_completed_trick is not None
         assert state.phase in ("SCORING", "WAITING", "PLAYING")
 
 
@@ -739,7 +756,7 @@ class TestScoringPhase:
         state = _complete_deal_bid_no_bid(state)
         state = _complete_stirring_all_pass(state)
         # Play tricks until phase changes or no progress
-        prev_history_len = 0
+        prev_completed_trick_key: CompletedTrickKey | None = None
         for _ in range(30):
             if state.phase != "PLAYING":
                 break
@@ -753,12 +770,13 @@ class TestScoringPhase:
                 trick = state.trick_state
                 if trick is None:
                     break
-            if len(state.trick_history) == prev_history_len:
+            completed_trick_key = _completed_trick_key(state.last_completed_trick)
+            if completed_trick_key == prev_completed_trick_key:
                 break
-            prev_history_len = len(state.trick_history)
+            prev_completed_trick_key = completed_trick_key
         # SCORING is transient and immediately transitions to COMPLETE
         # Game should have completed at least one trick
-        assert len(state.trick_history) >= 1
+        assert state.last_completed_trick is not None
 
 
 class TestRoundDeclarer:
@@ -933,7 +951,7 @@ class TestRoundFullFlow:
         assert state.phase == "PLAYING"
 
         # Play tricks until phase changes or no progress
-        prev_history_len = 0
+        prev_completed_trick_key: CompletedTrickKey | None = None
         for _ in range(30):
             if state.phase != "PLAYING":
                 break
@@ -947,12 +965,13 @@ class TestRoundFullFlow:
                 trick = state.trick_state
                 if trick is None:
                     break
-            if len(state.trick_history) == prev_history_len:
+            completed_trick_key = _completed_trick_key(state.last_completed_trick)
+            if completed_trick_key == prev_completed_trick_key:
                 break
-            prev_history_len = len(state.trick_history)
+            prev_completed_trick_key = completed_trick_key
 
         # Should progress through at least some tricks
-        assert len(state.trick_history) >= 1
+        assert state.last_completed_trick is not None
         # If round completed, verify result is valid
         if state.phase == "WAITING":
             assert is_round_complete(state) is True
@@ -1128,7 +1147,8 @@ def test_play_leading_accepts_legal_partial_throw_not_in_enumerated_hints() -> N
         players_hand=hands,
         bottom_cards=[],
         defender_points=0,
-        trick_history=[],
+        last_completed_trick=None,
+        defender_point_cards=[],
         deal_bid_state=None,
         stirring_state=None,
         trick_state=trick,
@@ -1178,7 +1198,8 @@ def test_play_leading_failed_throw_records_public_penalty_event() -> None:
         players_hand=hands,
         bottom_cards=[],
         defender_points=0,
-        trick_history=[],
+        last_completed_trick=None,
+        defender_point_cards=[],
         deal_bid_state=None,
         stirring_state=None,
         trick_state=trick,

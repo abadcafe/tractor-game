@@ -66,7 +66,7 @@ function scoringTrickPreview(
   ) {
     return null;
   }
-  return snapshot.trick_history.at(-1) ?? null;
+  return snapshot.last_completed_trick;
 }
 
 function trickViewClass(

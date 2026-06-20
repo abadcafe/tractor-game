@@ -90,7 +90,7 @@ function main() {
   let playbackCaughtUp = true;
   let playbackQueue: StatePlaybackQueue<ServerMessage> | null = null;
   let hasSeenState = false;
-  let lastSeenTrickHistoryLength = 0;
+  let lastSeenCompletedTrickKey: string | null = null;
   let previousTrickPreview: CompletedTrick | null = null;
   let previousTrickPreviewTimer: ReturnType<typeof setTimeout> | null =
     null;
@@ -219,6 +219,21 @@ function main() {
     }
   }
 
+  function completedTrickKey(trick: CompletedTrick | null): string | null {
+    if (trick === null) {
+      return null;
+    }
+    const slotParts = trick.slots.map((slot) =>
+      `${slot.player}:${slot.cards.map((card) => card.id).join(",")}`
+    );
+    return [
+      trick.lead_player,
+      trick.winner,
+      trick.points,
+      ...slotParts,
+    ].join("|");
+  }
+
   function failedThrowKey(
     snapshot: StateSnapshot,
     event: FailedThrow,
@@ -229,7 +244,7 @@ function main() {
       ",",
     );
     return [
-      snapshot.trick_history.length,
+      completedTrickKey(snapshot.last_completed_trick) ?? "none",
       event.player,
       attemptedIds,
       forcedIds,
@@ -268,27 +283,23 @@ function main() {
   }
 
   function updatePreviousTrickPreview(snapshot: StateSnapshot): void {
-    const historyLength = snapshot.trick_history.length;
+    const trickKey = completedTrickKey(snapshot.last_completed_trick);
     if (!hasSeenState) {
       hasSeenState = true;
-      lastSeenTrickHistoryLength = historyLength;
+      lastSeenCompletedTrickKey = trickKey;
       return;
     }
-    if (historyLength < lastSeenTrickHistoryLength) {
-      lastSeenTrickHistoryLength = historyLength;
+    if (trickKey === lastSeenCompletedTrickKey) {
+      return;
+    }
+
+    lastSeenCompletedTrickKey = trickKey;
+    if (snapshot.last_completed_trick === null) {
       clearPreviousTrickPreview();
       clearFailedThrowPreview();
       return;
     }
-    if (historyLength > lastSeenTrickHistoryLength) {
-      const latestTrick = snapshot.trick_history.at(-1);
-      lastSeenTrickHistoryLength = historyLength;
-      if (latestTrick !== undefined) {
-        showPreviousTrickPreview(latestTrick, false);
-      }
-      return;
-    }
-    lastSeenTrickHistoryLength = historyLength;
+    showPreviousTrickPreview(snapshot.last_completed_trick, false);
   }
 
   /** Send action, clear selection, re-render. */
@@ -380,8 +391,8 @@ function main() {
 
     onShowPreviousTrick() {
       const snap = stateManager.get();
-      const latestTrick = snap?.trick_history.at(-1);
-      if (latestTrick === undefined) return;
+      const latestTrick = snap?.last_completed_trick ?? null;
+      if (latestTrick === null) return;
       showPreviousTrickPreview(latestTrick, true);
     },
 
@@ -442,7 +453,7 @@ function main() {
       actionPending = false;
       playbackCaughtUp = true;
       hasSeenState = false;
-      lastSeenTrickHistoryLength = 0;
+      lastSeenCompletedTrickKey = null;
       clearPreviousTrickPreview();
       clearFailedThrowPreview();
       stateManager.reset();

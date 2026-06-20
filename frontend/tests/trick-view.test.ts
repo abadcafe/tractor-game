@@ -31,7 +31,8 @@ function makeSnapshot(
       }],
       current_player: 1,
     },
-    trick_history: [],
+    last_completed_trick: null,
+    defender_point_cards: [],
     failed_throw: null,
     bid_events: [],
     bid_winner: null,
@@ -76,7 +77,7 @@ Deno.test("test_renderTrickView_waiting_scoring_keeps_last_trick", () => {
   const snap = makeSnapshot({
     phase: "WAITING",
     trick: null,
-    trick_history: [{
+    last_completed_trick: {
       lead_player: 1,
       winner: 3,
       points: 20,
@@ -98,7 +99,7 @@ Deno.test("test_renderTrickView_waiting_scoring_keeps_last_trick", () => {
           cards: [{ id: "D1-diamonds-A", suit: "diamonds", rank: "A" }],
         },
       ],
-    }],
+    },
     scoring: {
       declarer_team: 0,
       defender_points: 80,

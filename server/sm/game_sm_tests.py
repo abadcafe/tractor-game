@@ -472,6 +472,23 @@ from .round_sm import (
     finalize_deal_bid as rn_finalize,
 )
 from .play_rules import get_legal_plays
+from .types import CompletedTrick
+
+type CompletedTrickKey = tuple[int, int, int, tuple[tuple[int, tuple[str, ...]], ...]]
+
+
+def _completed_trick_key(trick: CompletedTrick | None) -> CompletedTrickKey | None:
+    if trick is None:
+        return None
+    return (
+        trick.lead_player,
+        trick.winner,
+        trick.points,
+        tuple(
+            (slot.player, tuple(card.id for card in slot.cards))
+            for slot in trick.slots
+        ),
+    )
 
 
 def _unwrap_round(result: Ok[RoundState] | Rejected) -> RoundState:
@@ -541,7 +558,7 @@ def _complete_round_no_bid(round_state: RoundState) -> RoundState:
         else:
             break  # COMPLETE or unknown
 
-    prev_history_len = 0
+    prev_completed_trick_key: CompletedTrickKey | None = None
     max_iterations = 30
     for _ in range(max_iterations):
         if round_state.phase != "PLAYING":
@@ -556,9 +573,10 @@ def _complete_round_no_bid(round_state: RoundState) -> RoundState:
             trick = round_state.trick_state
             if trick is None:
                 break
-        if len(round_state.trick_history) == prev_history_len:
+        completed_trick_key = _completed_trick_key(round_state.last_completed_trick)
+        if completed_trick_key == prev_completed_trick_key:
             break
-        prev_history_len = len(round_state.trick_history)
+        prev_completed_trick_key = completed_trick_key
 
     return round_state
 

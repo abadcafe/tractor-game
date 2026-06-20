@@ -11,7 +11,7 @@ export interface TrickSlot {
   cards: Card[];
 }
 
-/** A completed trick in trick_history. */
+/** Last completed trick visible to players. */
 export interface CompletedTrick {
   lead_player: number;
   slots: TrickSlot[];
@@ -67,7 +67,8 @@ export interface StateSnapshot {
     current_player: number;
   } | null;
 
-  trick_history: CompletedTrick[];
+  last_completed_trick: CompletedTrick | null;
+  defender_point_cards: Card[];
   failed_throw: FailedThrow | null;
 
   bid_events: BidEvent[];

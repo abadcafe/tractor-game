@@ -1363,16 +1363,14 @@ def _verify_trick_invariants(
     state: dict[str, object],
     current_trump_suit: str | None,
 ) -> None:
-    """Verify trick history invariants: winners, suit-following, trump-wins."""
-    trick_history_raw = state.get("trick_history", [])
-    trick_history = _as_list(trick_history_raw)
-    if not trick_history:
+    """Verify last completed trick invariants: winners, suit-following, trump-wins."""
+    last_trick_raw = state.get("last_completed_trick")
+    if last_trick_raw is None:
         return
 
-    last_trick_raw = trick_history[-1]
     last_trick = _as_dict(last_trick_raw)
     assert "winner" in last_trick, (
-        "Completed trick in trick_history must have 'winner' field"
+        "last_completed_trick must have 'winner' field"
     )
     winner_val = last_trick["winner"]
     assert isinstance(winner_val, int) and winner_val in (0, 1, 2, 3), (
@@ -1399,35 +1397,49 @@ def _verify_trick_invariants(
                     if lead_suit is not None and follow_suit != lead_suit:
                         pass  # void in that suit — legal
 
-    # Verify trump wins over non-trump
+    # Verify trump wins over non-trump in the last completed trick.
     if current_trump_suit is not None:
-        for past_trick_raw in trick_history:
-            past_trick = _as_dict(past_trick_raw)
-            past_slots_raw = past_trick.get("slots", [])
-            past_slots = _as_list(past_slots_raw)
-            if not past_slots:
-                continue
-            winner_slot = None
-            for slot in past_slots:
-                slot_dict = _as_dict(slot)
-                if slot_dict.get("player") == past_trick["winner"]:
-                    winner_slot = slot_dict
-                    break
-            if winner_slot is not None:
-                winner_cards = _as_list(winner_slot.get("cards", []))
-                if winner_cards:
-                    winner_card = _as_dict(winner_cards[0])
-                    lead_slot_dict = _as_dict(past_slots[0])
-                    lead_cards = _as_list(lead_slot_dict.get("cards", []))
-                    if lead_cards:
-                        lead_card = _as_dict(lead_cards[0])
-                        winner_suit = _as_str_or_none(winner_card.get("suit"))
-                        lead_suit = _as_str_or_none(lead_card.get("suit"))
-                        if (winner_suit == current_trump_suit
-                                and lead_suit != current_trump_suit):
-                            assert past_trick["winner"] != _as_dict(past_slots[0]).get("player"), (
-                                "Trump must beat non-trump lead"
-                            )
+        winner_slot = None
+        for slot in last_trick_slots:
+            slot_dict = _as_dict(slot)
+            if slot_dict.get("player") == last_trick["winner"]:
+                winner_slot = slot_dict
+                break
+        if winner_slot is not None:
+            winner_cards = _as_list(winner_slot.get("cards", []))
+            if winner_cards and last_trick_slots:
+                winner_card = _as_dict(winner_cards[0])
+                lead_slot_dict = _as_dict(last_trick_slots[0])
+                lead_cards = _as_list(lead_slot_dict.get("cards", []))
+                if lead_cards:
+                    lead_card = _as_dict(lead_cards[0])
+                    winner_suit = _as_str_or_none(winner_card.get("suit"))
+                    lead_suit = _as_str_or_none(lead_card.get("suit"))
+                    if (winner_suit == current_trump_suit
+                            and lead_suit != current_trump_suit):
+                        assert last_trick["winner"] != _as_dict(last_trick_slots[0]).get("player"), (
+                            "Trump must beat non-trump lead"
+                        )
+
+
+def _last_completed_trick_key(state: dict[str, object]) -> str | None:
+    last_trick_raw = state.get("last_completed_trick")
+    if last_trick_raw is None:
+        return None
+    last_trick = _as_dict(last_trick_raw)
+    slots = _as_list(last_trick.get("slots", []))
+    slot_parts: list[str] = []
+    for slot_raw in slots:
+        slot = _as_dict(slot_raw)
+        cards = _as_list(slot.get("cards", []))
+        card_ids = ",".join(_as_str(_as_dict(card).get("id")) for card in cards)
+        slot_parts.append(f"{_as_int(slot.get('player'))}:{card_ids}")
+    return "|".join([
+        str(_as_int(last_trick.get("lead_player"))),
+        str(_as_int(last_trick.get("winner"))),
+        str(_as_int(last_trick.get("points"))),
+        *slot_parts,
+    ])
 
 
 def _play_playing(
@@ -1448,7 +1460,8 @@ def _play_playing(
     print(f"[round {round_count}] === PLAYING ===", flush=True)
     tricks_played = 0
     current_trump_suit: str | None = _as_str_or_none(state.get("trump_suit"))
-    prev_trick_count: int = len(_as_list(state.get("trick_history", [])))
+    completed_tricks_seen = 0
+    prev_completed_trick_key = _last_completed_trick_key(state)
 
     # If msg is stale (e.g., awaiting is not "play"), drain until we know
     # whether it's our turn. This handles cases where the STIRRING EXCHANGING sub-phase
@@ -1467,7 +1480,8 @@ def _play_playing(
 
         _verify_common_fields(state, "PLAYING")
         assert "trick" in state
-        assert "trick_history" in state
+        assert "last_completed_trick" in state
+        assert "defender_point_cards" in state
         assert "defender_points" in state
         assert "action_hints" in state or _awaiting(msg) != "play"
 
@@ -1475,12 +1489,13 @@ def _play_playing(
         if ts_raw is not None:
             current_trump_suit = ts_raw
 
-        # Check if a trick just completed (trick_history grew)
-        cur_trick_count = len(_as_list(state.get("trick_history", [])))
-        if cur_trick_count > prev_trick_count:
+        # Check if a trick just completed.
+        cur_completed_trick_key = _last_completed_trick_key(state)
+        if cur_completed_trick_key is not None and cur_completed_trick_key != prev_completed_trick_key:
             _verify_trick_invariants(state, current_trump_suit)
-            prev_trick_count = cur_trick_count
-            print(f"  [R{round_count}:PLAY] trick {cur_trick_count} completed", flush=True)
+            prev_completed_trick_key = cur_completed_trick_key
+            completed_tricks_seen += 1
+            print(f"  [R{round_count}:PLAY] trick completed ({completed_tricks_seen})", flush=True)
 
         if _awaiting(msg) == "play":
             legal = state.get("action_hints", [])
@@ -1523,11 +1538,12 @@ def _play_playing(
                     print(f"[round {round_count}] PLAYING -> {state['phase']} after {tricks_played} tricks", flush=True)
                     break
                 # Check if we won the trick and it's still our turn
-                cur_trick_count = len(_as_list(state.get("trick_history", [])))
-                if cur_trick_count > prev_trick_count:
+                cur_completed_trick_key = _last_completed_trick_key(state)
+                if cur_completed_trick_key is not None and cur_completed_trick_key != prev_completed_trick_key:
                     _verify_trick_invariants(state, current_trump_suit)
-                    prev_trick_count = cur_trick_count
-                    print(f"  [R{round_count}:PLAY] trick {cur_trick_count} completed", flush=True)
+                    prev_completed_trick_key = cur_completed_trick_key
+                    completed_tricks_seen += 1
+                    print(f"  [R{round_count}:PLAY] trick completed ({completed_tricks_seen})", flush=True)
                 if _awaiting(msg) == "play":
                     continue  # Still our turn (e.g., won trick -> lead next)
                 # Action failed or not our turn — fall through to drain
@@ -1545,11 +1561,12 @@ def _play_playing(
                 print(f"[round {round_count}] PLAYING -> {state['phase']} after {tricks_played} tricks", flush=True)
                 break
             # Check trick completion in the drained state
-            cur_trick_count = len(_as_list(state.get("trick_history", [])))
-            if cur_trick_count > prev_trick_count:
+            cur_completed_trick_key = _last_completed_trick_key(state)
+            if cur_completed_trick_key is not None and cur_completed_trick_key != prev_completed_trick_key:
                 _verify_trick_invariants(state, current_trump_suit)
-                prev_trick_count = cur_trick_count
-                print(f"  [R{round_count}:PLAY] trick {cur_trick_count} completed", flush=True)
+                prev_completed_trick_key = cur_completed_trick_key
+                completed_tricks_seen += 1
+                print(f"  [R{round_count}:PLAY] trick completed ({completed_tricks_seen})", flush=True)
             if _awaiting(msg) == "play":
                 break  # Our turn now — go back to top of outer loop
             # Shouldn't happen (_recv_until_our_turn guarantees one of the

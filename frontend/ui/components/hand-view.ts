@@ -12,7 +12,6 @@ import {
   sortHand,
   suitSymbol,
 } from "../../core/card.ts";
-import { SEAT_MAP } from "../../config.ts";
 import { el } from "../dom.ts";
 
 /**
@@ -59,7 +58,7 @@ export function renderHandView(
     bidOptions !== undefined &&
     bidOptions.length > 0 &&
     onBidOptionSelect !== undefined;
-  const canShowPreviousTrick = snapshot.trick_history.length > 0 &&
+  const canShowPreviousTrick = snapshot.last_completed_trick !== null &&
     onShowPreviousTrick !== undefined;
   const hasControls = (needsButton && onAction !== undefined) ||
     needsStirButtons || needsBidButtons || showTools ||
@@ -486,7 +485,7 @@ function renderScorePile(snapshot: StateSnapshot): HTMLElement {
   );
 
   const cardsWrap = el("div", { class: "score-pile__cards" });
-  for (const card of defenderPointCards(snapshot)) {
+  for (const card of snapshot.defender_point_cards) {
     cardsWrap.appendChild(
       el("span", {
         class: scorePileCardClass(card),
@@ -497,29 +496,6 @@ function renderScorePile(snapshot: StateSnapshot): HTMLElement {
   }
   scorePile.appendChild(cardsWrap);
   return scorePile;
-}
-
-function defenderPointCards(snapshot: StateSnapshot): Card[] {
-  if (snapshot.declarer_team === null) {
-    return [];
-  }
-  const cards: Card[] = [];
-  for (const trick of snapshot.trick_history) {
-    const winnerTeam = SEAT_MAP[trick.winner]?.team;
-    if (
-      winnerTeam === undefined || winnerTeam === snapshot.declarer_team
-    ) {
-      continue;
-    }
-    for (const slot of trick.slots) {
-      for (const card of slot.cards) {
-        if (isPointCard(card)) {
-          cards.push(card);
-        }
-      }
-    }
-  }
-  return cards;
 }
 
 function canSelectCard(

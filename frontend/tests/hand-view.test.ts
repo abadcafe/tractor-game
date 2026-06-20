@@ -31,7 +31,8 @@ function makeSnapshot(
     defender_points: 0,
     action_hints: [[{ id: "D1-hearts-5", suit: "hearts", rank: "5" }]],
     trick: null,
-    trick_history: [],
+    last_completed_trick: null,
+    defender_point_cards: [],
     failed_throw: null,
     bid_events: [],
     bid_winner: null,
@@ -95,7 +96,7 @@ Deno.test("test_renderHandView_play_button", () => {
 
 Deno.test("test_renderHandView_previous_trick_button_above_hand", () => {
   const snap = makeSnapshot({
-    trick_history: [{
+    last_completed_trick: {
       lead_player: 0,
       winner: 3,
       points: 10,
@@ -117,7 +118,7 @@ Deno.test("test_renderHandView_previous_trick_button_above_hand", () => {
           cards: [{ id: "D1-diamonds-K", suit: "diamonds", rank: "K" }],
         },
       ],
-    }],
+    },
   });
   let called = false;
   const el = renderHandView(
@@ -244,29 +245,10 @@ Deno.test("test_renderHandView_does_not_show_compact_sort_button", () => {
 Deno.test("test_renderHandView_score_pile_shows_captured_point_cards", () => {
   const snap = makeSnapshot({
     defender_points: 15,
-    trick_history: [{
-      lead_player: 0,
-      winner: 1,
-      points: 15,
-      slots: [
-        {
-          player: 0,
-          cards: [{ id: "D1-clubs-5", suit: "clubs", rank: "5" }],
-        },
-        {
-          player: 1,
-          cards: [{ id: "D1-spades-2", suit: "spades", rank: "2" }],
-        },
-        {
-          player: 2,
-          cards: [{ id: "D1-hearts-K", suit: "hearts", rank: "K" }],
-        },
-        {
-          player: 3,
-          cards: [{ id: "D1-diamonds-4", suit: "diamonds", rank: "4" }],
-        },
-      ],
-    }],
+    defender_point_cards: [
+      { id: "D1-clubs-5", suit: "clubs", rank: "5" },
+      { id: "D1-hearts-K", suit: "hearts", rank: "K" },
+    ],
   });
   const el = renderHandView(snap, "play");
   const text = el.querySelector(".score-pile__label")?.textContent ??

@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from server.sm.card_model import card_display
+from server.sm.types import CompletedTrick
 from server.snapshot import StateSnapshot
+
+type AITrickKey = tuple[int, int, int, tuple[tuple[int, tuple[str, ...]], ...]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +49,10 @@ def _empty_tricks() -> list[AITrickRecord]:
     return []
 
 
+def _empty_trick_keys() -> set[AITrickKey]:
+    return set()
+
+
 def _empty_failed_throws() -> list[AIFailedThrowRecord]:
     return []
 
@@ -56,6 +63,7 @@ class AIMemory:
 
     bids: list[AIBidRecord] = field(default_factory=_empty_bids)
     tricks: list[AITrickRecord] = field(default_factory=_empty_tricks)
+    seen_trick_keys: set[AITrickKey] = field(default_factory=_empty_trick_keys)
     failed_throws: list[AIFailedThrowRecord] = field(default_factory=_empty_failed_throws)
     last_seq: int | None = None
 
@@ -70,22 +78,16 @@ class AIMemory:
             )
             for event in snapshot.bid_events
         ]
-        self.tricks = [
-            AITrickRecord(
-                index=index,
-                lead_player=trick.lead_player,
-                plays=tuple(
-                    AIPlayRecord(
-                        player=slot.player,
-                        cards=tuple(card_display(card) for card in slot.cards),
+        if snapshot.last_completed_trick is not None:
+            key = _trick_key(snapshot.last_completed_trick)
+            if key not in self.seen_trick_keys:
+                self.seen_trick_keys.add(key)
+                self.tricks.append(
+                    _trick_record(
+                        len(self.tricks) + 1,
+                        snapshot.last_completed_trick,
                     )
-                    for slot in trick.slots
-                ),
-                winner=trick.winner,
-                points=trick.points,
-            )
-            for index, trick in enumerate(snapshot.trick_history, start=1)
-        ]
+                )
         if snapshot.failed_throw is not None:
             record = AIFailedThrowRecord(
                 player=snapshot.failed_throw.player,
@@ -122,3 +124,31 @@ class AIMemory:
                     f"attempted={list(item.attempted_cards)}, forced={list(item.forced_cards)}"
                 )
         return "\n".join(lines)
+
+
+def _trick_key(trick: CompletedTrick) -> AITrickKey:
+    return (
+        trick.lead_player,
+        trick.winner,
+        trick.points,
+        tuple(
+            (slot.player, tuple(card.id for card in slot.cards))
+            for slot in trick.slots
+        ),
+    )
+
+
+def _trick_record(index: int, trick: CompletedTrick) -> AITrickRecord:
+    return AITrickRecord(
+        index=index,
+        lead_player=trick.lead_player,
+        plays=tuple(
+            AIPlayRecord(
+                player=slot.player,
+                cards=tuple(card_display(card) for card in slot.cards),
+            )
+            for slot in trick.slots
+        ),
+        winner=trick.winner,
+        points=trick.points,
+    )

@@ -99,7 +99,8 @@ class StateSnapshot:
     declarer_player: int | None
     defender_points: int
     trick: TrickSnapshot | None
-    trick_history: list[CompletedTrick]
+    last_completed_trick: CompletedTrick | None
+    defender_point_cards: list[Card]
     failed_throw: FailedThrow | None
     action_hints: list[list[Card]]
     awaiting_action: str | None
@@ -166,21 +167,11 @@ class StateSnapshot:
             "declarer_player": self.declarer_player,
             "defender_points": self.defender_points,
             "trick": trick_dict,
-            "trick_history": [
-                {
-                    "lead_player": t.lead_player,
-                    "slots": [
-                        {
-                            "player": slot.player,
-                            "cards": [_card_to_dict(c) for c in slot.cards],
-                        }
-                        for slot in t.slots
-                    ],
-                    "winner": t.winner,
-                    "points": t.points,
-                }
-                for t in self.trick_history
-            ],
+            "last_completed_trick": (
+                _serialize_completed_trick(self.last_completed_trick)
+                if self.last_completed_trick is not None else None
+            ),
+            "defender_point_cards": [_card_to_dict(c) for c in self.defender_point_cards],
             "failed_throw": _serialize_failed_throw(self.failed_throw) if self.failed_throw is not None else None,
             "action_hints": [
                 [_card_to_dict(c) for c in entry]
@@ -216,6 +207,22 @@ def _serialize_failed_throw(event: FailedThrow) -> FailedThrowDict:
         "player": event.player,
         "attempted_cards": [_card_to_dict(c) for c in event.attempted_cards],
         "forced_cards": [_card_to_dict(c) for c in event.forced_cards],
+    }
+
+
+def _serialize_completed_trick(trick: CompletedTrick) -> CompletedTrickDict:
+    """Serialize one completed trick for public display."""
+    return {
+        "lead_player": trick.lead_player,
+        "slots": [
+            {
+                "player": slot.player,
+                "cards": [_card_to_dict(c) for c in slot.cards],
+            }
+            for slot in trick.slots
+        ],
+        "winner": trick.winner,
+        "points": trick.points,
     }
 
 
@@ -318,7 +325,8 @@ class SnapshotDict(TypedDict):
     declarer_player: int | None
     defender_points: int
     trick: TrickDict | None
-    trick_history: list[CompletedTrickDict]
+    last_completed_trick: CompletedTrickDict | None
+    defender_point_cards: list[CardDict]
     failed_throw: FailedThrowDict | None
     action_hints: list[list[CardDict]]
     awaiting_action: str | None

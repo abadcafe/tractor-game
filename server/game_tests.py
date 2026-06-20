@@ -433,7 +433,8 @@ def test_snapshot_stir_action_hints_ordered_from_small_to_large() -> None:
         players_hand=players_hand,
         bottom_cards=[],
         defender_points=0,
-        trick_history=[],
+        last_completed_trick=None,
+        defender_point_cards=[],
         deal_bid_state=None,
         stirring_state=stirring,
         trick_state=None,
@@ -481,7 +482,8 @@ def test_snapshot_play_leading_has_no_action_hints() -> None:
         players_hand=hands,
         bottom_cards=[],
         defender_points=0,
-        trick_history=[],
+        last_completed_trick=None,
+        defender_point_cards=[],
         deal_bid_state=None,
         stirring_state=None,
         trick_state=trick,
@@ -536,7 +538,8 @@ def test_snapshot_play_following_returns_smallest_hint_window() -> None:
         players_hand=played.value.hands,
         bottom_cards=[],
         defender_points=0,
-        trick_history=[],
+        last_completed_trick=None,
+        defender_point_cards=[],
         deal_bid_state=None,
         stirring_state=None,
         trick_state=played.value,
@@ -948,7 +951,8 @@ async def test_snapshot_to_dict_contains_all_required_fields():
         "declarer_player",
         "defender_points",
         "trick",
-        "trick_history",
+        "last_completed_trick",
+        "defender_point_cards",
         "failed_throw",
         "action_hints",
         "awaiting_action",
@@ -1020,7 +1024,8 @@ async def test_snapshot_completed_trick_no_lead_type():
     game = await _start_game(_make_players())
     snap = game.snapshot(for_player=0)
     d = snap.to_dict()
-    for trick in d["trick_history"]:
+    trick = d["last_completed_trick"]
+    if trick is not None:
         assert "lead_type" not in trick
 
 

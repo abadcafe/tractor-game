@@ -186,9 +186,10 @@ server 会用当前 player 的手牌解析这些 id。
 | 字段 | 含义 |
 | --- | --- |
 | `trick` | 当前墩进行中的出牌 |
-| `trick_history` | 已完成的每一墩 |
+| `last_completed_trick` | 最近完成的一墩，未完成过则为 `null` |
 | `failed_throw` | 甩牌失败后的公开惩罚信息 |
 | `defender_points` | 防守方当前捡分 |
+| `defender_point_cards` | 防守方按捡分顺序累计拿到的分牌 |
 
 ### 其他信息
 
