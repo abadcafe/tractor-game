@@ -31,6 +31,7 @@ _WS_ERRORS: tuple[type[Exception], ...] = (
     BrokenResourceError,
     EndOfStream,
 )
+_DEFAULT_WS_RECEIVE_TIMEOUT_SECONDS: float = 5.0
 
 
 class WsReceiveTimeout(TimeoutError):
@@ -64,7 +65,7 @@ def _as_dict(val: object) -> dict[str, object]:
     """Assert val is dict[str, object] and return it narrowed.
 
     For use when the caller knows the value is a dict (e.g. from
-    ws.receive_json() which returns object). Raises AssertionError
+    _receive_ws_json(ws) which returns object). Raises AssertionError
     if the value is not a dict.
     """
     assert _is_dict(val), f"Expected dict, got {type(val).__name__}"
@@ -148,6 +149,25 @@ def _private_raise_on_close(ws: WebSocketTestSession) -> _RaiseOnClose:
     return fn
 
 
+def _receive_ws_json(
+    ws: WebSocketTestSession,
+    *,
+    timeout: float = _DEFAULT_WS_RECEIVE_TIMEOUT_SECONDS,
+) -> object:
+    """Receive one JSON message from Starlette's test WS with a deadline."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            message = _private_send_rx(ws).receive_nowait()
+            _private_raise_on_close(ws)(message)
+            text = _as_str(message["text"])
+            return json.loads(text)
+        except WouldBlock as exc:
+            if time.monotonic() >= deadline:
+                raise WsReceiveTimeout("timed out waiting for websocket message") from exc
+            time.sleep(0.001)
+
+
 # ---- Fixtures ----
 
 
@@ -166,7 +186,7 @@ def clean_registry(sync_client: SyncServerClient) -> Generator[None, None, None]
 @pytest.fixture
 def sync_client() -> Generator[SyncServerClient, None, None]:
     """Synchronous test client using Starlette TestClient."""
-    with TestClient(app) as c:
+    with TestClient(app, backend_options={"use_uvloop": True}) as c:
         yield c
 
 
@@ -268,20 +288,9 @@ class WsGameDriver:
         if self._ws is None:
             raise RuntimeError("Not connected")
         if timeout is None:
-            raw = self._ws.receive_json()
+            raw = _receive_ws_json(self._ws)
         else:
-            deadline = time.monotonic() + timeout
-            while True:
-                try:
-                    message = _private_send_rx(self._ws).receive_nowait()
-                    _private_raise_on_close(self._ws)(message)
-                    text = _as_str(message["text"])
-                    raw = json.loads(text)
-                    break
-                except WouldBlock as exc:
-                    if time.monotonic() >= deadline:
-                        raise WsReceiveTimeout("timed out waiting for websocket message") from exc
-                    time.sleep(0.001)
+            raw = _receive_ws_json(self._ws, timeout=timeout)
         result = _as_dict(raw)
         if verbose:
             err = result.get("error")
@@ -592,7 +601,7 @@ def test_delete_game_closes_ws(sync_client: SyncServerClient) -> None:
 
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
         ws.send_json({"seq": 0})
-        raw = ws.receive_json()
+        raw = _receive_ws_json(ws)
         data_msg = _as_dict(raw)
         assert data_msg["type"] == "state"
 
@@ -600,14 +609,14 @@ def test_delete_game_closes_ws(sync_client: SyncServerClient) -> None:
         assert resp.status_code == 200
 
         with pytest.raises(_WS_ERRORS):
-            ws.receive_json()
+            _receive_ws_json(ws)
 
 
 def test_connect_nonexistent_game(sync_client: SyncServerClient) -> None:
     """Connecting to a nonexistent game closes with code 4404."""
     with pytest.raises(WebSocketDisconnect) as exc_info:
         with sync_client.websocket_connect("/game/nonexistent_id") as ws:
-            ws.receive_json()
+            _receive_ws_json(ws)
     assert exc_info.value.code == 4404
 
 
@@ -621,14 +630,14 @@ def test_connection_takeover(sync_client: SyncServerClient) -> None:
     # First connection: get state
     with sync_client.websocket_connect(f"/game/{game_id}") as ws1:
         ws1.send_json({"seq": 0})
-        raw1 = ws1.receive_json()
+        raw1 = _receive_ws_json(ws1)
         data1 = _as_dict(raw1)
         assert data1["type"] == "state"
 
         # Second connection (should kick first)
         with sync_client.websocket_connect(f"/game/{game_id}") as ws2:
             ws2.send_json({"seq": 0})
-            raw2 = ws2.receive_json()
+            raw2 = _receive_ws_json(ws2)
             data2 = _as_dict(raw2)
             assert data2["type"] == "state"
 
@@ -637,7 +646,7 @@ def test_connection_takeover(sync_client: SyncServerClient) -> None:
         # Note: send_json() raises RuntimeError (not in _WS_ERRORS) because
         # the server already sent a close frame, so we only try receive.
         with pytest.raises(_WS_ERRORS):
-            ws1.receive_json()
+            _receive_ws_json(ws1)
 
 
 def test_reconnect_resumes_game(sync_client: SyncServerClient) -> None:
@@ -650,7 +659,7 @@ def test_reconnect_resumes_game(sync_client: SyncServerClient) -> None:
     # First connection: get state
     with sync_client.websocket_connect(f"/game/{game_id}") as ws1:
         ws1.send_json({"seq": 0})
-        raw1 = ws1.receive_json()
+        raw1 = _receive_ws_json(ws1)
         data1 = _as_dict(raw1)
         assert data1["type"] == "state"
         seq1 = _as_int(data1["seq"])
@@ -658,7 +667,7 @@ def test_reconnect_resumes_game(sync_client: SyncServerClient) -> None:
     # Reconnect: send seq=0 to request the current state.
     with sync_client.websocket_connect(f"/game/{game_id}") as ws2:
         ws2.send_json({"seq": 0})
-        raw2 = ws2.receive_json()
+        raw2 = _receive_ws_json(ws2)
         data2 = _as_dict(raw2)
         assert data2["type"] == "state"
         # State should be valid and seq should be >= seq1
@@ -669,7 +678,7 @@ def test_reconnect_resumes_game(sync_client: SyncServerClient) -> None:
         # Verify subsequent action works with the correct seq from received state
         known_seq = _as_int(data2["seq"])
         ws2.send_json({"type": "next_round", "seq": known_seq})
-        raw3 = ws2.receive_json()
+        raw3 = _receive_ws_json(ws2)
         data3 = _as_dict(raw3)
         assert data3["type"] == "state"
         # Action with correct seq should either succeed (state changes) or
@@ -1717,7 +1726,7 @@ def _verify_game_over(
     print("  checking seq=0 reconnect...", flush=True)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
         ws.send_json({"seq": 0})
-        raw = ws.receive_json()
+        raw = _receive_ws_json(ws)
         msg = _as_dict(raw)
         assert msg["type"] == "state"
         reconnect_state = _as_dict(msg["state"])

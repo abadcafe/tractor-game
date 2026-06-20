@@ -7,13 +7,14 @@ from .play_rules import (
     compare_plays,
     decompose,
     detect_throws,
-    get_legal_plays,
+    get_legal_play_hints,
     is_legal_follow,
     is_legal_lead,
     resolve_lead_throw,
     sort_play_action_hints,
+    TOO_MANY_PLAY_HINTS,
 )
-from .result import Ok
+from .result import Ok, Rejected
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
@@ -24,6 +25,13 @@ def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
         is_big_joker=(rank == Rank.BIG_JOKER),
         points=0, deck=deck,
     )
+
+
+def _hint_id_sets(hints: list[list[Card]]) -> set[frozenset[str]]:
+    return {
+        frozenset(card.id for card in hint)
+        for hint in hints
+    }
 
 
 class TestDecompose:
@@ -1016,121 +1024,140 @@ class TestDetectThrows:
         assert len(throws) == 0
 
 
-class TestGetLegalPlays:
-    # --- Leading ---
-    def test_leading_returns_singles(self) -> None:
-        """Leading: each card is a single option."""
+class TestGetLegalPlayHints:
+    def test_leading_returns_no_hints(self) -> None:
+        """Leading is free-form, so it does not expose a closed hint set."""
         hand = [_card(Suit.HEARTS, Rank.ACE), _card(Suit.HEARTS, Rank.KING)]
-        plays = get_legal_plays(hand, True, None, Suit.SPADES, Rank.TWO, [])
-        singles = [p for p in plays if len(p) == 1]
-        assert len(singles) >= 2
+        result = get_legal_play_hints(
+            hand, True, None, Suit.SPADES, Rank.TWO, [], max_hints=5,
+        )
 
-    def test_leading_returns_pairs(self) -> None:
-        """Leading: pairs are options."""
-        hand = [_card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2)]
-        plays = get_legal_plays(hand, True, None, Suit.SPADES, Rank.TWO, [])
-        pairs = [p for p in plays if len(p) == 2]
-        assert len(pairs) >= 1
+        assert isinstance(result, Ok)
+        assert result.value == []
 
-    def test_leading_returns_tractors(self) -> None:
-        """Leading: tractors are options."""
+    def test_following_single_enumerates_all_same_suit_cards(self) -> None:
+        """Following a single enumerates every same-suit card, not just the first."""
         hand = [
-            _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
-            _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2),
+            _card(Suit.HEARTS, Rank.ACE),
+            _card(Suit.HEARTS, Rank.KING),
+            _card(Suit.SPADES, Rank.KING),
         ]
-        plays = get_legal_plays(hand, True, None, Suit.SPADES, Rank.TWO, [])
-        tractors = [p for p in plays if len(p) == 4]
-        assert len(tractors) >= 1
-
-    def test_leading_returns_valid_throws(self) -> None:
-        """Leading: valid throws (all sub-plays biggest) are options."""
-        hand = [_card(Suit.SPADES, Rank.ACE), _card(Suit.SPADES, Rank.KING)]
-        plays = get_legal_plays(hand, True, None, Suit.HEARTS, Rank.TWO, [])
-        throws = [p for p in plays if len(p) == 2]
-        assert len(throws) >= 1
-
-    # --- Following ---
-    def test_following_single_must_follow(self) -> None:
-        """Following single: must play same suit if possible."""
-        hand = [_card(Suit.HEARTS, Rank.ACE), _card(Suit.SPADES, Rank.KING)]
         lead = [_card(Suit.HEARTS, Rank.QUEEN)]
-        plays = get_legal_plays(hand, False, lead, Suit.SPADES, Rank.TWO, [])
-        # All plays must be heart
-        for p in plays:
-            assert all(c.suit == Suit.HEARTS for c in p)
+        result = get_legal_play_hints(
+            hand, False, lead, Suit.SPADES, Rank.TWO, [], max_hints=5,
+        )
 
-    def test_following_single_no_suit(self) -> None:
-        """Following single with no matching suit: can play anything."""
-        hand = [_card(Suit.SPADES, Rank.KING)]
-        lead = [_card(Suit.HEARTS, Rank.QUEEN)]
-        plays = get_legal_plays(hand, False, lead, Suit.SPADES, Rank.TWO, [])
-        assert len(plays) >= 1
+        assert isinstance(result, Ok)
+        assert _hint_id_sets(result.value) == {
+            frozenset({"D1-hearts-A"}),
+            frozenset({"D1-hearts-K"}),
+        }
 
-    def test_following_single_no_trump_rank_card_hints_all_cards(self) -> None:
+    def test_following_single_no_suit_enumerates_all_cards(self) -> None:
         """No effective lead-suit card means every single card is a legal hint."""
         hand = [
-            _card(Suit.JOKER, Rank.SMALL_JOKER),
-            _card(Suit.HEARTS, Rank.FOUR),
-            _card(Suit.CLUBS, Rank.FOUR),
-            _card(Suit.DIAMONDS, Rank.FOUR),
-            _card(Suit.SPADES, Rank.TWO),
-            _card(Suit.HEARTS, Rank.JACK),
-            _card(Suit.HEARTS, Rank.FIVE),
-            _card(Suit.HEARTS, Rank.TWO),
-            _card(Suit.CLUBS, Rank.SIX),
-            _card(Suit.CLUBS, Rank.THREE),
+            _card(Suit.SPADES, Rank.KING),
+            _card(Suit.CLUBS, Rank.QUEEN),
+            _card(Suit.DIAMONDS, Rank.JACK),
         ]
-        lead = [_card(Suit.DIAMONDS, Rank.ACE)]
-
-        plays = get_legal_plays(hand, False, lead, None, Rank.FOUR, [])
-        play_ids = {play[0].id for play in plays}
-
-        assert play_ids == {card.id for card in hand}
-
-    def test_following_pair_must_follow(self) -> None:
-        """Following pair: must play pair of same suit if available."""
-        hand = [
-            _card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2),
-            _card(Suit.SPADES, Rank.KING, 1), _card(Suit.SPADES, Rank.KING, 2),
-        ]
-        lead = [_card(Suit.HEARTS, Rank.QUEEN, 1), _card(Suit.HEARTS, Rank.QUEEN, 2)]
-        plays = get_legal_plays(hand, False, lead, Suit.SPADES, Rank.TWO, [])
-        # Must include hA pair option
-        has_heart_pair = any(
-            len(p) == 2 and all(c.suit == Suit.HEARTS for c in p)
-            for p in plays
+        lead = [_card(Suit.HEARTS, Rank.QUEEN)]
+        result = get_legal_play_hints(
+            hand, False, lead, Suit.SPADES, Rank.TWO, [], max_hints=5,
         )
-        assert has_heart_pair
 
-    def test_following_tractor_priority(self) -> None:
-        """Following tractor: must use higher-level sub-plays first."""
-        # Hand: tractor h3-3-4-4-5-5 + pair hK-K. Lead: 2-pair tractor.
+        assert isinstance(result, Ok)
+        assert _hint_id_sets(result.value) == {
+            frozenset({"D1-spades-K"}),
+            frozenset({"D1-clubs-Q"}),
+            frozenset({"D1-diamonds-J"}),
+        }
+
+    def test_following_pair_plus_single_enumerates_all_fill_suit_choices(self) -> None:
+        """After a required pair, all same-suit filler choices are enumerated."""
         hand = [
-            _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
-            _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2),
-            _card(Suit.HEARTS, Rank.FIVE, 1), _card(Suit.HEARTS, Rank.FIVE, 2),
-            _card(Suit.HEARTS, Rank.KING, 1), _card(Suit.HEARTS, Rank.KING, 2),
+            _card(Suit.HEARTS, Rank.ACE, 1),
+            _card(Suit.HEARTS, Rank.ACE, 2),
+            _card(Suit.HEARTS, Rank.KING),
+            _card(Suit.HEARTS, Rank.QUEEN),
+            _card(Suit.SPADES, Rank.JACK),
         ]
         lead = [
-            _card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2),
-            _card(Suit.HEARTS, Rank.QUEEN, 1), _card(Suit.HEARTS, Rank.QUEEN, 2),
+            _card(Suit.HEARTS, Rank.THREE, 1),
+            _card(Suit.HEARTS, Rank.THREE, 2),
+            _card(Suit.HEARTS, Rank.FOUR),
         ]
-        plays = get_legal_plays(hand, False, lead, Suit.SPADES, Rank.TWO, [])
-        # All plays must be 4 cards
-        for p in plays:
-            assert len(p) == 4
+        result = get_legal_play_hints(
+            hand, False, lead, Suit.SPADES, Rank.TWO, [], max_hints=5,
+        )
+
+        assert isinstance(result, Ok)
+        assert _hint_id_sets(result.value) == {
+            frozenset({"D1-hearts-A", "D2-hearts-A", "D1-hearts-K"}),
+            frozenset({"D1-hearts-A", "D2-hearts-A", "D1-hearts-Q"}),
+        }
+
+    def test_following_not_enough_suit_enumerates_all_off_suit_fill_choices(self) -> None:
+        """When suit cards are exhausted, all off-suit filler choices are enumerated."""
+        hand = [
+            _card(Suit.HEARTS, Rank.ACE, 1),
+            _card(Suit.HEARTS, Rank.ACE, 2),
+            _card(Suit.HEARTS, Rank.KING),
+            _card(Suit.SPADES, Rank.QUEEN),
+            _card(Suit.CLUBS, Rank.JACK),
+        ]
+        lead = [
+            _card(Suit.HEARTS, Rank.THREE, 1),
+            _card(Suit.HEARTS, Rank.THREE, 2),
+            _card(Suit.HEARTS, Rank.FOUR, 1),
+            _card(Suit.HEARTS, Rank.FOUR, 2),
+        ]
+        result = get_legal_play_hints(
+            hand, False, lead, Suit.SPADES, Rank.TWO, [], max_hints=5,
+        )
+
+        assert isinstance(result, Ok)
+        assert _hint_id_sets(result.value) == {
+            frozenset({"D1-hearts-A", "D2-hearts-A", "D1-hearts-K", "D1-spades-Q"}),
+            frozenset({"D1-hearts-A", "D2-hearts-A", "D1-hearts-K", "D1-clubs-J"}),
+        }
+
+    def test_following_hints_reject_when_too_many(self) -> None:
+        """The max_hints + 1-th unique hint rejects before full enumeration."""
+        hand = [
+            _card(Suit.CLUBS, Rank.ACE),
+            _card(Suit.CLUBS, Rank.KING),
+            _card(Suit.CLUBS, Rank.QUEEN),
+            _card(Suit.CLUBS, Rank.JACK),
+            _card(Suit.CLUBS, Rank.TEN),
+            _card(Suit.CLUBS, Rank.NINE),
+        ]
+        lead = [_card(Suit.HEARTS, Rank.QUEEN)]
+        result = get_legal_play_hints(
+            hand, False, lead, Suit.SPADES, Rank.TWO, [], max_hints=5,
+        )
+
+        assert isinstance(result, Rejected)
+        assert result.reason == TOO_MANY_PLAY_HINTS
 
     def test_following_empty_lead_cards(self) -> None:
         """Following with empty lead_cards -> returns empty (wait for lead)."""
         hand = [_card(Suit.HEARTS, Rank.ACE)]
-        plays = get_legal_plays(hand, False, [], Suit.SPADES, Rank.TWO, [])
-        assert plays == []
+        result = get_legal_play_hints(
+            hand, False, [], Suit.SPADES, Rank.TWO, [], max_hints=5,
+        )
+
+        assert isinstance(result, Ok)
+        assert result.value == []
 
     def test_following_lead_cards_none(self) -> None:
         """Following with lead_cards=None -> returns empty."""
         hand = [_card(Suit.HEARTS, Rank.ACE)]
-        plays = get_legal_plays(hand, False, None, Suit.SPADES, Rank.TWO, [])
-        assert plays == []
+        result = get_legal_play_hints(
+            hand, False, None, Suit.SPADES, Rank.TWO, [], max_hints=5,
+        )
+
+        assert isinstance(result, Ok)
+        assert result.value == []
 
     def test_sort_play_action_hints_orders_from_small_to_large(self) -> None:
         """Player-facing play hints are sorted weakest first."""

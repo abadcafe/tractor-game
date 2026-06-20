@@ -16,7 +16,7 @@ from server.actions import BidAction, NextRoundAction, PlayAction, SkipBidAction
 from server.game import Game
 from server.messages import PlayerMessage, StateMessage
 from server.player import Player
-from server.sm import round_sm, stirring_sm, trick_sm
+from server.sm import deal_bid_sm, round_sm, stirring_sm, trick_sm
 from server.sm.card_model import Card, Rank, Suit
 from server.sm.result import Ok, Rejected
 from server.sm.types import BidEvent
@@ -455,6 +455,66 @@ def test_snapshot_stir_action_hints_ordered_from_small_to_large() -> None:
     ]
 
 
+def test_snapshot_stir_action_hints_hidden_when_over_bid_hint_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """STIRRING uses MAX_BID_ACTION_HINTS as a closed-set limit."""
+    monkeypatch.setattr(deal_bid_sm, "MAX_BID_ACTION_HINTS", 2)
+
+    hearts_pair = [_card(Suit.HEARTS, Rank.TWO, 1), _card(Suit.HEARTS, Rank.TWO, 2)]
+    spades_pair = [_card(Suit.SPADES, Rank.TWO, 1), _card(Suit.SPADES, Rank.TWO, 2)]
+    small_joker_pair = [
+        _card(Suit.JOKER, Rank.SMALL_JOKER, 1),
+        _card(Suit.JOKER, Rank.SMALL_JOKER, 2),
+    ]
+    players_hand = [
+        [],
+        [*small_joker_pair, *spades_pair, *hearts_pair],
+        [],
+        [],
+    ]
+    stirring = stirring_sm.StirringState(
+        phase="WAITING",
+        trump_suit=Suit.CLUBS,
+        trump_rank=Rank.TWO,
+        declarer_player=0,
+        current_player=1,
+        pass_set=frozenset(),
+        actions=(),
+        last_stir_player=None,
+        current_priority=201,
+        bottom_cards=[],
+        players_hand=players_hand,
+    )
+    state = round_sm.RoundState(
+        phase="STIRRING",
+        declarer_team=0,
+        declarer_player=0,
+        defender_team=1,
+        trump_suit=Suit.CLUBS,
+        trump_rank=Rank.TWO,
+        bid_winner=None,
+        players_hand=players_hand,
+        bottom_cards=[],
+        defender_points=0,
+        last_completed_trick=None,
+        defender_point_cards=[],
+        deal_bid_state=None,
+        stirring_state=stirring,
+        trick_state=None,
+        result=None,
+        team0_level=Rank.TWO,
+        team1_level=Rank.TWO,
+        start_player=0,
+        next_declarer_player=None,
+    )
+    game = _game_with_round_state(state)
+
+    snap = game.snapshot(1)
+
+    assert snap.action_hints == []
+
+
 def test_snapshot_play_leading_has_no_action_hints() -> None:
     """PLAYING action_hints are empty while the player is leading."""
     hands = [
@@ -501,8 +561,8 @@ def test_snapshot_play_leading_has_no_action_hints() -> None:
     assert snap.action_hints == []
 
 
-def test_snapshot_play_following_returns_smallest_hint_window() -> None:
-    """Following action_hints are sorted and truncated to the smallest hints."""
+def test_snapshot_play_following_hides_hints_when_too_many() -> None:
+    """Following action_hints are hidden when count exceeds MAX_PLAY_ACTION_HINTS."""
     lead = _card(Suit.DIAMONDS, Rank.ACE)
     follower_hand = [
         _card(Suit.JOKER, Rank.SMALL_JOKER),
@@ -554,13 +614,8 @@ def test_snapshot_play_following_returns_smallest_hint_window() -> None:
     snap = game.snapshot(1)
 
     assert snap.awaiting_action == "play"
-    assert [[card.id for card in hint] for hint in snap.action_hints] == [
-        ["D1-clubs-3"],
-        ["D1-spades-4"],
-        ["D1-hearts-5"],
-        ["D1-clubs-6"],
-        ["D1-hearts-7"],
-    ]
+    # 10 possible plays > MAX_PLAY_ACTION_HINTS(5), so hints are hidden
+    assert snap.action_hints == []
 
 
 @pytest.mark.asyncio
@@ -978,7 +1033,7 @@ async def test_snapshot_to_dict_contains_all_required_fields():
         assert isinstance(count, int)
 
 
-# ---- Task 010: new get_legal_plays signature ----
+# ---- action_hints snapshot shape ----
 
 
 @pytest.mark.asyncio

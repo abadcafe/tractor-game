@@ -1,4 +1,6 @@
 """Tests for sm.game_sm module."""
+from itertools import combinations
+
 from .card_model import Rank
 from .result import Ok, Rejected
 from .scoring import RoundResult
@@ -471,7 +473,6 @@ from .round_sm import (
     play as rn_play, is_round_complete, get_round_result, RoundInput, RoundState,
     finalize_deal_bid as rn_finalize,
 )
-from .play_rules import get_legal_plays
 from .types import CompletedTrick
 
 type CompletedTrickKey = tuple[int, int, int, tuple[tuple[int, tuple[str, ...]], ...]]
@@ -506,24 +507,19 @@ def _play_first_legal(round_state: RoundState) -> RoundState:
     if not hand:
         return round_state
 
-    is_leading = trick.phase == "LEADING"
-    if is_leading:
-        lead_cards = None
+    if trick.phase == "LEADING":
+        candidate_sizes = [1]
     else:
         lead_slot = trick.slots[trick.lead_player]
         assert lead_slot is not None
-        lead_cards = lead_slot.cards
+        candidate_sizes = [len(lead_slot.cards)]
 
-    legal_plays = get_legal_plays(
-        hand=hand,
-        is_leading=is_leading,
-        lead_cards=lead_cards,
-        trump_suit=round_state.trump_suit,
-        trump_rank=round_state.trump_rank,
-        other_players_hands=[],
-    )
-    assert len(legal_plays) > 0, f"No legal plays for player {cur}"
-    return _unwrap_round(rn_play(round_state, player_index=cur, cards=legal_plays[0]))
+    for size in candidate_sizes:
+        for candidate in combinations(hand, size):
+            result = rn_play(round_state, player_index=cur, cards=list(candidate))
+            if isinstance(result, Ok):
+                return result.value
+    raise AssertionError(f"No accepted play for player {cur}")
 
 
 def _complete_round_no_bid(round_state: RoundState) -> RoundState:

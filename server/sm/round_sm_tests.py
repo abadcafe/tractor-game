@@ -1,6 +1,7 @@
 """Tests for sm.round_sm module."""
 import random
 from collections import Counter
+from itertools import combinations
 from typing import Literal
 
 import pytest
@@ -57,13 +58,7 @@ def _deal(state: RoundState) -> RoundState:
 
 
 def _play_first_legal(state: RoundState) -> RoundState:
-    """Play the first legal play for the current player in the trick.
-
-    Uses get_legal_plays to find a valid play instead of blindly playing
-    hand[0], which may violate follow-suit rules and cause ValueError.
-    """
-    from .play_rules import get_legal_plays
-
+    """Play the first accepted play for the current player in the trick."""
     trick = state.trick_state
     assert trick is not None
     cur = trick.cur
@@ -71,28 +66,19 @@ def _play_first_legal(state: RoundState) -> RoundState:
     if not hand:
         return state
 
-    # Determine if leading or following
-    is_leading = trick.phase == "LEADING"
-    if is_leading:
-        lead_cards = None
+    if trick.phase == "LEADING":
+        candidate_sizes = [1]
     else:
-        # Get the lead cards from the lead player's slot
         lead_slot = trick.slots[trick.lead_player]
-        assert lead_slot is not None and lead_slot.cards is not None
         lead_cards = lead_slot.cards
+        candidate_sizes = [len(lead_cards)]
 
-    legal_plays = get_legal_plays(
-        hand=hand,
-        is_leading=is_leading,
-        lead_cards=lead_cards,
-        trump_suit=state.trump_suit,
-        trump_rank=state.trump_rank,
-        other_players_hands=[],
-    )
-    assert len(legal_plays) > 0, f"No legal plays for player {cur}"
-    result = play(state, player_index=cur, cards=legal_plays[0])
-    assert isinstance(result, Ok), f"play rejected: {result.reason if hasattr(result, 'reason') else result}"
-    return result.value
+    for size in candidate_sizes:
+        for candidate in combinations(hand, size):
+            result = play(state, player_index=cur, cards=list(candidate))
+            if isinstance(result, Ok):
+                return result.value
+    raise AssertionError(f"No accepted play for player {cur}")
 
 
 def _deal_all_cards(state: RoundState) -> RoundState:
@@ -703,9 +689,8 @@ class TestPlayingPhase:
     def test_playing_all_tricks_to_scoring(self) -> None:
         """Playing phase progresses through tricks and eventually completes.
 
-        With the new SubPlay-based get_legal_plays, multi-card plays
-        (pairs, tractors) may cause players to run out of cards before
-        25 tricks. The game should still complete and transition to
+        Multi-card plays (pairs, tractors) may cause players to run out
+        of cards before 25 tricks. The game should still complete and transition to
         SCORING/COMPLETE once all cards are played or 25 tricks finish.
         """
         state = create_round(RoundInput(

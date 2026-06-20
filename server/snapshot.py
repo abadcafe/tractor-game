@@ -77,12 +77,15 @@ class StateSnapshot:
     Contains all fields from spec section 3.3. The to_dict() method
     serializes to JSON format matching spec section 5.5.
 
-    action_hints is advisory only. When non-empty, it is the complete
-    server-provided set of card groups the client may present for the
-    current awaiting_action. When empty, the server is not providing hints;
-    clients must not treat that as "no legal action" and must still allow
-    user input. The backend remains the authority for accepting or rejecting
-    every submitted action.
+    action_hints is a closed presentation set when non-empty: every card
+    group the UI or AI may choose for the current awaiting_action is included.
+    If the server cannot provide a complete bounded set, action_hints is [].
+    An empty list means "no closed hint set is provided", not "no legal
+    action"; clients must still allow user input where the action type allows
+    free card selection. The backend remains the authority for accepting or
+    rejecting every submitted action. During DEAL_BID, hints enumerate
+    complete logical bid options using canonical card ids rather than every
+    equivalent raw card-id permutation.
 
     bid_events is the deal-bid history. bid_winner is the current effective
     trump declaration for display: the highest bid during DEAL_BID, then the
@@ -119,7 +122,7 @@ class StateSnapshot:
         Cards are serialized as {"id", "suit", "rank"}.
         Enums are serialized as their string values.
         action_hints entries are serialized as lists of card-dict lists and
-        keep the same advisory-only semantics as StateSnapshot.action_hints.
+        keep the same closed-set semantics as StateSnapshot.action_hints.
         """
         trick_dict: TrickDict | None = None
         if self.trick is not None:
@@ -311,8 +314,9 @@ class BidEventDict(TypedDict):
 class SnapshotDict(TypedDict):
     """JSON-serialized snapshot matching spec section 5.5.
 
-    action_hints is a complete hint set when non-empty. An empty list means
-    no hint is provided, not that the player has no legal action.
+    action_hints is a complete closed hint set when non-empty. An empty list
+    means no closed hint set is provided, not that the player has no legal
+    action.
     """
 
     phase: str

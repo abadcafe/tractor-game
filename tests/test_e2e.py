@@ -8,14 +8,24 @@ fields. They do NOT directly access GameRegistry._last_access or _games -- they 
 the controllable clock injected via GameRegistry(clock=...) or the public API.
 """
 
+import json
+import time
+
 from collections.abc import AsyncGenerator, Generator
 from typing import Protocol, TypeGuard
 
-import pytest
 import httpx
+import pytest
+from anyio import WouldBlock
 from starlette.testclient import TestClient, WebSocketTestSession
 
 from server.server import app
+
+_DEFAULT_WS_RECEIVE_TIMEOUT_SECONDS: float = 5.0
+
+
+class WsReceiveTimeout(TimeoutError):
+    """Raised when the test WebSocket waits too long for a message."""
 
 
 class AsyncRestClient(Protocol):
@@ -28,6 +38,14 @@ class SyncServerClient(Protocol):
     def post(self, url: str) -> httpx.Response: ...
     def delete(self, url: str) -> httpx.Response: ...
     def websocket_connect(self, url: str) -> WebSocketTestSession: ...
+
+
+class _ReceiveNowaitQueue(Protocol):
+    def receive_nowait(self) -> dict[str, object]: ...
+
+
+class _RaiseOnClose(Protocol):
+    def __call__(self, message: dict[str, object]) -> None: ...
 
 
 def _is_dict(val: object) -> TypeGuard[dict[str, object]]:
@@ -48,11 +66,54 @@ def _as_list(val: object) -> list[object]:
     return val
 
 
+def _as_str(val: object) -> str:
+    assert isinstance(val, str), f"Expected str, got {type(val).__name__}"
+    return val
+
+
 def _game_id_from_response(resp: httpx.Response) -> str:
     data = _as_dict(resp.json())
     game_id = data["game_id"]
     assert isinstance(game_id, str)
     return game_id
+
+
+def _has_receive_nowait(val: object) -> TypeGuard[_ReceiveNowaitQueue]:
+    return callable(getattr(val, "receive_nowait", None))
+
+
+def _has_raise_on_close(val: object) -> TypeGuard[_RaiseOnClose]:
+    return callable(val)
+
+
+def _private_send_rx(ws: WebSocketTestSession) -> _ReceiveNowaitQueue:
+    queue = object.__getattribute__(ws, "_send_rx")
+    assert _has_receive_nowait(queue)
+    return queue
+
+
+def _private_raise_on_close(ws: WebSocketTestSession) -> _RaiseOnClose:
+    fn = object.__getattribute__(ws, "_raise_on_close")
+    assert _has_raise_on_close(fn)
+    return fn
+
+
+def _receive_ws_json(
+    ws: WebSocketTestSession,
+    *,
+    timeout: float = _DEFAULT_WS_RECEIVE_TIMEOUT_SECONDS,
+) -> object:
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            message = _private_send_rx(ws).receive_nowait()
+            _private_raise_on_close(ws)(message)
+            text = _as_str(message["text"])
+            return json.loads(text)
+        except WouldBlock as exc:
+            if time.monotonic() >= deadline:
+                raise WsReceiveTimeout("timed out waiting for websocket message") from exc
+            time.sleep(0.001)
 
 
 @pytest.fixture(autouse=True)
@@ -85,7 +146,7 @@ async def client() -> AsyncGenerator[AsyncRestClient, None]:
 @pytest.fixture
 def sync_client() -> Generator[SyncServerClient, None, None]:
     """Synchronous test client using Starlette TestClient for WebSocket tests."""
-    with TestClient(app) as c:
+    with TestClient(app, backend_options={"use_uvloop": True}) as c:
         yield c
 
 
@@ -112,7 +173,7 @@ def test_full_game_flow(sync_client: SyncServerClient) -> None:
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
         # Client must send seq=0 to get initial state (no auto-push on connect)
         ws.send_json({"seq": 0})
-        data = _as_dict(ws.receive_json())
+        data = _as_dict(_receive_ws_json(ws))
         assert data["type"] == "state"
         state = _as_dict(data["state"])
         assert "phase" in state
@@ -126,12 +187,12 @@ def test_reconnect_mid_game(sync_client: SyncServerClient) -> None:
     # First connection
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
         ws.send_json({"seq": 0})
-        data1 = _as_dict(ws.receive_json())
+        data1 = _as_dict(_receive_ws_json(ws))
         assert data1["type"] == "state"
     # Reconnect
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
         ws.send_json({"seq": 0})
-        data2 = _as_dict(ws.receive_json())
+        data2 = _as_dict(_receive_ws_json(ws))
         assert data2["type"] == "state"
         assert "phase" in _as_dict(data2["state"])
 
@@ -161,13 +222,13 @@ def test_invalid_action_returns_error(sync_client: SyncServerClient) -> None:
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
         # Get initial state via seq=0
         ws.send_json({"seq": 0})
-        initial = _as_dict(ws.receive_json())
+        initial = _as_dict(_receive_ws_json(ws))
         assert initial["type"] == "state"
         seq = initial["seq"]
         # Send unknown action with current seq
         ws.send_json({"type": "unknown_action_xyz", "seq": seq})
         # Server returns error as a field in the state message
-        resp = _as_dict(ws.receive_json())
+        resp = _as_dict(_receive_ws_json(ws))
         assert resp["type"] == "state"
         assert resp.get("error") is not None
 
@@ -177,7 +238,7 @@ def test_delete_game_disconnects_ws(sync_client: SyncServerClient) -> None:
     game_id = _create_game_sync(sync_client)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
         ws.send_json({"seq": 0})
-        ws.receive_json()
+        _receive_ws_json(ws)
     # Delete after disconnect is fine
     resp = sync_client.delete(f"/api/game/{game_id}")
     assert resp.status_code == 200

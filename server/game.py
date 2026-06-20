@@ -578,20 +578,30 @@ class Game:
         player_index: int,
         player_hand: list[Card],
     ) -> list[list[Card]]:
-        """Return advisory card-group hints for the current awaiting action."""
+        """Return a closed card-group hint set for the current awaiting action.
+
+        Non-empty hints are safe for UI/AI consumers to treat as the complete
+        selectable candidate set. If the complete set exceeds the phase limit,
+        return [] rather than truncating and accidentally hiding legal choices.
+        """
         rs = self._round_state
         if rs is None:
             return []
 
         if awaiting_action == "bid" and rs.phase == "DEAL_BID" and rs.deal_bid_state is not None:
-            return deal_bid_sm.get_bid_action_hints(rs.deal_bid_state, player_index)
+            hints = deal_bid_sm.get_bid_action_hints(rs.deal_bid_state, player_index)
+            if len(hints) > deal_bid_sm.MAX_BID_ACTION_HINTS:
+                return []
+            return hints
 
         if awaiting_action == "stir" and rs.phase == "STIRRING" and rs.stirring_state is not None:
-            return self._get_legal_stir_actions(player_hand, rs.stirring_state, player_index)
+            hints = self._get_legal_stir_actions(player_hand, rs.stirring_state, player_index)
+            if len(hints) > deal_bid_sm.MAX_BID_ACTION_HINTS:
+                return []
+            return hints
 
         if awaiting_action == "play" and rs.phase == "PLAYING":
-            hints = self._get_play_action_hints(player_index)
-            return hints[:play_rules.MAX_PLAY_ACTION_HINTS]
+            return self._get_play_action_hints(player_index)
 
         return []
 
@@ -621,16 +631,19 @@ class Game:
             if i != player_index:
                 other_players_hands.append(list(rs.players_hand[i]))
 
-        hints = play_rules.get_legal_plays(
+        hints_result = play_rules.get_legal_play_hints(
             hand=player_hand,
             is_leading=is_leading,
             lead_cards=lead_cards,
             trump_suit=rs.trump_suit,
             trump_rank=rs.trump_rank,
             other_players_hands=other_players_hands,
+            max_hints=play_rules.MAX_PLAY_ACTION_HINTS,
         )
+        if isinstance(hints_result, Rejected):
+            return []
         return play_rules.sort_play_action_hints(
-            hints,
+            hints_result.value,
             trump_suit=rs.trump_suit,
             trump_rank=rs.trump_rank,
         )
