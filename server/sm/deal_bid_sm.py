@@ -12,39 +12,20 @@ from pydantic import BaseModel, ConfigDict
 
 from server.result import Ok, Rejected
 
-from .card_model import Card, Rank, Suit
-from .comparator import bid_value
+from server.rules.cards import Card, Rank, Suit
+from server.rules import bid as bid_rules
 from .constants import next_player_ccw
 from .rejections import (
     AllCardsDealtRejected,
     BidNotAllowedInDealBidPhaseRejected,
-    BidCardSuitMismatchRejected,
-    BidCardWrongRankRejected,
-    BidCardsCountMismatchRejected,
-    BidCountRejected,
-    BidPriorityTooLowRejected,
-    CardNotInHandRejected,
     DealNotCompleteRejected,
-    DuplicateBidCardsRejected,
     InvalidPlayerIndexRejected,
-    JokerBidCountRejected,
-    JokerBidMustBePairRejected,
-    JokerBidSuitRejected,
-    MissingBidSuitRejected,
-    MixedJokerPairRejected,
-    NotJokerRejected,
     DealCardNotAllowedInDealBidPhaseRejected,
-    ZeroBidValueRejected,
 )
+from server.rules.rejections import CardNotInHandRejected
 from .types import BidEvent, DealBidPhase
 
-_BID_SUIT_ORDER: tuple[Suit, ...] = (
-    Suit.SPADES,
-    Suit.HEARTS,
-    Suit.CLUBS,
-    Suit.DIAMONDS,
-)
-MAX_BID_ACTION_HINTS: int = 10
+MAX_BID_ACTION_HINTS: int = bid_rules.MAX_BID_ACTION_HINTS
 
 
 # ---- Data Models ----
@@ -162,88 +143,8 @@ def get_bid_action_hints(state: DealBidState, player: int) -> list[list[Card]]:
     if state.phase != "DEALING" or player < 0 or player >= 4:
         return []
 
-    result: list[list[Card]] = []
-    for candidate in _get_bid_card_candidates(state.players_hand[player], state.trump_rank):
-        event = _bid_event_from_cards(player, candidate)
-        match reveal(state, event):
-            case Ok():
-                result.append(candidate)
-            case Rejected():
-                continue
-    result.sort(key=lambda cards: _bid_hint_sort_key(cards, state.trump_rank))
-    return result
-
-
-def _bid_hint_sort_key(cards: list[Card], trump_rank: Rank) -> tuple[int, tuple[str, ...]]:
-    return (bid_value(cards, trump_rank), tuple(sorted(card.id for card in cards)))
-
-
-def _get_bid_card_candidates(hand: list[Card], trump_rank: Rank) -> list[list[Card]]:
-    """Compute logical bid card groups from a player's hand.
-
-    Returns list of bid options where each option is 1 card (single) or
-    2 cards (pair). Singles are one canonical trump-rank card per suit.
-    Pairs are two trump-rank cards of the same suit or two jokers of same type.
-    Non-trump-rank cards and single jokers are excluded.
-
-    Only includes logical options that have a non-zero bid_value:
-    - Singles: one trump-rank card per suit
-    - Pairs: two trump-rank cards of the same suit, or two jokers of same type
-    """
-    # Group trump-rank and joker cards
-    suit_groups: dict[Suit, list[Card]] = {}
-    small_jokers: list[Card] = []
-    big_jokers: list[Card] = []
-
-    for card in hand:
-        if card.is_joker:
-            if card.is_big_joker:
-                big_jokers.append(card)
-            else:
-                small_jokers.append(card)
-        elif card.rank == trump_rank:
-            suit_groups.setdefault(card.suit, []).append(card)
-
-    result: list[list[Card]] = []
-
-    # Pairs: big joker, small joker, spades, hearts, clubs, diamonds.
-    if len(big_jokers) >= 2:
-        result.append(big_jokers[:2])
-    if len(small_jokers) >= 2:
-        result.append(small_jokers[:2])
-    for suit in _BID_SUIT_ORDER:
-        cards = suit_groups.get(suit, [])
-        if len(cards) >= 2:
-            result.append(cards[:2])
-
-    # Singles: spades, hearts, clubs, diamonds.
-    for suit in _BID_SUIT_ORDER:
-        cards = suit_groups.get(suit, [])
-        if len(cards) >= 1:
-            result.append([cards[0]])
-
-    return result
-
-
-def _bid_event_from_cards(player: int, cards: list[Card]) -> BidEvent:
-    card = cards[0]
-    if card.is_joker:
-        return BidEvent(
-            player=player,
-            cards=cards,
-            kind="joker",
-            suit=None,
-            joker_type="big" if card.is_big_joker else "small",
-            count=len(cards),
-        )
-    return BidEvent(
-        player=player,
-        cards=cards,
-        kind="trump_rank",
-        suit=card.suit,
-        joker_type=None,
-        count=len(cards),
-    )
+    current_cards = state.bid_winner.cards if state.bid_winner is not None else None
+    return bid_rules.legal_bid_hints(state.players_hand[player], state.trump_rank, current_cards)
 
 
 def reveal(state: DealBidState, event: BidEvent) -> Ok[DealBidState] | Rejected:
@@ -271,46 +172,30 @@ def reveal(state: DealBidState, event: BidEvent) -> Ok[DealBidState] | Rejected:
         if card.id not in hand_ids:
             return CardNotInHandRejected(card.id)
 
-    # Precondition 4a: cards must be distinct physical cards (no duplicate IDs)
-    if len(set(c.id for c in event.cards)) != len(event.cards):
-        return DuplicateBidCardsRejected()
+    match bid_rules.validate_distinct_bid_cards(event.cards):
+        case Ok():
+            pass
+        case Rejected() as rejected:
+            return rejected
 
-    # Precondition 2 & 3: validate card types
-    if event.kind == "trump_rank":
-        if event.suit is None:
-            return MissingBidSuitRejected()
-        # Each card must be trump_rank and same suit
-        for card in event.cards:
-            if card.rank != state.trump_rank:
-                return BidCardWrongRankRejected(card.id, state.trump_rank)
-            if card.suit != event.suit:
-                return BidCardSuitMismatchRejected(card.suit, event.suit)
-        if event.count not in (1, 2):
-            return BidCountRejected(event.count)
-        if len(event.cards) != event.count:
-            return BidCardsCountMismatchRejected(len(event.cards), event.count)
-    elif event.kind == "joker":
-        if event.count != 2:
-            return JokerBidMustBePairRejected()
-        if len(event.cards) != 2:
-            return JokerBidCountRejected(len(event.cards))
-        for card in event.cards:
-            if not card.is_joker:
-                return NotJokerRejected(card.id)
-        if event.cards[0].rank != event.cards[1].rank:
-            return MixedJokerPairRejected()
-        if event.suit is not None:
-            return JokerBidSuitRejected()
+    match bid_rules.validate_bid_cards(
+        kind=event.kind,
+        cards=event.cards,
+        declared_suit=event.suit,
+        declared_count=event.count,
+        trump_rank=state.trump_rank,
+    ):
+        case Ok():
+            pass
+        case Rejected() as rejected:
+            return rejected
 
-    # Precondition 5: if bid_winner exists, new bid value must be strictly greater
-    new_value = bid_value(event.cards, state.trump_rank)
-    if new_value == 0:
-        return ZeroBidValueRejected()
-
-    if state.bid_winner is not None:
-        current_value = bid_value(state.bid_winner.cards, state.trump_rank)
-        if new_value <= current_value:
-            return BidPriorityTooLowRejected()
+    current_cards = state.bid_winner.cards if state.bid_winner is not None else None
+    match bid_rules.bid_beats_current(event.cards, current_cards, state.trump_rank):
+        case Ok():
+            pass
+        case Rejected() as rejected:
+            return rejected
 
     # Valid bid: update state
     new_bid_events = state.bid_events + [event]

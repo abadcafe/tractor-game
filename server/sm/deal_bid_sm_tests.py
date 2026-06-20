@@ -1,5 +1,7 @@
 """Tests for sm.deal_bid_sm module."""
-from .card_model import Card, Suit, Rank, create_decks
+from typing import Literal
+
+from server.rules.cards import Card, POINTS_MAP, Suit, Rank, create_decks
 from server.result import Ok, Rejected
 from .types import BidEvent
 from .deal_bid_sm import (
@@ -7,6 +9,15 @@ from .deal_bid_sm import (
     create_deal_bid, deal_next_card, reveal, finalize_dealing,
     get_bid_action_hints, MAX_BID_ACTION_HINTS,
 )
+
+
+def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
+    return Card(
+        id=f"D{deck}-{suit.value}-{rank.value}",
+        suit=suit,
+        rank=rank,
+        points=POINTS_MAP[rank],
+    )
 
 
 def _deal(state: DealBidState) -> DealBidState:
@@ -51,14 +62,14 @@ def _make_deterministic_deck() -> tuple[list[Card], list[Card]]:
     random.shuffle(remaining)
 
     # Specific trump-rank cards for each player
-    spade_two_1 = Card(id="D1-spades-2", suit=Suit.SPADES, rank=Rank.TWO, is_joker=False, is_big_joker=False, points=0, deck=1)
-    spade_two_2 = Card(id="D2-spades-2", suit=Suit.SPADES, rank=Rank.TWO, is_joker=False, is_big_joker=False, points=0, deck=2)
-    heart_two_1 = Card(id="D1-hearts-2", suit=Suit.HEARTS, rank=Rank.TWO, is_joker=False, is_big_joker=False, points=0, deck=1)
-    heart_two_2 = Card(id="D2-hearts-2", suit=Suit.HEARTS, rank=Rank.TWO, is_joker=False, is_big_joker=False, points=0, deck=2)
-    club_two_1 = Card(id="D1-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO, is_joker=False, is_big_joker=False, points=0, deck=1)
-    club_two_2 = Card(id="D2-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO, is_joker=False, is_big_joker=False, points=0, deck=2)
-    diamond_two_1 = Card(id="D1-diamonds-2", suit=Suit.DIAMONDS, rank=Rank.TWO, is_joker=False, is_big_joker=False, points=0, deck=1)
-    diamond_two_2 = Card(id="D2-diamonds-2", suit=Suit.DIAMONDS, rank=Rank.TWO, is_joker=False, is_big_joker=False, points=0, deck=2)
+    spade_two_1 = _card(Suit.SPADES, Rank.TWO, 1)
+    spade_two_2 = _card(Suit.SPADES, Rank.TWO, 2)
+    heart_two_1 = _card(Suit.HEARTS, Rank.TWO, 1)
+    heart_two_2 = _card(Suit.HEARTS, Rank.TWO, 2)
+    club_two_1 = _card(Suit.CLUBS, Rank.TWO, 1)
+    club_two_2 = _card(Suit.CLUBS, Rank.TWO, 2)
+    diamond_two_1 = _card(Suit.DIAMONDS, Rank.TWO, 1)
+    diamond_two_2 = _card(Suit.DIAMONDS, Rank.TWO, 2)
 
     # Remove the specific cards from remaining pool (by id)
     specific_ids = {c.id for c in [spade_two_1, spade_two_2, heart_two_1, heart_two_2,
@@ -338,10 +349,7 @@ class TestReveal:
         for _ in range(5):
             state = _deal(state)
         # Create a fake card not in any hand
-        fake_card = Card(
-            id="D1-hearts-2", suit=Suit.HEARTS, rank=Rank.TWO,
-            is_joker=False, is_big_joker=False, points=0, deck=1,
-        )
+        fake_card = _card(Suit.HEARTS, Rank.TWO, 1)
         bid = BidEvent(
             player=0, cards=[fake_card], kind="trump_rank",
             suit=Suit.HEARTS, joker_type=None, count=1,
@@ -588,11 +596,11 @@ class TestDealBidFullFlow:
 
     def test_deal_bid_bid_value_ordering(self) -> None:
         """Bid values: pair♠(203) > pair♥(202) > single♠(103) > single♦(100)."""
-        from .comparator import bid_value
-        c_d = Card(id="D1-diamonds-2", suit=Suit.DIAMONDS, rank=Rank.TWO, is_joker=False, is_big_joker=False, points=0, deck=1)
-        c_s = Card(id="D1-spades-2", suit=Suit.SPADES, rank=Rank.TWO, is_joker=False, is_big_joker=False, points=0, deck=1)
-        c_h1 = Card(id="D1-hearts-2", suit=Suit.HEARTS, rank=Rank.TWO, is_joker=False, is_big_joker=False, points=0, deck=1)
-        c_h2 = Card(id="D2-hearts-2", suit=Suit.HEARTS, rank=Rank.TWO, is_joker=False, is_big_joker=False, points=0, deck=2)
+        from server.rules.ordering import bid_value
+        c_d = _card(Suit.DIAMONDS, Rank.TWO, 1)
+        c_s = _card(Suit.SPADES, Rank.TWO, 1)
+        c_h1 = _card(Suit.HEARTS, Rank.TWO, 1)
+        c_h2 = _card(Suit.HEARTS, Rank.TWO, 2)
 
         assert bid_value([c_s], Rank.TWO) > bid_value([c_d], Rank.TWO)
         assert bid_value([c_h1, c_h2], Rank.TWO) > bid_value([c_s], Rank.TWO)
@@ -743,16 +751,11 @@ def test_get_bid_action_hints_singles_and_pairs() -> None:
     """get_bid_action_hints returns complete bid hint singles and pairs."""
     trump_rank = Rank.TWO
     hand: list[Card] = [
-        Card(id="D1-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
-             is_joker=False, is_big_joker=False, points=0, deck=1),
-        Card(id="D2-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
-             is_joker=False, is_big_joker=False, points=0, deck=2),
-        Card(id="D1-spades-2", suit=Suit.SPADES, rank=Rank.TWO,
-             is_joker=False, is_big_joker=False, points=0, deck=1),
-        Card(id="small-joker", suit=Suit.JOKER, rank=Rank.SMALL_JOKER,
-             is_joker=True, is_big_joker=False, points=0, deck=1),
-        Card(id="D1-hearts-5", suit=Suit.HEARTS, rank=Rank.FIVE,
-             is_joker=False, is_big_joker=False, points=5, deck=1),
+        _card(Suit.CLUBS, Rank.TWO, 1),
+        _card(Suit.CLUBS, Rank.TWO, 2),
+        _card(Suit.SPADES, Rank.TWO, 1),
+        _card(Suit.JOKER, Rank.SMALL_JOKER, 1),
+        _card(Suit.HEARTS, Rank.FIVE, 1),
     ]
     state = DealBidState(
         phase="DEALING",
@@ -790,30 +793,18 @@ def test_get_bid_action_hints_ordered_from_small_to_large() -> None:
     """Bid hints are ordered as 10 logical options from small to large."""
     trump_rank = Rank.TWO
     hand: list[Card] = [
-        Card(id="D1-diamonds-2", suit=Suit.DIAMONDS, rank=Rank.TWO,
-             is_joker=False, is_big_joker=False, points=0, deck=1),
-        Card(id="D2-diamonds-2", suit=Suit.DIAMONDS, rank=Rank.TWO,
-             is_joker=False, is_big_joker=False, points=0, deck=2),
-        Card(id="D1-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
-             is_joker=False, is_big_joker=False, points=0, deck=1),
-        Card(id="D2-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
-             is_joker=False, is_big_joker=False, points=0, deck=2),
-        Card(id="D1-hearts-2", suit=Suit.HEARTS, rank=Rank.TWO,
-             is_joker=False, is_big_joker=False, points=0, deck=1),
-        Card(id="D2-hearts-2", suit=Suit.HEARTS, rank=Rank.TWO,
-             is_joker=False, is_big_joker=False, points=0, deck=2),
-        Card(id="D1-spades-2", suit=Suit.SPADES, rank=Rank.TWO,
-             is_joker=False, is_big_joker=False, points=0, deck=1),
-        Card(id="D2-spades-2", suit=Suit.SPADES, rank=Rank.TWO,
-             is_joker=False, is_big_joker=False, points=0, deck=2),
-        Card(id="D1-joker-SJ", suit=Suit.JOKER, rank=Rank.SMALL_JOKER,
-             is_joker=True, is_big_joker=False, points=0, deck=1),
-        Card(id="D2-joker-SJ", suit=Suit.JOKER, rank=Rank.SMALL_JOKER,
-             is_joker=True, is_big_joker=False, points=0, deck=2),
-        Card(id="D1-joker-BJ", suit=Suit.JOKER, rank=Rank.BIG_JOKER,
-             is_joker=True, is_big_joker=True, points=0, deck=1),
-        Card(id="D2-joker-BJ", suit=Suit.JOKER, rank=Rank.BIG_JOKER,
-             is_joker=True, is_big_joker=True, points=0, deck=2),
+        _card(Suit.DIAMONDS, Rank.TWO, 1),
+        _card(Suit.DIAMONDS, Rank.TWO, 2),
+        _card(Suit.CLUBS, Rank.TWO, 1),
+        _card(Suit.CLUBS, Rank.TWO, 2),
+        _card(Suit.HEARTS, Rank.TWO, 1),
+        _card(Suit.HEARTS, Rank.TWO, 2),
+        _card(Suit.SPADES, Rank.TWO, 1),
+        _card(Suit.SPADES, Rank.TWO, 2),
+        _card(Suit.JOKER, Rank.SMALL_JOKER, 1),
+        _card(Suit.JOKER, Rank.SMALL_JOKER, 2),
+        _card(Suit.JOKER, Rank.BIG_JOKER, 1),
+        _card(Suit.JOKER, Rank.BIG_JOKER, 2),
     ]
     state = DealBidState(
         phase="DEALING",
@@ -849,8 +840,7 @@ def test_get_bid_action_hints_allow_all_players_in_later_rounds() -> None:
     """get_bid_action_hints includes legal reveals from any team."""
     trump_rank = Rank.TWO
     hand: list[Card] = [
-        Card(id="D1-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
-             is_joker=False, is_big_joker=False, points=0, deck=1),
+        _card(Suit.CLUBS, Rank.TWO, 1),
     ]
     state = DealBidState(
         phase="DEALING",

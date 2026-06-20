@@ -2,7 +2,7 @@ import type {
   BidEvent,
   CompletedTrick,
   FailedThrow,
-  PublicGamePhase,
+  RoundPhase,
   StateSnapshot,
 } from "../../core/types.ts";
 import { el } from "../dom.ts";
@@ -30,6 +30,8 @@ function getCurrentPlayer(snapshot: StateSnapshot): number | null {
 }
 
 function actionText(snapshot: StateSnapshot): string {
+  if (snapshot.winning_team !== null) return "游戏结束";
+
   switch (snapshot.awaiting_action) {
     case "bid":
       return "轮到你抢主";
@@ -64,13 +66,12 @@ function actionText(snapshot: StateSnapshot): string {
 }
 
 /** Phase labels in Chinese. */
-const PHASE_LABELS: Record<PublicGamePhase, string> = {
+const PHASE_LABELS: Record<RoundPhase, string> = {
   DEAL_BID: "抢主阶段",
   STIRRING: "反主阶段",
   PLAYING: "出牌阶段",
   SCORING: "结算中",
   WAITING: "结算中",
-  GAME_OVER: "游戏结束",
 };
 
 /**
@@ -272,7 +273,9 @@ export function renderInfoBar(snapshot: StateSnapshot): HTMLElement {
   bar.appendChild(trumpDiv);
 
   // Phase display
-  const phaseLabel = PHASE_LABELS[snapshot.phase] ?? snapshot.phase;
+  const phaseLabel = snapshot.winning_team !== null
+    ? "游戏结束"
+    : PHASE_LABELS[snapshot.phase] ?? snapshot.phase;
   bar.appendChild(el("div", { class: "info-bar__phase" }, phaseLabel));
 
   return bar;

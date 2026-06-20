@@ -8,7 +8,7 @@ Total points in game: 200
 """
 
 from enum import Enum
-from typing import Literal, Self
+from typing import Literal, Self, overload
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -57,7 +57,6 @@ _SUIT_SYMBOLS: dict[Suit, str] = {
     Suit.SPADES: "♠",
     Suit.DIAMONDS: "♦",
     Suit.CLUBS: "♣",
-    Suit.JOKER: "\U0001f0cf",
 }
 
 _RANK_DISPLAY: dict[Rank, str] = {
@@ -78,43 +77,100 @@ POINTS_MAP: dict[Rank, int] = {
 # ---- Card Model ----
 
 
-class Card(BaseModel):
-    """A single playing card with unique ID, suit, rank, and point value."""
+type CardKey = Literal["id", "suit", "rank", "points"]
 
-    model_config = ConfigDict(frozen=True)
+
+class Card(BaseModel):
+    """A single playing card visible to rules and players."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str
     suit: Suit
     rank: Rank
-    is_joker: bool
-    is_big_joker: bool
     points: int
-    deck: Literal[1, 2]
 
     @model_validator(mode="after")
-    def _validate_joker_consistency(self) -> Self:
-        if self.is_big_joker and not self.is_joker:
-            raise ValueError("is_big_joker can only be True when is_joker is True")
-        if self.suit == Suit.JOKER and not self.is_joker:
-            raise ValueError("suit=JOKER requires is_joker=True")
-        if self.is_joker and self.suit != Suit.JOKER:
-            raise ValueError("is_joker=True requires suit=JOKER")
-        if self.is_joker and self.rank not in _JOKER_RANKS:
-            raise ValueError("is_joker=True requires rank to be SMALL_JOKER or BIG_JOKER")
-        if not self.is_joker and self.rank in _JOKER_RANKS:
-            raise ValueError("Joker ranks (SMALL_JOKER, BIG_JOKER) require is_joker=True")
-        if self.is_big_joker and self.rank != Rank.BIG_JOKER:
-            raise ValueError("is_big_joker=True requires rank to be BIG_JOKER")
-        if self.rank == Rank.BIG_JOKER and not self.is_big_joker:
-            raise ValueError("rank=BIG_JOKER requires is_big_joker=True")
+    def _validate_card_consistency(self) -> Self:
+        id_deck, id_suit, id_rank = _parse_card_id(self.id)
+        if id_deck != self.deck:
+            raise ValueError("card id deck does not match parsed deck")
+        if id_suit != self.suit:
+            raise ValueError("card id suit does not match suit")
+        if id_rank != self.rank:
+            raise ValueError("card id rank does not match rank")
+        if self.suit == Suit.JOKER and self.rank not in _JOKER_RANKS:
+            raise ValueError("suit=JOKER requires rank to be SMALL_JOKER or BIG_JOKER")
+        if self.suit != Suit.JOKER and self.rank in _JOKER_RANKS:
+            raise ValueError("Joker ranks require suit=JOKER")
+        if self.points != POINTS_MAP[self.rank]:
+            raise ValueError("points must equal POINTS_MAP[rank]")
         return self
+
+    @property
+    def is_joker(self) -> bool:
+        return self.suit == Suit.JOKER
+
+    @property
+    def is_big_joker(self) -> bool:
+        return self.rank == Rank.BIG_JOKER
+
+    @property
+    def deck(self) -> Literal[1, 2]:
+        return _parse_card_id(self.id)[0]
+
+    @overload
+    def __getitem__(self, key: Literal["id"]) -> str: ...
+
+    @overload
+    def __getitem__(self, key: Literal["suit"]) -> Suit: ...
+
+    @overload
+    def __getitem__(self, key: Literal["rank"]) -> Rank: ...
+
+    @overload
+    def __getitem__(self, key: Literal["points"]) -> int: ...
+
+    def __getitem__(self, key: CardKey) -> str | Suit | Rank | int:
+        if key == "id":
+            return self.id
+        if key == "suit":
+            return self.suit
+        if key == "rank":
+            return self.rank
+        return self.points
+
+    def __contains__(self, key: object) -> bool:
+        return isinstance(key, str) and key in type(self).model_fields
 
 
 # ---- Factory ----
 
 
-def _card_id(deck: int, suit: Suit, rank: Rank) -> str:
+def _card_id(deck: Literal[1, 2], suit: Suit, rank: Rank) -> str:
     return f"D{deck}-{suit.value}-{rank.value}"
+
+
+def _parse_card_id(card_id: str) -> tuple[Literal[1, 2], Suit, Rank]:
+    parts = card_id.split("-")
+    if len(parts) != 3:
+        raise ValueError("card id must have format D{deck}-{suit}-{rank}")
+    deck_raw, suit_raw, rank_raw = parts
+    if deck_raw == "D1":
+        deck: Literal[1, 2] = 1
+    elif deck_raw == "D2":
+        deck = 2
+    else:
+        raise ValueError("card id must start with D1- or D2-")
+    try:
+        suit = Suit(suit_raw)
+    except ValueError as exc:
+        raise ValueError("card id has invalid suit") from exc
+    try:
+        rank = Rank(rank_raw)
+    except ValueError as exc:
+        raise ValueError("card id has invalid rank") from exc
+    return deck, suit, rank
 
 
 def _make_card(suit: Suit, rank: Rank, deck: Literal[1, 2]) -> Card:
@@ -123,19 +179,13 @@ def _make_card(suit: Suit, rank: Rank, deck: Literal[1, 2]) -> Card:
             id=_card_id(deck, suit, rank),
             suit=Suit.JOKER,
             rank=rank,
-            is_joker=True,
-            is_big_joker=(rank == Rank.BIG_JOKER),
             points=0,
-            deck=deck,
         )
     return Card(
         id=_card_id(deck, suit, rank),
         suit=suit,
         rank=rank,
-        is_joker=False,
-        is_big_joker=False,
         points=POINTS_MAP[rank],
-        deck=deck,
     )
 
 
@@ -157,8 +207,8 @@ def create_decks() -> list[Card]:
 def card_display(card: Card) -> str:
     """Return a human-readable display string for a card.
 
-    Examples: "♥A", "♠10", "\U0001f0cf大", "\U0001f0cf小"
+    Examples: "♥A", "♠10", "大王", "小王"
     """
     if card.is_joker:
-        return f"{_SUIT_SYMBOLS[Suit.JOKER]}{_RANK_DISPLAY[card.rank]}"
+        return f"{_RANK_DISPLAY[card.rank]}王"
     return f"{_SUIT_SYMBOLS[card.suit]}{_RANK_DISPLAY[card.rank]}"

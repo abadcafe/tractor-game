@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict
 
 from server.result import Ok, Rejected
 
-from .card_model import Card, Rank, Suit, create_decks
+from server.rules.cards import Card, Rank, Suit, create_decks
 from .constants import (
     BOTTOM_CARD_COUNT,
     get_team_index,
@@ -24,9 +24,9 @@ from . import deal_bid_sm as db
 from . import stirring_sm as stir_mod
 from . import trick_sm as trick_mod
 from . import scoring
+from server.rules.rejections import CardNotInHandRejected
 from .rejections import (
     BidNotAllowedInRoundPhaseRejected,
-    CardNotInHandRejected,
     DealCardNotAllowedInRoundPhaseRejected,
     DiscardNotAllowedInRoundPhaseRejected,
     FinalizeDealNotAllowedInRoundPhaseRejected,

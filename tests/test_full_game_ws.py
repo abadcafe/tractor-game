@@ -1693,9 +1693,9 @@ def _verify_game_over(
     expected_t0: str | None,
     expected_t1: str | None,
 ) -> None:
-    """Verify GAME_OVER state and post-game cleanup."""
-    print("=== GAME_OVER ===")
-    assert state["phase"] == "GAME_OVER", f"Expected GAME_OVER, got {state['phase']}"
+    """Verify finished game state and post-game cleanup."""
+    print("=== GAME OVER ===")
+    assert state["phase"] == "WAITING", f"Expected finished game to remain WAITING, got {state['phase']}"
     assert "winning_team" in state
     winning_team = state["winning_team"]
     assert isinstance(winning_team, int) and winning_team in (0, 1)
@@ -1707,11 +1707,11 @@ def _verify_game_over(
 
     # Close the current connection and verify a fresh connection can
     # recover the finished state with seq=0.
-    print("  closing driver (GAME_OVER)", flush=True)
+    print("  closing driver (game over)", flush=True)
     driver.close()
     print("  driver closed", flush=True)
 
-    # Verify game remains in registry after GAME_OVER so a crashed client
+    # Verify game remains in registry after game over so a crashed client
     # can reconnect and request the current state.
     print("  checking registry...", flush=True)
     resp = sync_client.get("/api/game")
@@ -1719,7 +1719,7 @@ def _verify_game_over(
     assert _is_list_of_dict(games_raw)
     game_ids = [g["game_id"] for g in games_raw]
     assert game_id in game_ids, (
-        f"Game {game_id} should remain in registry after GAME_OVER"
+        f"Game {game_id} should remain in registry after game over"
     )
     print("  game retained in registry", flush=True)
 
@@ -1730,15 +1730,16 @@ def _verify_game_over(
         msg = _as_dict(raw)
         assert msg["type"] == "state"
         reconnect_state = _as_dict(msg["state"])
-        assert reconnect_state["phase"] == "GAME_OVER"
-    print("  GAME_OVER verification complete", flush=True)
+        assert reconnect_state["phase"] == "WAITING"
+        assert reconnect_state["winning_team"] == winning_team
+    print("  game over verification complete", flush=True)
 
 
 # ---- Full Game Playthrough ----
 
 
 def test_full_game(sync_client: SyncServerClient) -> None:
-    """Play a complete game from start to GAME_OVER.
+    """Play a complete game from start to winning_team.
 
     At each phase:
     - Before every correct human action, inject 1-3 rejected requests
@@ -1790,7 +1791,7 @@ def test_full_game(sync_client: SyncServerClient) -> None:
             cur_phase = state.get("phase", "?")
             cur_awaiting = _awaiting(msg)
             print(f"  initial state: phase={cur_phase} awaiting={cur_awaiting} seq={driver.known_seq}", flush=True)
-            if cur_phase in ("DEAL_BID", "STIRRING", "PLAYING", "GAME_OVER"):
+            if cur_phase in ("DEAL_BID", "STIRRING", "PLAYING") or state.get("winning_team") is not None:
                 break
             # Still in WAITING or transitional state — drain more
             msg = driver.receive_msg(timeout=5)
@@ -1801,7 +1802,7 @@ def test_full_game(sync_client: SyncServerClient) -> None:
                 break
 
         round_count = 0
-        max_rounds = 100  # play until GAME_OVER
+        max_rounds = 100  # play until winning_team is set
         expected_t0: str | None = None
         expected_t1: str | None = None
         # state and msg are set during initialization or by phase handlers
@@ -1839,10 +1840,8 @@ def test_full_game(sync_client: SyncServerClient) -> None:
                     prev_team1_level=prev_t1,
                 )
 
-            if state["phase"] == "GAME_OVER":
-                # Compute expected levels for this round (PLAYING may have
-                # transitioned directly to GAME_OVER, skipping WAITING's
-                # level verification).
+            if state.get("winning_team") is not None:
+                # Compute expected levels for this round if needed.
                 scoring = _as_dict(state["scoring"]) if state.get("scoring") is not None else None
                 if scoring is not None:
                     scoring_tdp = scoring.get("total_defender_points")
@@ -1853,9 +1852,9 @@ def test_full_game(sync_client: SyncServerClient) -> None:
                         )
                 break
 
-        assert state["phase"] == "GAME_OVER", (
-            f"Game should reach GAME_OVER within {max_rounds} rounds, "
-            f"but is still in {state['phase']}"
+        assert isinstance(state.get("winning_team"), int), (
+            f"Game should set winning_team within {max_rounds} rounds, "
+            f"but phase={state['phase']} winning_team={state.get('winning_team')}"
         )
         _verify_game_over(driver, state, game_id, sync_client, expected_t0, expected_t1)
     finally:

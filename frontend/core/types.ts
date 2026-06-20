@@ -16,13 +16,12 @@ export type Rank =
   | "A"
   | "SJ"
   | "BJ";
-export type PublicGamePhase =
+export type RoundPhase =
   | "DEAL_BID"
   | "STIRRING"
   | "PLAYING"
   | "SCORING"
-  | "WAITING"
-  | "GAME_OVER";
+  | "WAITING";
 export type StirringPhase = "WAITING" | "EXCHANGING" | "COMPLETE";
 export type AwaitingAction = "bid" | "stir" | "discard" | "play" | "next_round";
 export type BidEventKind = "trump_rank" | "joker";
@@ -66,9 +65,9 @@ export interface BidEvent {
 }
 
 /** Full game state snapshot pushed by the server.
- *  Matches server/snapshot.py SnapshotDict exactly. */
+ *  Matches server/protocol/snapshot.py StateSnapshot exactly. */
 export interface StateSnapshot {
-  phase: PublicGamePhase;
+  phase: RoundPhase;
 
   player_hand: Card[];
   player_hand_counts: number[];

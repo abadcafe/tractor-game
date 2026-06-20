@@ -59,8 +59,8 @@ export function render(
 
   container.appendChild(renderScoreboard(snapshot));
 
-  // Scoring overlay for WAITING phase
-  if (snapshot.phase === "WAITING") {
+  // Scoring overlay for completed rounds that can continue.
+  if (snapshot.phase === "WAITING" && snapshot.winning_team === null) {
     container.appendChild(
       renderScoringOverlay(
         snapshot,
@@ -73,8 +73,8 @@ export function render(
     );
   }
 
-  // Game over overlay
-  if (snapshot.phase === "GAME_OVER") {
+  // Game over is represented by winning_team, not by phase.
+  if (snapshot.winning_team !== null) {
     container.appendChild(
       renderGameOverOverlay(snapshot, ctx?.callbacks?.onNewGame),
     );

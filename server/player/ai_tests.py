@@ -33,7 +33,6 @@ from .ai.openai_client import (
 from .ai.rejections import AIToolRejected
 from .ai.tools import allowed_tool_specs, tool_call_to_message
 from .test_helpers import card, make_game, make_snapshot, make_state_message
-from server.sm.card_model import Rank, Suit
 
 
 def test_ai_player_is_player() -> None:
@@ -117,15 +116,15 @@ async def test_ai_player_bid_without_hint_passes_locally_without_client() -> Non
 
 
 @pytest.mark.asyncio
-async def test_ai_player_bid_with_hints_uses_smallest_bid_value_without_client() -> None:
-    spade_two = card(Suit.SPADES, Rank.TWO)
-    diamond_two = card(Suit.DIAMONDS, Rank.TWO)
+async def test_ai_player_bid_with_hints_uses_first_server_hint_without_client() -> None:
+    spade_two = card("spades", "2")
+    diamond_two = card("diamonds", "2")
     snap = make_snapshot(
         phase="DEAL_BID",
         awaiting_action="bid",
         player_hand=[spade_two, diamond_two],
         action_hints=[[spade_two], [diamond_two]],
-        trump_rank=Rank.TWO,
+        trump_rank="2",
     )
     game = make_game(snap)
     client = StaticAIClient(AIToolCall(name="pass_bid", arguments={"reason": "should not be used"}))
@@ -137,7 +136,7 @@ async def test_ai_player_bid_with_hints_uses_smallest_bid_value_without_client()
     game.receive.assert_awaited()
     assert game.receive.call_args[0][0] == 0
     assert game.receive.call_args[0][1].seq == 5
-    assert game.receive.call_args[0][1].raw == {"type": "bid", "cards": [diamond_two.id]}
+    assert game.receive.call_args[0][1].raw == {"type": "bid", "cards": [spade_two["id"]]}
     assert client.prompts == []
 
 
@@ -161,15 +160,15 @@ async def test_ai_player_stir_without_hint_passes_locally_without_client() -> No
 @pytest.mark.asyncio
 async def test_ai_player_stir_with_hint_uses_llm() -> None:
     trump_pair = [
-        card(Suit.HEARTS, Rank.TWO, deck=1),
-        card(Suit.HEARTS, Rank.TWO, deck=2),
+        card("hearts", "2", deck=1),
+        card("hearts", "2", deck=2),
     ]
     snap = make_snapshot(
         phase="STIRRING",
         awaiting_action="stir",
         player_hand=trump_pair,
         action_hints=[trump_pair],
-        trump_rank=Rank.TWO,
+        trump_rank="2",
     )
     game = make_game(snap)
     client = StaticAIClient(AIToolCall(name="pass_stir", arguments={"reason": "llm pass"}))
@@ -187,7 +186,7 @@ async def test_ai_player_stir_with_hint_uses_llm() -> None:
 
 @pytest.mark.asyncio
 async def test_ai_player_llm_tool_call_submits_play() -> None:
-    test_card = card(Suit.HEARTS, Rank.ACE)
+    test_card = card("hearts", "A")
     snap = make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
@@ -196,7 +195,7 @@ async def test_ai_player_llm_tool_call_submits_play() -> None:
     game = make_game(snap)
     client = StaticAIClient(AIToolCall(
         name="play_cards",
-        arguments={"card_ids": [test_card.id], "reason": "test play"},
+        arguments={"card_ids": [test_card["id"]], "reason": "test play"},
     ))
     player = ai.AIPlayer(index=0, config=_config(), client=client)
 
@@ -206,12 +205,12 @@ async def test_ai_player_llm_tool_call_submits_play() -> None:
     game.receive.assert_awaited()
     assert game.receive.call_args[0][0] == 0
     assert game.receive.call_args[0][1].seq == 5
-    assert game.receive.call_args[0][1].raw == {"type": "play", "cards": [test_card.id]}
+    assert game.receive.call_args[0][1].raw == {"type": "play", "cards": [test_card["id"]]}
 
 
 @pytest.mark.asyncio
 async def test_ai_player_does_not_log_llm_transcript_to_terminal() -> None:
-    test_card = card(Suit.HEARTS, Rank.ACE)
+    test_card = card("hearts", "A")
     snap = make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
@@ -220,7 +219,7 @@ async def test_ai_player_does_not_log_llm_transcript_to_terminal() -> None:
     game = make_game(snap)
     client = StaticAIClient(AIToolCall(
         name="play_cards",
-        arguments={"card_ids": [test_card.id], "reason": "test play"},
+        arguments={"card_ids": [test_card["id"]], "reason": "test play"},
     ))
     player = ai.AIPlayer(index=0, config=_config(), client=client)
 
@@ -241,7 +240,7 @@ async def test_ai_player_does_not_log_llm_transcript_to_terminal() -> None:
 
 @pytest.mark.asyncio
 async def test_ai_player_records_debug_transcript() -> None:
-    test_card = card(Suit.HEARTS, Rank.ACE)
+    test_card = card("hearts", "A")
     snap = make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
@@ -250,7 +249,7 @@ async def test_ai_player_records_debug_transcript() -> None:
     game = make_game(snap)
     client = StaticAIClient(AIToolCall(
         name="play_cards",
-        arguments={"card_ids": [test_card.id], "reason": "test play"},
+        arguments={"card_ids": [test_card["id"]], "reason": "test play"},
     ))
     player = ai.AIPlayer(index=0, config=_config(), client=client)
 
@@ -268,12 +267,12 @@ async def test_ai_player_records_debug_transcript() -> None:
     assert decision["api_error"] is None
     assert decision["tool_result"] is not None
     assert "accepted" in decision["tool_result"]
-    assert test_card.id in decision["tool_result"]
+    assert test_card["id"] in decision["tool_result"]
 
 
 @pytest.mark.asyncio
 async def test_ai_player_records_debug_transcript_stream_messages() -> None:
-    test_card = card(Suit.HEARTS, Rank.ACE)
+    test_card = card("hearts", "A")
     snap = make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
@@ -282,7 +281,7 @@ async def test_ai_player_records_debug_transcript_stream_messages() -> None:
     game = make_game(snap)
     client = StaticAIClient(AIToolCall(
         name="play_cards",
-        arguments={"card_ids": [test_card.id], "reason": "test play"},
+        arguments={"card_ids": [test_card["id"]], "reason": "test play"},
     ))
     player = ai.AIPlayer(index=0, config=_config(), client=client)
     queue = player.subscribe_transcript()
@@ -305,7 +304,7 @@ async def test_ai_player_records_debug_transcript_stream_messages() -> None:
 
 @pytest.mark.asyncio
 async def test_ai_player_records_openai_response_without_tool_calls() -> None:
-    test_card = card(Suit.HEARTS, Rank.ACE)
+    test_card = card("hearts", "A")
     snap = make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
@@ -347,7 +346,7 @@ async def test_ai_player_records_openai_response_without_tool_calls() -> None:
 
 @pytest.mark.asyncio
 async def test_ai_player_records_openai_network_failure() -> None:
-    test_card = card(Suit.HEARTS, Rank.ACE)
+    test_card = card("hearts", "A")
     snap = make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
@@ -382,7 +381,7 @@ async def test_ai_player_records_openai_network_failure() -> None:
 
 @pytest.mark.asyncio
 async def test_ai_player_records_debug_transcript_when_tool_use_logging_disabled() -> None:
-    test_card = card(Suit.HEARTS, Rank.ACE)
+    test_card = card("hearts", "A")
     snap = make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
@@ -391,7 +390,7 @@ async def test_ai_player_records_debug_transcript_when_tool_use_logging_disabled
     game = make_game(snap)
     client = StaticAIClient(AIToolCall(
         name="play_cards",
-        arguments={"card_ids": [test_card.id], "reason": "test play"},
+        arguments={"card_ids": [test_card["id"]], "reason": "test play"},
     ))
     player = ai.AIPlayer(index=0, config=_config(log_tool_use=False), client=client)
 
@@ -406,7 +405,7 @@ async def test_ai_player_records_debug_transcript_when_tool_use_logging_disabled
 
 @pytest.mark.asyncio
 async def test_ai_player_llm_failure_does_not_submit_action() -> None:
-    test_card = card(Suit.HEARTS, Rank.ACE)
+    test_card = card("hearts", "A")
     snap = make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
@@ -445,8 +444,8 @@ async def test_ai_player_records_server_rejection_in_debug_transcript() -> None:
 
 @pytest.mark.asyncio
 async def test_ai_player_repairs_server_rejected_tool_call() -> None:
-    first_card = card(Suit.HEARTS, Rank.ACE)
-    repaired_card = card(Suit.DIAMONDS, Rank.KING)
+    first_card = card("hearts", "A")
+    repaired_card = card("diamonds", "K")
     snap = make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
@@ -456,11 +455,11 @@ async def test_ai_player_repairs_server_rejected_tool_call() -> None:
     client = SequenceAIClient([
         AIToolCall(
             name="play_cards",
-            arguments={"card_ids": [first_card.id], "reason": "first try"},
+            arguments={"card_ids": [first_card["id"]], "reason": "first try"},
         ),
         AIToolCall(
             name="play_cards",
-            arguments={"card_ids": [repaired_card.id], "reason": "server repair"},
+            arguments={"card_ids": [repaired_card["id"]], "reason": "server repair"},
         ),
     ])
     player = ai.AIPlayer(index=0, config=_config(), client=client)
@@ -474,9 +473,9 @@ async def test_ai_player_repairs_server_rejected_tool_call() -> None:
     first_message = game.receive.await_args_list[0].args[1]
     second_message = game.receive.await_args_list[1].args[1]
     assert first_message.seq == 13
-    assert first_message.raw == {"type": "play", "cards": [first_card.id]}
+    assert first_message.raw == {"type": "play", "cards": [first_card["id"]]}
     assert second_message.seq == 13
-    assert second_message.raw == {"type": "play", "cards": [repaired_card.id]}
+    assert second_message.raw == {"type": "play", "cards": [repaired_card["id"]]}
     assert len(client.prompts) == 2
     assert "illegal play" in client.prompts[1].user
     assert "error_type: rule" in client.prompts[1].user
@@ -495,9 +494,9 @@ async def test_ai_player_repairs_server_rejected_tool_call() -> None:
 
 @pytest.mark.asyncio
 async def test_ai_player_repairs_play_not_matching_action_hint() -> None:
-    hint_card_1 = card(Suit.DIAMONDS, Rank.TWO)
-    hint_card_2 = card(Suit.HEARTS, Rank.TEN)
-    other_card = card(Suit.SPADES, Rank.ACE)
+    hint_card_1 = card("diamonds", "2")
+    hint_card_2 = card("hearts", "10")
+    other_card = card("spades", "A")
     snap = make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
@@ -508,11 +507,11 @@ async def test_ai_player_repairs_play_not_matching_action_hint() -> None:
     client = SequenceAIClient([
         AIToolCall(
             name="play_cards",
-            arguments={"card_ids": [hint_card_2.id], "reason": "partial hint"},
+            arguments={"card_ids": [hint_card_2["id"]], "reason": "partial hint"},
         ),
         AIToolCall(
             name="play_cards",
-            arguments={"card_ids": [hint_card_1.id, hint_card_2.id], "reason": "full hint"},
+            arguments={"card_ids": [hint_card_1["id"], hint_card_2["id"]], "reason": "full hint"},
         ),
     ])
     player = ai.AIPlayer(index=0, config=_config(), client=client)
@@ -524,7 +523,7 @@ async def test_ai_player_repairs_play_not_matching_action_hint() -> None:
     assert game.receive.call_args[0][1].seq == 12
     assert game.receive.call_args[0][1].raw == {
         "type": "play",
-        "cards": [hint_card_1.id, hint_card_2.id],
+        "cards": [hint_card_1["id"], hint_card_2["id"]],
     }
     assert len(client.prompts) == 2
     assert "error_type: format" in client.prompts[1].user
@@ -534,7 +533,7 @@ async def test_ai_player_repairs_play_not_matching_action_hint() -> None:
 
 @pytest.mark.asyncio
 async def test_ai_player_repairs_invalid_card_id_once() -> None:
-    valid_card = card(Suit.HEARTS, Rank.ACE)
+    valid_card = card("hearts", "A")
     invalid_card_id = "D2-diamonds-A"
     snap = make_snapshot(
         phase="PLAYING",
@@ -549,7 +548,7 @@ async def test_ai_player_repairs_invalid_card_id_once() -> None:
         ),
         AIToolCall(
             name="play_cards",
-            arguments={"card_ids": [valid_card.id], "reason": "repaired id"},
+            arguments={"card_ids": [valid_card["id"]], "reason": "repaired id"},
         ),
     ])
     player = ai.AIPlayer(index=0, config=_config(), client=client)
@@ -560,16 +559,16 @@ async def test_ai_player_repairs_invalid_card_id_once() -> None:
     game.receive.assert_awaited()
     assert game.receive.call_args[0][0] == 0
     assert game.receive.call_args[0][1].seq == 9
-    assert game.receive.call_args[0][1].raw == {"type": "play", "cards": [valid_card.id]}
+    assert game.receive.call_args[0][1].raw == {"type": "play", "cards": [valid_card["id"]]}
     assert len(client.prompts) == 2
     assert f"牌 {invalid_card_id} 不在你的当前手牌里" in client.prompts[1].user
     assert "error_type: format" in client.prompts[1].user
-    assert valid_card.id in client.prompts[1].user
+    assert valid_card["id"] in client.prompts[1].user
 
 
 @pytest.mark.asyncio
 async def test_ai_player_stops_after_invalid_card_id_repair_fails() -> None:
-    valid_card = card(Suit.HEARTS, Rank.ACE)
+    valid_card = card("hearts", "A")
     invalid_card_id = "D2-diamonds-A"
     snap = make_snapshot(
         phase="PLAYING",
@@ -638,8 +637,8 @@ def test_ai_config_defaults_to_larger_output_budget(monkeypatch: pytest.MonkeyPa
 
 
 def test_ai_tool_schema_limits_play_card_ids_to_current_hand() -> None:
-    card1 = card(Suit.HEARTS, Rank.ACE)
-    card2 = card(Suit.DIAMONDS, Rank.KING)
+    card1 = card("hearts", "A")
+    card2 = card("diamonds", "K")
     snap = make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
@@ -650,13 +649,13 @@ def test_ai_tool_schema_limits_play_card_ids_to_current_hand() -> None:
 
     assert len(tools) == 1
     assert tools[0].name == "play_cards"
-    assert _card_id_enum(tools[0]) == [card1.id, card2.id]
+    assert _card_id_enum(tools[0]) == [card1["id"], card2["id"]]
 
 
 def test_ai_tool_schema_limits_play_card_ids_to_action_hints_when_present() -> None:
-    card1 = card(Suit.HEARTS, Rank.ACE)
-    card2 = card(Suit.DIAMONDS, Rank.TWO)
-    card3 = card(Suit.SPADES, Rank.KING)
+    card1 = card("hearts", "A")
+    card2 = card("diamonds", "2")
+    card3 = card("spades", "K")
     snap = make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
@@ -668,12 +667,12 @@ def test_ai_tool_schema_limits_play_card_ids_to_action_hints_when_present() -> N
 
     assert len(tools) == 1
     assert tools[0].name == "play_cards"
-    assert _card_id_enum(tools[0]) == [card2.id, card1.id]
+    assert _card_id_enum(tools[0]) == [card2["id"], card1["id"]]
 
 
 def test_ai_play_tool_rejects_partial_action_hint() -> None:
-    card1 = card(Suit.DIAMONDS, Rank.TWO)
-    card2 = card(Suit.HEARTS, Rank.TEN)
+    card1 = card("diamonds", "2")
+    card2 = card("hearts", "10")
     snap = make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
@@ -686,7 +685,7 @@ def test_ai_play_tool_rejects_partial_action_hint() -> None:
         snap,
         AIToolCall(
             name="play_cards",
-            arguments={"card_ids": [card2.id], "reason": "partial hint"},
+            arguments={"card_ids": [card2["id"]], "reason": "partial hint"},
         ),
     )
 

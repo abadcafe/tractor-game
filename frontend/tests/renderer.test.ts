@@ -207,7 +207,7 @@ Deno.test("test_render_complete_phase_keeps_last_trick_on_table", () => {
 Deno.test("test_render_game_over_phase", () => {
   const container = freshContainer();
   const snap = makeSnapshot({
-    phase: "GAME_OVER",
+    phase: "WAITING",
     winning_team: 0,
     trick: null,
     awaiting_action: null,
@@ -524,7 +524,7 @@ Deno.test("test_render_primary_actions_are_not_duplicated", () => {
   const gameOverContainer = freshContainer();
   render(
     makeSnapshot({
-      phase: "GAME_OVER",
+      phase: "WAITING",
       awaiting_action: null,
       winning_team: 0,
     }),
@@ -542,7 +542,7 @@ Deno.test("test_render_primary_actions_are_not_duplicated", () => {
 Deno.test("test_render_game_over_receives_callback", () => {
   const container = freshContainer();
   const snap = makeSnapshot({
-    phase: "GAME_OVER",
+    phase: "WAITING",
     winning_team: 0,
     trick: null,
     awaiting_action: null,

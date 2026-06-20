@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Self
 
-from server.snapshot import StateSnapshot
+from server.protocol import StateSnapshot
 
 
 @dataclass(frozen=True, slots=True)

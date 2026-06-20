@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import assert_never
 
-from server.sm.card_model import Suit, card_display
-from server.sm.types import CompletedTrick
-from server.snapshot import SerializedSuit, StateSnapshot
+from server.player.ai.formatting import card_text
+from server.protocol import CompletedTrickSnapshot, StateSnapshot
+from server.rules.cards import Suit
 
 type AITrickKey = tuple[int, int, int, tuple[tuple[int, tuple[str, ...]], ...]]
 
@@ -31,7 +30,7 @@ class AITrickRecord:
 class AIBidRecord:
     player: int
     cards: tuple[str, ...]
-    suit: SerializedSuit | None
+    suit: Suit | None
     count: int
 
 
@@ -73,8 +72,8 @@ class AIMemory:
         self.bids = [
             AIBidRecord(
                 player=event.player,
-                cards=tuple(card_display(card) for card in event.cards),
-                suit=_suit_value(event.suit),
+                cards=tuple(card_text(card) for card in event.cards),
+                suit=event.suit,
                 count=event.count,
             )
             for event in snapshot.bid_events
@@ -92,8 +91,8 @@ class AIMemory:
         if snapshot.failed_throw is not None:
             record = AIFailedThrowRecord(
                 player=snapshot.failed_throw.player,
-                attempted_cards=tuple(card_display(card) for card in snapshot.failed_throw.attempted_cards),
-                forced_cards=tuple(card_display(card) for card in snapshot.failed_throw.forced_cards),
+                attempted_cards=tuple(card_text(card) for card in snapshot.failed_throw.attempted_cards),
+                forced_cards=tuple(card_text(card) for card in snapshot.failed_throw.forced_cards),
             )
             if record not in self.failed_throws:
                 self.failed_throws.append(record)
@@ -127,24 +126,7 @@ class AIMemory:
         return "\n".join(lines)
 
 
-def _suit_value(suit: Suit | None) -> SerializedSuit | None:
-    if suit is None:
-        return None
-    match suit:
-        case Suit.HEARTS:
-            return "hearts"
-        case Suit.SPADES:
-            return "spades"
-        case Suit.DIAMONDS:
-            return "diamonds"
-        case Suit.CLUBS:
-            return "clubs"
-        case Suit.JOKER:
-            return "joker"
-    assert_never(suit)
-
-
-def _trick_key(trick: CompletedTrick) -> AITrickKey:
+def _trick_key(trick: CompletedTrickSnapshot) -> AITrickKey:
     return (
         trick.lead_player,
         trick.winner,
@@ -156,14 +138,14 @@ def _trick_key(trick: CompletedTrick) -> AITrickKey:
     )
 
 
-def _trick_record(index: int, trick: CompletedTrick) -> AITrickRecord:
+def _trick_record(index: int, trick: CompletedTrickSnapshot) -> AITrickRecord:
     return AITrickRecord(
         index=index,
         lead_player=trick.lead_player,
         plays=tuple(
             AIPlayRecord(
                 player=slot.player,
-                cards=tuple(card_display(card) for card in slot.cards),
+                cards=tuple(card_text(card) for card in slot.cards),
             )
             for slot in trick.slots
         ),

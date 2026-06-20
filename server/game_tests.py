@@ -2,7 +2,7 @@
 
 All tests use only public interfaces: Game.__init__, Game.receive,
 Game.snapshot, Game.is_over, Game.get_phase, Game.get_player, Game.set_on_game_over,
-StateSnapshot.to_dict.
+and the StateSnapshot wire dict.
 No tests access Game private fields or patch Game's SM collaborators.
 """
 
@@ -14,14 +14,13 @@ import pytest
 
 from server.actions import BidAction, NextRoundAction, PlayAction, SkipBidAction, SkipStirAction
 from server.game import Game
-from server.messages import PlayerMessage, StateMessage
+from server.protocol import FailedThrowSnapshot, PlayerMessage, StateMessage
 from server.player import Player
 from server.sm import deal_bid_sm, round_sm, stirring_sm, trick_sm
-from server.sm.card_model import Card, Rank, Suit
+from server.rules.cards import Card, POINTS_MAP, Rank, Suit
 from server.result import Ok, Rejected
-from server.sm.rejections import CardNotInHandRejected
+from server.rules.rejections import CardNotInHandRejected
 from server.sm.types import BidEvent
-from server.snapshot import StateSnapshot
 
 
 type TestAction = BidAction | NextRoundAction | PlayAction | SkipBidAction | SkipStirAction
@@ -61,10 +60,7 @@ def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
         id=f"D{deck}-{suit.value}-{rank.value}",
         suit=suit,
         rank=rank,
-        is_joker=suit == Suit.JOKER,
-        is_big_joker=rank == Rank.BIG_JOKER,
-        points=0,
-        deck=deck,
+        points=POINTS_MAP[rank],
     )
 
 
@@ -148,7 +144,7 @@ async def test_next_round_confirmation_starts_game() -> None:
         await _send_action(game, players, i, NextRoundAction())
     assert game.get_phase() != "WAITING"
     snap = game.snapshot(for_player=0)
-    assert snap.phase in ("DEAL_BID", "STIRRING", "PLAYING")
+    assert snap["phase"] in ("DEAL_BID", "STIRRING", "PLAYING")
 
 
 @pytest.mark.asyncio
@@ -184,10 +180,10 @@ async def test_next_round_intermediate_confirmation_pushes_state() -> None:
 
     # Intermediate snapshot shows confirmed players
     snap = game.snapshot(for_player=0)
-    assert snap.next_round_confirmed is not None
-    assert 0 in snap.next_round_confirmed
-    assert 1 in snap.next_round_confirmed
-    assert 2 not in snap.next_round_confirmed
+    assert snap["next_round_confirmed"] is not None
+    assert 0 in snap["next_round_confirmed"]
+    assert 1 in snap["next_round_confirmed"]
+    assert 2 not in snap["next_round_confirmed"]
 
 
 @pytest.mark.asyncio
@@ -199,8 +195,8 @@ async def test_next_round_all_confirmed_clears_set() -> None:
         await _send_action(game, players, i, NextRoundAction())
     # Game has started — next_round_confirmed should be empty
     snap = game.snapshot(for_player=0)
-    assert snap.phase != "WAITING"
-    assert snap.next_round_confirmed == []
+    assert snap["phase"] != "WAITING"
+    assert snap["next_round_confirmed"] == []
 
 
 # ---- _start_game() ----
@@ -211,7 +207,7 @@ async def test_start_game_transitions_to_deal_bid():
     game = await _start_game(_make_players())
     # Verify via snapshot (public interface)
     snap = game.snapshot(for_player=0)
-    assert snap.phase in ("DEAL_BID", "STIRRING", "PLAYING", "WAITING")
+    assert snap["phase"] in ("DEAL_BID", "STIRRING", "PLAYING", "WAITING")
 
 
 # ---- receive() ----
@@ -269,8 +265,8 @@ async def test_seq_zero_returns_state_without_action_side_effect() -> None:
     await game.receive(0, PlayerMessage(seq=0, raw={"type": "next_round"}))
 
     snap = game.snapshot(for_player=0)
-    assert snap.phase == "WAITING"
-    assert snap.next_round_confirmed == []
+    assert snap["phase"] == "WAITING"
+    assert snap["next_round_confirmed"] == []
     assert players[0].messages[-1].seq == 1
     assert players[0].messages[-1].error is None
 
@@ -282,7 +278,6 @@ async def test_seq_zero_returns_state_without_action_side_effect() -> None:
 async def test_snapshot_returns_player_hand():
     game = await _start_game(_make_players())
     snap = game.snapshot(for_player=0)
-    assert isinstance(snap, StateSnapshot)
     assert isinstance(snap.player_hand, list)
 
 
@@ -294,16 +289,16 @@ def test_snapshot_before_run_returns_waiting():
     """
     game = _create_game_with_auto_players()
     snap = game.snapshot(for_player=0)
-    assert snap.phase == "WAITING"
-    assert snap.awaiting_action == "next_round"
-    assert snap.player_hand == []
+    assert snap["phase"] == "WAITING"
+    assert snap["awaiting_action"] == "next_round"
+    assert snap["player_hand"] == []
 
 
 @pytest.mark.asyncio
 async def test_snapshot_phase():
     game = await _start_game(_make_players())
     snap = game.snapshot(for_player=0)
-    assert snap.phase in ("DEAL_BID", "STIRRING", "PLAYING", "WAITING", "GAME_OVER", "SCORING")
+    assert snap["phase"] in ("DEAL_BID", "STIRRING", "PLAYING", "WAITING", "SCORING")
 
 
 @pytest.mark.asyncio
@@ -311,7 +306,7 @@ async def test_snapshot_awaiting_action():
     """awaiting_action should be a valid string or None."""
     game = await _start_game(_make_players())
     snap = game.snapshot(for_player=0)
-    assert snap.awaiting_action is None or isinstance(snap.awaiting_action, str)
+    assert snap["awaiting_action"] is None or isinstance(snap["awaiting_action"], str)
 
 
 @pytest.mark.asyncio
@@ -323,13 +318,16 @@ async def test_snapshot_action_hints_shape():
     """
     game = await _start_game(_make_players())
     snap = game.snapshot(for_player=0)
-    assert isinstance(snap.action_hints, list)
-    if len(snap.action_hints) > 0:
-        entry = snap.action_hints[0]
+    assert isinstance(snap["action_hints"], list)
+    if len(snap["action_hints"]) > 0:
+        entry = snap["action_hints"][0]
         assert isinstance(entry, list)
         if len(entry) > 0:
-            from server.sm.card_model import Card
-            assert isinstance(entry[0], Card)
+            card = entry[0]
+            assert isinstance(card, Card)
+            assert isinstance(card.id, str)
+            assert isinstance(card.suit, Suit)
+            assert isinstance(card.rank, Rank)
 
 
 def test_first_round_deal_bid_snapshot_has_no_declarer_before_bid_winner() -> None:
@@ -345,9 +343,9 @@ def test_first_round_deal_bid_snapshot_has_no_declarer_before_bid_winner() -> No
 
     snap = game.snapshot(for_player=0)
 
-    assert snap.phase == "DEAL_BID"
-    assert snap.declarer_team is None
-    assert snap.declarer_player is None
+    assert snap["phase"] == "DEAL_BID"
+    assert snap["declarer_team"] is None
+    assert snap["declarer_player"] is None
 
 
 def test_subsequent_round_deal_bid_snapshot_shows_fixed_declarer() -> None:
@@ -363,9 +361,9 @@ def test_subsequent_round_deal_bid_snapshot_shows_fixed_declarer() -> None:
 
     snap = game.snapshot(for_player=0)
 
-    assert snap.phase == "DEAL_BID"
-    assert snap.declarer_team == 1
-    assert snap.declarer_player == 2
+    assert snap["phase"] == "DEAL_BID"
+    assert snap["declarer_team"] == 1
+    assert snap["declarer_player"] == 2
 
 
 def test_subsequent_round_deal_bid_bid_winner_does_not_change_fixed_declarer_snapshot() -> None:
@@ -389,11 +387,18 @@ def test_subsequent_round_deal_bid_bid_winner_does_not_change_fixed_declarer_sna
 
     snap = game.snapshot(for_player=0)
 
-    assert snap.phase == "DEAL_BID"
-    assert snap.bid_winner is not None
-    assert snap.bid_winner == bid
-    assert snap.declarer_player == 2
-    assert snap.declarer_player != snap.bid_winner.player
+    assert snap["phase"] == "DEAL_BID"
+    bid_winner = snap.bid_winner
+    assert bid_winner is not None
+    assert bid_winner.player == bid.player
+    assert bid_winner.cards == [_card(Suit.SPADES, Rank.THREE, 1)]
+    bid_winner_wire = bid_winner.model_dump(mode="json")
+    assert bid_winner_wire["cards"] == [
+        {"id": "D1-spades-3", "suit": "spades", "rank": "3", "points": 0}
+    ]
+    assert bid_winner_wire["suit"] == "spades"
+    assert snap["declarer_player"] == 2
+    assert snap["declarer_player"] != bid_winner.player
 
 
 def test_snapshot_stir_action_hints_ordered_from_small_to_large() -> None:
@@ -449,7 +454,7 @@ def test_snapshot_stir_action_hints_ordered_from_small_to_large() -> None:
 
     snap = game.snapshot(1)
 
-    assert [[card.id for card in hint] for hint in snap.action_hints] == [
+    assert [[card["id"] for card in hint] for hint in snap["action_hints"]] == [
         ["D1-hearts-2", "D2-hearts-2"],
         ["D1-spades-2", "D2-spades-2"],
         ["D1-joker-SJ", "D2-joker-SJ"],
@@ -513,7 +518,7 @@ def test_snapshot_stir_action_hints_hidden_when_over_bid_hint_limit(
 
     snap = game.snapshot(1)
 
-    assert snap.action_hints == []
+    assert snap["action_hints"] == []
 
 
 def test_snapshot_play_leading_has_no_action_hints() -> None:
@@ -558,26 +563,25 @@ def test_snapshot_play_leading_has_no_action_hints() -> None:
 
     snap = game.snapshot(0)
 
-    assert snap.awaiting_action == "play"
-    assert snap.action_hints == []
+    assert snap["awaiting_action"] == "play"
+    assert snap["action_hints"] == []
 
 
 def test_snapshot_play_following_hides_hints_when_too_many() -> None:
     """Following action_hints are hidden when count exceeds MAX_PLAY_ACTION_HINTS."""
-    lead = _card(Suit.DIAMONDS, Rank.ACE)
+    lead_1 = _card(Suit.DIAMONDS, Rank.ACE)
+    lead_2 = _card(Suit.DIAMONDS, Rank.KING)
     follower_hand = [
         _card(Suit.JOKER, Rank.SMALL_JOKER),
+        _card(Suit.JOKER, Rank.BIG_JOKER),
         _card(Suit.SPADES, Rank.JACK),
         _card(Suit.HEARTS, Rank.TEN),
         _card(Suit.CLUBS, Rank.NINE),
         _card(Suit.SPADES, Rank.EIGHT),
         _card(Suit.HEARTS, Rank.SEVEN),
         _card(Suit.CLUBS, Rank.SIX),
-        _card(Suit.HEARTS, Rank.FIVE),
-        _card(Suit.SPADES, Rank.FOUR),
-        _card(Suit.CLUBS, Rank.THREE),
     ]
-    hands = [[lead], follower_hand, [], []]
+    hands = [[lead_1, lead_2], follower_hand, [], []]
     trick = trick_sm.create_trick(trick_sm.TrickInput(
         lead_player=0,
         hands=hands,
@@ -586,7 +590,7 @@ def test_snapshot_play_following_hides_hints_when_too_many() -> None:
         defender_points=0,
         declarer_team=0,
     ))
-    played = trick_sm.play(trick, player=0, cards=[lead])
+    played = trick_sm.play(trick, player=0, cards=[lead_1, lead_2])
     assert isinstance(played, Ok)
     state = round_sm.RoundState(
         phase="PLAYING",
@@ -614,47 +618,47 @@ def test_snapshot_play_following_hides_hints_when_too_many() -> None:
 
     snap = game.snapshot(1)
 
-    assert snap.awaiting_action == "play"
-    # 10 possible plays > MAX_PLAY_ACTION_HINTS(5), so hints are hidden
-    assert snap.action_hints == []
+    assert snap["awaiting_action"] == "play"
+    # No matching diamonds: choosing any two of eight cards creates 28 legal
+    # candidates, so the complete hint set is intentionally hidden.
+    assert snap["action_hints"] == []
 
 
 @pytest.mark.asyncio
 async def test_snapshot_awaiting_action_play():
     game = await _start_game(_make_players())
     snap = game.snapshot(for_player=0)
-    assert snap.awaiting_action in ("stir", "discard", "play", "next_round", "bid", None)
+    assert snap["awaiting_action"] in ("stir", "discard", "play", "next_round", "bid", None)
 
 
 @pytest.mark.asyncio
 async def test_snapshot_trump_info():
     game = await _start_game(_make_players())
     snap = game.snapshot(for_player=0)
-    assert snap.trump_rank is not None
+    assert snap["trump_rank"] is not None
 
 
 @pytest.mark.asyncio
 async def test_snapshot_team_levels():
     game = await _start_game(_make_players())
     snap = game.snapshot(for_player=0)
-    assert snap.team0_level is not None
-    assert snap.team1_level is not None
+    assert snap["team0_level"] is not None
+    assert snap["team1_level"] is not None
 
 
 @pytest.mark.asyncio
 async def test_snapshot_bid_events():
     game = await _start_game(_make_players())
     snap = game.snapshot(for_player=0)
-    assert isinstance(snap.bid_events, list)
+    assert isinstance(snap["bid_events"], list)
 
 
 @pytest.mark.asyncio
 async def test_snapshot_stirring_state():
     game = await _start_game(_make_players())
     snap = game.snapshot(for_player=0)
-    from server.snapshot import StirringStateSnapshot
     # stirring_state may be None outside of STIRRING phase
-    assert snap.stirring_state is None or isinstance(snap.stirring_state, StirringStateSnapshot)
+    assert snap["stirring_state"] is None or isinstance(snap["stirring_state"], dict)
 
 
 
@@ -663,8 +667,7 @@ async def test_snapshot_scoring_in_complete():
     """When round is WAITING (SM COMPLETE), snapshot should include scoring info."""
     game = await _start_game(_make_players())
     snap = game.snapshot(for_player=0)
-    from server.snapshot import ScoringSnapshot
-    assert snap.scoring is None or isinstance(snap.scoring, ScoringSnapshot)
+    assert snap["scoring"] is None or isinstance(snap["scoring"], dict)
 
 
 # ---- is_over() ----
@@ -677,11 +680,9 @@ def test_is_over_false_during_game():
 
 @pytest.mark.asyncio
 async def test_is_over_true_after_game_over():
-    """Game should be over when get_phase() returns GAME_OVER."""
+    """Game starts in a non-over state."""
     game = await _start_game(_make_players())
-    # We can't easily force GAME_OVER through public API alone in unit test.
-    # Instead, verify is_over() is consistent with get_phase().
-    assert game.is_over() == (game.get_phase() == "GAME_OVER")
+    assert game.is_over() is False
 
 
 @pytest.mark.asyncio
@@ -691,22 +692,22 @@ async def test_snapshot_winning_team_in_game_over():
     snap = game.snapshot(for_player=0)
     # During normal flow, game is not over yet
     if game.is_over():
-        assert snap.winning_team is not None
-        assert isinstance(snap.winning_team, int)
+        assert snap["winning_team"] is not None
+        assert isinstance(snap["winning_team"], int)
     else:
-        assert snap.winning_team is None
+        assert snap["winning_team"] is None
 
 
 @pytest.mark.asyncio
 async def test_game_over_consistency():
-    """is_over() should equal get_phase() == 'GAME_OVER'."""
+    """is_over() is independent from the player-visible phase."""
     players = _make_players()
     game = Game(players=players)
-    assert game.is_over() == (game.get_phase() == "GAME_OVER")
+    assert game.is_over() is False
     # Confirm all players to start the game
     for i in range(4):
         await _send_action(game, players, i, NextRoundAction())
-    assert game.is_over() == (game.get_phase() == "GAME_OVER")
+    assert game.is_over() is False
 
 
 # ---- Action dispatch with type conversion ----
@@ -720,13 +721,14 @@ async def test_act_bid_during_dealing_converts_to_bid_event():
     snap = game.snapshot(for_player=0)
     # During DEAL_BID, try bidding. This tests the BidAction -> BidEvent conversion.
     # If not in DEAL_BID, we can't test bid; that's fine, integration tests cover it.
-    if snap.phase == "DEAL_BID" and len(snap.player_hand) > 0:
+    if snap["phase"] == "DEAL_BID" and len(snap["player_hand"]) > 0:
         # Find a trump rank card to bid with
-        trump_cards = [c for c in snap.player_hand if c.rank == snap.trump_rank]
+        trump_cards = [c for c in snap["player_hand"] if c["rank"] == snap["trump_rank"]]
         if trump_cards:
-            action = BidAction(cards=trump_cards[:1], count=1)
+            card_ids = [card["id"] for card in trump_cards[:1]]
+            message = PlayerMessage(seq=players[0].last_seq(), raw={"type": "bid", "cards": card_ids})
             # Bid may be rejected (e.g. priority too low), but receive() never raises
-            await _send_action(game, players, 0, action)
+            await game.receive(0, message)
 
 
 @pytest.mark.asyncio
@@ -750,19 +752,14 @@ async def test_act_next_round_during_non_complete():
     await _send_action(game, players, 0, NextRoundAction())
 
 
-# ---- get_phase() GAME_OVER priority ----
+# ---- get_phase() player-visible phase ----
 
 
-def test_get_phase_prioritizes_game_over():
-    """is_over() must always be consistent with the public phase.
-
-    For Game black-box tests, the observable contract is enough:
-    is_over() mirrors get_phase() == "GAME_OVER".
-    """
+def test_get_phase_is_player_visible_round_phase():
+    """Game over is not encoded in phase."""
     game = _create_game_with_auto_players()
     assert game.get_phase() == "WAITING"
-    # The invariant: is_over() == (get_phase() == "GAME_OVER")
-    assert game.is_over() == (game.get_phase() == "GAME_OVER")
+    assert game.is_over() is False
 
 
 # ---- get_player() ----
@@ -776,12 +773,12 @@ def test_get_player_returns_player_by_index():
         assert game.get_player(i) is players[i]
 
 
-# ---- StateSnapshot.to_dict() ----
+# ---- StateSnapshot wire dict ----
 
 
 @pytest.mark.asyncio
-async def test_snapshot_to_dict_json_serializable():
-    """StateSnapshot.to_dict() must return a dict that is JSON-serializable.
+async def test_snapshot_json_serializable():
+    """Game.snapshot().model_dump(mode="json") must be JSON-serializable.
 
     This is critical because HumanPlayer.on_state() calls ws.send_json() which
     requires JSON-serializable data. The sm Card/Suit/Rank types are Pydantic
@@ -789,8 +786,8 @@ async def test_snapshot_to_dict_json_serializable():
     is list[list[Card]], serialized to list of card-dict lists.
     """
     game = await _start_game(_make_players())
-    snap = game.snapshot(for_player=0)
-    result = snap.to_dict()
+    snapshot = game.snapshot(for_player=0)
+    result = snapshot.model_dump(mode="json")
     # Must be a dict
     assert isinstance(result, dict)
     # Must be JSON-serializable (no Pydantic objects, no enums as objects)
@@ -814,17 +811,15 @@ async def test_snapshot_to_dict_json_serializable():
 
 
 @pytest.mark.asyncio
-async def test_snapshot_to_dict_card_format():
-    """StateSnapshot.to_dict() must format cards as {"id", "suit", "rank"}.
+async def test_snapshot_card_format():
+    """Snapshot JSON must format cards as {"id", "suit", "rank", "points"}.
 
     Per spec section 5.5, each card in player_hand must be:
-    {"id": "D1-H-A", "suit": "hearts", "rank": "A"}
-    This is a subset of the sm Card fields (omitting is_joker, is_big_joker,
-    points, deck). Suit and Rank enums must be serialized as their string values.
+    {"id": "D1-H-A", "suit": "hearts", "rank": "A", "points": 0}.
+    Suit and Rank enums must be serialized as their string values.
     """
     game = await _start_game(_make_players())
-    snap = game.snapshot(for_player=0)
-    result = snap.to_dict()
+    result = game.snapshot(for_player=0).model_dump(mode="json")
     # If player has cards, verify the format
     player_hand_raw = result["player_hand"]
     if len(player_hand_raw) > 0:
@@ -833,58 +828,42 @@ async def test_snapshot_to_dict_card_format():
         assert "id" in card
         assert "suit" in card
         assert "rank" in card
+        assert "points" in card
         # suit and rank must be strings (not enum objects)
         assert isinstance(card["suit"], str)
         assert isinstance(card["rank"], str)
         # Must NOT contain internal sm fields
         assert "is_joker" not in card
         assert "is_big_joker" not in card
-        assert "points" not in card
         assert "deck" not in card
 
 
 @pytest.mark.asyncio
-async def test_snapshot_to_dict_failed_throw_format() -> None:
-    """StateSnapshot.to_dict() serializes failed_throw as public card dicts."""
-    from server.sm.card_model import Card, Rank, Suit
-    from server.sm.types import FailedThrow
-
+async def test_snapshot_failed_throw_format() -> None:
+    """StateSnapshot failed_throw is a public card dict event."""
     game = await _start_game(_make_players())
-    snap = game.snapshot(for_player=0)
-    king = Card(
-        id="D1-spades-K",
-        suit=Suit.SPADES,
-        rank=Rank.KING,
-        is_joker=False,
-        is_big_joker=False,
-        points=10,
-        deck=1,
-    )
-    queen = Card(
-        id="D1-spades-Q",
-        suit=Suit.SPADES,
-        rank=Rank.QUEEN,
-        is_joker=False,
-        is_big_joker=False,
-        points=0,
-        deck=1,
-    )
-    snap.failed_throw = FailedThrow(
-        player=0,
-        attempted_cards=[king, queen],
-        forced_cards=[queen],
-    )
-
-    result = snap.to_dict()
+    snapshot = game.snapshot(for_player=0).model_copy(update={
+        "failed_throw": FailedThrowSnapshot(
+            player=0,
+            attempted_cards=[
+                _card(Suit.SPADES, Rank.KING, 1),
+                _card(Suit.SPADES, Rank.QUEEN, 1),
+            ],
+            forced_cards=[
+                _card(Suit.SPADES, Rank.QUEEN, 1),
+            ],
+        )
+    })
+    result = snapshot.model_dump(mode="json")
 
     assert result["failed_throw"] == {
         "player": 0,
         "attempted_cards": [
-            {"id": "D1-spades-K", "suit": "spades", "rank": "K"},
-            {"id": "D1-spades-Q", "suit": "spades", "rank": "Q"},
+            {"id": "D1-spades-K", "suit": "spades", "rank": "K", "points": 10},
+            {"id": "D1-spades-Q", "suit": "spades", "rank": "Q", "points": 0},
         ],
         "forced_cards": [
-            {"id": "D1-spades-Q", "suit": "spades", "rank": "Q"},
+            {"id": "D1-spades-Q", "suit": "spades", "rank": "Q", "points": 0},
         ],
     }
 
@@ -904,14 +883,14 @@ async def test_resolve_cards_returns_matching_cards():
     """
     game = await _start_game(_make_players())
     snap = game.snapshot(for_player=0)
-    if len(snap.player_hand) > 0:
-        card_ids = [c.id for c in snap.player_hand[:2]]
+    if len(snap["player_hand"]) > 0:
+        card_ids = [card["id"] for card in snap["player_hand"][:2]]
         result = game.resolve_cards(player_index=0, card_ids=card_ids)
         assert isinstance(result, Ok)
         for original, resolved_card in zip(card_ids, result.value):
             assert resolved_card.id == original
             # Must be a Card Pydantic model (not a string or dict)
-            from server.sm.card_model import Card
+            from server.rules.cards import Card
             assert isinstance(resolved_card, Card)
 
 
@@ -966,7 +945,7 @@ async def test_bid_during_deal_bid_pushes_state_uniformly():
     # Find the current bidder and skip
     for i in range(4):
         snap = game.snapshot(i)
-        if snap.awaiting_action == "bid":
+        if snap["awaiting_action"] == "bid":
             await _send_action(game, counters, i, SkipBidAction())
             break
 
@@ -981,20 +960,19 @@ async def test_bid_during_deal_bid_pushes_state_uniformly():
 
 
 @pytest.mark.asyncio
-async def test_snapshot_to_dict_contains_all_required_fields():
-    """StateSnapshot.to_dict() must contain ALL fields from spec section 5.5.
+async def test_snapshot_contains_all_required_fields():
+    """StateSnapshot must contain ALL fields from spec section 5.5.
 
     Regression test for Bug 2: the `player_hand_counts` field was missing
     from StateSnapshot, causing the frontend's game-table component to
-    show "0 张" for every player because `snapshot.player_hand_counts[i]`
+    show "0 张" for every player because `snapshot["player_hand"]_counts[i]`
     evaluated to `undefined ?? 0`.
 
     This test asserts the complete set of required fields so any future
     addition to the spec is also caught if the server doesn't serialize it.
     """
     game = await _start_game(_make_players())
-    snap = game.snapshot(for_player=0)
-    result = snap.to_dict()
+    result = game.snapshot(for_player=0).model_dump(mode="json")
 
     # Complete list of required fields per current snapshot protocol.
     required_fields = [
@@ -1043,7 +1021,7 @@ async def test_snapshot_action_hints_are_card_lists():
     """action_hints entries are plain card lists, not PlayAction objects.
 
     action_hints is list[list[Card]].
-    Each entry is a list of Card objects (no .type attribute).
+    Each entry is a list of card dicts (no .type attribute).
     """
     game = await _start_game(_make_players())
     snap = game.snapshot(for_player=0)
@@ -1053,17 +1031,16 @@ async def test_snapshot_action_hints_are_card_lists():
         assert isinstance(entry, list)
         assert not hasattr(entry, "type")  # not a PlayAction
         if len(entry) > 0:
-            from server.sm.card_model import Card
             assert isinstance(entry[0], Card)
+            assert entry[0].id
 
 
 @pytest.mark.asyncio
-async def test_snapshot_action_hints_to_dict_format():
-    """to_dict() serializes action_hints as list of card-dict lists (no 'type' field)."""
+async def test_snapshot_action_hints_card_format():
+    """snapshot action_hints are list of card-dict lists (no 'type' field)."""
     game = await _start_game(_make_players())
-    snap = game.snapshot(for_player=0)
-    d = snap.to_dict()
-    action_hints_val = d["action_hints"]
+    snap = game.snapshot(for_player=0).model_dump(mode="json")
+    action_hints_val = snap["action_hints"]
     if len(action_hints_val) > 0:
         entry = action_hints_val[0]
         # Entry is a list of card dicts, not a dict with 'type' key
@@ -1080,8 +1057,7 @@ async def test_snapshot_completed_trick_no_lead_type():
     """
     game = await _start_game(_make_players())
     snap = game.snapshot(for_player=0)
-    d = snap.to_dict()
-    trick = d["last_completed_trick"]
+    trick = snap.last_completed_trick
     if trick is not None:
         assert "lead_type" not in trick
 
@@ -1109,7 +1085,7 @@ async def test_game_auto_completes_past_deal_bid():
         bid_found = False
         for i in range(4):
             snap = game.snapshot(i)
-            if snap.awaiting_action == "bid":
+            if snap["awaiting_action"] == "bid":
                 await _send_action(game, players, i, SkipBidAction())
                 bid_found = True
                 break
@@ -1119,11 +1095,11 @@ async def test_game_auto_completes_past_deal_bid():
     phase = game.get_phase()
     assert phase in (
         "DEAL_BID", "STIRRING", "PLAYING",
-        "WAITING", "GAME_OVER",
+        "WAITING",
     )
     # Snapshot must still be valid
     snap = game.snapshot(for_player=0)
-    assert isinstance(snap.player_hand, list)
+    assert isinstance(snap["player_hand"], list)
 
 
 @pytest.mark.asyncio
@@ -1165,7 +1141,7 @@ async def test_full_game_flow_completes_without_resource_explosion():
         bid_found = False
         for i in range(4):
             snap = game.snapshot(i)
-            if snap.awaiting_action == "bid":
+            if snap["awaiting_action"] == "bid":
                 await _send_action(game, players, i, SkipBidAction())
                 bid_found = True
                 break
@@ -1174,12 +1150,12 @@ async def test_full_game_flow_completes_without_resource_explosion():
     phase = game.get_phase()
     assert phase in (
         "DEAL_BID", "STIRRING", "PLAYING",
-        "WAITING", "GAME_OVER",
+        "WAITING",
     ), f"Game stuck in unexpected phase: {phase}"
 
     # Snapshot must still be valid (no cascading error state)
     snap = game.snapshot(for_player=0)
-    assert isinstance(snap.player_hand, list)
+    assert isinstance(snap["player_hand"], list)
 
 
 # ---- Task 002: DEAL_BID Sync Round-Robin Bidding ----
@@ -1202,23 +1178,23 @@ async def test_deal_bid_sync_round_robin() -> None:
 
     # After starting, should be in DEAL_BID with first card dealt
     snapshot = game.snapshot(0)
-    assert snapshot.phase == "DEAL_BID"
+    assert snapshot["phase"] == "DEAL_BID"
 
     # First player (start_player, which is 0 by default) should have
     # 1 card and awaiting_action='bid'
     s0 = game.snapshot(0)
-    assert len(s0.player_hand) == 1, (
-        f"Player 0: expected 1 card after first deal, got {len(s0.player_hand)}"
+    assert len(s0["player_hand"]) == 1, (
+        f"Player 0: expected 1 card after first deal, got {len(s0['player_hand'])}"
     )
-    assert s0.awaiting_action == "bid"
+    assert s0["awaiting_action"] == "bid"
 
     # Other players should have 0 cards and no awaiting
     for i in range(1, 4):
         si = game.snapshot(i)
-        assert len(si.player_hand) == 0, (
-            f"Player {i}: expected 0 cards before their deal, got {len(si.player_hand)}"
+        assert len(si["player_hand"]) == 0, (
+            f"Player {i}: expected 0 cards before their deal, got {len(si['player_hand'])}"
         )
-        assert si.awaiting_action is None
+        assert si["awaiting_action"] is None
 
     # Player 0 skips → next card dealt to next player
     await _send_action(game, players, 0, SkipBidAction())
@@ -1228,19 +1204,19 @@ async def test_deal_bid_sync_round_robin() -> None:
     # Player 0 still has 1 card (no new card yet), next player has 1
     # The next player in CCW order after 0 is 1
     s0_after = game.snapshot(0)
-    assert len(s0_after.player_hand) == 1
+    assert len(s0_after["player_hand"]) == 1
     s1 = game.snapshot(1)
-    assert len(s1.player_hand) == 1, (
-        f"Player 1: expected 1 card after their deal, got {len(s1.player_hand)}"
+    assert len(s1["player_hand"]) == 1, (
+        f"Player 1: expected 1 card after their deal, got {len(s1['player_hand'])}"
     )
-    assert s1.awaiting_action == "bid"
+    assert s1["awaiting_action"] == "bid"
 
     # Continue: player 1 skips → player 3 gets a card (CCW: 1→3)
     await _send_action(game, players, 1, SkipBidAction())
     assert game.get_phase() == "DEAL_BID"
     s3 = game.snapshot(3)
-    assert len(s3.player_hand) == 1
-    assert s3.awaiting_action == "bid"
+    assert len(s3["player_hand"]) == 1
+    assert s3["awaiting_action"] == "bid"
 
 
 @pytest.mark.asyncio
@@ -1252,16 +1228,16 @@ async def test_bid_action_hints_in_snapshot() -> None:
     bidder = None
     for i in range(4):
         s = game.snapshot(i)
-        if s.phase == "DEAL_BID" and s.awaiting_action == "bid":
+        if s["phase"] == "DEAL_BID" and s["awaiting_action"] == "bid":
             bidder = i
             break
     assert bidder is not None, "No player has awaiting_action='bid' in DEAL_BID"
 
     snapshot = game.snapshot(bidder)
-    assert snapshot.phase == "DEAL_BID"
-    assert isinstance(snapshot.action_hints, list)
+    assert snapshot["phase"] == "DEAL_BID"
+    assert isinstance(snapshot["action_hints"], list)
     # Each entry is a list of cards (1 or 2 cards per bid option)
-    for entry in snapshot.action_hints:
+    for entry in snapshot["action_hints"]:
         assert isinstance(entry, list)
         assert len(entry) in (1, 2)
 
@@ -1274,7 +1250,7 @@ async def test_awaiting_bid_for_current_bidder() -> None:
     bidding_player = None
     for i in range(4):
         snap = game.snapshot(i)
-        if snap.awaiting_action == "bid":
+        if snap["awaiting_action"] == "bid":
             bidding_player = i
             break
     assert bidding_player is not None, "No player has awaiting_action='bid'"
@@ -1289,7 +1265,7 @@ async def test_awaiting_null_for_non_current_bidder() -> None:
     bidding_player = None
     for i in range(4):
         snap = game.snapshot(i)
-        if snap.awaiting_action == "bid":
+        if snap["awaiting_action"] == "bid":
             bidding_player = i
             break
     assert bidding_player is not None
@@ -1299,8 +1275,8 @@ async def test_awaiting_null_for_non_current_bidder() -> None:
         if i == bidding_player:
             continue
         snap = game.snapshot(i)
-        assert snap.awaiting_action is None, (
-            f"Player {i}: expected awaiting_action=None, got {snap.awaiting_action}"
+        assert snap["awaiting_action"] is None, (
+            f"Player {i}: expected awaiting_action=None, got {snap['awaiting_action']}"
         )
 
 
@@ -1319,7 +1295,7 @@ async def test_deal_bid_no_background_delay() -> None:
     current_bidder = None
     for i in range(4):
         s = game.snapshot(i)
-        if s.awaiting_action == "bid":
+        if s["awaiting_action"] == "bid":
             current_bidder = i
             break
     assert current_bidder is not None, "No player has awaiting_action='bid'"
@@ -1329,11 +1305,11 @@ async def test_deal_bid_no_background_delay() -> None:
 
     # The bid turn must have advanced or phase changed immediately
     snap_after = game.snapshot(current_bidder)
-    if snap_after.phase == "DEAL_BID":
+    if snap_after["phase"] == "DEAL_BID":
         new_bidder = None
         for i in range(4):
             s = game.snapshot(i)
-            if s.awaiting_action == "bid":
+            if s["awaiting_action"] == "bid":
                 new_bidder = i
                 break
         assert new_bidder is not None, "No player has awaiting_action='bid' after skip"
@@ -1355,13 +1331,13 @@ async def test_skip_bid_action_advances_turn() -> None:
 
     # Get to a state where we can bid
     snapshot = game.snapshot(3)
-    assert snapshot.phase == "DEAL_BID"
+    assert snapshot["phase"] == "DEAL_BID"
 
     # Find the current bidder
     current_bidder = None
     for i in range(4):
         s = game.snapshot(i)
-        if s.awaiting_action == "bid":
+        if s["awaiting_action"] == "bid":
             current_bidder = i
             break
     assert current_bidder is not None, "No player has awaiting_action='bid'"
@@ -1373,12 +1349,12 @@ async def test_skip_bid_action_advances_turn() -> None:
     # (a) another player now has awaiting_action='bid' (turn advanced), or
     # (b) phase changed to STIRRING (if all players passed and dealing done)
     snapshot_after = game.snapshot(current_bidder)
-    if snapshot_after.phase == "DEAL_BID":
+    if snapshot_after["phase"] == "DEAL_BID":
         # Turn must have advanced to a different player
         new_bidder = None
         for i in range(4):
             s = game.snapshot(i)
-            if s.awaiting_action == "bid":
+            if s["awaiting_action"] == "bid":
                 new_bidder = i
                 break
         assert new_bidder is not None, "No player has awaiting_action='bid' after skip"
@@ -1387,7 +1363,7 @@ async def test_skip_bid_action_advances_turn() -> None:
         )
     else:
         # Phase changed (acceptable if dealing completed)
-        assert snapshot_after.phase == "STIRRING"
+        assert snapshot_after["phase"] == "STIRRING"
 
 
 @pytest.mark.asyncio
@@ -1404,29 +1380,26 @@ async def test_stirring_state_snapshot_has_declarer_player() -> None:
     max_attempts = 500
     for _ in range(max_attempts):
         snap = game.snapshot(for_player=0)
-        if snap.phase != "DEAL_BID":
+        if snap["phase"] != "DEAL_BID":
             break
         # Find the current bidder and skip
         bid_found = False
         for i in range(4):
             s = game.snapshot(i)
-            if s.awaiting_action == "bid":
+            if s["awaiting_action"] == "bid":
                 await _send_action(game, players, i, SkipBidAction())
                 bid_found = True
                 break
         assert bid_found, "no bidder found — DEAL_BID stuck"
 
     snap = game.snapshot(for_player=0)
-    assert snap.phase == "STIRRING", f"Expected STIRRING phase, got {snap.phase}"
+    assert snap["phase"] == "STIRRING", f"Expected STIRRING phase, got {snap['phase']}"
 
-    assert snap.stirring_state is not None
-    assert snap.stirring_state.declarer_player is not None
-    assert isinstance(snap.stirring_state.declarer_player, int)
-    assert 0 <= snap.stirring_state.declarer_player <= 3
+    stirring_snapshot = snap.stirring_state
+    assert stirring_snapshot is not None
+    assert isinstance(stirring_snapshot.declarer_player, int)
+    assert 0 <= stirring_snapshot.declarer_player <= 3
 
-    # Verify to_dict() serializes declarer_player
-    d = snap.to_dict()
-    stirring_dict = d["stirring_state"]
-    assert stirring_dict is not None
+    stirring_dict = stirring_snapshot.model_dump(mode="json")
     assert "declarer_player" in stirring_dict
-    assert stirring_dict["declarer_player"] == snap.stirring_state.declarer_player
+    assert stirring_dict["declarer_player"] == stirring_snapshot.declarer_player

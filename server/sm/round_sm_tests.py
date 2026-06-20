@@ -5,7 +5,7 @@ from itertools import combinations
 from typing import Literal
 
 import pytest
-from .card_model import Card, Suit, Rank
+from server.rules.cards import Card, POINTS_MAP, Suit, Rank
 from .types import BidEvent, CompletedTrick
 from .round_sm import (
     RoundState, RoundInput, create_round,
@@ -34,19 +34,11 @@ def _completed_trick_key(trick: CompletedTrick | None) -> CompletedTrickKey | No
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
     """Create a card for deterministic round-state tests."""
-    points_map: dict[Rank, int] = {
-        Rank.FIVE: 5,
-        Rank.TEN: 10,
-        Rank.KING: 10,
-    }
     return Card(
         id=f"D{deck}-{suit.value}-{rank.value}",
         suit=suit,
         rank=rank,
-        is_joker=(suit == Suit.JOKER),
-        is_big_joker=(rank == Rank.BIG_JOKER),
-        points=points_map.get(rank, 0),
-        deck=deck,
+        points=POINTS_MAP[rank],
     )
 
 
@@ -402,24 +394,8 @@ class TestStirringPhase:
 
         cur = state.stirring_state.current_player
         big_jokers = [
-            Card(
-                id="test-big-joker-1",
-                suit=Suit.JOKER,
-                rank=Rank.BIG_JOKER,
-                is_joker=True,
-                is_big_joker=True,
-                points=0,
-                deck=1,
-            ),
-            Card(
-                id="test-big-joker-2",
-                suit=Suit.JOKER,
-                rank=Rank.BIG_JOKER,
-                is_joker=True,
-                is_big_joker=True,
-                points=0,
-                deck=2,
-            ),
+            _card(Suit.JOKER, Rank.BIG_JOKER, 1),
+            _card(Suit.JOKER, Rank.BIG_JOKER, 2),
         ]
         hands = [list(hand) for hand in state.players_hand]
         hands[cur].extend(big_jokers)
@@ -520,10 +496,8 @@ class TestStirringPhase:
         assert state.stirring_state is not None
         # Fabricate cards that are NOT in the current player's hand
         fake_cards = [
-            Card(id="D1-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
-                 is_joker=False, is_big_joker=False, points=0, deck=1),
-            Card(id="D2-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
-                 is_joker=False, is_big_joker=False, points=0, deck=2),
+            _card(Suit.CLUBS, Rank.TWO, 1),
+            _card(Suit.CLUBS, Rank.TWO, 2),
         ]
         result = stir(state, player_index=state.stirring_state.current_player, cards=fake_cards)
         assert isinstance(result, Rejected)
@@ -909,10 +883,8 @@ class TestRoundValidation:
         assert state.phase == "DEAL_BID"
         # Cannot stir during DEAL_BID
         cards = [
-            Card(id="D1-diamonds-2", suit=Suit.DIAMONDS, rank=Rank.TWO,
-                 is_joker=False, is_big_joker=False, points=0, deck=1),
-            Card(id="D2-diamonds-2", suit=Suit.DIAMONDS, rank=Rank.TWO,
-                 is_joker=False, is_big_joker=False, points=0, deck=2),
+            _card(Suit.DIAMONDS, Rank.TWO, 1),
+            _card(Suit.DIAMONDS, Rank.TWO, 2),
         ]
         result = stir(state, player_index=0, cards=cards)
         assert isinstance(result, Rejected)
@@ -1023,10 +995,8 @@ class TestPlayerIdentityValidation:
         wrong_player = (cur + 1) % 4
         # Use any cards; the player identity check happens before card validation
         fake_cards = [
-            Card(id="D1-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
-                 is_joker=False, is_big_joker=False, points=0, deck=1),
-            Card(id="D2-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
-                 is_joker=False, is_big_joker=False, points=0, deck=2),
+            _card(Suit.CLUBS, Rank.TWO, 1),
+            _card(Suit.CLUBS, Rank.TWO, 2),
         ]
         result = stir(state, player_index=wrong_player, cards=fake_cards)
         assert isinstance(result, Rejected)
@@ -1049,8 +1019,7 @@ class TestPlayerIdentityValidation:
         wrong_player = (exchanging + 1) % 4
         # Use any cards; the player identity check happens before card validation
         fake_cards = [
-            Card(id="D1-clubs-2", suit=Suit.CLUBS, rank=Rank.TWO,
-                 is_joker=False, is_big_joker=False, points=0, deck=1),
+            _card(Suit.CLUBS, Rank.TWO, 1),
         ]
         result = stir_discard(state, player_index=wrong_player, cards=fake_cards)
         assert isinstance(result, Rejected)

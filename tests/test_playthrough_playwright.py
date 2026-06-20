@@ -1292,7 +1292,7 @@ def run_playthrough(config: Config) -> None:
                 take_screenshot(page, config.output_dir, f"tick_{int(elapsed)}", recorder)
                 last_screenshot_time = time.monotonic()
 
-            if phase == "GAME_OVER":
+            if state.get("winning_team") is not None:
                 game_completed = True
                 take_screenshot(page, config.output_dir, "game_over", recorder)
                 recorder.event(

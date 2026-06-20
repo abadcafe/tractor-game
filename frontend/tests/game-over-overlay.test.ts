@@ -17,7 +17,7 @@ function makeSnapshot(
   overrides: Partial<StateSnapshot> = {},
 ): StateSnapshot {
   return {
-    phase: "GAME_OVER",
+    phase: "WAITING",
     player_hand: [],
     bottom_cards: [],
     trump_rank: "2",

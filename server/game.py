@@ -6,7 +6,8 @@ is_over(), get_phase(), set_on_game_over(), get_player(), and
 resolve_cards() interfaces.
 
 Game lifecycle: WAITING (confirm to start) → DEAL_BID → STIRRING →
-PLAYING → WAITING (confirm for next round) → ... → GAME_OVER.
+PLAYING → WAITING (confirm for next round) → ...
+Game over is represented by winning_team, not by a phase value.
 
 Push model: every state change triggers exactly one broadcast push with
 seq increment. This includes each card dealt during DEAL_BID, each
@@ -35,32 +36,39 @@ from server.actions import (
     SkipStirAction,
     StirAction,
 )
-from server.messages import PlayerMessage, StateMessage
+from server.protocol import PlayerMessage, StateMessage
 from server.player import Player
 from server.result import Ok, Rejected
-from server.sm import deal_bid_sm, game_sm, play_rules, round_sm, stirring_sm
-from server.sm.comparator import bid_value
-from server.sm.card_model import Card, Rank, Suit
+from server.rules import hints as play_rules
+from server.sm import deal_bid_sm, game_sm, round_sm, stirring_sm
+from server.rules.ordering import bid_value
+from server.rules.cards import Card, Rank, Suit
+from server.rules.rejections import CardNotInHandRejected, EmptyBidRejected
 from server.sm.rejections import (
-    CardNotInHandRejected,
     DuplicateNextRoundConfirmationRejected,
-    EmptyBidRejected,
     GameNotStartedRejected,
     InvalidCardFormatRejected,
     MissingActionTypeRejected,
     MissingCardIdRejected,
-    PlayerActionNotAllowedInGamePhaseRejected,
+    PlayerActionNotAllowedInRoundPhaseRejected,
     UnknownActionTypeRejected,
     WrongBidTurnRejected,
 )
-from server.sm.types import BidEvent, PublicGamePhase
-from server.snapshot import (
+from server.sm.types import BidEvent
+from server.protocol_snapshot_builder import (
+    bid_event_snapshot,
+    optional_bid_event_snapshot,
+    optional_completed_trick_snapshot,
+    optional_failed_throw_snapshot,
+    scoring_snapshot,
+    stirring_state_snapshot,
+    trick_slot_snapshot,
+    trick_snapshot,
+)
+from server.protocol import (
     AwaitingAction,
-    ScoringSnapshot,
+    RoundPhase,
     StateSnapshot,
-    StirringStateSnapshot,
-    TrickSnapshot,
-    TrickSlotSnapshot,
 )
 
 logger = logging.getLogger(__name__)
@@ -313,8 +321,8 @@ class Game:
                                 )
                 case Rejected() as rejected:
                     error = rejected
-            # Check if game ended after processing the play
-            if error is None and rs.phase == "WAITING" and self._game_state.phase == "GAME_OVER":
+            # Check if game ended after processing the play.
+            if error is None and rs.phase == "WAITING" and self.is_over():
                 self._round_state = rs
                 await self._push_state_to_all()
                 if self._on_game_over is not None:
@@ -337,7 +345,7 @@ class Game:
 
                     # Between rounds: _game_state was already updated when
                     # the round ended (PLAYING branch calls process_round_result).
-                    if self._game_state.phase == "GAME_OVER":
+                    if self.is_over():
                         self._round_state = rs
                         await self._push_state_to_all()
                         if self._on_game_over is not None:
@@ -365,7 +373,7 @@ class Game:
                 # that's a state change like any other.
 
         else:
-            error = PlayerActionNotAllowedInGamePhaseRejected(_action_kind(action), phase)
+            error = PlayerActionNotAllowedInRoundPhaseRejected(_action_kind(action), phase)
 
         self._round_state = rs
 
@@ -512,7 +520,7 @@ class Game:
 
         # awaiting_action — derived directly from SM state (no current_player)
         awaiting_action: AwaitingAction | None = None
-        if gs.phase == "GAME_OVER":
+        if gs.winning_team is not None:
             awaiting_action = None
         elif rs.phase == "DEAL_BID":
             # Only the player who just received a card sees
@@ -538,12 +546,15 @@ class Game:
         action_hints = self._get_action_hints(awaiting_action, for_player, player_hand)
 
         # trick
-        trick: TrickSnapshot | None = None
+        trick = None
         if rs.phase == "PLAYING" and rs.trick_state is not None:
             ts = rs.trick_state
-            trick = TrickSnapshot(
+            trick = trick_snapshot(
                 lead_player=ts.lead_player,
-                slots=[TrickSlotSnapshot(player=slot.player, cards=slot.cards) for slot in ts.slots],
+                slots=[
+                    trick_slot_snapshot(slot.player, slot.cards)
+                    for slot in ts.slots
+                ],
                 current_player=ts.cur,
             )
         failed_throw = rs.trick_state.failed_throw if rs.phase == "PLAYING" and rs.trick_state is not None else None
@@ -554,7 +565,7 @@ class Game:
             bid_events = list(rs.deal_bid_state.bid_events)
 
         # stirring_state
-        stirring_state_snap: StirringStateSnapshot | None = None
+        stirring_state_snap = None
         if rs.stirring_state is not None and rs.phase == "STIRRING":
             exchanging_player: int | None = None
             exchange_count: int | None = None
@@ -562,7 +573,7 @@ class Game:
                 exchanging_player = rs.stirring_state.exchanging_player
                 if rs.stirring_state.exchange_state is not None:
                     exchange_count = rs.stirring_state.exchange_state.count
-            stirring_state_snap = StirringStateSnapshot(
+            stirring_state_snap = stirring_state_snapshot(
                 phase=rs.stirring_state.phase,
                 trump_suit=rs.stirring_state.trump_suit,
                 current_player=rs.stirring_state.current_player,
@@ -572,9 +583,9 @@ class Game:
             )
 
         # scoring
-        scoring_snap: ScoringSnapshot | None = None
+        scoring_snap = None
         if rs.result is not None:
-            scoring_snap = ScoringSnapshot(
+            scoring_snap = scoring_snapshot(
                 declarer_team=rs.declarer_team,
                 defender_points=rs.defender_points,
                 total_defender_points=rs.result.total_defender_points,
@@ -593,17 +604,17 @@ class Game:
             declarer_player=_snapshot_declarer_player(rs),
             defender_points=rs.defender_points,
             trick=trick,
-            last_completed_trick=rs.last_completed_trick,
+            last_completed_trick=optional_completed_trick_snapshot(rs.last_completed_trick),
             defender_point_cards=list(rs.defender_point_cards),
-            failed_throw=failed_throw,
+            failed_throw=optional_failed_throw_snapshot(failed_throw),
             action_hints=action_hints,
             awaiting_action=awaiting_action,
             scoring=scoring_snap,
             winning_team=gs.winning_team,
             team0_level=gs.team0_level,
             team1_level=gs.team1_level,
-            bid_events=bid_events,
-            bid_winner=rs.bid_winner,
+            bid_events=[bid_event_snapshot(event) for event in bid_events],
+            bid_winner=optional_bid_event_snapshot(rs.bid_winner),
             stirring_state=stirring_state_snap,
             next_round_confirmed=sorted(self._next_round_confirmed),
         )
@@ -662,18 +673,11 @@ class Game:
         if not lead_cards:
             return []
 
-        other_players_hands: list[list[Card]] = []
-        for i in range(4):
-            if i != player_index:
-                other_players_hands.append(list(rs.players_hand[i]))
-
         hints_result = play_rules.get_legal_play_hints(
             hand=player_hand,
-            is_leading=is_leading,
             lead_cards=lead_cards,
             trump_suit=rs.trump_suit,
             trump_rank=rs.trump_rank,
-            other_players_hands=other_players_hands,
             max_hints=play_rules.MAX_PLAY_ACTION_HINTS,
         )
         if isinstance(hints_result, Rejected):
@@ -686,24 +690,22 @@ class Game:
 
     def is_over(self) -> bool:
         """Return True if the game is over."""
-        return self._game_state.phase == "GAME_OVER"
+        return self._game_state.winning_team is not None
 
-    def get_phase(self) -> PublicGamePhase:
-        """Return the current phase.
+    def get_phase(self) -> RoundPhase:
+        """Return the current round/player-visible phase.
 
         WAITING: game not started yet (_round_state is None) or round
         complete (rs.phase == "WAITING"). Both use the same WAITING
         phase with next_round confirmation mechanism.
-        GAME_OVER takes priority over round-level phases.
+        Game over is represented by winning_team, not by a phase value.
         """
-        if self._game_state.phase == "GAME_OVER":
-            return "GAME_OVER"
         if self._round_state is None:
             return "WAITING"
         return self._round_state.phase
 
     def set_on_game_over(self, callback: Callable[[Game], None]) -> None:
-        """Register a callback for when the game transitions to GAME_OVER."""
+        """Register a callback for when the game reaches a winning team."""
         self._on_game_over = callback
 
     def get_player(self, index: int) -> Player:

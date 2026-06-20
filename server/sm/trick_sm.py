@@ -8,16 +8,14 @@ from pydantic import BaseModel, ConfigDict
 
 from server.result import Ok, Rejected
 
-from .card_model import Card, Suit, Rank
-from .comparator import effective_suit
+from server.rules.cards import Card, Suit, Rank
+from server.rules.ordering import effective_suit
+from server.rules.compare import compare_plays
+from server.rules.follow import illegal_follow_rejection, is_legal_follow
+from server.rules.rejections import CardsNotInHandRejected, EmptyPlayRejected
+from server.rules.throw import resolve_lead_throw
 from .constants import next_player_ccw, get_team_index
-from .play_rules import (
-    compare_plays,
-    illegal_follow_rejection,
-    is_legal_follow,
-    resolve_lead_throw,
-)
-from .rejections import CardsNotInHandRejected, EmptyPlayRejected, TrickResolvedRejected, WrongTurnRejected
+from .rejections import TrickResolvedRejected, WrongTurnRejected
 from .types import CompletedTrick, CompletedTrickSlot, FailedThrow, TrickPhase
 
 

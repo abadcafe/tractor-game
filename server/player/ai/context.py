@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from server.player.ai.client import AIDecisionPrompt
+from server.player.ai.formatting import card_points, card_text
 from server.player.ai.memory import AIMemory
 from server.player.ai.rules import RuleBook
-from server.sm.card_model import Card, card_display
-from server.snapshot import StateSnapshot, TrickSnapshot
+from server.protocol import StateSnapshot, TrickSnapshot
+from server.rules.cards import Card
 
 
 def build_decision_prompt(
@@ -44,8 +45,8 @@ def _state_summary(player_index: int, snapshot: StateSnapshot) -> str:
         f"- 你是 player {player_index}",
         f"- phase: {snapshot.phase}",
         f"- awaiting_action: {snapshot.awaiting_action}",
-        f"- trump_rank: {snapshot.trump_rank.value}",
-        f"- trump_suit: {snapshot.trump_suit.value if snapshot.trump_suit is not None else 'no_trump'}",
+        f"- trump_rank: {snapshot.trump_rank}",
+        f"- trump_suit: {snapshot.trump_suit if snapshot.trump_suit is not None else 'no_trump'}",
         f"- declarer_player: {snapshot.declarer_player}",
         f"- declarer_team: {snapshot.declarer_team}",
         f"- defender_points: {snapshot.defender_points}",
@@ -58,7 +59,7 @@ def _hand_summary(hand: list[Card]) -> str:
     if not hand:
         lines.append("- empty")
     for card in hand:
-        lines.append(f"- {card.id}: {card_display(card)}, points={card.points}")
+        lines.append(f"- {card.id}: {card_text(card)}, points={card_points(card)}")
     return "\n".join(lines)
 
 
@@ -71,7 +72,7 @@ def _trick_summary(trick: TrickSnapshot | None) -> str:
         f"- current_player: {trick.current_player}",
     ]
     for slot in trick.slots:
-        cards = ", ".join(card_display(card) for card in slot.cards)
+        cards = ", ".join(card_text(card) for card in slot.cards)
         lines.append(f"- player {slot.player}: {cards if cards else 'not_played'}")
     return "\n".join(lines)
 
@@ -81,6 +82,6 @@ def _hints_summary(snapshot: StateSnapshot) -> str:
         return "action_hints: empty"
     lines = ["action_hints:"]
     for index, hint in enumerate(snapshot.action_hints):
-        cards = ", ".join(f"{card.id}:{card_display(card)}" for card in hint)
+        cards = ", ".join(f"{card.id}:{card_text(card)}" for card in hint)
         lines.append(f"- hint {index}: {cards}")
     return "\n".join(lines)

@@ -7,25 +7,25 @@ import logging
 import random
 from dataclasses import dataclass
 from itertools import combinations
+from typing import Literal
 
-from server.actions import (
-    BidAction,
-    DiscardAction,
-    NextRoundAction,
-    PlayAction,
-    SkipBidAction,
-    SkipStirAction,
-    StirAction,
-)
-from server.messages import PlayerMessage, StateMessage
+from server.protocol import PlayerMessage, StateMessage
 from server.player.base import GameView, Player
-from server.sm.card_model import Card, Rank, Suit
-from server.sm.types import PublicGamePhase
-from server.snapshot import AwaitingAction, StateSnapshot
+from server.protocol import (
+    AwaitingAction,
+    RoundPhase,
+    StateSnapshot,
+)
+from server.result import Ok
+from server.rules.cards import Card, Rank, Suit
+from server.rules.follow import is_legal_follow
+from server.rules.hints import get_legal_play_hints, sort_play_action_hints
 
 logger = logging.getLogger(__name__)
 
-type PlayerAction = BidAction | SkipBidAction | StirAction | SkipStirAction | DiscardAction | PlayAction | NextRoundAction
+type CardActionType = Literal["bid", "stir", "discard", "play"]
+MAX_AUTO_PLAY_CANDIDATES: int = 40
+MAX_AUTO_COMBINATIONS_SCANNED: int = 5000
 
 
 @dataclass(frozen=True)
@@ -49,7 +49,7 @@ class TrickDecisionKey:
 class AutoDecisionKey:
     """Player-facing state identity for suppressing repeated failed card actions."""
 
-    phase: PublicGamePhase
+    phase: RoundPhase
     awaiting_action: AwaitingAction | None
     hand_card_ids: tuple[str, ...]
     trick: TrickDecisionKey | None
@@ -111,19 +111,19 @@ class AutoPlayer(Player):
         """Bid only from player-facing action_hints; otherwise pass."""
         candidates = self._hint_candidates(snapshot)
         if not candidates:
-            self._submit_action(game, seq, SkipBidAction(), snapshot)
+            self._submit_message(game, seq, {"type": "bid", "pass": True}, snapshot, None)
             return
-        chosen = self._prefer_longer_candidate(candidates)
-        self._submit_action(game, seq, BidAction(cards=chosen, count=len(chosen)), snapshot)
+        chosen = candidates[0]
+        self._submit_card_action(game, seq, "bid", chosen, snapshot)
 
     async def _handle_stir(self, snapshot: StateSnapshot, game: GameView, *, seq: int) -> None:
         """Optionally stir using only player-facing action_hints."""
         candidates = self._hint_candidates(snapshot)
         if candidates and random.random() < 0.5:
             chosen = random.choice(candidates)
-            self._submit_action(game, seq, StirAction(cards=chosen), snapshot)
+            self._submit_card_action(game, seq, "stir", chosen, snapshot)
             return
-        self._submit_action(game, seq, SkipStirAction(), snapshot)
+        self._submit_message(game, seq, {"type": "stir", "pass": True}, snapshot, None)
 
     async def _handle_discard(self, snapshot: StateSnapshot, game: GameView, *, seq: int) -> None:
         """Randomly discard cards during STIRRING EXCHANGING sub-phase."""
@@ -136,8 +136,7 @@ class AutoPlayer(Player):
             cards = list(hand)
         else:
             return
-        action = DiscardAction(cards=cards)
-        self._submit_action(game, seq, action, snapshot)
+        self._submit_card_action(game, seq, "discard", cards, snapshot)
 
     async def _handle_play(self, snapshot: StateSnapshot, game: GameView, *, seq: int) -> None:
         """Pick a play using only the same snapshot information a human sees."""
@@ -146,11 +145,10 @@ class AutoPlayer(Player):
             logger.warning("AutoPlayer %d: no fallback play found", self.index)
             return
         chosen = random.choice(candidates)
-        action = PlayAction(cards=chosen)
         self._action_count += 1
         if self._action_count % 50 == 0:
             logger.info("AutoPlayer %d: action #%d in PLAYING", self.index, self._action_count)
-        self._submit_action(game, seq, action, snapshot)
+        self._submit_card_action(game, seq, "play", chosen, snapshot)
 
     def _hint_candidates(self, snapshot: StateSnapshot) -> list[list[Card]]:
         return self._filter_failed_candidates(snapshot, [list(cards) for cards in snapshot.action_hints])
@@ -159,41 +157,33 @@ class AutoPlayer(Player):
         hand = list(snapshot.player_hand)
         if not hand:
             return []
-        if snapshot.trick is None or not snapshot.trick.slots:
-            return self._filter_failed_candidates(snapshot, [[card] for card in hand])
-
-        lead_slot = snapshot.trick.slots[snapshot.trick.lead_player]
-        lead_cards = list(lead_slot.cards)
+        lead_cards = _lead_cards(snapshot)
         if not lead_cards:
             return self._filter_failed_candidates(snapshot, [[card] for card in hand])
 
-        lead_count = len(lead_cards)
-        if len(hand) < lead_count:
-            return []
+        hints_result = get_legal_play_hints(
+            hand,
+            lead_cards,
+            snapshot.trump_suit,
+            snapshot.trump_rank,
+            max_hints=MAX_AUTO_PLAY_CANDIDATES,
+        )
+        if isinstance(hints_result, Ok):
+            return self._filter_failed_candidates(snapshot, hints_result.value)
 
-        lead_eff = self._effective_suit(lead_cards[0], snapshot.trump_suit, snapshot.trump_rank)
-        same_eff_cards = [
-            card for card in hand
-            if self._effective_suit(card, snapshot.trump_suit, snapshot.trump_rank) == lead_eff
-        ]
-        other_cards = [
-            card for card in hand
-            if self._effective_suit(card, snapshot.trump_suit, snapshot.trump_rank) != lead_eff
-        ]
+        fallback_candidates = _bounded_legal_follow_candidates(
+            hand,
+            lead_cards,
+            snapshot.trump_suit,
+            snapshot.trump_rank,
+        )
+        return self._filter_failed_candidates(snapshot, fallback_candidates)
 
-        candidates: list[list[Card]] = []
-        if len(same_eff_cards) >= lead_count:
-            candidates.extend(self._candidate_combinations(same_eff_cards, lead_count))
-        else:
-            needed = lead_count - len(same_eff_cards)
-            candidates.extend(
-                same_eff_cards + fill
-                for fill in self._candidate_combinations(other_cards, needed)
-            )
-
-        return self._filter_failed_candidates(snapshot, candidates)
-
-    def _filter_failed_candidates(self, snapshot: StateSnapshot, candidates: list[list[Card]]) -> list[list[Card]]:
+    def _filter_failed_candidates(
+        self,
+        snapshot: StateSnapshot,
+        candidates: list[list[Card]],
+    ) -> list[list[Card]]:
         failed = self._failed_card_actions.get(self._decision_key(snapshot), set())
         result: list[list[Card]] = []
         seen: set[tuple[str, ...]] = set()
@@ -205,77 +195,37 @@ class AutoPlayer(Player):
             result.append(candidate)
         return result
 
-    @staticmethod
-    def _prefer_longer_candidate(candidates: list[list[Card]]) -> list[Card]:
-        return max(candidates, key=len)
-
-    @staticmethod
-    def _candidate_combinations(cards: list[Card], count: int, limit: int = 40) -> list[list[Card]]:
-        if count <= 0:
-            return [[]]
-        if len(cards) < count:
-            return []
-        combos = [list(combo) for combo in combinations(cards, count)]
-        combos.sort(key=AutoPlayer._combo_sort_key)
-        return combos[:limit]
-
-    @staticmethod
-    def _combo_sort_key(cards: list[Card]) -> tuple[int, int]:
-        rank_counts: dict[Rank, int] = {}
-        for card in cards:
-            rank_counts[card.rank] = rank_counts.get(card.rank, 0) + 1
-        pair_like = sum(count // 2 for count in rank_counts.values())
-        point_cards = sum(1 for card in cards if card.rank in (Rank.FIVE, Rank.TEN, Rank.KING))
-        return (-pair_like, point_cards)
-
-    @staticmethod
-    def _effective_suit(card: Card, trump_suit: Suit | None, trump_rank: Rank) -> str:
-        if card.is_joker or card.rank == trump_rank or (trump_suit is not None and card.suit == trump_suit):
-            return "trump"
-        return card.suit.value
-
-    def _submit_action(
+    def _submit_card_action(
         self,
         game: GameView,
         seq: int,
-        action: PlayerAction,
+        action_type: CardActionType,
+        cards: list[Card],
         snapshot: StateSnapshot,
     ) -> None:
-        if isinstance(action, BidAction | StirAction | DiscardAction | PlayAction) and action.cards:
+        self._submit_message(
+            game,
+            seq,
+            {"type": action_type, "cards": [card.id for card in cards]},
+            snapshot,
+            self._cards_key(cards) if cards else None,
+        )
+
+    def _submit_message(
+        self,
+        game: GameView,
+        seq: int,
+        raw: dict[str, object],
+        snapshot: StateSnapshot,
+        attempted_cards: tuple[str, ...] | None,
+    ) -> None:
+        if attempted_cards is not None:
             self._last_attempt_key = self._decision_key(snapshot)
-            self._last_attempt_cards = self._cards_key(action.cards)
+            self._last_attempt_cards = attempted_cards
         else:
             self._last_attempt_key = None
             self._last_attempt_cards = None
-        asyncio.create_task(game.receive(self.index, self._message_from_action(seq, action)))
-
-    @staticmethod
-    def _message_from_action(seq: int, action: PlayerAction) -> PlayerMessage:
-        if isinstance(action, BidAction):
-            return PlayerMessage(
-                seq=seq,
-                raw={"type": "bid", "cards": [card.id for card in action.cards]},
-            )
-        if isinstance(action, SkipBidAction):
-            return PlayerMessage(seq=seq, raw={"type": "bid", "pass": True})
-        if isinstance(action, StirAction):
-            return PlayerMessage(
-                seq=seq,
-                raw={"type": "stir", "cards": [card.id for card in action.cards]},
-            )
-        if isinstance(action, SkipStirAction):
-            return PlayerMessage(seq=seq, raw={"type": "stir", "pass": True})
-        if isinstance(action, DiscardAction):
-            return PlayerMessage(
-                seq=seq,
-                raw={"type": "discard", "cards": [card.id for card in action.cards]},
-            )
-        if isinstance(action, PlayAction):
-            return PlayerMessage(
-                seq=seq,
-                raw={"type": "play", "cards": [card.id for card in action.cards]},
-            )
-        return PlayerMessage(seq=seq, raw={"type": "next_round"})
+        asyncio.create_task(game.receive(self.index, PlayerMessage(seq=seq, raw=raw)))
 
     def _decision_key(self, snapshot: StateSnapshot) -> AutoDecisionKey:
         trick_key: TrickDecisionKey | None = None
@@ -300,7 +250,10 @@ class AutoPlayer(Player):
             hand_card_ids=tuple(card.id for card in snapshot.player_hand),
             trick=trick_key,
             bid_winner_card_ids=bid_winner_cards,
-            action_hint_card_ids=tuple(tuple(card.id for card in hint) for hint in snapshot.action_hints),
+            action_hint_card_ids=tuple(
+                tuple(card.id for card in hint)
+                for hint in snapshot.action_hints
+            ),
         )
 
     @staticmethod
@@ -314,5 +267,38 @@ class AutoPlayer(Player):
 
     async def _handle_next_round(self, snapshot: StateSnapshot, game: GameView, *, seq: int) -> None:
         """Submit NextRoundAction."""
-        action = NextRoundAction()
-        self._submit_action(game, seq, action, snapshot)
+        self._submit_message(game, seq, {"type": "next_round"}, snapshot, None)
+
+
+def _lead_cards(snapshot: StateSnapshot) -> list[Card]:
+    trick = snapshot.trick
+    if trick is None:
+        return []
+    for slot in trick.slots:
+        if slot.player == trick.lead_player:
+            return list(slot.cards)
+    return []
+
+
+def _bounded_legal_follow_candidates(
+    hand: list[Card],
+    lead_cards: list[Card],
+    trump_suit: Suit | None,
+    trump_rank: Rank,
+) -> list[list[Card]]:
+    lead_count = len(lead_cards)
+    if lead_count == 0 or len(hand) < lead_count:
+        return []
+
+    result: list[list[Card]] = []
+    scanned = 0
+    for combo in combinations(hand, lead_count):
+        scanned += 1
+        candidate = list(combo)
+        if is_legal_follow(hand, candidate, lead_cards, trump_suit, trump_rank):
+            result.append(candidate)
+            if len(result) >= MAX_AUTO_PLAY_CANDIDATES:
+                break
+        if scanned >= MAX_AUTO_COMBINATIONS_SCANNED:
+            break
+    return sort_play_action_hints(result, trump_suit, trump_rank)

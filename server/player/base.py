@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Protocol
 
-from server.messages import PlayerMessage, StateMessage
+from server.protocol import PlayerMessage, StateMessage
 
 
 class GameView(Protocol):

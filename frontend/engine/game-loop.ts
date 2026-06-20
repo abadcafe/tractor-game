@@ -74,7 +74,7 @@ export class GameLoop {
    * - STIRRING: shows "stir" or "discard" based on awaiting_action
    * - PLAYING: shows "play" when awaiting_action="play"
    * - WAITING: shows "next_round"
-   * - GAME_OVER: null (no interaction needed)
+   * - Game over: null, because awaiting_action is null
    * - Reconnecting: null (all interaction disabled)
    */
   private computeInteractionMode(state: StateSnapshot): InteractionMode {

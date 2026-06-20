@@ -10,9 +10,8 @@ from pydantic import BaseModel, ConfigDict
 
 from server.result import Ok, Rejected
 
-from .card_model import Rank
+from server.rules.cards import Rank
 from .rejections import CannotProcessRoundResultRejected, CannotStartGameRejected
-from .types import GamePhase
 from .scoring import RoundResult
 
 
@@ -30,7 +29,6 @@ class GameState(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    phase: GamePhase
     team0_level: Rank
     team1_level: Rank
     declarer_team: int | None
@@ -40,9 +38,8 @@ class GameState(BaseModel):
 
 
 def create_game() -> GameState:
-    """Create a new game in IDLE phase with both teams at level TWO."""
+    """Create a new game waiting for the first round to start."""
     return GameState(
-        phase="IDLE",
         team0_level=Rank.TWO,
         team1_level=Rank.TWO,
         declarer_team=None,
@@ -53,16 +50,16 @@ def create_game() -> GameState:
 
 
 def start_game(state: GameState) -> Ok[GameState] | Rejected:
-    """Start the game, transitioning IDLE -> IN_ROUND.
+    """Start the game.
 
     Sets both team levels to TWO and round_number to 1.
 
-    Returns Ok(new_state) on success, Rejected(reason) if not in IDLE phase.
+    Returns Ok(new_state) on success, Rejected(reason) if the game already
+    started or has ended.
     """
-    if state.phase != "IDLE":
-        return CannotStartGameRejected(state.phase)
+    if state.round_number != 0 or state.winning_team is not None:
+        return CannotStartGameRejected()
     return Ok(state.model_copy(update={
-        "phase": "IN_ROUND",
         "team0_level": Rank.TWO,
         "team1_level": Rank.TWO,
         "round_number": 1,
@@ -73,13 +70,14 @@ def process_round_result(state: GameState, result: RoundResult) -> Ok[GameState]
     """Process a round result and update game state.
 
     Updates team levels from the result. If either team reaches ACE,
-    transitions to GAME_OVER. Otherwise stays in IN_ROUND with updated
-    declarer info and incremented round_number.
+    records winning_team. Otherwise updates declarer info and increments
+    round_number.
 
-    Returns Ok(new_state) on success, Rejected(reason) if not in IN_ROUND phase.
+    Returns Ok(new_state) on success, Rejected(reason) if the game has not
+    started or has already ended.
     """
-    if state.phase != "IN_ROUND":
-        return CannotProcessRoundResultRejected(state.phase)
+    if state.round_number <= 0 or state.winning_team is not None:
+        return CannotProcessRoundResultRejected()
 
     new_team0 = result.team0_new_level
     new_team1 = result.team1_new_level
@@ -94,7 +92,6 @@ def process_round_result(state: GameState, result: RoundResult) -> Ok[GameState]
     if team0_passed_ace or team1_passed_ace:
         winning = 0 if team0_passed_ace else 1
         return Ok(state.model_copy(update={
-            "phase": "GAME_OVER",
             "team0_level": new_team0,
             "team1_level": new_team1,
             "winning_team": winning,

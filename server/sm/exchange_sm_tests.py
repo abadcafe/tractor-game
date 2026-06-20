@@ -1,7 +1,7 @@
 """Tests for sm.exchange_sm module."""
 from typing import Literal
 
-from .card_model import Card, Suit, Rank
+from server.rules.cards import Card, POINTS_MAP, Suit, Rank
 from .exchange_sm import (
     ExchangeInput, ExchangeResult,
     create_exchange, discard,
@@ -13,9 +13,7 @@ def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
     return Card(
         id=f"D{deck}-{suit.value}-{rank.value}",
         suit=suit, rank=rank,
-        is_joker=(suit == Suit.JOKER),
-        is_big_joker=(rank == Rank.BIG_JOKER),
-        points=0, deck=deck,
+        points=POINTS_MAP[rank],
     )
 
 

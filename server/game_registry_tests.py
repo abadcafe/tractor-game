@@ -106,8 +106,8 @@ def test_delete_missing_is_noop():
 
 def test_list_games_returns_phase_info():
     registry = GameRegistry()
-    game1 = _make_game(phase="IN_PROGRESS")
-    game2 = _make_game(phase="GAME_OVER")
+    game1 = _make_game(phase="DEAL_BID")
+    game2 = _make_game(phase="WAITING")
     id1 = registry.create(game1)
     id2 = registry.create(game2)
     result = registry.list_games()
@@ -115,8 +115,8 @@ def test_list_games_returns_phase_info():
     ids_in_result = {r["game_id"] for r in result}
     assert ids_in_result == {id1, id2}
     phases = {r["game_id"]: r["phase"] for r in result}
-    assert phases[id1] == "IN_PROGRESS"
-    assert phases[id2] == "GAME_OVER"
+    assert phases[id1] == "DEAL_BID"
+    assert phases[id2] == "WAITING"
 
 
 def test_list_games_empty():

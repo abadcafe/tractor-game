@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from server.messages import PlayerMessage
+from server.protocol import PlayerMessage
 from server.player.ai.client import AIToolCall, AIToolSpec, JSONValue
 from server.player.ai.rejections import format_rejected
 from server.result import Ok, Rejected
-from server.snapshot import AwaitingAction, StateSnapshot
+from server.protocol import AwaitingAction, StateSnapshot
 
 
 def allowed_tool_specs(snapshot: StateSnapshot) -> list[AIToolSpec]:

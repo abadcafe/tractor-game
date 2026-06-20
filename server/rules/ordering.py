@@ -1,9 +1,9 @@
-"""Trump-aware card comparison module for Shengji/Tractor.
+"""Trump-aware card ordering rules for Shengji/Tractor.
 
 Provides trump ordering, effective suit determination, and play comparison.
 """
 
-from .card_model import Card, Suit, Rank
+from .cards import Card, Suit, Rank
 from .types import EffectiveSuit
 
 # ---- Constants ----

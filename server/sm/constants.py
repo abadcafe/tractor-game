@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from types import MappingProxyType
 
-from .card_model import Rank
+from server.rules.cards import Rank
 
 # ---- Player Positioning ----
 

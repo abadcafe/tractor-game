@@ -1,8 +1,8 @@
-"""Tests for sm.comparator module."""
+"""Tests for rules.ordering module."""
 from typing import Literal
 
-from .card_model import Card, Suit, Rank
-from .comparator import (
+from server.rules.cards import Card, POINTS_MAP, Suit, Rank
+from server.rules.ordering import (
     trump_order, effective_suit, sort_by_trump_order,
     is_trump_card, bid_value, trump_rank_order,
 )
@@ -12,9 +12,7 @@ def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
     return Card(
         id=f"D{deck}-{suit.value}-{rank.value}",
         suit=suit, rank=rank,
-        is_joker=(suit == Suit.JOKER),
-        is_big_joker=(rank == Rank.BIG_JOKER),
-        points=0, deck=deck,
+        points=POINTS_MAP[rank],
     )
 
 
@@ -161,7 +159,7 @@ class TestSortByTrumpOrder:
 class TestSUITOffset:
     def test_suit_offset_matches_spec(self) -> None:
         """SUIT_OFFSET must match spec section 2.3: diamond=0, club=1, heart=2, spade=3."""
-        from .comparator import SUIT_OFFSET
+        from server.rules.ordering import SUIT_OFFSET
         assert SUIT_OFFSET[Suit.DIAMONDS] == 0
         assert SUIT_OFFSET[Suit.CLUBS] == 1
         assert SUIT_OFFSET[Suit.HEARTS] == 2

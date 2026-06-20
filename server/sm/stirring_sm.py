@@ -23,15 +23,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from server.result import Ok, Rejected
 
-from .card_model import Card, Suit, Rank
-from .comparator import bid_value
+from server.rules.cards import Card, POINTS_MAP, Suit, Rank
+from server.rules.ordering import bid_value
+from server.rules.rejections import MixedJokerPairRejected
 from .constants import next_player_ccw
 from .rejections import (
     CannotPassStirWhileExchangingRejected,
     CannotStirConsecutivelyRejected,
     CannotStirNowRejected,
     JokerCannotPairWithNormalRejected,
-    MixedJokerPairRejected,
     NotStirExchangePhaseRejected,
     NotStirringExchangerRejected,
     PairSuitMismatchRejected,
@@ -384,13 +384,10 @@ def _make_trump_cards(suit: Suit, rank: Rank, count: int) -> list[Card]:
     for deck in deck_values[:count]:
         result.append(
             Card(
-                id=f"dummy-{deck}-{suit.value}-{rank.value}",
+                id=f"D{deck}-{suit.value}-{rank.value}",
                 suit=suit,
                 rank=rank,
-                is_joker=False,
-                is_big_joker=False,
-                points=0,
-                deck=deck,
+                points=POINTS_MAP[rank],
             )
         )
     return result

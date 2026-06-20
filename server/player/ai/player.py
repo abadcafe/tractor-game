@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from server.messages import PlayerMessage, StateMessage
+from server.protocol import PlayerMessage, StateMessage
 from server.player.ai.client import (
     AIAPIInteraction,
     AIDecisionPrompt,
@@ -36,7 +36,7 @@ from server.player.ai.transcript import (
 from server.player.ai.tools import allowed_tool_specs, tool_call_to_message
 from server.player.base import GameView, Player
 from server.result import Ok, Rejected
-from server.snapshot import StateSnapshot
+from server.protocol import StateSnapshot
 
 
 class AIPlayer(Player):

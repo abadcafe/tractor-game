@@ -8,7 +8,7 @@ This is NOT a state machine -- it is a pure function.
 
 from pydantic import BaseModel, ConfigDict
 
-from .card_model import Card, Suit, Rank
+from server.rules.cards import Card, Suit, Rank
 from .constants import (
     SCORE_THRESHOLDS,
     advance_level,
@@ -17,7 +17,7 @@ from .constants import (
     next_player_ccw,
 )
 from .types import CompletedTrick
-from .play_rules import decompose
+from server.rules.decompose import decompose
 
 
 class RoundResult(BaseModel):

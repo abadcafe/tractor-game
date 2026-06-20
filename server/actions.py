@@ -7,7 +7,7 @@ and Game (to dispatch actions). Depends only on Card.
 from dataclasses import dataclass
 from typing import Literal
 
-from server.sm.card_model import Card
+from server.rules.cards import Card
 
 type GameActionKind = Literal[
     "bid",

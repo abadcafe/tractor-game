@@ -8,8 +8,9 @@ from pydantic import BaseModel, ConfigDict
 
 from server.result import Ok, Rejected
 
-from .card_model import Card
-from .rejections import CardNotInHandRejected, DuplicateCardRejected, InvalidExchangeCountRejected
+from server.rules.cards import Card
+from server.rules.rejections import CardNotInHandRejected, DuplicateCardRejected
+from .rejections import InvalidExchangeCountRejected
 from .types import ExchangePhase
 
 

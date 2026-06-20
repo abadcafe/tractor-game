@@ -7,7 +7,7 @@ from typing import TypeGuard
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from server.messages import PlayerMessage, StateMessage
+from server.protocol import PlayerMessage, StateMessage
 from server.player.base import GameView, Player
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ class HumanPlayer(Player):
         if self._ws is None:
             return
         try:
-            await self._ws.send_json(message.to_dict())
+            await self._ws.send_json(message.model_dump(mode="json"))
         except (WebSocketDisconnect, OSError):
             logger.debug("Failed to push state to human player %d (WS likely disconnected)", self.index, exc_info=True)
 

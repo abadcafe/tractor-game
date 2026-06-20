@@ -13,7 +13,7 @@ from server.actions import (
     SkipStirAction,
     StirAction,
 )
-from server.sm.card_model import Card, Rank, Suit
+from server.rules.cards import Card, POINTS_MAP, Rank, Suit
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
@@ -21,10 +21,7 @@ def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
         id=f"D{deck}-{suit.value}-{rank.value}",
         suit=suit,
         rank=rank,
-        is_joker=(suit == Suit.JOKER),
-        is_big_joker=(rank == Rank.BIG_JOKER),
-        points=0,
-        deck=deck,
+        points=POINTS_MAP[rank],
     )
 
 

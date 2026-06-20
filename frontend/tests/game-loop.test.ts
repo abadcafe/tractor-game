@@ -222,13 +222,13 @@ Deno.test("test_handleMessage_game_over_no_interaction", () => {
   const stateManager = new StateManager();
   const loop = new GameLoop(stateManager, mockRender, mockContainer);
   const msg = makeStateMsg({
-    phase: "GAME_OVER",
+    phase: "WAITING",
     winning_team: 0,
     awaiting_action: null,
   });
   loop.handleMessage(msg);
-  assertEquals(lastRenderedSnapshot!.phase, "GAME_OVER");
-  // GAME_OVER has no awaiting action -> null interaction mode
+  assertEquals(lastRenderedSnapshot!.winning_team, 0);
+  // Game over has no awaiting action -> null interaction mode
   assertEquals(lastInteractionMode, null);
 });
 

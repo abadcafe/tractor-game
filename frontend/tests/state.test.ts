@@ -3,9 +3,9 @@ import {
   assertNotEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { StateManager } from "../core/state.ts";
-import type { PublicGamePhase, StateSnapshot } from "../core/types.ts";
+import type { RoundPhase, StateSnapshot } from "../core/types.ts";
 
-function makeSnapshot(phase: PublicGamePhase): StateSnapshot {
+function makeSnapshot(phase: RoundPhase): StateSnapshot {
   return {
     phase,
     player_hand: [],

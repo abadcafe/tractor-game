@@ -1,6 +1,6 @@
-"""Tests for sm.card_model module."""
+"""Tests for rules.cards module."""
 import pytest
-from .card_model import Card, Suit, Rank, create_decks, card_display
+from server.rules.cards import Card, Suit, Rank, create_decks, card_display
 
 
 class TestCreateDecks:
@@ -36,34 +36,51 @@ class TestCardModel:
         """Card is immutable."""
         card = Card(
             id="D1-hearts-A", suit=Suit.HEARTS, rank=Rank.ACE,
-            is_joker=False, is_big_joker=False, points=0, deck=1,
+            points=0,
         )
         with pytest.raises(Exception):
             setattr(card, "points", 5)
 
-    def test_card_joker_validation_big_joker_requires_is_joker(self) -> None:
-        """is_big_joker=True requires is_joker=True."""
-        with pytest.raises(Exception):
-            Card(
-                id="D1-hearts-A", suit=Suit.HEARTS, rank=Rank.ACE,
-                is_joker=False, is_big_joker=True, points=0, deck=1,
-            )
-
-    def test_card_joker_validation_joker_requires_suit(self) -> None:
-        """is_joker=True requires suit=JOKER."""
+    def test_card_joker_validation_joker_rank_requires_joker_suit(self) -> None:
+        """Joker ranks require suit=JOKER."""
         with pytest.raises(Exception):
             Card(
                 id="D1-hearts-SJ", suit=Suit.HEARTS, rank=Rank.SMALL_JOKER,
-                is_joker=True, is_big_joker=False, points=0, deck=1,
+                points=0,
+            )
+
+    def test_card_joker_validation_joker_suit_requires_joker_rank(self) -> None:
+        """suit=JOKER requires a joker rank."""
+        with pytest.raises(Exception):
+            Card(
+                id="D1-joker-A", suit=Suit.JOKER, rank=Rank.ACE,
+                points=0,
             )
 
     def test_card_id_format(self) -> None:
         """Card id follows D{deck}-{suit}-{rank} format."""
         card = Card(
             id="D2-spades-5", suit=Suit.SPADES, rank=Rank.FIVE,
-            is_joker=False, is_big_joker=False, points=5, deck=2,
+            points=5,
         )
         assert card.id == "D2-spades-5"
+        assert card.deck == 2
+
+    def test_card_id_must_match_suit_and_rank(self) -> None:
+        """Card id suit/rank must match fields."""
+        with pytest.raises(Exception):
+            Card(
+                id="D1-spades-A", suit=Suit.HEARTS, rank=Rank.ACE,
+                points=0,
+            )
+
+    def test_card_points_must_match_rank(self) -> None:
+        """points is a stored protocol field but must match the rank."""
+        with pytest.raises(Exception):
+            Card(
+                id="D1-hearts-5", suit=Suit.HEARTS, rank=Rank.FIVE,
+                points=0,
+            )
 
 
 class TestCardPoints:
@@ -71,7 +88,7 @@ class TestCardPoints:
         """Rank 5 = 5 points."""
         card = Card(
             id="D1-hearts-5", suit=Suit.HEARTS, rank=Rank.FIVE,
-            is_joker=False, is_big_joker=False, points=5, deck=1,
+            points=5,
         )
         assert card.points == 5
 
@@ -79,7 +96,7 @@ class TestCardPoints:
         """Rank 10 = 10 points."""
         card = Card(
             id="D1-hearts-10", suit=Suit.HEARTS, rank=Rank.TEN,
-            is_joker=False, is_big_joker=False, points=10, deck=1,
+            points=10,
         )
         assert card.points == 10
 
@@ -87,7 +104,7 @@ class TestCardPoints:
         """Rank K = 10 points."""
         card = Card(
             id="D1-hearts-K", suit=Suit.HEARTS, rank=Rank.KING,
-            is_joker=False, is_big_joker=False, points=10, deck=1,
+            points=10,
         )
         assert card.points == 10
 
@@ -95,7 +112,7 @@ class TestCardPoints:
         """Non-scoring ranks = 0 points."""
         card = Card(
             id="D1-hearts-7", suit=Suit.HEARTS, rank=Rank.SEVEN,
-            is_joker=False, is_big_joker=False, points=0, deck=1,
+            points=0,
         )
         assert card.points == 0
 
@@ -103,9 +120,11 @@ class TestCardPoints:
         """Jokers have 0 points."""
         card = Card(
             id="D1-joker-BJ", suit=Suit.JOKER, rank=Rank.BIG_JOKER,
-            is_joker=True, is_big_joker=True, points=0, deck=1,
+            points=0,
         )
         assert card.points == 0
+        assert card.is_joker is True
+        assert card.is_big_joker is True
 
 
 class TestCardDisplay:
@@ -113,25 +132,25 @@ class TestCardDisplay:
         """Suited card displays as {symbol}{rank}."""
         card = Card(
             id="D1-hearts-A", suit=Suit.HEARTS, rank=Rank.ACE,
-            is_joker=False, is_big_joker=False, points=0, deck=1,
+            points=0,
         )
         assert card_display(card) == "♥A"
 
     def test_card_display_joker_big(self) -> None:
-        """Big joker displays as \U0001f0cf大."""
+        """Big joker displays as 大王."""
         card = Card(
             id="D1-joker-BJ", suit=Suit.JOKER, rank=Rank.BIG_JOKER,
-            is_joker=True, is_big_joker=True, points=0, deck=1,
+            points=0,
         )
-        assert card_display(card) == "\U0001f0cf大"
+        assert card_display(card) == "大王"
 
     def test_card_display_joker_small(self) -> None:
-        """Small joker displays as \U0001f0cf小."""
+        """Small joker displays as 小王."""
         card = Card(
             id="D1-joker-SJ", suit=Suit.JOKER, rank=Rank.SMALL_JOKER,
-            is_joker=True, is_big_joker=False, points=0, deck=1,
+            points=0,
         )
-        assert card_display(card) == "\U0001f0cf小"
+        assert card_display(card) == "小王"
 
 
 class TestEnums:

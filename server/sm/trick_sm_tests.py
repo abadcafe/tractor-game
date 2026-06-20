@@ -1,27 +1,22 @@
 """Tests for sm.trick_sm module."""
 from typing import Literal
 
-from .card_model import Card, Suit, Rank
+from server.rules.cards import Card, POINTS_MAP, Suit, Rank
 from .trick_sm import (
     TrickState, TrickInput, TrickResult,
     create_trick, play,
 )
 from server.result import Ok, Rejected
 
-from .rejections import MustFollowLeadSuitRejected
+from server.rules.rejections import MustFollowLeadSuitRejected
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
     """Create a card with correct point values per spec: 5=5, 10=10, K=10, else 0."""
-    pts_map: dict[Rank, int] = {
-        Rank.FIVE: 5, Rank.TEN: 10, Rank.KING: 10,
-    }
     return Card(
         id=f"D{deck}-{suit.value}-{rank.value}",
         suit=suit, rank=rank,
-        is_joker=(suit == Suit.JOKER),
-        is_big_joker=(rank == Rank.BIG_JOKER),
-        points=pts_map.get(rank, 0), deck=deck,
+        points=POINTS_MAP[rank],
     )
 
 

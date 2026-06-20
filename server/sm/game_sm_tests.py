@@ -1,7 +1,7 @@
 """Tests for sm.game_sm module."""
 from itertools import combinations
 
-from .card_model import Rank
+from server.rules.cards import Rank
 from server.result import Ok, Rejected
 from .scoring import RoundResult
 from .game_sm import (
@@ -11,18 +11,20 @@ from .game_sm import (
 
 class TestCreateGame:
     def test_create_game_initial_state(self) -> None:
-        """Game starts in IDLE phase with both teams at level TWO."""
+        """Game starts waiting for the first round with both teams at level TWO."""
         state = create_game()
-        assert state.phase == "IDLE"
+        assert state.round_number == 0
+        assert state.winning_team is None
         assert state.team0_level == Rank.TWO
         assert state.team1_level == Rank.TWO
 
     def test_start_game_enters_in_round(self) -> None:
-        """Starting the game transitions to IN_ROUND."""
+        """Starting the game records the first round number."""
         state = create_game()
         result = start_game(state)
         assert isinstance(result, Ok)
-        assert result.value.phase == "IN_ROUND"
+        assert result.value.round_number == 1
+        assert result.value.winning_team is None
 
     def test_start_game_initial_levels(self) -> None:
         """Both teams start at level TWO."""
@@ -126,7 +128,6 @@ class TestGameOver:
         result = process_round_result(state, rr)
         assert isinstance(result, Ok)
         state = result.value
-        assert state.phase == "IN_ROUND"
         assert state.winning_team is None
         assert state.team0_level == Rank.ACE
 
@@ -150,7 +151,6 @@ class TestGameOver:
         result = process_round_result(state, rr)
         assert isinstance(result, Ok)
         state = result.value
-        assert state.phase == "IN_ROUND"
         assert state.winning_team is None
         assert state.team0_level == Rank.ACE
 
@@ -174,7 +174,6 @@ class TestGameOver:
         result = process_round_result(state, rr)
         assert isinstance(result, Ok)
         state = result.value
-        assert state.phase == "IN_ROUND"
         assert state.winning_team is None
         assert state.team1_level == Rank.ACE
 
@@ -198,7 +197,6 @@ class TestGameOver:
         result = process_round_result(state, rr)
         assert isinstance(result, Ok)
         state = result.value
-        assert state.phase == "GAME_OVER"
         assert state.winning_team == 0
 
     def test_game_over_team1_after_passing_ace(self) -> None:
@@ -221,7 +219,6 @@ class TestGameOver:
         result = process_round_result(state, rr)
         assert isinstance(result, Ok)
         state = result.value
-        assert state.phase == "GAME_OVER"
         assert state.winning_team == 1
 
     def test_ace_without_level_gain_does_not_end_game(self) -> None:
@@ -243,7 +240,6 @@ class TestGameOver:
         )
         result = process_round_result(state, rr)
         assert isinstance(result, Ok)
-        assert result.value.phase == "IN_ROUND"
         assert result.value.winning_team is None
 
     def test_game_not_over_mid_game(self) -> None:
@@ -265,7 +261,7 @@ class TestGameOver:
         )
         result = process_round_result(state, rr)
         assert isinstance(result, Ok)
-        assert result.value.phase == "IN_ROUND"
+        assert result.value.winning_team is None
 
     def test_game_multiple_rounds(self) -> None:
         """Multiple rounds can be processed."""
@@ -288,7 +284,6 @@ class TestGameOver:
         result = process_round_result(state, r1)
         assert isinstance(result, Ok)
         state = result.value
-        assert state.phase == "IN_ROUND"
         assert state.team0_level == Rank.FIVE
         # Round 2: team 1 wins
         r2 = RoundResult(
@@ -305,7 +300,7 @@ class TestGameOver:
         result = process_round_result(state, r2)
         assert isinstance(result, Ok)
         state = result.value
-        assert state.phase == "IN_ROUND"
+        assert state.winning_team is None
         assert state.team1_level == Rank.FIVE
 
 
@@ -379,7 +374,7 @@ class TestInvalidTransitions:
         result = process_round_result(state, rr)
         assert isinstance(result, Ok)
         state = result.value
-        assert state.phase == "GAME_OVER"
+        assert state.winning_team == 0
         rr2 = RoundResult(
             team0_new_level=Rank.ACE,
             team1_new_level=Rank.TWO,
@@ -416,7 +411,6 @@ class TestEdgeCases:
         result = process_round_result(state, rr)
         assert isinstance(result, Ok)
         state = result.value
-        assert state.phase == "IN_ROUND"
         assert state.winning_team is None
         assert state.team0_level == Rank.ACE
         assert state.team1_level == Rank.ACE
@@ -459,7 +453,7 @@ class TestEdgeCases:
         result = process_round_result(state, r2)
         assert isinstance(result, Ok)
         state = result.value
-        assert state.phase == "GAME_OVER"
+        assert state.winning_team == 0
         assert state.declarer_team is None
         assert state.next_declarer_player is None
 
@@ -586,7 +580,7 @@ class TestMultipleRoundsWithRealRoundSm:
         game = result.value
 
         for _ in range(6):
-            if game.phase == "GAME_OVER":
+            if game.winning_team is not None:
                 break
 
             round_state = create_round(RoundInput(
@@ -607,7 +601,7 @@ class TestMultipleRoundsWithRealRoundSm:
             else:
                 break
 
-        assert game.phase in ("IN_ROUND", "GAME_OVER")
+        assert game.round_number >= 1
 
     def test_full_game_with_real_round_sm(self) -> None:
         """Fast game: use real RoundResults from completed rounds to drive game_sm."""
@@ -618,7 +612,7 @@ class TestMultipleRoundsWithRealRoundSm:
 
         max_rounds = 20
         for _ in range(max_rounds):
-            if game.phase == "GAME_OVER":
+            if game.winning_team is not None:
                 break
 
             round_state = create_round(RoundInput(
@@ -639,4 +633,4 @@ class TestMultipleRoundsWithRealRoundSm:
             else:
                 break
 
-        assert game.phase in ("IN_ROUND", "GAME_OVER")
+        assert game.round_number >= 1

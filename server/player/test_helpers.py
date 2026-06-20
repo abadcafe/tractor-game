@@ -5,42 +5,66 @@ from __future__ import annotations
 from typing import Literal, TypeGuard
 from unittest.mock import AsyncMock, MagicMock
 
-from server.messages import StateMessage
-from server.snapshot import (
+from server.protocol import StateMessage
+from server.protocol import (
     AwaitingAction,
+    BidEventSnapshot,
+    CompletedTrickSnapshot,
+    FailedThrowSnapshot,
+    RoundPhase,
     ScoringSnapshot,
     StateSnapshot,
     StirringStateSnapshot,
     TrickSnapshot,
 )
-from server.sm.card_model import Card, Rank, Suit
-from server.sm.types import BidEvent, CompletedTrick, FailedThrow, PublicGamePhase
+from server.rules.cards import Card, POINTS_MAP, Rank, Suit
+
+type TestSuit = Literal["hearts", "spades", "diamonds", "clubs", "joker"]
+type TestRank = Literal[
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "10",
+    "J",
+    "Q",
+    "K",
+    "A",
+    "SJ",
+    "BJ",
+]
 
 
 def is_object_list(value: object) -> TypeGuard[list[object]]:
     return isinstance(value, list)
 
 
-def card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1, suffix: str = "") -> Card:
-    """Create a real Card for testing."""
+def card(
+    suit: TestSuit,
+    rank: TestRank,
+    deck: Literal[1, 2] = 1,
+) -> Card:
+    """Create a protocol card snapshot for player tests."""
+    card_rank = Rank(rank)
     return Card(
-        id=f"D{deck}-{suit.value}-{rank.value}{suffix}",
-        suit=suit,
-        rank=rank,
-        is_joker=(suit == Suit.JOKER),
-        is_big_joker=(rank == Rank.BIG_JOKER),
-        points=0,
-        deck=deck,
+        id=f"D{deck}-{suit}-{rank}",
+        suit=Suit(suit),
+        rank=card_rank,
+        points=POINTS_MAP[card_rank],
     )
 
 
 def make_snapshot(
     *,
-    phase: PublicGamePhase = "PLAYING",
+    phase: RoundPhase = "PLAYING",
     awaiting_action: AwaitingAction | None = "play",
     action_hints: list[list[Card]] | None = None,
-    trump_rank: Rank = Rank.TWO,
-    trump_suit: Suit | None = None,
+    trump_rank: TestRank = "2",
+    trump_suit: TestSuit | None = None,
     player_hand: list[Card] | None = None,
     player_hand_counts: list[int] | None = None,
     bottom_cards: list[Card] | None = None,
@@ -48,16 +72,16 @@ def make_snapshot(
     declarer_player: int | None = None,
     defender_points: int = 0,
     trick: TrickSnapshot | None = None,
-    last_completed_trick: CompletedTrick | None = None,
+    last_completed_trick: CompletedTrickSnapshot | None = None,
     defender_point_cards: list[Card] | None = None,
-    failed_throw: FailedThrow | None = None,
-    bid_events: list[BidEvent] | None = None,
-    bid_winner: BidEvent | None = None,
+    failed_throw: FailedThrowSnapshot | None = None,
+    bid_events: list[BidEventSnapshot] | None = None,
+    bid_winner: BidEventSnapshot | None = None,
     stirring_state: StirringStateSnapshot | None = None,
     scoring: ScoringSnapshot | None = None,
     winning_team: int | None = None,
-    team0_level: Rank = Rank.TWO,
-    team1_level: Rank = Rank.TWO,
+    team0_level: TestRank = "2",
+    team1_level: TestRank = "2",
     next_round_confirmed: list[int] | None = None,
 ) -> StateSnapshot:
     """Create a real StateSnapshot with sensible defaults."""
@@ -65,8 +89,8 @@ def make_snapshot(
         phase=phase,
         awaiting_action=awaiting_action,
         action_hints=action_hints if action_hints is not None else [],
-        trump_rank=trump_rank,
-        trump_suit=trump_suit,
+        trump_rank=Rank(trump_rank),
+        trump_suit=Suit(trump_suit) if trump_suit is not None else None,
         player_hand=player_hand if player_hand is not None else [],
         player_hand_counts=player_hand_counts if player_hand_counts is not None else [0, 0, 0, 0],
         bottom_cards=bottom_cards if bottom_cards is not None else [],
@@ -82,8 +106,8 @@ def make_snapshot(
         stirring_state=stirring_state,
         scoring=scoring,
         winning_team=winning_team,
-        team0_level=team0_level,
-        team1_level=team1_level,
+        team0_level=Rank(team0_level),
+        team1_level=Rank(team1_level),
         next_round_confirmed=next_round_confirmed if next_round_confirmed is not None else [],
     )
 

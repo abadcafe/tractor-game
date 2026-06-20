@@ -153,6 +153,17 @@ server 收到消息后，先检查 `seq`。
 server 会用当前 player 的手牌解析这些 id。  
 如果某个 id 不在当前 player 的手牌里，动作会被拒绝。
 
+## Card
+
+StateSnapshot 里所有可见牌都使用同一个结构：
+
+```json
+{ "id": "D1-hearts-10", "suit": "hearts", "rank": "10", "points": 10 }
+```
+
+`points` 是协议字段，表示这张牌的分值。  
+`is_joker`、`is_big_joker`、`deck` 不进入协议；这些都是可以由 `id/suit/rank` 推导出来的内部属性。
+
 ## StateSnapshot
 
 `state` 是当前 player 能看到的信息。它不应该包含其他 player 的完整手牌。
