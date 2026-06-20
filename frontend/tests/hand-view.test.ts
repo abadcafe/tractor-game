@@ -611,6 +611,52 @@ Deno.test("test_renderHandView_card_click_callback", () => {
   assertEquals(clickedCardId, "D1-spades-2");
 });
 
+Deno.test("test_renderHandView_drag_selects_displayed_card_range", () => {
+  const snap = makeSnapshot({
+    player_hand: [
+      { id: "D1-hearts-5", suit: "hearts", rank: "5" },
+      { id: "D1-spades-2", suit: "spades", rank: "2" },
+      { id: "D1-clubs-A", suit: "clubs", rank: "A" },
+      { id: "D1-diamonds-3", suit: "diamonds", rank: "3" },
+    ],
+    action_hints: [],
+  });
+  const ranges: string[][] = [];
+  const onCardRangeSelect = (cardIds: string[]) => {
+    ranges.push(cardIds);
+  };
+  const el = renderHandView(
+    snap,
+    "play",
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    onCardRangeSelect,
+  );
+  const cards = Array.from(el.querySelectorAll(".card"));
+  const expected = cards.slice(0, 3).map((card) =>
+    card.getAttribute("data-card-id") ?? ""
+  );
+
+  cards[0].dispatchEvent(new Event("pointerdown", { bubbles: true }));
+  cards[2].dispatchEvent(new Event("pointerenter", { bubbles: true }));
+  cards[2].dispatchEvent(new Event("pointerup", { bubbles: true }));
+
+  assertEquals(ranges.at(-1), expected);
+});
+
 Deno.test("test_renderHandView_play_mode_hint_cards_do_not_block_other_cards", () => {
   const snap = makeSnapshot();
   let clickedCardId: string | null = null;

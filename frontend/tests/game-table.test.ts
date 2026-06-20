@@ -48,6 +48,20 @@ Deno.test("test_renderGameTable_shows_four_players", () => {
   assertEquals(players.length, 4);
 });
 
+Deno.test("test_renderGameTable_debug_avatars_use_seat_labels_not_ai_type", () => {
+  const snap = makeSnapshot();
+  const el = renderGameTable(snap, null, null, "game-1");
+  const avatars = Array.from(el.querySelectorAll(".player-avatar"));
+  assertEquals(avatars.length, 4);
+  assertEquals(avatars.map((avatar) => avatar.textContent), [
+    "同",
+    "左",
+    "右",
+    "你",
+  ]);
+  assertEquals(avatars.every((avatar) => avatar.textContent !== "ai"), true);
+});
+
 Deno.test("test_renderGameTable_declarer_in_status_badge", () => {
   const snap = makeSnapshot({ declarer_player: 3 });
   const el = renderGameTable(snap);
@@ -56,6 +70,35 @@ Deno.test("test_renderGameTable_declarer_in_status_badge", () => {
   );
   assertEquals(southStatus !== null, true);
   assertEquals((southStatus?.textContent ?? "").includes("庄"), true);
+});
+
+Deno.test("test_renderGameTable_deal_bid_can_show_fixed_declarer_separate_from_bid_winner", () => {
+  const snap = makeSnapshot({
+    phase: "DEAL_BID",
+    trump_rank: "3",
+    trump_suit: null,
+    declarer_team: 1,
+    declarer_player: 2,
+    bid_winner: {
+      player: 1,
+      cards: [{ id: "D1-spades-3", suit: "spades", rank: "3" }],
+      kind: "trump_rank",
+      suit: "spades",
+      joker_type: null,
+      count: 1,
+    },
+  });
+  const el = renderGameTable(snap);
+  const eastText = el.querySelector('.player-area[data-position="东"]')
+    ?.textContent ?? "";
+  const westText = el.querySelector('.player-area[data-position="西"]')
+    ?.textContent ?? "";
+
+  assertEquals(eastText.includes("庄"), true);
+  assertEquals(eastText.includes("♠3"), false);
+  assertEquals(westText.includes("♠3"), true);
+  assertEquals(westText.includes("♠主"), true);
+  assertEquals(westText.includes("庄"), false);
 });
 
 Deno.test("test_renderGameTable_current_player_highlight", () => {

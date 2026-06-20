@@ -60,6 +60,13 @@ def _trump_rank_for_round(state: game_sm.GameState) -> Rank:
     return state.team0_level
 
 
+def _snapshot_declarer_player(state: round_sm.RoundState) -> int | None:
+    """Return the player already known to be declarer for public display."""
+    if state.phase == "DEAL_BID" and state.next_declarer_player is not None:
+        return state.next_declarer_player
+    return state.declarer_player
+
+
 class Game:
     """Aggregate root that orchestrates game lifecycle using sm state machines.
 
@@ -546,7 +553,7 @@ class Game:
             trump_suit=rs.trump_suit,
             trump_rank=rs.trump_rank,
             declarer_team=rs.declarer_team,
-            declarer_player=rs.declarer_player,
+            declarer_player=_snapshot_declarer_player(rs),
             defender_points=rs.defender_points,
             trick=trick,
             trick_history=list(rs.trick_history),

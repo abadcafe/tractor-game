@@ -701,6 +701,7 @@ button:disabled {
   gap: 7px;
   padding: 3px 4px 8px;
   overflow: visible;
+  user-select: none;
 }
 
 .card {
@@ -720,6 +721,7 @@ button:disabled {
     border-color 0.12s ease,
     box-shadow 0.12s ease,
     opacity 0.12s ease;
+  touch-action: none;
 }
 
 .card:hover:not(.not-selectable) {
@@ -1182,6 +1184,26 @@ body {
     radial-gradient(circle at 50% 34%, #ffe0b8 0 23%, transparent 24%),
     radial-gradient(circle at 50% 72%, #92315f 0 32%, transparent 33%),
     #ec79a7;
+}
+
+.player-avatar--debug {
+  color: #14211e;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-decoration: none;
+  text-transform: uppercase;
+  background:
+    linear-gradient(145deg, #f6d76c, #f1a93d);
+}
+
+.player-avatar--debug.team1 {
+  background:
+    linear-gradient(145deg, #84d7ff, #3c97d4);
+}
+
+.player-avatar--debug:hover {
+  filter: brightness(1.06);
 }
 
 .player-area.current .player-avatar {

@@ -78,6 +78,7 @@ export function renderGameTable(
   snapshot: StateSnapshot,
   previousTrickPreview?: CompletedTrick | null,
   failedThrowPreview?: FailedThrow | null,
+  gameId?: string | null,
 ): HTMLElement {
   const table = el("div", { class: "game-table" });
   const currentPlayer = getCurrentPlayer(snapshot);
@@ -96,13 +97,7 @@ export function renderGameTable(
     const area = el("div", attrs);
 
     const header = el("div", { class: "player-area__header" });
-    header.appendChild(
-      el(
-        "span",
-        { class: `player-avatar team${seat.team}` },
-        seat.label.slice(0, 1),
-      ),
-    );
+    header.appendChild(renderDebugAvatar(i, seat.team, seat.label, gameId));
     const labelClass = `player-label team${seat.team}`;
     header.appendChild(el("span", { class: labelClass }, seat.label));
     header.appendChild(
@@ -158,6 +153,32 @@ export function renderGameTable(
   );
 
   return table;
+}
+
+function renderDebugAvatar(
+  player: number,
+  team: number,
+  label: string,
+  gameId?: string | null,
+): HTMLElement {
+  const attrs: Record<string, string> = {
+    class: `player-avatar player-avatar--debug team${team}`,
+  };
+  const text = label.slice(0, 1);
+  if (gameId === null || gameId === undefined || gameId.length === 0) {
+    return el("span", attrs, text);
+  }
+  return el(
+    "a",
+    {
+      ...attrs,
+      href: `/debug/ai/${encodeURIComponent(gameId)}?player=${player}`,
+      target: "_blank",
+      rel: "noreferrer",
+      title: `AI transcript player ${player}`,
+    },
+    text,
+  );
 }
 
 function renderStatusBadge(

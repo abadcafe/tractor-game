@@ -19,6 +19,7 @@ from server.player import Player
 from server.sm import round_sm, stirring_sm, trick_sm
 from server.sm.card_model import Card, Rank, Suit
 from server.sm.result import Ok, Rejected
+from server.sm.types import BidEvent
 from server.snapshot import StateSnapshot
 
 
@@ -328,6 +329,70 @@ async def test_snapshot_action_hints_shape():
         if len(entry) > 0:
             from server.sm.card_model import Card
             assert isinstance(entry[0], Card)
+
+
+def test_first_round_deal_bid_snapshot_has_no_declarer_before_bid_winner() -> None:
+    """First round DEAL_BID has no fixed declarer until bidding resolves."""
+    state = round_sm.create_round(round_sm.RoundInput(
+        declarer_team=None,
+        trump_rank=Rank.TWO,
+        next_declarer_player=None,
+        team0_level=Rank.TWO,
+        team1_level=Rank.TWO,
+    ))
+    game = _game_with_round_state(state)
+
+    snap = game.snapshot(for_player=0)
+
+    assert snap.phase == "DEAL_BID"
+    assert snap.declarer_team is None
+    assert snap.declarer_player is None
+
+
+def test_subsequent_round_deal_bid_snapshot_shows_fixed_declarer() -> None:
+    """Later-round DEAL_BID exposes the already fixed declarer for UI display."""
+    state = round_sm.create_round(round_sm.RoundInput(
+        declarer_team=1,
+        trump_rank=Rank.THREE,
+        next_declarer_player=2,
+        team0_level=Rank.TWO,
+        team1_level=Rank.THREE,
+    ))
+    game = _game_with_round_state(state)
+
+    snap = game.snapshot(for_player=0)
+
+    assert snap.phase == "DEAL_BID"
+    assert snap.declarer_team == 1
+    assert snap.declarer_player == 2
+
+
+def test_subsequent_round_deal_bid_bid_winner_does_not_change_fixed_declarer_snapshot() -> None:
+    """In later rounds, bid_winner chooses trump only; declarer remains fixed."""
+    bid = BidEvent(
+        player=1,
+        cards=[_card(Suit.SPADES, Rank.THREE)],
+        kind="trump_rank",
+        suit=Suit.SPADES,
+        joker_type=None,
+        count=1,
+    )
+    state = round_sm.create_round(round_sm.RoundInput(
+        declarer_team=1,
+        trump_rank=Rank.THREE,
+        next_declarer_player=2,
+        team0_level=Rank.TWO,
+        team1_level=Rank.THREE,
+    )).model_copy(update={"bid_winner": bid})
+    game = _game_with_round_state(state)
+
+    snap = game.snapshot(for_player=0)
+
+    assert snap.phase == "DEAL_BID"
+    assert snap.bid_winner is not None
+    assert snap.bid_winner == bid
+    assert snap.declarer_player == 2
+    assert snap.declarer_player != snap.bid_winner.player
 
 
 def test_snapshot_stir_action_hints_ordered_from_small_to_large() -> None:

@@ -14,6 +14,8 @@ import type {
 export interface ActionCallbacks {
   /** Called when a card in hand is clicked. Toggles selection. */
   onCardClick: (cardId: string) => void;
+  /** Called when the player drags across hand cards. Replaces selection with the displayed range. */
+  onCardRangeSelect?: (cardIds: string[]) => void;
   /** Called when the user clears the current hand selection. */
   onClearSelection?: () => void;
   /** Called when the user asks the UI to select the first available hint. */
@@ -37,6 +39,8 @@ export interface ActionCallbacks {
 /** Context bundle passed to render() and UI components. */
 export interface RenderContext {
   callbacks?: ActionCallbacks;
+  /** Current game id, used for debug links that are outside the game protocol. */
+  gameId?: string | null;
   selectedCardIds: Set<string>;
   /** Pre-computed legal card IDs for hand highlighting. */
   legalCardIds: Set<string>;

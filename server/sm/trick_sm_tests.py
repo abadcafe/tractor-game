@@ -63,7 +63,7 @@ class TestPlayLead:
     def test_play_lead_single(self) -> None:
         """Leading a single card transitions to FOLLOWING."""
         hands = [
-            [_card(Suit.HEARTS, Rank.ACE)],
+            [_card(Suit.HEARTS, Rank.ACE), _card(Suit.CLUBS, Rank.THREE)],
             [_card(Suit.HEARTS, Rank.KING)],
             [_card(Suit.HEARTS, Rank.QUEEN)],
             [_card(Suit.HEARTS, Rank.JACK)],
@@ -101,7 +101,7 @@ class TestPlayLead:
     def test_play_lead_sets_following(self) -> None:
         """Lead play transitions to FOLLOWING phase."""
         hands = [
-            [_card(Suit.HEARTS, Rank.ACE)],
+            [_card(Suit.HEARTS, Rank.ACE), _card(Suit.CLUBS, Rank.THREE)],
             [_card(Suit.HEARTS, Rank.KING)],
             [_card(Suit.HEARTS, Rank.QUEEN)],
             [_card(Suit.HEARTS, Rank.JACK)],
@@ -147,7 +147,7 @@ class TestPlayFollow:
     def test_play_follow_single(self) -> None:
         """Following with a single card advances cur."""
         hands = [
-            [_card(Suit.HEARTS, Rank.ACE)],
+            [_card(Suit.HEARTS, Rank.ACE), _card(Suit.CLUBS, Rank.THREE)],
             [_card(Suit.HEARTS, Rank.KING)],
             [_card(Suit.HEARTS, Rank.QUEEN)],
             [_card(Suit.HEARTS, Rank.JACK)],
@@ -169,7 +169,7 @@ class TestPlayFollow:
     def test_play_follow_after_lead(self) -> None:
         """After lead, following players play in CCW order."""
         hands = [
-            [_card(Suit.HEARTS, Rank.ACE)],
+            [_card(Suit.HEARTS, Rank.ACE), _card(Suit.CLUBS, Rank.THREE)],
             [_card(Suit.HEARTS, Rank.KING)],
             [_card(Suit.HEARTS, Rank.QUEEN)],
             [_card(Suit.HEARTS, Rank.JACK)],
@@ -202,16 +202,8 @@ class TestPlayResolve:
         result = play(state, player=0, cards=[hands[0][0]])
         assert isinstance(result, Ok)
         state = result.value
-        result = play(state, player=1, cards=[hands[1][0]])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=3, cards=[hands[3][0]])  # CCW: 1->3
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=2, cards=[hands[2][0]])  # CCW: 3->2
-        assert isinstance(result, Ok)
-        state = result.value
         assert state.phase == "RESOLVED"
+        assert state.played == 4
 
     def test_play_resolve_determines_winner(self) -> None:
         """Winner is determined by compare_plays: highest same-suit card wins."""
@@ -227,15 +219,6 @@ class TestPlayResolve:
             defender_points=0, declarer_team=0,
         ))
         result = play(state, player=0, cards=[hands[0][0]])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=1, cards=[hands[1][0]])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=3, cards=[hands[3][0]])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=2, cards=[hands[2][0]])
         assert isinstance(result, Ok)
         state = result.value
         assert state.phase == "RESOLVED"
@@ -259,15 +242,6 @@ class TestPlayResolve:
         result = play(state, player=0, cards=[hands[0][0]])
         assert isinstance(result, Ok)
         state = result.value
-        result = play(state, player=1, cards=[hands[1][0]])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=3, cards=[hands[3][0]])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=2, cards=[hands[2][0]])
-        assert isinstance(result, Ok)
-        state = result.value
         result = _get_result(state)
         assert result.points == 15  # K(10) + 5(5) = 15
 
@@ -285,15 +259,6 @@ class TestPlayResolve:
             defender_points=10, declarer_team=0,
         ))
         result = play(state, player=0, cards=[hands[0][0]])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=1, cards=[hands[1][0]])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=3, cards=[hands[3][0]])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=2, cards=[hands[2][0]])
         assert isinstance(result, Ok)
         state = result.value
         result = _get_result(state)
@@ -318,15 +283,6 @@ class TestPlayResolve:
         result = play(state, player=0, cards=[hands[0][0]])
         assert isinstance(result, Ok)
         state = result.value
-        result = play(state, player=1, cards=[hands[1][0]])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=3, cards=[hands[3][0]])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=2, cards=[hands[2][0]])
-        assert isinstance(result, Ok)
-        state = result.value
         result = _get_result(state)
         assert result.completed_trick is not None
         assert len(result.completed_trick.slots) == 4
@@ -346,15 +302,6 @@ class TestPlayResolve:
             defender_points=0, declarer_team=0,
         ))
         result = play(state, player=0, cards=[hands[0][0]])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=1, cards=[hands[1][0]])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=3, cards=[hands[3][0]])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=2, cards=[hands[2][0]])
         assert isinstance(result, Ok)
         state = result.value
         result = _get_result(state)
@@ -431,7 +378,7 @@ class TestPlayValidation:
         # Lead: ♥A (single). Player 1 has only ♠ cards.
         # Player 1 can play any ♠ card.
         hands = [
-            [_card(Suit.HEARTS, Rank.ACE)],       # 0: leads ♥A
+            [_card(Suit.HEARTS, Rank.ACE), _card(Suit.CLUBS, Rank.THREE)],  # 0: leads ♥A
             [_card(Suit.SPADES, Rank.QUEEN)],      # 1: only ♠ (no hearts)
             [_card(Suit.HEARTS, Rank.KING)],       # 2: ♥K
             [_card(Suit.HEARTS, Rank.JACK)],       # 3: ♥J
@@ -466,15 +413,6 @@ class TestPlayValidation:
         result = play(state, player=0, cards=[hands[0][0]])
         assert isinstance(result, Ok)
         state = result.value
-        result = play(state, player=1, cards=[hands[1][0]])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=3, cards=[hands[3][0]])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=2, cards=[hands[2][0]])
-        assert isinstance(result, Ok)
-        state = result.value
         assert state.phase == "RESOLVED"
         assert state.played == 4
 
@@ -494,15 +432,6 @@ class TestPlayResolved:
             defender_points=0, declarer_team=0,
         ))
         result = play(state, player=0, cards=[hands[0][0]])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=1, cards=[hands[1][0]])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=3, cards=[hands[3][0]])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=2, cards=[hands[2][0]])
         assert isinstance(result, Ok)
         state = result.value
         assert state.phase == "RESOLVED"
@@ -563,7 +492,11 @@ class TestPlayFollowPairSuit:
         """Following a pair lead: with no pair of led suit, can play any pair."""
         # Lead: pair of ♥A. Player 1 has only ♠ cards (no ♥ pair).
         hands = [
-            [_card(Suit.HEARTS, Rank.ACE, 1), _card(Suit.HEARTS, Rank.ACE, 2)],
+            [
+                _card(Suit.HEARTS, Rank.ACE, 1),
+                _card(Suit.HEARTS, Rank.ACE, 2),
+                _card(Suit.CLUBS, Rank.THREE),
+            ],
             [_card(Suit.SPADES, Rank.QUEEN, 1), _card(Suit.SPADES, Rank.QUEEN, 2)],
             [_card(Suit.HEARTS, Rank.KING, 1), _card(Suit.HEARTS, Rank.KING, 2)],
             [_card(Suit.HEARTS, Rank.JACK, 1), _card(Suit.HEARTS, Rank.JACK, 2)],
@@ -646,9 +579,6 @@ class TestPlayResolveNewComparison:
             declarer_team=0,
         ))
         state = _play_unwrap(state, player=0, cards=hands[0])
-        state = _play_unwrap(state, player=1, cards=hands[1])
-        state = _play_unwrap(state, player=3, cards=hands[3])
-        state = _play_unwrap(state, player=2, cards=hands[2])
 
         result = _get_result(state)
         assert result.winner == 0
@@ -670,9 +600,6 @@ class TestPlayResolveNewComparison:
             declarer_team=0,
         ))
         state = _play_unwrap(state, player=0, cards=hands[0])
-        state = _play_unwrap(state, player=1, cards=hands[1])
-        state = _play_unwrap(state, player=3, cards=hands[3])
-        state = _play_unwrap(state, player=2, cards=hands[2])
 
         result = _get_result(state)
         assert result.winner == 0
@@ -691,9 +618,6 @@ class TestPlayResolveNewComparison:
             defender_points=0, declarer_team=0,
         ))
         state = _play_unwrap(state, player=0, cards=hands[0])
-        state = _play_unwrap(state, player=1, cards=hands[1])
-        state = _play_unwrap(state, player=3, cards=hands[3])
-        state = _play_unwrap(state, player=2, cards=hands[2])
 
         result = _get_result(state)
         assert result.winner == 3
@@ -714,15 +638,6 @@ class TestPlayResolveNewComparison:
         result = play(state, player=0, cards=hands[0])
         assert isinstance(result, Ok)
         state = result.value
-        result = play(state, player=1, cards=hands[1])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=3, cards=hands[3])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=2, cards=hands[2])
-        assert isinstance(result, Ok)
-        state = result.value
         result = _get_result(state)
         assert result.winner == 1  # hA pair wins
 
@@ -740,15 +655,6 @@ class TestPlayResolveNewComparison:
             defender_points=0, declarer_team=0,
         ))
         result = play(state, player=0, cards=hands[0])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=1, cards=hands[1])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=3, cards=hands[3])
-        assert isinstance(result, Ok)
-        state = result.value
-        result = play(state, player=2, cards=hands[2])
         assert isinstance(result, Ok)
         state = result.value
         result = _get_result(state)
@@ -785,9 +691,6 @@ class TestTractorRanking:
             defender_points=0, declarer_team=0,
         ))
         state = _play_unwrap(state, player=0, cards=hands[0])
-        state = _play_unwrap(state, player=1, cards=hands[1])
-        state = _play_unwrap(state, player=3, cards=hands[3])
-        state = _play_unwrap(state, player=2, cards=hands[2])
         result = _get_result(state)
         assert result.winner == 3  # h9-9-10-10 wins (highest tractor)
 
@@ -810,9 +713,6 @@ class TestTractorRanking:
         ))
         # CCW order: 0 -> 1 -> 3 -> 2
         state = _play_unwrap(state, player=0, cards=hands[0])
-        state = _play_unwrap(state, player=1, cards=hands[1])
-        state = _play_unwrap(state, player=3, cards=hands[3])
-        state = _play_unwrap(state, player=2, cards=hands[2])
         result = _get_result(state)
         assert result.winner == 2  # trump tractor wins
 
@@ -838,8 +738,5 @@ class TestThrowResolution:
             defender_points=0, declarer_team=0,
         ))
         state = _play_unwrap(state, player=0, cards=hands[0])
-        state = _play_unwrap(state, player=1, cards=hands[1])
-        state = _play_unwrap(state, player=3, cards=hands[3])
-        state = _play_unwrap(state, player=2, cards=hands[2])
         result = _get_result(state)
         assert result.winner == 0  # throw wins

@@ -1,6 +1,6 @@
 {
   "tasks": {
-    "build": "rm -rf static && mkdir -p static && tsc --project frontend/tsconfig.json && cp frontend/index.html static/ && cp frontend/style.css static/",
+    "build": "rm -rf static && mkdir -p static && tsc --project frontend/tsconfig.json && cp frontend/index.html frontend/debug-ai.html static/ && cp frontend/style.css frontend/debug-ai.css static/",
     "test": "deno test --allow-net --allow-read=frontend/main.ts frontend/tests/"
   },
   "compilerOptions": {

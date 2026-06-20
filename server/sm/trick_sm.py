@@ -192,6 +192,9 @@ def play(state: TrickState, player: int, cards: list[Card]) -> StateResult[Trick
         failed_throw=failed_throw,
     )
 
+    if state.played == 0 and _should_auto_complete_last_trick(new_state):
+        return Ok(_auto_complete_last_trick(new_state))
+
     # Resolve when all 4 have played
     if new_played == 4:
         return Ok(_resolve(new_state))
@@ -207,6 +210,37 @@ def _trick_play_order(lead_player: int) -> list[int]:
         cur = next_player_ccw(cur)
         order.append(cur)
     return order
+
+
+def _should_auto_complete_last_trick(state: TrickState) -> bool:
+    """Return whether followers have no choice because all hands end here."""
+    if state.phase != "FOLLOWING" or state.played != 1:
+        return False
+    lead_cards = state.slots[state.lead_player].cards
+    if len(lead_cards) == 0:
+        return False
+    if len(state.hands[state.lead_player]) != 0:
+        return False
+    lead_count = len(lead_cards)
+    for player in _trick_play_order(state.lead_player)[1:]:
+        if len(state.hands[player]) != lead_count:
+            return False
+    return True
+
+
+def _auto_complete_last_trick(state: TrickState) -> TrickState:
+    """Play every follower's remaining hand and return the resolved trick."""
+    next_state = state
+    for player in _trick_play_order(state.lead_player)[1:]:
+        cards = list(next_state.hands[player])
+        match play(next_state, player, cards):
+            case Ok(value=played_state):
+                next_state = played_state
+            case Rejected(reason=reason):
+                raise RuntimeError(f"auto-complete last trick rejected for player {player}: {reason}")
+    if next_state.phase != "RESOLVED":
+        raise RuntimeError("auto-complete last trick did not resolve")
+    return next_state
 
 
 def _resolve(state: TrickState) -> TrickState:

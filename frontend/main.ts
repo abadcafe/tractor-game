@@ -98,6 +98,7 @@ function main() {
   let failedThrowPreviewTimer: ReturnType<typeof setTimeout> | null =
     null;
   let lastFailedThrowKey: string | null = null;
+  let currentGameId: string | null = null;
 
   // Auto-bid state
   let pendingBidIntent: BidOption | null = null;
@@ -146,6 +147,7 @@ function main() {
       selectedCardIds,
     );
     renderCtx.compactHand = compactHand;
+    renderCtx.gameId = currentGameId;
     renderCtx.previousTrickPreview = previousTrickPreview;
     renderCtx.failedThrowPreview = failedThrowPreview;
     renderCtx.levelChange = snap.scoring
@@ -342,6 +344,15 @@ function main() {
       reRender();
     },
 
+    onCardRangeSelect(cardIds: string[]) {
+      if (interactionBlocked()) return;
+      selectedCardIds.clear();
+      for (const cardId of cardIds) {
+        selectedCardIds.add(cardId);
+      }
+      reRender();
+    },
+
     onClearSelection() {
       if (interactionBlocked()) return;
       selectedCardIds.clear();
@@ -436,6 +447,7 @@ function main() {
       clearFailedThrowPreview();
       stateManager.reset();
       localStorage.removeItem(GAME_ID_STORAGE_KEY);
+      currentGameId = null;
       container.innerHTML = "";
       startNewGame();
     },
@@ -522,6 +534,7 @@ function main() {
 
   async function connectToGame(gameId: string): Promise<void> {
     await wsClient.connect(gameId, currentWsHost());
+    currentGameId = gameId;
     localStorage.setItem(GAME_ID_STORAGE_KEY, gameId);
   }
 

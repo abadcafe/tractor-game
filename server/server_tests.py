@@ -5,6 +5,8 @@ WebSocket tests use starlette.testclient.TestClient which supports
 ASGI WebSocket testing natively.
 """
 
+import logging
+
 import pytest
 import httpx
 from collections.abc import AsyncGenerator, Generator
@@ -12,8 +14,53 @@ from typing import Protocol, TypeGuard
 from starlette.testclient import TestClient, WebSocketTestSession
 
 from server.game import Game
-from server.player import HumanPlayer
+from server.player import AIPlayer, HumanPlayer
 from server.server import app
+
+
+def test_server_logger_has_visible_info_handler() -> None:
+    server_logger = logging.getLogger("server")
+
+    assert server_logger.isEnabledFor(logging.INFO)
+    assert any(handler.level <= logging.INFO for handler in server_logger.handlers)
+    assert server_logger.propagate is False
+
+
+def test_ai_debug_page_returns_html(sync_client: SyncServerClient, clean_registry: None) -> None:
+    create_resp = sync_client.post("/api/game")
+    game_id = _game_id_from(create_resp)
+
+    response = sync_client.get(f"/debug/ai/{game_id}?player=0")
+
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert "AI Transcript" in response.text
+    assert "/debug-ai.css" in response.text
+    assert "/debug-ai.js" in response.text
+    assert game_id not in response.text
+    assert "new WebSocket" not in response.text
+    assert "/ws/debug/ai/" not in response.text
+    assert "renderRecords" not in response.text
+    assert "renderTabs" not in response.text
+    assert "openStream(player, true)" not in response.text
+    assert "/api/debug/ai/" not in response.text
+    assert "fetch(" not in response.text
+    assert "setInterval" not in response.text
+
+
+def test_ai_debug_page_missing_game_returns_404(sync_client: SyncServerClient, clean_registry: None) -> None:
+    response = sync_client.get("/debug/ai/not-a-game?player=0")
+
+    assert response.status_code == 404
+
+
+def test_ai_debug_transcript_rest_endpoint_removed(sync_client: SyncServerClient, clean_registry: None) -> None:
+    create_resp = sync_client.post("/api/game")
+    game_id = _game_id_from(create_resp)
+
+    response = sync_client.get(f"/api/debug/ai/{game_id}/transcript?player=0")
+
+    assert response.status_code == 404
 
 
 class AsyncRestClient(Protocol):
@@ -116,6 +163,26 @@ async def test_create_game_starts_game(client: AsyncRestClient, clean_registry: 
     game_id_raw = data["game_id"]
     assert isinstance(game_id_raw, str)
     assert len(game_id_raw) > 0
+
+
+@pytest.mark.asyncio
+async def test_create_game_can_use_ai_bot_players(
+    client: AsyncRestClient,
+    clean_registry: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TRACTOR_BOT_PLAYER", "ai")
+
+    response = await client.post("/api/game")
+    game_id = _game_id_from(response)
+
+    from server.server import registry
+
+    game = registry.get(game_id)
+    assert isinstance(game, Game)
+    for index in range(3):
+        assert isinstance(game.get_player(index), AIPlayer)
+    assert isinstance(game.get_player(3), HumanPlayer)
 
 
 # ---- REST: List Games ----

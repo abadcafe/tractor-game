@@ -37,6 +37,7 @@ export function renderHandView(
   bidOptions?: BidOption[],
   pendingBidIntent?: BidOption | null,
   onBidOptionSelect?: (option: BidOption) => void,
+  onCardRangeSelect?: (cardIds: string[]) => void,
 ): HTMLElement {
   const actionHints = snapshot.action_hints ?? [];
   const selectedCount = selectedCardIds?.size ?? 0;
@@ -128,6 +129,13 @@ export function renderHandView(
   });
   const hasActionHints = actionHints.length > 0;
   const constrainedCardIds = hasActionHints ? legalCardIds : undefined;
+  const dragSelection = createDragSelection(
+    sortedHand,
+    interactionMode,
+    constrainedCardIds,
+    onCardRangeSelect,
+    handView,
+  );
 
   // Render each card
   for (const card of sortedHand) {
@@ -168,7 +176,14 @@ export function renderHandView(
     }
 
     if (onCardClick && canSelect) {
-      cardSpan.addEventListener("click", () => onCardClick(card.id));
+      cardSpan.addEventListener("click", () => {
+        if (dragSelection.consumeSuppressedClick()) return;
+        onCardClick(card.id);
+      });
+    }
+
+    if (canSelect) {
+      dragSelection.bindCard(cardSpan, card.id);
     }
 
     handView.appendChild(cardSpan);
@@ -180,6 +195,113 @@ export function renderHandView(
   container.appendChild(panel);
 
   return container;
+}
+
+interface DragSelectionController {
+  bindCard: (cardEl: HTMLElement, cardId: string) => void;
+  consumeSuppressedClick: () => boolean;
+}
+
+interface ActiveDragSelection {
+  startId: string;
+  moved: boolean;
+  currentIds: string[];
+  originalSelectedIds: string[];
+}
+
+function createDragSelection(
+  sortedHand: Card[],
+  interactionMode: InteractionMode,
+  constrainedCardIds: Set<string> | undefined,
+  onCardRangeSelect: ((cardIds: string[]) => void) | undefined,
+  handView: HTMLElement,
+): DragSelectionController {
+  let active: ActiveDragSelection | null = null;
+  let suppressNextClick = false;
+  const cardElements = new Map<string, HTMLElement>();
+
+  function selectableRange(startId: string, endId: string): string[] {
+    const startIndex = sortedHand.findIndex((card) => card.id === startId);
+    const endIndex = sortedHand.findIndex((card) => card.id === endId);
+    if (startIndex < 0 || endIndex < 0) return [];
+    const low = Math.min(startIndex, endIndex);
+    const high = Math.max(startIndex, endIndex);
+    return sortedHand
+      .slice(low, high + 1)
+      .filter((card) =>
+        canSelectCard(card.id, interactionMode, constrainedCardIds)
+      )
+      .map((card) => card.id);
+  }
+
+  function preview(endId: string): void {
+    if (active === null || onCardRangeSelect === undefined) return;
+    if (endId === active.startId && !active.moved) return;
+    const cardIds = selectableRange(active.startId, endId);
+    if (cardIds.length === 0) return;
+    active.moved = true;
+    active.currentIds = cardIds;
+    const selectedIds = new Set(cardIds);
+    for (const [cardId, cardEl] of cardElements) {
+      cardEl.classList.toggle("selected", selectedIds.has(cardId));
+    }
+  }
+
+  function end(commit: boolean): void {
+    const completed = active;
+    if (active?.moved) {
+      suppressNextClick = true;
+      setTimeout(() => {
+        suppressNextClick = false;
+      }, 0);
+    }
+    active = null;
+    handView.classList.remove("drag-selecting");
+    if (!commit && completed !== null) {
+      const selectedIds = new Set(completed.originalSelectedIds);
+      for (const [cardId, cardEl] of cardElements) {
+        cardEl.classList.toggle("selected", selectedIds.has(cardId));
+      }
+    }
+    if (
+      commit &&
+      completed !== null &&
+      completed.moved &&
+      completed.currentIds.length > 0 &&
+      onCardRangeSelect !== undefined
+    ) {
+      onCardRangeSelect(completed.currentIds);
+    }
+  }
+
+  handView.addEventListener("pointerup", () => end(true));
+  handView.addEventListener("pointercancel", () => end(false));
+
+  return {
+    bindCard(cardEl: HTMLElement, cardId: string): void {
+      if (onCardRangeSelect === undefined) return;
+      cardElements.set(cardId, cardEl);
+      cardEl.addEventListener("pointerdown", () => {
+        const originalSelectedIds = Array.from(cardElements.entries())
+          .filter((entry) => entry[1].classList.contains("selected"))
+          .map((entry) => entry[0]);
+        active = {
+          startId: cardId,
+          moved: false,
+          currentIds: [],
+          originalSelectedIds,
+        };
+        handView.classList.add("drag-selecting");
+      });
+      cardEl.addEventListener("pointerenter", () => preview(cardId));
+      cardEl.addEventListener("pointerup", () => preview(cardId));
+    },
+    consumeSuppressedClick(): boolean {
+      if (!suppressNextClick) return false;
+      suppressNextClick = false;
+      return true;
+    },
+  };
 }
 
 function renderBidActionPanel(

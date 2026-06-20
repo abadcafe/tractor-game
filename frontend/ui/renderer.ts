@@ -30,6 +30,7 @@ export function render(
       snapshot,
       ctx?.previousTrickPreview,
       ctx?.failedThrowPreview,
+      ctx?.gameId,
     ),
   );
 
@@ -52,6 +53,7 @@ export function render(
       ctx?.bidOptions,
       ctx?.pendingBidIntent,
       ctx?.callbacks?.onBidOptionSelect,
+      ctx?.callbacks?.onCardRangeSelect,
     ),
   );
 
