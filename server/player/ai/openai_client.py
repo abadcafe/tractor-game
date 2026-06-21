@@ -127,7 +127,7 @@ class OpenAIChatCompletionsClient(AIClient):
         last_rejection: Rejected = OpenAIRequestNotAttemptedRejected()
 
         async with httpx.AsyncClient(
-            timeout=self.config.timeout_seconds,
+            timeout=self.config.http_timeout_seconds,
             transport=self.transport,
         ) as client:
             for attempt in range(1, max_attempts + 1):
