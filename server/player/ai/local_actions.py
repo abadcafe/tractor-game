@@ -7,6 +7,10 @@ from server.result import Ok, Rejected
 
 type LocalDecision = Ok[PlayerMessage] | Rejected | None
 
+BID_LLM_DECISION_HAND_COUNTS: frozenset[int] = frozenset(
+    {5, 11, 17, 23}
+)
+
 
 def local_message(seq: int, snapshot: StateSnapshot) -> LocalDecision:
     """
@@ -16,17 +20,8 @@ def local_message(seq: int, snapshot: StateSnapshot) -> LocalDecision:
     if awaiting == "next_round":
         return Ok(PlayerMessage(seq=seq, raw={"type": "next_round"}))
     if awaiting == "bid":
-        if snapshot.action_hints:
-            cards = snapshot.action_hints[0]
-            return Ok(
-                PlayerMessage(
-                    seq=seq,
-                    raw={
-                        "type": "bid",
-                        "cards": [card.id for card in cards],
-                    },
-                )
-            )
+        if _should_ask_llm_for_bid(snapshot):
+            return None
         return Ok(
             PlayerMessage(seq=seq, raw={"type": "bid", "pass": True})
         )
@@ -35,3 +30,10 @@ def local_message(seq: int, snapshot: StateSnapshot) -> LocalDecision:
             PlayerMessage(seq=seq, raw={"type": "stir", "pass": True})
         )
     return None
+
+
+def _should_ask_llm_for_bid(snapshot: StateSnapshot) -> bool:
+    hand_count = len(snapshot.player_hand)
+    return hand_count in BID_LLM_DECISION_HAND_COUNTS and bool(
+        snapshot.action_hints
+    )

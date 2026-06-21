@@ -21,7 +21,17 @@ def allowed_tool_specs(snapshot: StateSnapshot) -> list[AIToolSpec]:
     if awaiting == "next_round":
         return []
     if awaiting == "bid":
-        return []
+        return [
+            _card_tool(
+                "bid_trump",
+                "抓牌阶段抢主：card_ids 为空或省略表示不抢；"
+                "要抢主时，legal_action_groups 是合法抢主约束，"
+                "card_ids 必须完整等于其中一组。",
+                _hint_card_ids(snapshot),
+                require_card_ids=False,
+                require_reason=False,
+            )
+        ]
     if awaiting == "stir":
         allowed_ids = _hint_card_ids(snapshot) or _hand_card_ids(
             snapshot
@@ -66,7 +76,12 @@ def tool_call_to_message(
     call: AIToolCall,
 ) -> Ok[PlayerMessage] | Rejected:
     awaiting = snapshot.awaiting_action
-    known_card_tools = {"stir_trump", "discard_bottom", "play_cards"}
+    known_card_tools = {
+        "bid_trump",
+        "stir_trump",
+        "discard_bottom",
+        "play_cards",
+    }
     if call.name not in known_card_tools:
         return format_rejected(
             f"未知工具 {call.name}：当前 tools 列表里没有这个工具。",
@@ -75,7 +90,7 @@ def tool_call_to_message(
         )
 
     card_ids_result = _card_ids(
-        call, missing_as_empty=call.name == "stir_trump"
+        call, missing_as_empty=call.name in {"bid_trump", "stir_trump"}
     )
     if isinstance(card_ids_result, Rejected):
         return card_ids_result
@@ -83,6 +98,23 @@ def tool_call_to_message(
     hand_result = _validate_card_ids_in_hand(snapshot, card_ids)
     if isinstance(hand_result, Rejected):
         return hand_result
+
+    if call.name == "bid_trump":
+        if awaiting != "bid":
+            return _tool_not_allowed(call.name, awaiting, "bid")
+        if not card_ids:
+            return Ok(
+                PlayerMessage(
+                    seq=seq, raw={"type": "bid", "pass": True}
+                )
+            )
+        if not _matches_hint(card_ids, snapshot):
+            return _action_hint_rejected()
+        return Ok(
+            PlayerMessage(
+                seq=seq, raw={"type": "bid", "cards": card_ids}
+            )
+        )
 
     if call.name == "stir_trump":
         if awaiting != "stir":

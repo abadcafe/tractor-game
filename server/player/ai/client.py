@@ -69,9 +69,7 @@ class AIClientDisabledRejected(Rejected):
 
 
 class OpenAIAPIKeyMissingRejected(Rejected):
-    reason_text: ClassVar[str] = (
-        "TRACTOR_AI_API_KEY or OPENAI_API_KEY is not set"
-    )
+    reason_text: ClassVar[str] = "TRACTOR_AI_API_KEY is not set"
 
     def __init__(self) -> None:
         super().__init__(self.reason_text)

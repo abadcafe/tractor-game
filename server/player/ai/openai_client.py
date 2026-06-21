@@ -87,58 +87,12 @@ class OpenAIChatCompletionsClient(AIClient):
             self.config, prompt, tools
         )
         endpoint = _chat_completions_endpoint(self.config.base_url)
-        tool_names = [tool.name for tool in tools]
-        if self.config.log_tool_use:
-            logger.debug(
-                "AI OpenAI-compatible request: model=%s tools=%s"
-                "input_chars=%d",
-                self.config.model,
-                tool_names,
-                len(prompt.user),
-            )
-        else:
-            logger.debug(
-                "AI OpenAI-compatible request: model=%s tool_count=%d"
-                "input_chars=%d",
-                self.config.model,
-                len(tool_names),
-                len(prompt.user),
-            )
-        if self.config.log_payloads:
-            logger.debug(
-                "AI OpenAI-compatible request payload: %s",
-                json.dumps(payload, ensure_ascii=False),
-            )
         result = await self._post(endpoint, payload)
         if isinstance(result, Rejected):
             return result
         response = result.value.body
-        response_id = _optional_str(response.get("id"))
-        model = _optional_str(response.get("model"))
-        logger.debug(
-            "AI OpenAI-compatible response: id=%s model=%s",
-            response_id,
-            model,
-        )
-        logger.debug(
-            "AI OpenAI-compatible response message: %s",
-            chat_completion_message_log(
-                response, include_tool_calls=self.config.log_tool_use
-            ),
-        )
-        if self.config.log_payloads:
-            logger.debug(
-                "AI OpenAI-compatible response payload: %s",
-                json.dumps(response, ensure_ascii=False),
-            )
         call_result = extract_chat_completion_tool_call(response)
         if isinstance(call_result, Ok):
-            if self.config.log_tool_use:
-                logger.debug(
-                    "AI OpenAI-compatible tool call: name=%s args=%s",
-                    call_result.value.name,
-                    call_result.value.arguments,
-                )
             return Ok(
                 AIDecision(
                     assistant_content=assistant_content(response),
@@ -167,7 +121,7 @@ class OpenAIChatCompletionsClient(AIClient):
             "Authorization": f"Bearer {self.config.api_key}",
             "Content-Type": "application/json",
         }
-        max_attempts = max(self.config.max_retries, 0) + 1
+        max_attempts = max(self.config.http_max_retries, 0) + 1
         api_request = _api_request_content(endpoint, payload)
         api_errors: list[str] = []
         last_rejection: Rejected = OpenAIRequestNotAttemptedRejected()
@@ -207,7 +161,8 @@ class OpenAIChatCompletionsClient(AIClient):
                     )
                 last_rejection = result
                 if retryable and attempt < max_attempts:
-                    await asyncio.sleep(self.config.retry_delay_seconds)
+                    delay = self.config.http_retry_delay_seconds
+                    await asyncio.sleep(delay)
                 else:
                     break
 
@@ -425,31 +380,6 @@ def extract_chat_completion_tool_call(
     return Ok(calls[0])
 
 
-def chat_completion_message_log(
-    response: JSONObject, *, include_tool_calls: bool
-) -> str:
-    message_result = _extract_message(response)
-    if isinstance(message_result, Rejected):
-        return f"<invalid message: {message_result.reason}>"
-    message = message_result.value
-    content = message.get("content")
-    tool_calls = message.get("tool_calls")
-    tool_calls_log: object
-    if include_tool_calls:
-        tool_calls_log = (
-            tool_calls if _is_object_list(tool_calls) else None
-        )
-    else:
-        tool_calls_log = "<hidden>"
-    return json.dumps(
-        {
-            "content": content if isinstance(content, str) else None,
-            "tool_calls": tool_calls_log,
-        },
-        ensure_ascii=False,
-    )
-
-
 def assistant_content(response: JSONObject) -> str | None:
     message_result = _extract_message(response)
     if isinstance(message_result, Rejected):
@@ -517,12 +447,6 @@ def _is_object_list(value: object) -> TypeGuard[list[object]]:
 
 def _is_object_dict(value: object) -> TypeGuard[dict[str, object]]:
     return isinstance(value, dict)
-
-
-def _optional_str(value: JSONValue | None) -> str | None:
-    if isinstance(value, str):
-        return value
-    return None
 
 
 def _retryable_status(status_code: int) -> bool:

@@ -29,7 +29,6 @@ from .ai.memory import AIMemory
 from .ai.openai_client import (
     OpenAIChatCompletionsClient,
     build_chat_completions_payload,
-    chat_completion_message_log,
     extract_chat_completion_tool_call,
 )
 from .ai.prompt import RuleBook, build_decision_prompt
@@ -82,7 +81,7 @@ def test_ai_decision_prompt_uses_chinese_game_labels() -> None:
     assert "- 当前需要你：出牌" in prompt.user
     assert "- 主花色：黑桃" in prompt.user
     assert "当前墩：无" in prompt.user
-    assert "合法动作约束（legal_action_groups）：无" in prompt.user
+    assert "legal_action_groups：无" in prompt.user
     assert "phase:" not in prompt.user
     assert "awaiting_action:" not in prompt.user
     assert "trump_suit:" not in prompt.user
@@ -231,7 +230,7 @@ async def test_ai_bid_without_hint_passes_locally() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ai_bid_with_hints_uses_first_server_hint() -> None:
+async def test_ai_bid_hint_outside_decision_count_passes() -> None:
     spade_two = card("spades", "2")
     diamond_two = card("diamonds", "2")
     snap = make_snapshot(
@@ -258,9 +257,87 @@ async def test_ai_bid_with_hints_uses_first_server_hint() -> None:
     assert game.receive.call_args[0][1].seq == 5
     assert game.receive.call_args[0][1].raw == {
         "type": "bid",
-        "cards": [spade_two["id"]],
+        "pass": True,
     }
     assert client.prompts == []
+
+
+@pytest.mark.asyncio
+async def test_ai_bid_no_hint_at_decision_count_passes() -> None:
+    hand = [
+        card("spades", "3"),
+        card("hearts", "4"),
+        card("clubs", "5"),
+        card("diamonds", "6"),
+        card("spades", "7"),
+    ]
+    snap = make_snapshot(
+        phase="DEAL_BID",
+        awaiting_action="bid",
+        player_hand=hand,
+    )
+    game = make_game(snap)
+    client = StaticAIClient(
+        AIToolCall(
+            name="unused_tool",
+            arguments={"reason": "should not be used"},
+        )
+    )
+    player = ai.AIPlayer(index=0, config=_config(), client=client)
+
+    await player.on_state(game, make_state_message(snap, seq=6))
+    await asyncio.sleep(0.05)
+
+    game.receive.assert_awaited()
+    assert game.receive.call_args[0][0] == 0
+    assert game.receive.call_args[0][1].seq == 6
+    assert game.receive.call_args[0][1].raw == {
+        "type": "bid",
+        "pass": True,
+    }
+    assert client.prompts == []
+
+
+@pytest.mark.asyncio
+async def test_ai_bid_with_hints_at_decision_count_asks_llm() -> None:
+    spade_two = card("spades", "2")
+    diamond_two = card("diamonds", "2")
+    hand = [
+        spade_two,
+        diamond_two,
+        card("hearts", "4"),
+        card("clubs", "5"),
+        card("diamonds", "6"),
+    ]
+    snap = make_snapshot(
+        phase="DEAL_BID",
+        awaiting_action="bid",
+        player_hand=hand,
+        action_hints=[[spade_two], [diamond_two]],
+        trump_rank="2",
+    )
+    game = make_game(snap)
+    client = StaticAIClient(
+        AIToolCall(
+            name="bid_trump",
+            arguments={"card_ids": [diamond_two["id"]]},
+        )
+    )
+    player = ai.AIPlayer(index=0, config=_config(), client=client)
+
+    await player.on_state(game, make_state_message(snap, seq=7))
+    await asyncio.sleep(0.05)
+
+    game.receive.assert_awaited()
+    assert game.receive.call_args[0][0] == 0
+    assert game.receive.call_args[0][1].seq == 7
+    assert game.receive.call_args[0][1].raw == {
+        "type": "bid",
+        "cards": [diamond_two["id"]],
+    }
+    assert len(client.prompts) == 1
+    assert len(client.tools) == 1
+    assert client.tools[0][0].name == "bid_trump"
 
 
 @pytest.mark.asyncio
@@ -529,7 +606,7 @@ async def test_ai_player_records_openai_network_failure() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connect failed", request=request)
 
-    config = _config(max_retries=1)
+    config = _config(http_max_retries=1)
     client = OpenAIChatCompletionsClient(
         config,
         transport=httpx.MockTransport(handler),
@@ -552,7 +629,7 @@ async def test_ai_player_records_openai_network_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ai_records_debug_without_tool_use_logging() -> None:
+async def test_ai_records_accepted_tool_result() -> None:
     test_card = card("hearts", "A")
     snap = make_snapshot(
         phase="PLAYING",
@@ -569,9 +646,7 @@ async def test_ai_records_debug_without_tool_use_logging() -> None:
             },
         )
     )
-    player = ai.AIPlayer(
-        index=0, config=_config(log_tool_use=False), client=client
-    )
+    player = ai.AIPlayer(index=0, config=_config(), client=client)
 
     await player.on_state(game, make_state_message(snap, seq=5))
     await asyncio.sleep(0.05)
@@ -890,7 +965,7 @@ def test_ai_tool_schema_hides_local_next_round_tool() -> None:
     assert tools == []
 
 
-def test_ai_tool_schema_hides_local_bid_tools() -> None:
+def test_ai_tool_schema_bid_uses_one_optional_card_tool() -> None:
     test_card = card("spades", "2")
     snap = make_snapshot(
         phase="DEAL_BID",
@@ -901,7 +976,83 @@ def test_ai_tool_schema_hides_local_bid_tools() -> None:
 
     tools = allowed_tool_specs(snap)
 
-    assert tools == []
+    assert len(tools) == 1
+    assert tools[0].name == "bid_trump"
+    assert _card_id_enum(tools[0]) == [test_card["id"]]
+    assert _required_fields(tools[0]) == []
+
+
+def test_ai_bid_tool_without_card_ids_passes() -> None:
+    test_card = card("spades", "2")
+    snap = make_snapshot(
+        phase="DEAL_BID",
+        awaiting_action="bid",
+        player_hand=[test_card],
+        action_hints=[[test_card]],
+    )
+
+    result = tool_call_to_message(
+        7,
+        snap,
+        AIToolCall(name="bid_trump", arguments={}),
+    )
+
+    assert isinstance(result, Ok)
+    assert result.value.raw == {"type": "bid", "pass": True}
+
+
+def test_ai_bid_tool_with_card_ids_bids() -> None:
+    test_card = card("spades", "2")
+    snap = make_snapshot(
+        phase="DEAL_BID",
+        awaiting_action="bid",
+        player_hand=[test_card],
+        action_hints=[[test_card]],
+    )
+
+    result = tool_call_to_message(
+        7,
+        snap,
+        AIToolCall(
+            name="bid_trump",
+            arguments={"card_ids": [test_card["id"]]},
+        ),
+    )
+
+    assert isinstance(result, Ok)
+    assert result.value.raw == {
+        "type": "bid",
+        "cards": [test_card["id"]],
+    }
+
+
+def test_ai_bid_tool_rejects_partial_action_hint() -> None:
+    card1 = card("hearts", "2", deck=1)
+    card2 = card("hearts", "2", deck=2)
+    snap = make_snapshot(
+        phase="DEAL_BID",
+        awaiting_action="bid",
+        player_hand=[card1, card2],
+        action_hints=[[card1, card2]],
+    )
+
+    result = tool_call_to_message(
+        7,
+        snap,
+        AIToolCall(
+            name="bid_trump",
+            arguments={"card_ids": [card1["id"]]},
+        ),
+    )
+
+    assert isinstance(result, Rejected)
+    assert isinstance(result, AIToolRejected)
+    assert result.feedback.error_type == "format"
+    assert (
+        result.reason == "legal_action_groups 是合法动作约束；"
+        "card_ids 必须完整等于其中一组："
+        "不能只选其中一部分，也不能混合多组。"
+    )
 
 
 def test_ai_tool_schema_stir_uses_one_optional_card_tool() -> None:
@@ -1019,12 +1170,10 @@ def test_openai_client_always_disables_thinking() -> None:
         api_key="test-key",
         model="test-model",
         timeout_seconds=1.0,
-        max_retries=2,
-        retry_delay_seconds=0.0,
+        http_max_retries=2,
+        http_retry_delay_seconds=0.0,
         decision_retries=1,
         max_output_tokens=200,
-        log_payloads=False,
-        log_tool_use=True,
     )
     payload = build_chat_completions_payload(
         config,
@@ -1085,35 +1234,6 @@ def test_openai_client_reports_length_finish_before_tool_call() -> None:
         "(finish_reason=length); increase TRACTOR_AI_MAX_OUTPUT_TOKENS "
         "or disable thinking"
     )
-
-
-def test_openai_message_log_includes_content_and_tool_calls() -> None:
-    arguments: JSONObject = {"card_ids": ["card-1"], "reason": "test"}
-    response = _chat_completion_response(
-        tool_name="play_cards", arguments=arguments
-    )
-
-    message_log = chat_completion_message_log(
-        response, include_tool_calls=True
-    )
-
-    assert "play_cards" in message_log
-    assert "card-1" in message_log
-    assert '"content": ""' in message_log
-
-
-def test_openai_client_message_log_can_hide_tool_calls() -> None:
-    arguments: JSONObject = {"card_ids": ["card-1"], "reason": "test"}
-    response = _chat_completion_response(
-        tool_name="play_cards", arguments=arguments
-    )
-
-    message_log = chat_completion_message_log(
-        response, include_tool_calls=False
-    )
-
-    assert "card-1" not in message_log
-    assert '"tool_calls": "<hidden>"' in message_log
 
 
 @pytest.mark.asyncio
@@ -1406,19 +1526,15 @@ def _chat_completion_response(
     }
 
 
-def _config(
-    *, log_tool_use: bool = True, max_retries: int = 2
-) -> AIConfig:
+def _config(*, http_max_retries: int = 2) -> AIConfig:
     return AIConfig(
         provider="openai",
         base_url="https://example.test/v1",
         api_key="test-key",
         model="test-model",
         timeout_seconds=1.0,
-        max_retries=max_retries,
-        retry_delay_seconds=0.0,
+        http_max_retries=http_max_retries,
+        http_retry_delay_seconds=0.0,
         decision_retries=1,
         max_output_tokens=200,
-        log_payloads=False,
-        log_tool_use=log_tool_use,
     )
