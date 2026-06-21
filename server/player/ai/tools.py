@@ -7,27 +7,21 @@ from server.player.ai.rejections import format_rejected
 from server.protocol import AwaitingAction, PlayerMessage, StateSnapshot
 from server.result import Ok, Rejected
 
+_AWAITING_TEXT: dict[AwaitingAction, str] = {
+    "bid": "抢主或不抢",
+    "stir": "反主或不反",
+    "discard": "埋底牌",
+    "play": "出牌",
+    "next_round": "确认进入下一轮",
+}
+
 
 def allowed_tool_specs(snapshot: StateSnapshot) -> list[AIToolSpec]:
     awaiting = snapshot.awaiting_action
     if awaiting == "next_round":
-        return [
-            _no_card_tool(
-                "confirm_next_round", "确认准备开始游戏或进入下一轮。"
-            )
-        ]
+        return []
     if awaiting == "bid":
-        allowed_ids = _hint_card_ids(snapshot) or _hand_card_ids(
-            snapshot
-        )
-        return [
-            _card_tool(
-                "bid_trump",
-                "抓牌阶段抢主：亮出一组 action_hints 中允许的主牌。",
-                allowed_ids,
-            ),
-            _no_card_tool("pass_bid", "抓牌阶段不抢。"),
-        ]
+        return []
     if awaiting == "stir":
         allowed_ids = _hint_card_ids(snapshot) or _hand_card_ids(
             snapshot
@@ -35,11 +29,13 @@ def allowed_tool_specs(snapshot: StateSnapshot) -> list[AIToolSpec]:
         return [
             _card_tool(
                 "stir_trump",
-                "炒地皮阶段反主：亮出一组 action_hints "
-                "中允许的更大主牌。",
+                "炒地皮阶段反主：card_ids 为空或省略表示不反；"
+                "要反主时，card_ids 必须完整等于 action_hints "
+                "中的一组。",
                 allowed_ids,
+                require_card_ids=False,
+                require_reason=False,
             ),
-            _no_card_tool("pass_stir", "炒地皮阶段不反。"),
         ]
     if awaiting == "discard":
         return [
@@ -70,26 +66,17 @@ def tool_call_to_message(
     call: AIToolCall,
 ) -> Ok[PlayerMessage] | Rejected:
     awaiting = snapshot.awaiting_action
-    if call.name == "confirm_next_round":
-        if awaiting != "next_round":
-            return _tool_not_allowed(call.name, awaiting, "next_round")
-        return Ok(PlayerMessage(seq=seq, raw={"type": "next_round"}))
-
-    if call.name == "pass_bid":
-        if awaiting != "bid":
-            return _tool_not_allowed(call.name, awaiting, "bid")
-        return Ok(
-            PlayerMessage(seq=seq, raw={"type": "bid", "pass": True})
+    known_card_tools = {"stir_trump", "discard_bottom", "play_cards"}
+    if call.name not in known_card_tools:
+        return format_rejected(
+            f"未知工具 {call.name}：当前 tools 列表里没有这个工具。",
+            "只调用当前 tools 列表中存在的工具，"
+            "不要使用上一轮状态里的工具名。",
         )
 
-    if call.name == "pass_stir":
-        if awaiting != "stir":
-            return _tool_not_allowed(call.name, awaiting, "stir")
-        return Ok(
-            PlayerMessage(seq=seq, raw={"type": "stir", "pass": True})
-        )
-
-    card_ids_result = _card_ids(call)
+    card_ids_result = _card_ids(
+        call, missing_as_empty=call.name == "stir_trump"
+    )
     if isinstance(card_ids_result, Rejected):
         return card_ids_result
     card_ids = card_ids_result.value
@@ -97,22 +84,15 @@ def tool_call_to_message(
     if isinstance(hand_result, Rejected):
         return hand_result
 
-    if call.name == "bid_trump":
-        if awaiting != "bid":
-            return _tool_not_allowed(call.name, awaiting, "bid")
-        if snapshot.action_hints and not _matches_hint(
-            card_ids, snapshot
-        ):
-            return _action_hint_rejected()
-        return Ok(
-            PlayerMessage(
-                seq=seq, raw={"type": "bid", "cards": card_ids}
-            )
-        )
-
     if call.name == "stir_trump":
         if awaiting != "stir":
             return _tool_not_allowed(call.name, awaiting, "stir")
+        if not card_ids:
+            return Ok(
+                PlayerMessage(
+                    seq=seq, raw={"type": "stir", "pass": True}
+                )
+            )
         if snapshot.action_hints and not _matches_hint(
             card_ids, snapshot
         ):
@@ -133,10 +113,10 @@ def tool_call_to_message(
         )
         if expected is None:
             return format_rejected(
-                "当前 state 没有 stirring_state.exchange_count，"
+                "当前状态没有 stirring_state.exchange_count，"
                 "不能判断埋底数量。",
-                "重新读取当前 state；只有 awaiting_action=discard 且"
-                "exchange_count 存在时才能调用 discard_bottom。",
+                "重新读取当前状态；只有当前需要你埋底，且 "
+                "exchange_count 存在时，才能调用 discard_bottom。",
             )
         if len(card_ids) != expected:
             return format_rejected(
@@ -170,33 +150,16 @@ def tool_call_to_message(
             )
         )
 
-    return format_rejected(
-        f"未知工具 {call.name}：当前 tools 列表里没有这个工具。",
-        "只调用当前 tools 列表中存在的工具，"
-        "不要使用上一轮状态里的工具名。",
-    )
-
-
-def _no_card_tool(name: str, description: str) -> AIToolSpec:
-    return AIToolSpec(
-        name=name,
-        description=description,
-        parameters={
-            "type": "object",
-            "properties": {
-                "reason": {
-                    "type": "string",
-                    "description": "简短说明，便于 debug。",
-                },
-            },
-            "required": ["reason"],
-            "additionalProperties": False,
-        },
-    )
+    raise AssertionError(f"unreachable known tool: {call.name}")
 
 
 def _card_tool(
-    name: str, description: str, allowed_card_ids: list[str]
+    name: str,
+    description: str,
+    allowed_card_ids: list[str],
+    *,
+    require_card_ids: bool = True,
+    require_reason: bool = True,
 ) -> AIToolSpec:
     item_schema: dict[str, JSONValue] = {"type": "string"}
     if allowed_card_ids:
@@ -222,10 +185,24 @@ def _card_tool(
                     "description": "简短说明，便于 debug。",
                 },
             },
-            "required": ["card_ids", "reason"],
+            "required": _required_tool_fields(
+                require_card_ids=require_card_ids,
+                require_reason=require_reason,
+            ),
             "additionalProperties": False,
         },
     )
+
+
+def _required_tool_fields(
+    *, require_card_ids: bool, require_reason: bool
+) -> list[JSONValue]:
+    result: list[JSONValue] = []
+    if require_card_ids:
+        result.append("card_ids")
+    if require_reason:
+        result.append("reason")
+    return result
 
 
 def _hand_card_ids(snapshot: StateSnapshot) -> list[str]:
@@ -243,12 +220,16 @@ def _hint_card_ids(snapshot: StateSnapshot) -> list[str]:
     return result
 
 
-def _card_ids(call: AIToolCall) -> Ok[list[str]] | Rejected:
+def _card_ids(
+    call: AIToolCall, *, missing_as_empty: bool
+) -> Ok[list[str]] | Rejected:
     raw = call.arguments.get("card_ids")
+    if raw is None and missing_as_empty:
+        return Ok([])
     if not isinstance(raw, list):
         return format_rejected(
             f"{call.name} 必须提供 card_ids 数组。",
-            "按工具 schema 传入 card_ids，且 card_ids "
+            "按工具参数格式传入 card_ids，且 card_ids "
             "必须是字符串数组。",
         )
     result: list[str] = []
@@ -257,8 +238,7 @@ def _card_ids(call: AIToolCall) -> Ok[list[str]] | Rejected:
         if not isinstance(item, str):
             return format_rejected(
                 "card_ids 只能包含字符串 card id。",
-                "从当前 hand 或 action_hints 中逐字复制 "
-                "card id 字符串。",
+                "从你的手牌或 action_hints 中逐字复制 card id 字符串。",
             )
         if item in seen:
             return format_rejected(
@@ -279,7 +259,7 @@ def _validate_card_ids_in_hand(
         if card_id not in hand_ids:
             return format_rejected(
                 f"牌 {card_id} 不在你的当前手牌里。",
-                "card_ids 只能从当前 hand 或 action_hints 中逐字复制；"
+                "card_ids 只能从你的手牌或 action_hints 中逐字复制；"
                 "不要根据牌面自行编造"
                 "id。",
             )
@@ -299,11 +279,11 @@ def _tool_not_allowed(
     awaiting_action: AwaitingAction | None,
     expected_awaiting_action: AwaitingAction,
 ) -> Rejected:
-    actual = awaiting_action if awaiting_action is not None else "none"
+    actual = _awaiting_text(awaiting_action)
+    expected = _AWAITING_TEXT[expected_awaiting_action]
     return format_rejected(
-        f"当前不能调用 {tool_name}：state.awaiting_action 是"
-        f"{actual}，这个工具只允许在 "
-        f"{expected_awaiting_action} 时调用。",
+        f"当前不能调用 {tool_name}：现在需要你{actual}，"
+        f"这个工具只允许在需要你{expected}时调用。",
         "只调用当前 tools 列表中的工具；"
         "不要使用上一轮状态里的工具调用。",
     )
@@ -315,3 +295,9 @@ def _action_hint_rejected() -> Rejected:
         "不能只选其中一部分，也不能混合多组。",
         "从 legal_action_hint_groups 中复制一整组 card_ids。",
     )
+
+
+def _awaiting_text(awaiting_action: AwaitingAction | None) -> str:
+    if awaiting_action is None:
+        return "不行动"
+    return _AWAITING_TEXT[awaiting_action]

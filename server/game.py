@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections import defaultdict
 from collections.abc import Sequence
 from typing import Callable, TypeGuard, assert_never
 
@@ -55,14 +54,14 @@ from server.protocol_snapshot_builder import (
     trick_snapshot,
 )
 from server.result import Ok, Rejected
+from server.rules import bid as bid_rules
 from server.rules import hints as play_rules
-from server.rules.cards import Card, Rank, Suit
-from server.rules.ordering import bid_value
+from server.rules.cards import Card, Rank
 from server.rules.rejections import (
     CardNotInHandRejected,
     EmptyBidRejected,
 )
-from server.sm import deal_bid_sm, game_sm, round_sm, stirring_sm
+from server.sm import deal_bid_sm, game_sm, round_sm
 from server.sm.rejections import (
     DuplicateNextRoundConfirmationRejected,
     GameNotStartedRejected,
@@ -480,65 +479,27 @@ class Game:
     @staticmethod
     def _get_legal_stir_actions(
         hand: list[Card],
-        stirring_state: stirring_sm.StirringState,
+        state: round_sm.RoundState,
         player_index: int,
     ) -> list[list[Card]]:
         """Compute legal stir actions for a player's hand.
 
-        Returns pairs of trump-rank cards or joker pairs that have
-        priority
-        exceeding the current trump. Returns empty list if the player is
-        stirring_state.last_stir_player (can't stir own trump).
+        Candidate card groups come from shared bid rules; legality is
+        decided by the same round state-machine path as a real stir
+        action.
         """
-        # Can't stir own trump
-        if stirring_state.last_stir_player == player_index:
-            return []
-
-        trump_rank = stirring_state.trump_rank
-        current_priority = stirring_state.current_priority
-
-        # Group trump-rank cards by suit
-        by_suit: dict[Suit, list[Card]] = defaultdict(list)
-        small_jokers: list[Card] = []
-        big_jokers: list[Card] = []
-
-        for c in hand:
-            if c.is_joker:
-                if c.rank == Rank.SMALL_JOKER:
-                    small_jokers.append(c)
-                else:
-                    big_jokers.append(c)
-            elif c.rank == trump_rank:
-                by_suit[c.suit].append(c)
-
         result: list[list[Card]] = []
-
-        # Same-suit trump-rank pairs
-        for suit_cards in by_suit.values():
-            if len(suit_cards) >= 2:
-                pair = [suit_cards[0], suit_cards[1]]
-                if bid_value(pair, trump_rank) > current_priority:
-                    result.append(pair)
-
-        # Small joker pair
-        if len(small_jokers) >= 2:
-            pair = [small_jokers[0], small_jokers[1]]
-            if bid_value(pair, trump_rank) > current_priority:
-                result.append(pair)
-
-        # Big joker pair
-        if len(big_jokers) >= 2:
-            pair = [big_jokers[0], big_jokers[1]]
-            if bid_value(pair, trump_rank) > current_priority:
-                result.append(pair)
-
-        result.sort(
-            key=lambda cards: (
-                bid_value(cards, trump_rank),
-                tuple(sorted(card.id for card in cards)),
-            )
-        )
-        return result
+        for candidate in bid_rules.bid_card_candidates(
+            hand, state.trump_rank
+        ):
+            if len(candidate) != 2:
+                continue
+            match round_sm.stir(state, player_index, candidate):
+                case Ok():
+                    result.append(candidate)
+                case Rejected():
+                    continue
+        return bid_rules.sort_bid_action_hints(result, state.trump_rank)
 
     def snapshot(self, for_player: int) -> StateSnapshot:
         """Build a StateSnapshot for the given player.
@@ -791,7 +752,7 @@ class Game:
             and rs.stirring_state is not None
         ):
             hints = self._get_legal_stir_actions(
-                player_hand, rs.stirring_state, player_index
+                player_hand, rs, player_index
             )
             if len(hints) > deal_bid_sm.MAX_BID_ACTION_HINTS:
                 return []

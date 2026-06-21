@@ -8,6 +8,14 @@ from server.player.ai.formatting import card_text
 from server.protocol import CompletedTrickSnapshot, StateSnapshot
 from server.rules.cards import Suit
 
+_SUIT_TEXT: dict[Suit, str] = {
+    Suit.HEARTS: "红桃",
+    Suit.SPADES: "黑桃",
+    Suit.DIAMONDS: "方片",
+    Suit.CLUBS: "梅花",
+    Suit.JOKER: "王",
+}
+
 type AITrickKey = tuple[
     int, int, int, tuple[tuple[int, tuple[str, ...]], ...]
 ]
@@ -110,33 +118,38 @@ class AIMemory:
                 self.failed_throws.append(record)
 
     def summary(self) -> str:
-        lines = ["AI 可见记忆:"]
-        lines.append(f"- last_seq: {self.last_seq}")
-        lines.append(f"- bid_count: {len(self.bids)}")
+        lines = ["已知牌局记录:"]
+        lines.append(
+            f"- 最近状态序号：{_optional_seq_text(self.last_seq)}"
+        )
+        lines.append(f"- 亮主/反主记录数：{len(self.bids)}")
         if self.bids:
             last_bid = self.bids[-1]
             lines.append(
-                f"- last_bid: player={last_bid.player},"
-                f"cards={list(last_bid.cards)},"
-                f"suit={last_bid.suit}, count={last_bid.count}"
+                f"- 最近亮主/反主：{_player_text(last_bid.player)}，"
+                f"牌={list(last_bid.cards)}，"
+                f"花色={_optional_suit_text(last_bid.suit)}，"
+                f"张数={last_bid.count}"
             )
-        lines.append(f"- completed_tricks: {len(self.tricks)}")
+        lines.append(f"- 已完成墩数：{len(self.tricks)}")
         for trick in self.tricks[-6:]:
             play_text = "; ".join(
-                f"p{play.player}={list(play.cards)}"
+                f"{_player_text(play.player)}={list(play.cards)}"
                 for play in trick.plays
             )
             lines.append(
-                f"- trick {trick.index}: lead={trick.lead_player}, "
-                f"winner={trick.winner}, points={trick.points},"
+                f"- 第 {trick.index} 墩：首出="
+                f"{_player_text(trick.lead_player)}，"
+                f"赢家={_player_text(trick.winner)}，"
+                f"分={trick.points}，"
                 f"{play_text}"
             )
         if self.failed_throws:
             for item in self.failed_throws[-3:]:
                 lines.append(
-                    f"- failed_throw: player={item.player}, "
-                    f"attempted={list(item.attempted_cards)},"
-                    f"forced={list(item.forced_cards)}"
+                    f"- 甩牌失败：{_player_text(item.player)}，"
+                    f"尝试甩={list(item.attempted_cards)}，"
+                    f"被捡小={list(item.forced_cards)}"
                 )
         return "\n".join(lines)
 
@@ -169,3 +182,19 @@ def _trick_record(
         winner=trick.winner,
         points=trick.points,
     )
+
+
+def _player_text(player: int) -> str:
+    return f"玩家 {player}"
+
+
+def _optional_seq_text(seq: int | None) -> str:
+    if seq is None:
+        return "无"
+    return str(seq)
+
+
+def _optional_suit_text(suit: Suit | None) -> str:
+    if suit is None:
+        return "无主"
+    return _SUIT_TEXT[suit]

@@ -376,9 +376,9 @@ def _repair_prompt(
     repair_text = "\n".join(
         [
             "上一次动作被拒绝。",
-            f"- error_type: {feedback.error_type}",
-            f"- reason: {feedback.reason}",
-            f"- repair: {feedback.repair}",
+            f"- 错误类型（error_type）：{feedback.error_type}",
+            f"- 原因：{feedback.reason}",
+            f"- 修正建议：{feedback.repair}",
             f"- 当前手牌 card_ids: {legal_ids}",
             hint_groups,
             "请重新调用一个允许的工具。",
@@ -392,10 +392,12 @@ def _repair_prompt(
 
 def _hint_groups_text(snapshot: StateSnapshot) -> str:
     if not snapshot.action_hints:
-        return "- legal_action_hint_groups: 无"
+        return "- 合法提示组（legal_action_hint_groups）：无"
     groups: list[str] = []
     for index, hint in enumerate(snapshot.action_hints):
         groups.append(
-            f"hint {index}: [{', '.join(card.id for card in hint)}]"
+            f"提示 {index}: [{', '.join(card.id for card in hint)}]"
         )
-    return f"- legal_action_hint_groups: {'; '.join(groups)}"
+    return (
+        f"- 合法提示组（legal_action_hint_groups）：{'; '.join(groups)}"
+    )

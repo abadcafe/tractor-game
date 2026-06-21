@@ -24,6 +24,8 @@ from .ai.client import (
     is_json_object,
 )
 from .ai.config import AIConfig
+from .ai.context import build_decision_prompt
+from .ai.memory import AIMemory
 from .ai.openai_client import (
     OpenAIChatCompletionsClient,
     build_chat_completions_payload,
@@ -31,6 +33,7 @@ from .ai.openai_client import (
     extract_chat_completion_tool_call,
 )
 from .ai.rejections import AIToolRejected
+from .ai.rules import RuleBook
 from .ai.tools import allowed_tool_specs, tool_call_to_message
 from .test_helpers import (
     card,
@@ -52,6 +55,40 @@ def test_ai_player_is_not_auto_player() -> None:
     assert type(player) is ai.AIPlayer
 
 
+def test_ai_decision_prompt_uses_chinese_game_labels() -> None:
+    test_card = card("hearts", "A")
+    snap = make_snapshot(
+        phase="PLAYING",
+        awaiting_action="play",
+        trump_suit="spades",
+        trump_rank="2",
+        player_hand=[test_card],
+        player_hand_counts=[10, 9, 8, 7],
+        declarer_team=0,
+        declarer_player=2,
+        defender_points=35,
+    )
+    rules = RuleBook.from_markdown("## common\n- 测试规则")
+
+    prompt = build_decision_prompt(
+        player_index=1,
+        snapshot=snap,
+        memory=AIMemory(),
+        rules=rules,
+    )
+
+    assert "- 你是：玩家 1" in prompt.user
+    assert "- 阶段：出牌阶段" in prompt.user
+    assert "- 当前需要你：出牌" in prompt.user
+    assert "- 主花色：黑桃" in prompt.user
+    assert "当前墩：无" in prompt.user
+    assert "可选提示（action_hints）：无" in prompt.user
+    assert "phase:" not in prompt.user
+    assert "awaiting_action:" not in prompt.user
+    assert "trump_suit:" not in prompt.user
+    assert "not_played" not in prompt.user
+
+
 @pytest.mark.asyncio
 async def test_ai_player_run_requests_state() -> None:
     game = make_game()
@@ -70,7 +107,7 @@ async def test_ai_next_round_confirms_locally() -> None:
     game = make_game(snap)
     client = StaticAIClient(
         AIToolCall(
-            name="confirm_next_round",
+            name="unused_tool",
             arguments={"reason": "should not be used"},
         )
     )
@@ -92,7 +129,7 @@ async def test_ai_player_does_not_log_local_action_submission() -> None:
     game = make_game(snap)
     client = StaticAIClient(
         AIToolCall(
-            name="confirm_next_round",
+            name="unused_tool",
             arguments={"reason": "should not be used"},
         )
     )
@@ -119,7 +156,8 @@ async def test_ai_bid_without_hint_passes_locally() -> None:
     game = make_game(snap)
     client = StaticAIClient(
         AIToolCall(
-            name="pass_bid", arguments={"reason": "should not be used"}
+            name="unused_tool",
+            arguments={"reason": "should not be used"},
         )
     )
     player = ai.AIPlayer(index=0, config=_config(), client=client)
@@ -151,7 +189,8 @@ async def test_ai_bid_with_hints_uses_first_server_hint() -> None:
     game = make_game(snap)
     client = StaticAIClient(
         AIToolCall(
-            name="pass_bid", arguments={"reason": "should not be used"}
+            name="unused_tool",
+            arguments={"reason": "should not be used"},
         )
     )
     player = ai.AIPlayer(index=0, config=_config(), client=client)
@@ -175,7 +214,8 @@ async def test_ai_stir_without_hint_passes_locally() -> None:
     game = make_game(snap)
     client = StaticAIClient(
         AIToolCall(
-            name="pass_stir", arguments={"reason": "should not be used"}
+            name="unused_tool",
+            arguments={"reason": "should not be used"},
         )
     )
     player = ai.AIPlayer(index=0, config=_config(), client=client)
@@ -207,9 +247,7 @@ async def test_ai_player_stir_with_hint_uses_llm() -> None:
         trump_rank="2",
     )
     game = make_game(snap)
-    client = StaticAIClient(
-        AIToolCall(name="pass_stir", arguments={"reason": "llm pass"})
-    )
+    client = StaticAIClient(AIToolCall(name="stir_trump", arguments={}))
     player = ai.AIPlayer(index=0, config=_config(), client=client)
 
     await player.on_state(game, make_state_message(snap, seq=7))
@@ -586,7 +624,7 @@ async def test_ai_player_repairs_server_rejected_tool_call() -> None:
     }
     assert len(client.prompts) == 2
     assert "illegal play" in client.prompts[1].user
-    assert "error_type: rule" in client.prompts[1].user
+    assert "错误类型（error_type）：rule" in client.prompts[1].user
 
     transcript = player.transcript()
     assert len(transcript) == 2
@@ -644,7 +682,7 @@ async def test_ai_player_repairs_play_not_matching_action_hint() -> (
         "cards": [hint_card_1["id"], hint_card_2["id"]],
     }
     assert len(client.prompts) == 2
-    assert "error_type: format" in client.prompts[1].user
+    assert "错误类型（error_type）：format" in client.prompts[1].user
     assert (
         "card_ids 必须完整等于 action_hints 里的某一组"
         in client.prompts[1].user
@@ -697,7 +735,7 @@ async def test_ai_player_repairs_invalid_card_id_once() -> None:
         f"牌 {invalid_card_id} 不在你的当前手牌里"
         in client.prompts[1].user
     )
-    assert "error_type: format" in client.prompts[1].user
+    assert "错误类型（error_type）：format" in client.prompts[1].user
     assert valid_card["id"] in client.prompts[1].user
 
 
@@ -752,7 +790,7 @@ def test_openai_client_uses_chat_completions_tool_shape() -> None:
         AIDecisionPrompt(system="system text", user="user text"),
         [
             AIToolSpec(
-                name="confirm_next_round",
+                name="test_tool",
                 description="confirm",
                 parameters=parameters,
             )
@@ -770,7 +808,7 @@ def test_openai_client_uses_chat_completions_tool_shape() -> None:
         {
             "type": "function",
             "function": {
-                "name": "confirm_next_round",
+                "name": "test_tool",
                 "description": "confirm",
                 "parameters": parameters,
                 "strict": True,
@@ -787,6 +825,66 @@ def test_ai_config_defaults_to_larger_output_budget(
     config = ai_config.AIConfig.from_env()
 
     assert config.max_output_tokens == 2400
+
+
+def test_ai_tool_schema_hides_local_next_round_tool() -> None:
+    snap = make_snapshot(phase="WAITING", awaiting_action="next_round")
+
+    tools = allowed_tool_specs(snap)
+
+    assert tools == []
+
+
+def test_ai_tool_schema_hides_local_bid_tools() -> None:
+    test_card = card("spades", "2")
+    snap = make_snapshot(
+        phase="DEAL_BID",
+        awaiting_action="bid",
+        player_hand=[test_card],
+        action_hints=[[test_card]],
+    )
+
+    tools = allowed_tool_specs(snap)
+
+    assert tools == []
+
+
+def test_ai_tool_schema_stir_uses_one_optional_card_tool() -> None:
+    card1 = card("hearts", "2", deck=1)
+    card2 = card("hearts", "2", deck=2)
+    snap = make_snapshot(
+        phase="STIRRING",
+        awaiting_action="stir",
+        player_hand=[card1, card2],
+        action_hints=[[card1, card2]],
+    )
+
+    tools = allowed_tool_specs(snap)
+
+    assert len(tools) == 1
+    assert tools[0].name == "stir_trump"
+    assert _card_id_enum(tools[0]) == [card1["id"], card2["id"]]
+    assert _required_fields(tools[0]) == []
+
+
+def test_ai_stir_tool_without_card_ids_passes() -> None:
+    card1 = card("hearts", "2", deck=1)
+    card2 = card("hearts", "2", deck=2)
+    snap = make_snapshot(
+        phase="STIRRING",
+        awaiting_action="stir",
+        player_hand=[card1, card2],
+        action_hints=[[card1, card2]],
+    )
+
+    result = tool_call_to_message(
+        7,
+        snap,
+        AIToolCall(name="stir_trump", arguments={}),
+    )
+
+    assert isinstance(result, Ok)
+    assert result.value.raw == {"type": "stir", "pass": True}
 
 
 def test_ai_tool_schema_limits_play_card_ids_to_current_hand() -> None:
@@ -878,7 +976,7 @@ def test_openai_client_always_disables_thinking() -> None:
         AIDecisionPrompt(system="system text", user="user text"),
         [
             AIToolSpec(
-                name="confirm_next_round",
+                name="test_tool",
                 description="confirm",
                 parameters={
                     "type": "object",
@@ -981,7 +1079,7 @@ async def test_openai_client_decide_uses_async_http_transport() -> None:
             status_code=200,
             content=json.dumps(
                 _chat_completion_response(
-                    tool_name="confirm_next_round",
+                    tool_name="test_tool",
                     arguments=arguments,
                 )
             ).encode("utf-8"),
@@ -997,7 +1095,7 @@ async def test_openai_client_decide_uses_async_http_transport() -> None:
         AIDecisionPrompt(system="system", user="user"),
         [
             AIToolSpec(
-                name="confirm_next_round",
+                name="test_tool",
                 description="confirm",
                 parameters={
                     "type": "object",
@@ -1011,14 +1109,14 @@ async def test_openai_client_decide_uses_async_http_transport() -> None:
 
     assert isinstance(result, Ok)
     assert result.value.tool_call == AIToolCall(
-        name="confirm_next_round", arguments=arguments
+        name="test_tool", arguments=arguments
     )
     assert len(captured_payloads) == 1
     assert captured_payloads[0]["model"] == "test-model"
     assert result.value.api.request is not None
     assert result.value.api.response is not None
     assert result.value.api.error is None
-    assert "confirm_next_round" in result.value.api.response
+    assert "test_tool" in result.value.api.response
     assert _duration_ms(_json_object(result.value.api.response)) >= 0
 
 
@@ -1036,7 +1134,7 @@ async def test_openai_client_retries_timeout_then_succeeds() -> None:
             status_code=200,
             content=json.dumps(
                 _chat_completion_response(
-                    tool_name="confirm_next_round",
+                    tool_name="test_tool",
                     arguments=arguments,
                 )
             ).encode("utf-8"),
@@ -1052,7 +1150,7 @@ async def test_openai_client_retries_timeout_then_succeeds() -> None:
         AIDecisionPrompt(system="system", user="user"),
         [
             AIToolSpec(
-                name="confirm_next_round",
+                name="test_tool",
                 description="confirm",
                 parameters={
                     "type": "object",
@@ -1067,7 +1165,7 @@ async def test_openai_client_retries_timeout_then_succeeds() -> None:
     assert isinstance(result, Ok)
     assert calls == 2
     assert result.value.tool_call == AIToolCall(
-        name="confirm_next_round", arguments=arguments
+        name="test_tool", arguments=arguments
     )
     assert result.value.api.request is not None
     assert result.value.api.response is not None
@@ -1099,7 +1197,7 @@ async def test_openai_does_not_retry_non_retryable_http_error() -> None:
         AIDecisionPrompt(system="system", user="user"),
         [
             AIToolSpec(
-                name="confirm_next_round",
+                name="test_tool",
                 description="confirm",
                 parameters={
                     "type": "object",
@@ -1195,6 +1293,16 @@ def _card_id_enum(tool: AIToolSpec) -> list[str]:
     assert isinstance(enum_values, list)
     result: list[str] = []
     for item in enum_values:
+        assert isinstance(item, str)
+        result.append(item)
+    return result
+
+
+def _required_fields(tool: AIToolSpec) -> list[str]:
+    required = tool.parameters["required"]
+    assert isinstance(required, list)
+    result: list[str] = []
+    for item in required:
         assert isinstance(item, str)
         result.append(item)
     return result
