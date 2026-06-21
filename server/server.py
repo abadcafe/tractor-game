@@ -12,7 +12,12 @@ import logging
 import os
 from contextlib import asynccontextmanager, suppress
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    HTTPException,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import FileResponse, Response
 
 from server.game import Game
@@ -31,7 +36,8 @@ _SERVER_LOG_HANDLER_NAME = "tractor-server-stderr"
 def _configure_server_logging() -> None:
     """Route project loggers to stderr under uvicorn.
 
-    Uvicorn's default logging config only installs handlers for uvicorn.*
+    Uvicorn's default logging config only installs handlers for
+    uvicorn.*
     loggers. Without this handler, INFO logs from server.* modules are
     created but not visible in the terminal.
     """
@@ -41,15 +47,21 @@ def _configure_server_logging() -> None:
         handler = logging.StreamHandler()
         handler.set_name(_SERVER_LOG_HANDLER_NAME)
         handler.setLevel(logging.INFO)
-        handler.setFormatter(logging.Formatter(
-            "%(asctime)s %(levelname)s [%(name)s] %(message)s",
-        ))
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s %(levelname)s [%(name)s] %(message)s",
+            )
+        )
         server_logger.addHandler(handler)
     server_logger.propagate = False
 
 
-def _has_named_handler(target_logger: logging.Logger, name: str) -> bool:
-    return any(handler.get_name() == name for handler in target_logger.handlers)
+def _has_named_handler(
+    target_logger: logging.Logger, name: str
+) -> bool:
+    return any(
+        handler.get_name() == name for handler in target_logger.handlers
+    )
 
 
 _configure_server_logging()
@@ -60,7 +72,9 @@ async def _cleanup_loop():
     while True:
         await asyncio.sleep(300)
         # Clean up human_players entries for expired games
-        expired_ids = set(human_players.keys()) - set(g["game_id"] for g in registry.list_games())
+        expired_ids = set(human_players.keys()) - set(
+            g["game_id"] for g in registry.list_games()
+        )
         for gid in expired_ids:
             human = human_players.pop(gid, None)
             if human is not None and human.is_connected():
@@ -93,18 +107,23 @@ async def health():
 async def create_game():
     """Create a new game with 3 bot players and 1 human player.
 
-    The game starts in WAITING phase. All players must confirm (next_round)
-    before the game begins. Bot players first request state via seq=0; the
+    The game starts in WAITING phase. All players must confirm
+    (next_round)
+    before the game begins. Bot players first request state via seq=0;
+    the
     human client does the same after opening its WebSocket.
     """
-    bot_players: list[BotPlayer] = [_create_bot_player(i) for i in range(3)]
+    bot_players: list[BotPlayer] = [
+        _create_bot_player(i) for i in range(3)
+    ]
     human = HumanPlayer(3)
     players: list[Player] = [*bot_players, human]
     game = Game(players=players)
     game_id = registry.create(game)
     human_players[game_id] = human
 
-    # Start each bot player independently. They send seq=0 to request the
+    # Start each bot player independently. They send seq=0 to request
+    # the
     # current state, then act only from received StateMessage pushes.
     for player in bot_players:
         asyncio.create_task(player.run(game))
@@ -139,11 +158,16 @@ async def ai_debug_page(game_id: str) -> Response:
     html_path = os.path.join(static_dir, "debug-ai.html")
     if os.path.isfile(html_path):
         return FileResponse(html_path)
-    return Response(status_code=404, content="Debug frontend not built. Run: deno task build")
+    return Response(
+        status_code=404,
+        content="Debug frontend not built. Run: deno task build",
+    )
 
 
 @app.websocket("/ws/debug/ai/{game_id}")
-async def ai_debug_stream(websocket: WebSocket, game_id: str, player: int | None = None) -> None:
+async def ai_debug_stream(
+    websocket: WebSocket, game_id: str, player: int | None = None
+) -> None:
     game = registry.get(game_id)
     if game is None:
         await websocket.close(code=4404, reason="game not found")
@@ -160,7 +184,9 @@ async def ai_debug_stream(websocket: WebSocket, game_id: str, player: int | None
         for message in ai_player.transcript_stream():
             await _send_ai_debug_message(websocket, message)
             last_sent_event_id = message["event_id"]
-        await _stream_live_ai_debug_messages(websocket, queue, last_sent_event_id)
+        await _stream_live_ai_debug_messages(
+            websocket, queue, last_sent_event_id
+        )
     except WebSocketDisconnect:
         pass
     finally:
@@ -184,7 +210,9 @@ def _ai_player_at(game: Game, player: int | None) -> AIPlayer | None:
     return None
 
 
-async def _send_ai_debug_message(websocket: WebSocket, message: TranscriptRecordDict) -> None:
+async def _send_ai_debug_message(
+    websocket: WebSocket, message: TranscriptRecordDict
+) -> None:
     await websocket.send_json(message)
 
 
@@ -194,7 +222,9 @@ async def _stream_live_ai_debug_messages(
     last_sent_event_id: int,
 ) -> None:
     queue_task = asyncio.create_task(queue.get())
-    disconnect_task = asyncio.create_task(_wait_ai_debug_disconnect(websocket))
+    disconnect_task = asyncio.create_task(
+        _wait_ai_debug_disconnect(websocket)
+    )
     try:
         while True:
             done, _pending = await asyncio.wait(
@@ -227,7 +257,6 @@ async def _wait_ai_debug_disconnect(websocket: WebSocket) -> None:
         return
 
 
-
 # ---- WebSocket Endpoint ----
 
 
@@ -254,7 +283,9 @@ async def websocket_game(websocket: WebSocket, game_id: str):
 
 # ---- Static files ----
 
-static_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static"))
+static_dir = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "static")
+)
 
 
 @app.get("/")
@@ -262,16 +293,25 @@ async def index():
     html_path = os.path.join(static_dir, "index.html")
     if os.path.isfile(html_path):
         return FileResponse(html_path)
-    return Response(status_code=404, content="Frontend not built. Run: deno task build")
+    return Response(
+        status_code=404,
+        content="Frontend not built. Run: deno task build",
+    )
 
 
 @app.get("/{path:path}")
 async def serve_static(path: str):
-    """Serve static files from static/ directory. Falls back to index.html for unknown paths."""
+    """
+    Serve static files from static/ directory. Falls back to index.html
+    for unknown paths.
+    """
     if path.startswith("api/") or path.startswith("ws/"):
         return Response(status_code=404, content="Not found")
     file_path = os.path.normpath(os.path.join(static_dir, path))
-    if not file_path.startswith(static_dir + os.sep) and file_path != static_dir:
+    if (
+        not file_path.startswith(static_dir + os.sep)
+        and file_path != static_dir
+    ):
         return Response(status_code=403, content="Forbidden")
     if os.path.isfile(file_path):
         return FileResponse(file_path)

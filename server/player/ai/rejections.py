@@ -1,7 +1,8 @@
 """Structured rejection feedback for AI tool decisions.
 
 These strings are part of the prompt loop. Keep them short, Chinese, and
-actionable so the LLM can repair a rejected tool call on the next attempt.
+actionable so the LLM can repair a rejected tool call on the next
+attempt.
 """
 
 from __future__ import annotations
@@ -41,7 +42,10 @@ def rule_feedback(reason: str) -> AIRejectionFeedback:
     return AIRejectionFeedback(
         error_type="rule",
         reason=reason,
-        repair="请根据当前 state 重新选择合法动作；如果 action_hints 非空，完整复制其中一组。",
+        repair=(
+            "请根据当前 state 重新选择合法动作；如果 action_hints "
+            "非空，完整复制其中一组。"
+        ),
     )
 
 

@@ -16,7 +16,9 @@ type RoundPhase = Literal[
     "WAITING",
 ]
 type StirringPhase = Literal["WAITING", "EXCHANGING", "COMPLETE"]
-type AwaitingAction = Literal["bid", "stir", "discard", "play", "next_round"]
+type AwaitingAction = Literal[
+    "bid", "stir", "discard", "play", "next_round"
+]
 type BidEventKind = Literal["trump_rank", "joker"]
 type JokerType = Literal["big", "small"]
 
@@ -42,7 +44,9 @@ class TrickSlotSnapshot(SnapshotModel):
     @overload
     def __getitem__(self, key: Literal["cards"]) -> list[Card]: ...
 
-    def __getitem__(self, key: Literal["player", "cards"]) -> int | list[Card]:
+    def __getitem__(
+        self, key: Literal["player", "cards"]
+    ) -> int | list[Card]:
         if key == "player":
             return self.player
         return self.cards
@@ -59,7 +63,9 @@ class TrickSnapshot(SnapshotModel):
     def __getitem__(self, key: Literal["lead_player"]) -> int: ...
 
     @overload
-    def __getitem__(self, key: Literal["slots"]) -> list[TrickSlotSnapshot]: ...
+    def __getitem__(
+        self, key: Literal["slots"]
+    ) -> list[TrickSlotSnapshot]: ...
 
     @overload
     def __getitem__(self, key: Literal["current_player"]) -> int: ...
@@ -87,7 +93,9 @@ class CompletedTrickSnapshot(SnapshotModel):
     def __getitem__(self, key: Literal["lead_player"]) -> int: ...
 
     @overload
-    def __getitem__(self, key: Literal["slots"]) -> list[TrickSlotSnapshot]: ...
+    def __getitem__(
+        self, key: Literal["slots"]
+    ) -> list[TrickSlotSnapshot]: ...
 
     @overload
     def __getitem__(self, key: Literal["winner"]) -> int: ...
@@ -119,10 +127,14 @@ class FailedThrowSnapshot(SnapshotModel):
     def __getitem__(self, key: Literal["player"]) -> int: ...
 
     @overload
-    def __getitem__(self, key: Literal["attempted_cards"]) -> list[Card]: ...
+    def __getitem__(
+        self, key: Literal["attempted_cards"]
+    ) -> list[Card]: ...
 
     @overload
-    def __getitem__(self, key: Literal["forced_cards"]) -> list[Card]: ...
+    def __getitem__(
+        self, key: Literal["forced_cards"]
+    ) -> list[Card]: ...
 
     def __getitem__(
         self,
@@ -145,19 +157,25 @@ class ScoringSnapshot(SnapshotModel):
     bottom_cards: list[Card]
 
     @overload
-    def __getitem__(self, key: Literal["declarer_team"]) -> int | None: ...
+    def __getitem__(
+        self, key: Literal["declarer_team"]
+    ) -> int | None: ...
 
     @overload
     def __getitem__(self, key: Literal["defender_points"]) -> int: ...
 
     @overload
-    def __getitem__(self, key: Literal["total_defender_points"]) -> int: ...
+    def __getitem__(
+        self, key: Literal["total_defender_points"]
+    ) -> int: ...
 
     @overload
     def __getitem__(self, key: Literal["bottom_card_bonus"]) -> int: ...
 
     @overload
-    def __getitem__(self, key: Literal["bottom_cards"]) -> list[Card]: ...
+    def __getitem__(
+        self, key: Literal["bottom_cards"]
+    ) -> list[Card]: ...
 
     def __getitem__(
         self,
@@ -194,7 +212,9 @@ class StirringStateSnapshot(SnapshotModel):
     def __getitem__(self, key: Literal["phase"]) -> StirringPhase: ...
 
     @overload
-    def __getitem__(self, key: Literal["trump_suit"]) -> Suit | None: ...
+    def __getitem__(
+        self, key: Literal["trump_suit"]
+    ) -> Suit | None: ...
 
     @overload
     def __getitem__(self, key: Literal["current_player"]) -> int: ...
@@ -203,10 +223,14 @@ class StirringStateSnapshot(SnapshotModel):
     def __getitem__(self, key: Literal["declarer_player"]) -> int: ...
 
     @overload
-    def __getitem__(self, key: Literal["exchanging_player"]) -> int | None: ...
+    def __getitem__(
+        self, key: Literal["exchanging_player"]
+    ) -> int | None: ...
 
     @overload
-    def __getitem__(self, key: Literal["exchange_count"]) -> int | None: ...
+    def __getitem__(
+        self, key: Literal["exchange_count"]
+    ) -> int | None: ...
 
     def __getitem__(
         self,
@@ -255,14 +279,18 @@ class BidEventSnapshot(SnapshotModel):
     def __getitem__(self, key: Literal["suit"]) -> Suit | None: ...
 
     @overload
-    def __getitem__(self, key: Literal["joker_type"]) -> JokerType | None: ...
+    def __getitem__(
+        self, key: Literal["joker_type"]
+    ) -> JokerType | None: ...
 
     @overload
     def __getitem__(self, key: Literal["count"]) -> int: ...
 
     def __getitem__(
         self,
-        key: Literal["player", "cards", "kind", "suit", "joker_type", "count"],
+        key: Literal[
+            "player", "cards", "kind", "suit", "joker_type", "count"
+        ],
     ) -> int | list[Card] | BidEventKind | Suit | JokerType | None:
         if key == "player":
             return self.player
@@ -280,9 +308,12 @@ class BidEventSnapshot(SnapshotModel):
 class StateSnapshot(SnapshotModel):
     """Full player-facing state snapshot.
 
-    ``action_hints`` is a complete closed hint set when non-empty. An empty
-    list means no closed hint set is provided, not that the player has no
-    legal action. Clients must still allow user input where the action type
+    ``action_hints`` is a complete closed hint set when non-empty. An
+    empty
+    list means no closed hint set is provided, not that the player has
+    no
+    legal action. Clients must still allow user input where the action
+    type
     allows free card selection; the backend remains authoritative.
     """
 
@@ -314,31 +345,45 @@ class StateSnapshot(SnapshotModel):
     def __getitem__(self, key: Literal["phase"]) -> RoundPhase: ...
 
     @overload
-    def __getitem__(self, key: Literal["player_hand"]) -> list[Card]: ...
+    def __getitem__(
+        self, key: Literal["player_hand"]
+    ) -> list[Card]: ...
 
     @overload
-    def __getitem__(self, key: Literal["player_hand_counts"]) -> list[int]: ...
+    def __getitem__(
+        self, key: Literal["player_hand_counts"]
+    ) -> list[int]: ...
 
     @overload
-    def __getitem__(self, key: Literal["bottom_cards"]) -> list[Card]: ...
+    def __getitem__(
+        self, key: Literal["bottom_cards"]
+    ) -> list[Card]: ...
 
     @overload
-    def __getitem__(self, key: Literal["trump_suit"]) -> Suit | None: ...
+    def __getitem__(
+        self, key: Literal["trump_suit"]
+    ) -> Suit | None: ...
 
     @overload
     def __getitem__(self, key: Literal["trump_rank"]) -> Rank: ...
 
     @overload
-    def __getitem__(self, key: Literal["declarer_team"]) -> int | None: ...
+    def __getitem__(
+        self, key: Literal["declarer_team"]
+    ) -> int | None: ...
 
     @overload
-    def __getitem__(self, key: Literal["declarer_player"]) -> int | None: ...
+    def __getitem__(
+        self, key: Literal["declarer_player"]
+    ) -> int | None: ...
 
     @overload
     def __getitem__(self, key: Literal["defender_points"]) -> int: ...
 
     @overload
-    def __getitem__(self, key: Literal["trick"]) -> TrickSnapshot | None: ...
+    def __getitem__(
+        self, key: Literal["trick"]
+    ) -> TrickSnapshot | None: ...
 
     @overload
     def __getitem__(
@@ -347,22 +392,34 @@ class StateSnapshot(SnapshotModel):
     ) -> CompletedTrickSnapshot | None: ...
 
     @overload
-    def __getitem__(self, key: Literal["defender_point_cards"]) -> list[Card]: ...
+    def __getitem__(
+        self, key: Literal["defender_point_cards"]
+    ) -> list[Card]: ...
 
     @overload
-    def __getitem__(self, key: Literal["failed_throw"]) -> FailedThrowSnapshot | None: ...
+    def __getitem__(
+        self, key: Literal["failed_throw"]
+    ) -> FailedThrowSnapshot | None: ...
 
     @overload
-    def __getitem__(self, key: Literal["action_hints"]) -> list[list[Card]]: ...
+    def __getitem__(
+        self, key: Literal["action_hints"]
+    ) -> list[list[Card]]: ...
 
     @overload
-    def __getitem__(self, key: Literal["awaiting_action"]) -> AwaitingAction | None: ...
+    def __getitem__(
+        self, key: Literal["awaiting_action"]
+    ) -> AwaitingAction | None: ...
 
     @overload
-    def __getitem__(self, key: Literal["scoring"]) -> ScoringSnapshot | None: ...
+    def __getitem__(
+        self, key: Literal["scoring"]
+    ) -> ScoringSnapshot | None: ...
 
     @overload
-    def __getitem__(self, key: Literal["winning_team"]) -> int | None: ...
+    def __getitem__(
+        self, key: Literal["winning_team"]
+    ) -> int | None: ...
 
     @overload
     def __getitem__(self, key: Literal["team0_level"]) -> Rank: ...
@@ -371,16 +428,24 @@ class StateSnapshot(SnapshotModel):
     def __getitem__(self, key: Literal["team1_level"]) -> Rank: ...
 
     @overload
-    def __getitem__(self, key: Literal["bid_events"]) -> list[BidEventSnapshot]: ...
+    def __getitem__(
+        self, key: Literal["bid_events"]
+    ) -> list[BidEventSnapshot]: ...
 
     @overload
-    def __getitem__(self, key: Literal["bid_winner"]) -> BidEventSnapshot | None: ...
+    def __getitem__(
+        self, key: Literal["bid_winner"]
+    ) -> BidEventSnapshot | None: ...
 
     @overload
-    def __getitem__(self, key: Literal["stirring_state"]) -> StirringStateSnapshot | None: ...
+    def __getitem__(
+        self, key: Literal["stirring_state"]
+    ) -> StirringStateSnapshot | None: ...
 
     @overload
-    def __getitem__(self, key: Literal["next_round_confirmed"]) -> list[int]: ...
+    def __getitem__(
+        self, key: Literal["next_round_confirmed"]
+    ) -> list[int]: ...
 
     def __getitem__(
         self,

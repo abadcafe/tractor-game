@@ -1,17 +1,47 @@
 """Tests for sm.game_sm module."""
+
 from itertools import combinations
 
-from server.rules.cards import Rank
 from server.result import Ok, Rejected
-from .scoring import RoundResult
+from server.rules.cards import Rank
+
 from .game_sm import (
-    create_game, start_game, process_round_result,
+    create_game,
+    process_round_result,
+    start_game,
 )
+from .round_sm import (
+    RoundInput,
+    RoundState,
+    create_round,
+    get_round_result,
+    is_round_complete,
+)
+from .round_sm import (
+    deal_next_card as rn_deal,
+)
+from .round_sm import (
+    finalize_deal_bid as rn_finalize,
+)
+from .round_sm import (
+    pass_stir as rn_pass,
+)
+from .round_sm import (
+    play as rn_play,
+)
+from .round_sm import (
+    stir_discard as rn_stir_discard,
+)
+from .scoring import RoundResult
+from .types import CompletedTrick
 
 
 class TestCreateGame:
     def test_create_game_initial_state(self) -> None:
-        """Game starts waiting for the first round with both teams at level TWO."""
+        """
+        Game starts waiting for the first round with both teams at level
+        TWO.
+        """
         state = create_game()
         assert state.round_number == 0
         assert state.winning_team is None
@@ -109,11 +139,15 @@ class TestProcessRoundResult:
 
 class TestGameOver:
     def test_reaching_ace_does_not_end_game_team0(self) -> None:
-        """Reaching ACE schedules an ACE round; it does not end the game."""
+        """
+        Reaching ACE schedules an ACE round; it does not end the game.
+        """
         state = create_game()
         result = start_game(state)
         assert isinstance(result, Ok)
-        state = result.value.model_copy(update={"team0_level": Rank.KING})
+        state = result.value.model_copy(
+            update={"team0_level": Rank.KING}
+        )
         rr = RoundResult(
             team0_new_level=Rank.ACE,
             team1_new_level=Rank.TEN,
@@ -132,11 +166,15 @@ class TestGameOver:
         assert state.team0_level == Rank.ACE
 
     def test_jumping_from_queen_to_ace_does_not_end_game(self) -> None:
-        """A big level jump that lands on ACE still requires playing ACE."""
+        """
+        A big level jump that lands on ACE still requires playing ACE.
+        """
         state = create_game()
         result = start_game(state)
         assert isinstance(result, Ok)
-        state = result.value.model_copy(update={"team0_level": Rank.QUEEN})
+        state = result.value.model_copy(
+            update={"team0_level": Rank.QUEEN}
+        )
         rr = RoundResult(
             team0_new_level=Rank.ACE,
             team1_new_level=Rank.TEN,
@@ -155,11 +193,15 @@ class TestGameOver:
         assert state.team0_level == Rank.ACE
 
     def test_reaching_ace_does_not_end_game_team1(self) -> None:
-        """A defender team that reaches ACE still has to pass ACE later."""
+        """
+        A defender team that reaches ACE still has to pass ACE later.
+        """
         state = create_game()
         result = start_game(state)
         assert isinstance(result, Ok)
-        state = result.value.model_copy(update={"team1_level": Rank.KING})
+        state = result.value.model_copy(
+            update={"team1_level": Rank.KING}
+        )
         rr = RoundResult(
             team0_new_level=Rank.QUEEN,
             team1_new_level=Rank.ACE,
@@ -182,7 +224,9 @@ class TestGameOver:
         state = create_game()
         result = start_game(state)
         assert isinstance(result, Ok)
-        state = result.value.model_copy(update={"team0_level": Rank.ACE})
+        state = result.value.model_copy(
+            update={"team0_level": Rank.ACE}
+        )
         rr = RoundResult(
             team0_new_level=Rank.ACE,
             team1_new_level=Rank.TEN,
@@ -204,7 +248,9 @@ class TestGameOver:
         state = create_game()
         result = start_game(state)
         assert isinstance(result, Ok)
-        state = result.value.model_copy(update={"team1_level": Rank.ACE})
+        state = result.value.model_copy(
+            update={"team1_level": Rank.ACE}
+        )
         rr = RoundResult(
             team0_new_level=Rank.QUEEN,
             team1_new_level=Rank.ACE,
@@ -222,11 +268,15 @@ class TestGameOver:
         assert state.winning_team == 1
 
     def test_ace_without_level_gain_does_not_end_game(self) -> None:
-        """Playing an ACE round without gaining a level does not pass ACE."""
+        """
+        Playing an ACE round without gaining a level does not pass ACE.
+        """
         state = create_game()
         result = start_game(state)
         assert isinstance(result, Ok)
-        state = result.value.model_copy(update={"team1_level": Rank.ACE})
+        state = result.value.model_copy(
+            update={"team1_level": Rank.ACE}
+        )
         rr = RoundResult(
             team0_new_level=Rank.TWO,
             team1_new_level=Rank.ACE,
@@ -319,7 +369,9 @@ class TestInvalidTransitions:
         state = create_game()
         result = start_game(state)
         assert isinstance(result, Ok)
-        state = result.value.model_copy(update={"team0_level": Rank.ACE})
+        state = result.value.model_copy(
+            update={"team0_level": Rank.ACE}
+        )
         rr = RoundResult(
             team0_new_level=Rank.ACE,
             team1_new_level=Rank.TWO,
@@ -359,7 +411,9 @@ class TestInvalidTransitions:
         state = create_game()
         result = start_game(state)
         assert isinstance(result, Ok)
-        state = result.value.model_copy(update={"team0_level": Rank.ACE})
+        state = result.value.model_copy(
+            update={"team0_level": Rank.ACE}
+        )
         rr = RoundResult(
             team0_new_level=Rank.ACE,
             team1_new_level=Rank.TWO,
@@ -392,7 +446,9 @@ class TestInvalidTransitions:
 
 class TestEdgeCases:
     def test_both_teams_reaching_ace_does_not_end_game(self) -> None:
-        """If neither team has passed ACE, both teams at ACE can continue."""
+        """
+        If neither team has passed ACE, both teams at ACE can continue.
+        """
         state = create_game()
         result = start_game(state)
         assert isinstance(result, Ok)
@@ -416,7 +472,10 @@ class TestEdgeCases:
         assert state.team1_level == Rank.ACE
 
     def test_game_over_resets_declarer_fields(self) -> None:
-        """On game over, declarer_team and next_declarer_player are reset to None."""
+        """
+        On game over, declarer_team and next_declarer_player are reset
+        to None.
+        """
         state = create_game()
         result = start_game(state)
         assert isinstance(result, Ok)
@@ -435,7 +494,9 @@ class TestEdgeCases:
         )
         result = process_round_result(state, r1)
         assert isinstance(result, Ok)
-        state = result.value.model_copy(update={"team0_level": Rank.ACE})
+        state = result.value.model_copy(
+            update={"team0_level": Rank.ACE}
+        )
         assert state.declarer_team == 0
         assert state.next_declarer_player == 3
         # Second round passes ACE and ends the game
@@ -460,19 +521,14 @@ class TestEdgeCases:
 
 # ---- Integration tests with real round_sm ----
 
-
-from .round_sm import (
-    create_round, deal_next_card as rn_deal,
-    pass_stir as rn_pass, stir_discard as rn_stir_discard,
-    play as rn_play, is_round_complete, get_round_result, RoundInput, RoundState,
-    finalize_deal_bid as rn_finalize,
-)
-from .types import CompletedTrick
-
-type CompletedTrickKey = tuple[int, int, int, tuple[tuple[int, tuple[str, ...]], ...]]
+type CompletedTrickKey = tuple[
+    int, int, int, tuple[tuple[int, tuple[str, ...]], ...]
+]
 
 
-def _completed_trick_key(trick: CompletedTrick | None) -> CompletedTrickKey | None:
+def _completed_trick_key(
+    trick: CompletedTrick | None,
+) -> CompletedTrickKey | None:
     if trick is None:
         return None
     return (
@@ -488,7 +544,9 @@ def _completed_trick_key(trick: CompletedTrick | None) -> CompletedTrickKey | No
 
 def _unwrap_round(result: Ok[RoundState] | Rejected) -> RoundState:
     """Unwrap an Ok[RoundState] | Rejected result, asserting Ok."""
-    assert isinstance(result, Ok), f"Expected Ok, got Rejected: {result.reason}"
+    assert isinstance(result, Ok), (
+        f"Expected Ok, got Rejected: {result.reason}"
+    )
     return result.value
 
 
@@ -510,16 +568,23 @@ def _play_first_legal(round_state: RoundState) -> RoundState:
 
     for size in candidate_sizes:
         for candidate in combinations(hand, size):
-            result = rn_play(round_state, player_index=cur, cards=list(candidate))
+            result = rn_play(
+                round_state, player_index=cur, cards=list(candidate)
+            )
             if isinstance(result, Ok):
                 return result.value
     raise AssertionError(f"No accepted play for player {cur}")
 
 
 def _complete_round_no_bid(round_state: RoundState) -> RoundState:
-    """Drive a round through all phases with no bids, all pass stirring."""
+    """
+    Drive a round through all phases with no bids, all pass stirring.
+    """
     while round_state.phase == "DEAL_BID":
-        if round_state.deal_bid_state is None or round_state.deal_bid_state.phase != "DEALING":
+        if (
+            round_state.deal_bid_state is None
+            or round_state.deal_bid_state.phase != "DEALING"
+        ):
             break
         if round_state.deal_bid_state.all_dealt:
             round_state = _unwrap_round(rn_finalize(round_state))
@@ -538,13 +603,21 @@ def _complete_round_no_bid(round_state: RoundState) -> RoundState:
             # Discard bottom cards for the exchanging player
             assert stirring.exchange_state is not None
             assert stirring.exchanging_player is not None
-            discards = stirring.exchange_state.hand_after_pickup[:stirring.exchange_state.count]
-            round_state = _unwrap_round(rn_stir_discard(
-                round_state, player_index=stirring.exchanging_player, cards=discards,
-            ))
+            discards = stirring.exchange_state.hand_after_pickup[
+                : stirring.exchange_state.count
+            ]
+            round_state = _unwrap_round(
+                rn_stir_discard(
+                    round_state,
+                    player_index=stirring.exchanging_player,
+                    cards=discards,
+                )
+            )
         elif stirring.phase == "WAITING":
             cur = stirring.current_player
-            round_state = _unwrap_round(rn_pass(round_state, player_index=cur))
+            round_state = _unwrap_round(
+                rn_pass(round_state, player_index=cur)
+            )
         else:
             break  # COMPLETE or unknown
 
@@ -563,7 +636,9 @@ def _complete_round_no_bid(round_state: RoundState) -> RoundState:
             trick = round_state.trick_state
             if trick is None:
                 break
-        completed_trick_key = _completed_trick_key(round_state.last_completed_trick)
+        completed_trick_key = _completed_trick_key(
+            round_state.last_completed_trick
+        )
         if completed_trick_key == prev_completed_trick_key:
             break
         prev_completed_trick_key = completed_trick_key
@@ -573,7 +648,10 @@ def _complete_round_no_bid(round_state: RoundState) -> RoundState:
 
 class TestMultipleRoundsWithRealRoundSm:
     def test_multiple_rounds_with_real_round_sm(self) -> None:
-        """Drive multiple rounds through the game state machine using real round results."""
+        """
+        Drive multiple rounds through the game state machine using real
+        round results.
+        """
         game = create_game()
         result = start_game(game)
         assert isinstance(result, Ok)
@@ -583,13 +661,17 @@ class TestMultipleRoundsWithRealRoundSm:
             if game.winning_team is not None:
                 break
 
-            round_state = create_round(RoundInput(
-                declarer_team=game.declarer_team,
-                trump_rank=game.team0_level if (game.declarer_team or 0) == 0 else game.team1_level,
-                next_declarer_player=game.next_declarer_player,
-                team0_level=game.team0_level,
-                team1_level=game.team1_level,
-            ))
+            round_state = create_round(
+                RoundInput(
+                    declarer_team=game.declarer_team,
+                    trump_rank=game.team0_level
+                    if (game.declarer_team or 0) == 0
+                    else game.team1_level,
+                    next_declarer_player=game.next_declarer_player,
+                    team0_level=game.team0_level,
+                    team1_level=game.team1_level,
+                )
+            )
             round_state = _complete_round_no_bid(round_state)
 
             if is_round_complete(round_state):
@@ -604,7 +686,10 @@ class TestMultipleRoundsWithRealRoundSm:
         assert game.round_number >= 1
 
     def test_full_game_with_real_round_sm(self) -> None:
-        """Fast game: use real RoundResults from completed rounds to drive game_sm."""
+        """
+        Fast game: use real RoundResults from completed rounds to drive
+        game_sm.
+        """
         game = create_game()
         result = start_game(game)
         assert isinstance(result, Ok)
@@ -615,13 +700,17 @@ class TestMultipleRoundsWithRealRoundSm:
             if game.winning_team is not None:
                 break
 
-            round_state = create_round(RoundInput(
-                declarer_team=game.declarer_team,
-                trump_rank=game.team0_level if (game.declarer_team or 0) == 0 else game.team1_level,
-                next_declarer_player=game.next_declarer_player,
-                team0_level=game.team0_level,
-                team1_level=game.team1_level,
-            ))
+            round_state = create_round(
+                RoundInput(
+                    declarer_team=game.declarer_team,
+                    trump_rank=game.team0_level
+                    if (game.declarer_team or 0) == 0
+                    else game.team1_level,
+                    next_declarer_player=game.next_declarer_player,
+                    team0_level=game.team0_level,
+                    team1_level=game.team1_level,
+                )
+            )
             round_state = _complete_round_no_bid(round_state)
 
             if is_round_complete(round_state):

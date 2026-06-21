@@ -1,20 +1,27 @@
 """Tests for sm.types module."""
+
 from typing import Literal
 
 import pytest
 from pydantic import ValidationError
-from server.rules.cards import Card, POINTS_MAP, Suit, Rank
+
+from server.rules.cards import POINTS_MAP, Card, Rank, Suit
 from server.rules.types import SubPlay
+
 from .types import (
-    BidEvent, StirAction, Player,
-    CompletedTrick, CompletedTrickSlot,
+    BidEvent,
+    CompletedTrick,
+    CompletedTrickSlot,
+    Player,
+    StirAction,
 )
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
     return Card(
         id=f"D{deck}-{suit.value}-{rank.value}",
-        suit=suit, rank=rank,
+        suit=suit,
+        rank=rank,
         points=POINTS_MAP[rank],
     )
 
@@ -57,10 +64,17 @@ class TestBidEvent:
 
     def test_bid_event_suit_none_for_joker(self) -> None:
         """Joker bid event has suit=None."""
-        cards = [_card(Suit.JOKER, Rank.SMALL_JOKER, 1), _card(Suit.JOKER, Rank.SMALL_JOKER, 2)]
+        cards = [
+            _card(Suit.JOKER, Rank.SMALL_JOKER, 1),
+            _card(Suit.JOKER, Rank.SMALL_JOKER, 2),
+        ]
         event = BidEvent(
-            player=1, cards=cards, kind="joker",
-            suit=None, joker_type="small", count=2,
+            player=1,
+            cards=cards,
+            kind="joker",
+            suit=None,
+            joker_type="small",
+            count=2,
         )
         assert event.suit is None
 
@@ -68,8 +82,12 @@ class TestBidEvent:
         """BidEvent is immutable (frozen=True)."""
         cards = [_card(Suit.HEARTS, Rank.TWO)]
         event = BidEvent(
-            player=0, cards=cards, kind="trump_rank",
-            suit=Suit.HEARTS, joker_type=None, count=1,
+            player=0,
+            cards=cards,
+            kind="trump_rank",
+            suit=Suit.HEARTS,
+            joker_type=None,
+            count=1,
         )
         with pytest.raises(ValidationError):
             event.player = 1
@@ -79,17 +97,28 @@ class TestBidEvent:
         cards = [_card(Suit.HEARTS, Rank.TWO)]
         with pytest.raises(ValidationError):
             BidEvent(
-                player=0, cards=cards, kind="trump_rank",
-                suit=None, joker_type=None, count=1,
+                player=0,
+                cards=cards,
+                kind="trump_rank",
+                suit=None,
+                joker_type=None,
+                count=1,
             )
 
     def test_bid_event_joker_rejects_suit(self) -> None:
         """BidEvent.kind='joker' requires suit=None."""
-        cards = [_card(Suit.JOKER, Rank.BIG_JOKER, 1), _card(Suit.JOKER, Rank.BIG_JOKER, 2)]
+        cards = [
+            _card(Suit.JOKER, Rank.BIG_JOKER, 1),
+            _card(Suit.JOKER, Rank.BIG_JOKER, 2),
+        ]
         with pytest.raises(ValidationError):
             BidEvent(
-                player=0, cards=cards, kind="joker",
-                suit=Suit.HEARTS, joker_type="big", count=2,
+                player=0,
+                cards=cards,
+                kind="joker",
+                suit=Suit.HEARTS,
+                joker_type="big",
+                count=2,
             )
 
 
@@ -114,7 +143,10 @@ class TestStirAction:
             action.player = 2
 
     def test_stir_action_stir_with_no_trump(self) -> None:
-        """StirAction.kind='stir' allows new_suit=None for joker pair (no trump)."""
+        """
+        StirAction.kind='stir' allows new_suit=None for joker pair (no
+        trump).
+        """
         action = StirAction(player=0, kind="stir", new_suit=None)
         assert action.kind == "stir"
         assert action.new_suit is None
@@ -150,8 +182,12 @@ class TestPlayer:
 class TestCompletedTrick:
     def test_completed_trick_creation(self) -> None:
         """CompletedTrick holds full trick data."""
-        slot0 = CompletedTrickSlot(player=0, cards=[_card(Suit.HEARTS, Rank.ACE)])
-        slot1 = CompletedTrickSlot(player=1, cards=[_card(Suit.HEARTS, Rank.KING)])
+        slot0 = CompletedTrickSlot(
+            player=0, cards=[_card(Suit.HEARTS, Rank.ACE)]
+        )
+        slot1 = CompletedTrickSlot(
+            player=1, cards=[_card(Suit.HEARTS, Rank.KING)]
+        )
         trick = CompletedTrick(
             lead_player=0,
             slots=[slot0, slot1],
@@ -165,23 +201,31 @@ class TestCompletedTrick:
 
     def test_completed_trick_slot_creation(self) -> None:
         """Individual trick slot with player and cards."""
-        slot = CompletedTrickSlot(player=3, cards=[_card(Suit.SPADES, Rank.FIVE)])
+        slot = CompletedTrickSlot(
+            player=3, cards=[_card(Suit.SPADES, Rank.FIVE)]
+        )
         assert slot.player == 3
         assert len(slot.cards) == 1
 
     def test_completed_trick_frozen(self) -> None:
         """CompletedTrick is immutable (frozen=True)."""
-        slot = CompletedTrickSlot(player=0, cards=[_card(Suit.HEARTS, Rank.ACE)])
+        slot = CompletedTrickSlot(
+            player=0, cards=[_card(Suit.HEARTS, Rank.ACE)]
+        )
         trick = CompletedTrick(
             lead_player=0,
-            slots=[slot], winner=0, points=10,
+            slots=[slot],
+            winner=0,
+            points=10,
         )
         with pytest.raises(ValidationError):
             trick.winner = 1
 
     def test_completed_trick_slot_frozen(self) -> None:
         """CompletedTrickSlot is immutable (frozen=True)."""
-        slot = CompletedTrickSlot(player=0, cards=[_card(Suit.HEARTS, Rank.ACE)])
+        slot = CompletedTrickSlot(
+            player=0, cards=[_card(Suit.HEARTS, Rank.ACE)]
+        )
         with pytest.raises(ValidationError):
             slot.player = 1
 
@@ -206,8 +250,10 @@ class TestSubPlay:
     def test_subplay_tractor(self) -> None:
         """Tractor (2 pairs): pair_count=2."""
         cards = [
-            _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
-            _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2),
+            _card(Suit.HEARTS, Rank.THREE, 1),
+            _card(Suit.HEARTS, Rank.THREE, 2),
+            _card(Suit.HEARTS, Rank.FOUR, 1),
+            _card(Suit.HEARTS, Rank.FOUR, 2),
         ]
         sp = SubPlay(pair_count=2, cards=cards, suit=Suit.HEARTS)
         assert sp.pair_count == 2
@@ -216,9 +262,12 @@ class TestSubPlay:
     def test_subplay_tractor_3_pairs(self) -> None:
         """Tractor (3 pairs): pair_count=3, 6 cards."""
         cards = [
-            _card(Suit.HEARTS, Rank.THREE, 1), _card(Suit.HEARTS, Rank.THREE, 2),
-            _card(Suit.HEARTS, Rank.FOUR, 1), _card(Suit.HEARTS, Rank.FOUR, 2),
-            _card(Suit.HEARTS, Rank.FIVE, 1), _card(Suit.HEARTS, Rank.FIVE, 2),
+            _card(Suit.HEARTS, Rank.THREE, 1),
+            _card(Suit.HEARTS, Rank.THREE, 2),
+            _card(Suit.HEARTS, Rank.FOUR, 1),
+            _card(Suit.HEARTS, Rank.FOUR, 2),
+            _card(Suit.HEARTS, Rank.FIVE, 1),
+            _card(Suit.HEARTS, Rank.FIVE, 2),
         ]
         sp = SubPlay(pair_count=3, cards=cards, suit=Suit.HEARTS)
         assert sp.pair_count == 3
@@ -266,6 +315,8 @@ class TestSubPlay:
         """SubPlay rejects cards count that doesn't match pair_count."""
         c1 = _card(Suit.HEARTS, Rank.ACE, 1)
         c2 = _card(Suit.HEARTS, Rank.ACE, 2)
-        c3 = _card(Suit.HEARTS, Rank.ACE, 1)  # 3 cards for pair_count=1 (needs 2)
+        c3 = _card(
+            Suit.HEARTS, Rank.ACE, 1
+        )  # 3 cards for pair_count=1 (needs 2)
         with pytest.raises(ValidationError):
             SubPlay(pair_count=1, cards=[c1, c2, c3], suit=Suit.HEARTS)

@@ -59,8 +59,12 @@ class TranscriptRecord:
 
 @dataclass(slots=True)
 class AITranscript:
-    records: list[TranscriptRecord] = field(default_factory=_empty_records)
-    subscribers: list[asyncio.Queue[TranscriptRecordDict]] = field(default_factory=_empty_subscribers)
+    records: list[TranscriptRecord] = field(
+        default_factory=_empty_records
+    )
+    subscribers: list[asyncio.Queue[TranscriptRecordDict]] = field(
+        default_factory=_empty_subscribers
+    )
     next_record_id: int = 1
     next_event_id: int = 1
 
@@ -92,7 +96,9 @@ class AITranscript:
         self._publish(record)
         return record
 
-    def update_tool_result(self, record: TranscriptRecord, tool_result: str) -> None:
+    def update_tool_result(
+        self, record: TranscriptRecord, tool_result: str
+    ) -> None:
         record.tool_result = tool_result
         self._publish(record)
 
@@ -107,7 +113,9 @@ class AITranscript:
         self.subscribers.append(queue)
         return queue
 
-    def unsubscribe(self, queue: asyncio.Queue[TranscriptRecordDict]) -> None:
+    def unsubscribe(
+        self, queue: asyncio.Queue[TranscriptRecordDict]
+    ) -> None:
         if queue in self.subscribers:
             self.subscribers.remove(queue)
 

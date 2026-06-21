@@ -1,4 +1,7 @@
-"""Tests for server/game_registry.py -- in-memory game registry with timeout cleanup."""
+"""
+Tests for server/game_registry.py -- in-memory game registry with
+timeout cleanup.
+"""
 
 from unittest.mock import MagicMock
 
@@ -49,10 +52,12 @@ def test_get_updates_last_access():
 
     Uses a controllable clock (lambda returning incrementing timestamps)
     instead of accessing private _last_access field. The test verifies
-    that cleanup_expired does NOT remove a game that was recently accessed
+    that cleanup_expired does NOT remove a game that was recently
+    accessed
     via get(), proving that get() updates the timestamp.
     """
-    # Use a controllable clock: starts at T=100, increments by 100 each call
+    # Use a controllable clock: starts at T=100, increments by 100 each
+    # call
     clock_calls = [0]
 
     def fake_clock():
@@ -67,13 +72,15 @@ def test_get_updates_last_access():
     registry.get(game_id)  # clock returns 200.0
 
     # Now advance clock to T=500 and cleanup with max_age=250
-    # Game was accessed at T=200, which is 300 seconds ago (500-200=300 > 250)
+    # Game was accessed at T=200, which is 300 seconds ago (500-200=300
+    # > 250)
     # So it should be expired
     clock_calls[0] = 4  # next clock call will return 500.0
     removed = registry.cleanup_expired(max_age_seconds=250)
     assert removed == 1
 
-    # Now test the positive case: get() updates timestamp so game is NOT expired
+    # Now test the positive case: get() updates timestamp so game is NOT
+    # expired
     registry2 = GameRegistry(clock=fake_clock)
     clock_calls[0] = 0
     game2 = _make_game()
@@ -83,7 +90,8 @@ def test_get_updates_last_access():
     registry2.get(game_id2)  # clock returns 200.0
 
     # Advance clock to T=300 and cleanup with max_age=250
-    # Game was accessed at T=200, which is 100 seconds ago (300-200=100 < 250)
+    # Game was accessed at T=200, which is 100 seconds ago (300-200=100
+    # < 250)
     # So it should NOT be expired
     clock_calls[0] = 2  # next clock call will return 300.0
     removed2 = registry2.cleanup_expired(max_age_seconds=250)
@@ -137,7 +145,9 @@ def test_cleanup_expired_removes_old():
 
     registry = GameRegistry(clock=fake_clock)
     game = _make_game()
-    game_id = registry.create(game)  # clock returns 100.0 (timestamp = 100)
+    game_id = registry.create(
+        game
+    )  # clock returns 100.0 (timestamp = 100)
 
     # Advance clock to T=8000 (8000 - 100 = 7900 seconds ago, > 3600)
     clock_calls[0] = 79
@@ -161,7 +171,8 @@ def test_cleanup_expired_keeps_recent():
     game = _make_game()
     game_id = registry.create(game)  # clock returns 100.0
 
-    # Advance clock only slightly: T=200 (200 - 100 = 100 seconds ago, < 3600)
+    # Advance clock only slightly: T=200 (200 - 100 = 100 seconds ago, <
+    # 3600)
     clock_calls[0] = 1
     removed = registry.cleanup_expired(max_age_seconds=3600)
     assert removed == 0
@@ -187,7 +198,8 @@ def test_cleanup_expired_mixed():
 
     # Simulate old_game being created long ago by resetting clock
     # We need: old_game created at T=100, new_game created at T=7200
-    # Then at T=8000, old_game is 7900s old (>3600), new_game is 800s old (<3600)
+    # Then at T=8000, old_game is 7900s old (>3600), new_game is 800s
+    # old (<3600)
 
     # Reset clock so new_game gets a high timestamp
     clock_calls[0] = 71  # next clock call returns 7200.0
@@ -202,8 +214,12 @@ def test_cleanup_expired_mixed():
 
 
 def test_list_games_returns_real_phase():
-    """list_games should use game.get_phase() for phase info, not a simple is_over() check."""
+    """
+    list_games should use game.get_phase() for phase info, not a simple
+    is_over() check.
+    """
     from unittest.mock import MagicMock
+
     registry = GameRegistry()
     game1 = MagicMock()
     game1.get_phase.return_value = "DEAL_BID"

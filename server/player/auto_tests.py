@@ -7,6 +7,13 @@ from unittest.mock import patch
 
 import pytest
 
+from server.protocol import (
+    StirringStateSnapshot,
+    TrickSlotSnapshot,
+    TrickSnapshot,
+)
+from server.rules.cards import Card
+
 from . import auto
 from .test_helpers import (
     card,
@@ -15,13 +22,14 @@ from .test_helpers import (
     make_snapshot,
     make_state_message,
 )
-from server.protocol import StirringStateSnapshot, TrickSlotSnapshot, TrickSnapshot
-from server.rules.cards import Card
 
 
 @pytest.mark.asyncio
 async def test_auto_player_play_when_current() -> None:
-    """AutoPlayer submits a play action when it's their turn in PLAYING phase."""
+    """
+    AutoPlayer submits a play action when it's their turn in PLAYING
+    phase.
+    """
     test_card = card("spades", "A", 1)
     snap = make_snapshot(
         phase="PLAYING",
@@ -37,7 +45,10 @@ async def test_auto_player_play_when_current() -> None:
 
 @pytest.mark.asyncio
 async def test_auto_player_play_from_action_hints() -> None:
-    """AutoPlayer picks from the same action_hints visible to human players."""
+    """
+    AutoPlayer picks from the same action_hints visible to human
+    players.
+    """
     card1 = card("spades", "A", 1)
     snap = make_snapshot(
         phase="PLAYING",
@@ -55,8 +66,11 @@ async def test_auto_player_play_from_action_hints() -> None:
 
 
 @pytest.mark.asyncio
-async def test_auto_player_follow_fallback_uses_rules_for_pair_lead() -> None:
-    """Without action_hints, AutoPlayer fallback still honors pair-follow rules."""
+async def test_auto_follow_fallback_uses_rules_for_pair_lead() -> None:
+    """
+    Without action_hints, AutoPlayer fallback still honors pair-follow
+    rules.
+    """
     lead1 = card("hearts", "3", 1)
     lead2 = card("hearts", "3", 2)
     heart_ace1 = card("hearts", "A", 1)
@@ -96,7 +110,10 @@ async def test_auto_player_follow_fallback_uses_rules_for_pair_lead() -> None:
 
 @pytest.mark.asyncio
 async def test_auto_player_error_skips_failed_hint_candidate() -> None:
-    """A rejected card action is not repeated for the same player-facing state."""
+    """
+    A rejected card action is not repeated for the same player-facing
+    state.
+    """
     card1 = card("spades", "A", 1)
     card2 = card("hearts", "A", 1)
     snap = make_snapshot(
@@ -115,13 +132,21 @@ async def test_auto_player_error_skips_failed_hint_candidate() -> None:
         await player.on_state(game, make_state_message(snap))
         await asyncio.sleep(0.05)
         first_message = game.receive.call_args[0][1]
-        assert first_message.raw == {"type": "play", "cards": [card1["id"]]}
+        assert first_message.raw == {
+            "type": "play",
+            "cards": [card1["id"]],
+        }
 
         game.receive.reset_mock()
-        await player.on_state(game, make_state_message(snap, error="rejected"))
+        await player.on_state(
+            game, make_state_message(snap, error="rejected")
+        )
         await asyncio.sleep(0.05)
         second_message = game.receive.call_args[0][1]
-        assert second_message.raw == {"type": "play", "cards": [card2["id"]]}
+        assert second_message.raw == {
+            "type": "play",
+            "cards": [card2["id"]],
+        }
 
 
 @pytest.mark.asyncio
@@ -140,7 +165,9 @@ async def test_auto_player_ignores_when_not_awaiting() -> None:
 
 @pytest.mark.asyncio
 async def test_auto_player_ignores_stirring_when_not_awaiting() -> None:
-    """AutoPlayer does not stir when awaiting_action is None in STIRRING."""
+    """
+    AutoPlayer does not stir when awaiting_action is None in STIRRING.
+    """
     snap = make_snapshot(
         phase="STIRRING",
         awaiting_action=None,
@@ -154,7 +181,10 @@ async def test_auto_player_ignores_stirring_when_not_awaiting() -> None:
 
 @pytest.mark.asyncio
 async def test_auto_player_ignores_discard_when_not_awaiting() -> None:
-    """AutoPlayer does not discard when awaiting_action is None in STIRRING."""
+    """
+    AutoPlayer does not discard when awaiting_action is None in
+    STIRRING.
+    """
     snap = make_snapshot(
         phase="STIRRING",
         awaiting_action=None,
@@ -184,8 +214,11 @@ async def test_auto_player_next_round() -> None:
 
 
 @pytest.mark.asyncio
-async def test_auto_player_submits_next_round_even_when_other_player() -> None:
-    """AutoPlayer submits NextRoundAction whenever awaiting_action is next_round."""
+async def test_auto_submits_next_round_when_other_player() -> None:
+    """
+    AutoPlayer submits NextRoundAction whenever awaiting_action is
+    next_round.
+    """
     snap = make_snapshot(
         phase="WAITING",
         awaiting_action="next_round",
@@ -199,7 +232,10 @@ async def test_auto_player_submits_next_round_even_when_other_player() -> None:
 
 @pytest.mark.asyncio
 async def test_auto_player_discard_when_current() -> None:
-    """AutoPlayer submits DiscardAction when awaiting discard and it's their turn."""
+    """
+    AutoPlayer submits DiscardAction when awaiting discard and it's
+    their turn.
+    """
     card1 = card("diamonds", "3", 1)
     card2 = card("clubs", "4", 1)
     snap = make_snapshot(
@@ -227,7 +263,10 @@ async def test_auto_player_discard_when_current() -> None:
 
 @pytest.mark.asyncio
 async def test_auto_player_stir_when_current() -> None:
-    """AutoPlayer can stir from the same action_hints visible to human players."""
+    """
+    AutoPlayer can stir from the same action_hints visible to human
+    players.
+    """
     card1 = card("hearts", "2", 1)
     card2 = card("hearts", "2", 2)
     snap = make_snapshot(
@@ -242,7 +281,10 @@ async def test_auto_player_stir_when_current() -> None:
     await asyncio.sleep(0.05)
     game.receive.assert_awaited()
     message = game.receive.call_args[0][1]
-    assert message.raw == {"type": "stir", "cards": [card1["id"], card2["id"]]}
+    assert message.raw == {
+        "type": "stir",
+        "cards": [card1["id"], card2["id"]],
+    }
 
 
 @pytest.mark.asyncio
@@ -264,7 +306,10 @@ async def test_auto_player_stir_pass() -> None:
 
 @pytest.mark.asyncio
 async def test_auto_player_stir_randomly_skips_hint() -> None:
-    """AutoPlayer keeps the old optional-stir behavior by skipping half the time."""
+    """
+    AutoPlayer keeps the old optional-stir behavior by skipping half the
+    time.
+    """
     card1 = card("hearts", "2", 1)
     card2 = card("hearts", "2", 2)
     snap = make_snapshot(
@@ -292,7 +337,10 @@ async def test_auto_player_bid_during_dealing() -> None:
         phase="DEAL_BID",
         awaiting_action="bid",
         player_hand=[trump_card, trump_pair_card_1, trump_pair_card_2],
-        action_hints=[[trump_card], [trump_pair_card_1, trump_pair_card_2]],
+        action_hints=[
+            [trump_card],
+            [trump_pair_card_1, trump_pair_card_2],
+        ],
         trump_rank="2",
     )
     game = make_game(snap)
@@ -307,7 +355,10 @@ async def test_auto_player_bid_during_dealing() -> None:
 
 @pytest.mark.asyncio
 async def test_auto_player_ignores_dealing_if_no_trump_rank() -> None:
-    """AutoPlayer sends SkipBidAction during DEAL_BID if hand has no trump rank cards."""
+    """
+    AutoPlayer sends SkipBidAction during DEAL_BID if hand has no trump
+    rank cards.
+    """
     non_trump = card("spades", "3", 1)
     snap = make_snapshot(
         phase="DEAL_BID",
@@ -335,7 +386,11 @@ async def test_auto_player_stir_only_uses_same_suit_pairs() -> None:
     snap = make_snapshot(
         phase="STIRRING",
         awaiting_action="stir",
-        player_hand=[card_hearts_2_d1, card_spades_2_d1, card_hearts_2_d2],
+        player_hand=[
+            card_hearts_2_d1,
+            card_spades_2_d1,
+            card_hearts_2_d2,
+        ],
         action_hints=[[card_hearts_2_d1, card_hearts_2_d2]],
         trump_rank="2",
     )
@@ -350,12 +405,20 @@ async def test_auto_player_stir_only_uses_same_suit_pairs() -> None:
     call_args = game.receive.call_args
     message = call_args[0][1]
 
-    assert message.raw == {"type": "stir", "cards": [card_hearts_2_d1["id"], card_hearts_2_d2["id"]]}
+    assert message.raw == {
+        "type": "stir",
+        "cards": [card_hearts_2_d1["id"], card_hearts_2_d2["id"]],
+    }
 
 
 @pytest.mark.asyncio
-async def test_auto_player_discard_with_stirring_exchange_count() -> None:
-    """AutoPlayer._handle_discard uses StirringStateSnapshot.exchange_count."""
+async def test_auto_player_discard_with_stirring_exchange_count() -> (
+    None
+):
+    """
+    AutoPlayer._handle_discard uses
+    StirringStateSnapshot.exchange_count.
+    """
     card1 = card("diamonds", "3", 1)
     card2 = card("clubs", "4", 1)
     card3 = card("spades", "5", 1)

@@ -14,10 +14,10 @@ from server.result import Ok, Rejected
 from . import ai, auto, base
 from .ai import config as ai_config
 from .ai.client import (
-    AIDecision,
-    AIDecisionPrompt,
     AIClient,
     AIClientRejected,
+    AIDecision,
+    AIDecisionPrompt,
     AIToolCall,
     AIToolSpec,
     JSONObject,
@@ -32,7 +32,12 @@ from .ai.openai_client import (
 )
 from .ai.rejections import AIToolRejected
 from .ai.tools import allowed_tool_specs, tool_call_to_message
-from .test_helpers import card, make_game, make_snapshot, make_state_message
+from .test_helpers import (
+    card,
+    make_game,
+    make_snapshot,
+    make_state_message,
+)
 
 
 def test_ai_player_is_player() -> None:
@@ -60,10 +65,15 @@ async def test_ai_player_run_requests_state() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ai_player_next_round_confirms_locally_without_client() -> None:
+async def test_ai_next_round_confirms_locally() -> None:
     snap = make_snapshot(phase="WAITING", awaiting_action="next_round")
     game = make_game(snap)
-    client = StaticAIClient(AIToolCall(name="confirm_next_round", arguments={"reason": "should not be used"}))
+    client = StaticAIClient(
+        AIToolCall(
+            name="confirm_next_round",
+            arguments={"reason": "should not be used"},
+        )
+    )
     player = ai.AIPlayer(index=0, config=_config(), client=client)
 
     await player.on_state(game, make_state_message(snap, seq=3))
@@ -80,7 +90,12 @@ async def test_ai_player_next_round_confirms_locally_without_client() -> None:
 async def test_ai_player_does_not_log_local_action_submission() -> None:
     snap = make_snapshot(phase="WAITING", awaiting_action="next_round")
     game = make_game(snap)
-    client = StaticAIClient(AIToolCall(name="confirm_next_round", arguments={"reason": "should not be used"}))
+    client = StaticAIClient(
+        AIToolCall(
+            name="confirm_next_round",
+            arguments={"reason": "should not be used"},
+        )
+    )
     player = ai.AIPlayer(index=0, config=_config(), client=client)
 
     logs = ListLogHandler()
@@ -99,10 +114,14 @@ async def test_ai_player_does_not_log_local_action_submission() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ai_player_bid_without_hint_passes_locally_without_client() -> None:
+async def test_ai_bid_without_hint_passes_locally() -> None:
     snap = make_snapshot(phase="DEAL_BID", awaiting_action="bid")
     game = make_game(snap)
-    client = StaticAIClient(AIToolCall(name="pass_bid", arguments={"reason": "should not be used"}))
+    client = StaticAIClient(
+        AIToolCall(
+            name="pass_bid", arguments={"reason": "should not be used"}
+        )
+    )
     player = ai.AIPlayer(index=0, config=_config(), client=client)
 
     await player.on_state(game, make_state_message(snap, seq=4))
@@ -111,12 +130,15 @@ async def test_ai_player_bid_without_hint_passes_locally_without_client() -> Non
     game.receive.assert_awaited()
     assert game.receive.call_args[0][0] == 0
     assert game.receive.call_args[0][1].seq == 4
-    assert game.receive.call_args[0][1].raw == {"type": "bid", "pass": True}
+    assert game.receive.call_args[0][1].raw == {
+        "type": "bid",
+        "pass": True,
+    }
     assert client.prompts == []
 
 
 @pytest.mark.asyncio
-async def test_ai_player_bid_with_hints_uses_first_server_hint_without_client() -> None:
+async def test_ai_bid_with_hints_uses_first_server_hint() -> None:
     spade_two = card("spades", "2")
     diamond_two = card("diamonds", "2")
     snap = make_snapshot(
@@ -127,7 +149,11 @@ async def test_ai_player_bid_with_hints_uses_first_server_hint_without_client() 
         trump_rank="2",
     )
     game = make_game(snap)
-    client = StaticAIClient(AIToolCall(name="pass_bid", arguments={"reason": "should not be used"}))
+    client = StaticAIClient(
+        AIToolCall(
+            name="pass_bid", arguments={"reason": "should not be used"}
+        )
+    )
     player = ai.AIPlayer(index=0, config=_config(), client=client)
 
     await player.on_state(game, make_state_message(snap, seq=5))
@@ -136,15 +162,22 @@ async def test_ai_player_bid_with_hints_uses_first_server_hint_without_client() 
     game.receive.assert_awaited()
     assert game.receive.call_args[0][0] == 0
     assert game.receive.call_args[0][1].seq == 5
-    assert game.receive.call_args[0][1].raw == {"type": "bid", "cards": [spade_two["id"]]}
+    assert game.receive.call_args[0][1].raw == {
+        "type": "bid",
+        "cards": [spade_two["id"]],
+    }
     assert client.prompts == []
 
 
 @pytest.mark.asyncio
-async def test_ai_player_stir_without_hint_passes_locally_without_client() -> None:
+async def test_ai_stir_without_hint_passes_locally() -> None:
     snap = make_snapshot(phase="STIRRING", awaiting_action="stir")
     game = make_game(snap)
-    client = StaticAIClient(AIToolCall(name="pass_stir", arguments={"reason": "should not be used"}))
+    client = StaticAIClient(
+        AIToolCall(
+            name="pass_stir", arguments={"reason": "should not be used"}
+        )
+    )
     player = ai.AIPlayer(index=0, config=_config(), client=client)
 
     await player.on_state(game, make_state_message(snap, seq=6))
@@ -153,7 +186,10 @@ async def test_ai_player_stir_without_hint_passes_locally_without_client() -> No
     game.receive.assert_awaited()
     assert game.receive.call_args[0][0] == 0
     assert game.receive.call_args[0][1].seq == 6
-    assert game.receive.call_args[0][1].raw == {"type": "stir", "pass": True}
+    assert game.receive.call_args[0][1].raw == {
+        "type": "stir",
+        "pass": True,
+    }
     assert client.prompts == []
 
 
@@ -171,7 +207,9 @@ async def test_ai_player_stir_with_hint_uses_llm() -> None:
         trump_rank="2",
     )
     game = make_game(snap)
-    client = StaticAIClient(AIToolCall(name="pass_stir", arguments={"reason": "llm pass"}))
+    client = StaticAIClient(
+        AIToolCall(name="pass_stir", arguments={"reason": "llm pass"})
+    )
     player = ai.AIPlayer(index=0, config=_config(), client=client)
 
     await player.on_state(game, make_state_message(snap, seq=7))
@@ -180,7 +218,10 @@ async def test_ai_player_stir_with_hint_uses_llm() -> None:
     game.receive.assert_awaited()
     assert game.receive.call_args[0][0] == 0
     assert game.receive.call_args[0][1].seq == 7
-    assert game.receive.call_args[0][1].raw == {"type": "stir", "pass": True}
+    assert game.receive.call_args[0][1].raw == {
+        "type": "stir",
+        "pass": True,
+    }
     assert len(client.prompts) == 1
 
 
@@ -193,10 +234,15 @@ async def test_ai_player_llm_tool_call_submits_play() -> None:
         player_hand=[test_card],
     )
     game = make_game(snap)
-    client = StaticAIClient(AIToolCall(
-        name="play_cards",
-        arguments={"card_ids": [test_card["id"]], "reason": "test play"},
-    ))
+    client = StaticAIClient(
+        AIToolCall(
+            name="play_cards",
+            arguments={
+                "card_ids": [test_card["id"]],
+                "reason": "test play",
+            },
+        )
+    )
     player = ai.AIPlayer(index=0, config=_config(), client=client)
 
     await player.on_state(game, make_state_message(snap, seq=5))
@@ -205,11 +251,16 @@ async def test_ai_player_llm_tool_call_submits_play() -> None:
     game.receive.assert_awaited()
     assert game.receive.call_args[0][0] == 0
     assert game.receive.call_args[0][1].seq == 5
-    assert game.receive.call_args[0][1].raw == {"type": "play", "cards": [test_card["id"]]}
+    assert game.receive.call_args[0][1].raw == {
+        "type": "play",
+        "cards": [test_card["id"]],
+    }
 
 
 @pytest.mark.asyncio
-async def test_ai_player_does_not_log_llm_transcript_to_terminal() -> None:
+async def test_ai_player_does_not_log_llm_transcript_to_terminal() -> (
+    None
+):
     test_card = card("hearts", "A")
     snap = make_snapshot(
         phase="PLAYING",
@@ -217,10 +268,15 @@ async def test_ai_player_does_not_log_llm_transcript_to_terminal() -> None:
         player_hand=[test_card],
     )
     game = make_game(snap)
-    client = StaticAIClient(AIToolCall(
-        name="play_cards",
-        arguments={"card_ids": [test_card["id"]], "reason": "test play"},
-    ))
+    client = StaticAIClient(
+        AIToolCall(
+            name="play_cards",
+            arguments={
+                "card_ids": [test_card["id"]],
+                "reason": "test play",
+            },
+        )
+    )
     player = ai.AIPlayer(index=0, config=_config(), client=client)
 
     logs = ListLogHandler()
@@ -247,10 +303,15 @@ async def test_ai_player_records_debug_transcript() -> None:
         player_hand=[test_card],
     )
     game = make_game(snap)
-    client = StaticAIClient(AIToolCall(
-        name="play_cards",
-        arguments={"card_ids": [test_card["id"]], "reason": "test play"},
-    ))
+    client = StaticAIClient(
+        AIToolCall(
+            name="play_cards",
+            arguments={
+                "card_ids": [test_card["id"]],
+                "reason": "test play",
+            },
+        )
+    )
     player = ai.AIPlayer(index=0, config=_config(), client=client)
 
     await player.on_state(game, make_state_message(snap, seq=5))
@@ -271,7 +332,9 @@ async def test_ai_player_records_debug_transcript() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ai_player_records_debug_transcript_stream_messages() -> None:
+async def test_ai_player_records_debug_transcript_stream_messages() -> (
+    None
+):
     test_card = card("hearts", "A")
     snap = make_snapshot(
         phase="PLAYING",
@@ -279,10 +342,15 @@ async def test_ai_player_records_debug_transcript_stream_messages() -> None:
         player_hand=[test_card],
     )
     game = make_game(snap)
-    client = StaticAIClient(AIToolCall(
-        name="play_cards",
-        arguments={"card_ids": [test_card["id"]], "reason": "test play"},
-    ))
+    client = StaticAIClient(
+        AIToolCall(
+            name="play_cards",
+            arguments={
+                "card_ids": [test_card["id"]],
+                "reason": "test play",
+            },
+        )
+    )
     player = ai.AIPlayer(index=0, config=_config(), client=client)
     queue = player.subscribe_transcript()
 
@@ -303,7 +371,7 @@ async def test_ai_player_records_debug_transcript_stream_messages() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ai_player_records_openai_response_without_tool_calls() -> None:
+async def test_ai_records_openai_response_without_tool_calls() -> None:
     test_card = card("hearts", "A")
     snap = make_snapshot(
         phase="PLAYING",
@@ -315,11 +383,19 @@ async def test_ai_player_records_openai_response_without_tool_calls() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             status_code=200,
-            content=json.dumps({
-                "id": "chatcmpl-no-tool",
-                "model": "test-model",
-                "choices": [{"message": {"content": "plain non-tool answer"}}],
-            }).encode("utf-8"),
+            content=json.dumps(
+                {
+                    "id": "chatcmpl-no-tool",
+                    "model": "test-model",
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "plain non-tool answer"
+                            }
+                        }
+                    ],
+                }
+            ).encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
 
@@ -341,7 +417,10 @@ async def test_ai_player_records_openai_response_without_tool_calls() -> None:
     assert record["api_error"] is not None
     assert record["tool_result"] is None
     assert "plain non-tool answer" in record["api_response"]
-    assert "OpenAI-compatible message has no tool_calls list" in record["api_error"]
+    assert (
+        "OpenAI-compatible message has no tool_calls list"
+        in record["api_error"]
+    )
 
 
 @pytest.mark.asyncio
@@ -380,7 +459,7 @@ async def test_ai_player_records_openai_network_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ai_player_records_debug_transcript_when_tool_use_logging_disabled() -> None:
+async def test_ai_records_debug_without_tool_use_logging() -> None:
     test_card = card("hearts", "A")
     snap = make_snapshot(
         phase="PLAYING",
@@ -388,11 +467,18 @@ async def test_ai_player_records_debug_transcript_when_tool_use_logging_disabled
         player_hand=[test_card],
     )
     game = make_game(snap)
-    client = StaticAIClient(AIToolCall(
-        name="play_cards",
-        arguments={"card_ids": [test_card["id"]], "reason": "test play"},
-    ))
-    player = ai.AIPlayer(index=0, config=_config(log_tool_use=False), client=client)
+    client = StaticAIClient(
+        AIToolCall(
+            name="play_cards",
+            arguments={
+                "card_ids": [test_card["id"]],
+                "reason": "test play",
+            },
+        )
+    )
+    player = ai.AIPlayer(
+        index=0, config=_config(log_tool_use=False), client=client
+    )
 
     await player.on_state(game, make_state_message(snap, seq=5))
     await asyncio.sleep(0.05)
@@ -423,12 +509,18 @@ async def test_ai_player_llm_failure_does_not_submit_action() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ai_player_records_server_rejection_in_debug_transcript() -> None:
+async def test_ai_records_server_rejection_in_debug() -> None:
     snap = make_snapshot(phase="PLAYING", awaiting_action=None)
     game = make_game(snap)
-    player = ai.AIPlayer(index=0, config=_config(), client=StaticAIClient(Rejected("unused")))
+    player = ai.AIPlayer(
+        index=0,
+        config=_config(),
+        client=StaticAIClient(Rejected("unused")),
+    )
 
-    await player.on_state(game, make_state_message(snap, seq=11, error="illegal play"))
+    await player.on_state(
+        game, make_state_message(snap, seq=11, error="illegal play")
+    )
 
     transcript = player.transcript()
     assert len(transcript) == 1
@@ -452,30 +544,46 @@ async def test_ai_player_repairs_server_rejected_tool_call() -> None:
         player_hand=[first_card, repaired_card],
     )
     game = make_game(snap)
-    client = SequenceAIClient([
-        AIToolCall(
-            name="play_cards",
-            arguments={"card_ids": [first_card["id"]], "reason": "first try"},
-        ),
-        AIToolCall(
-            name="play_cards",
-            arguments={"card_ids": [repaired_card["id"]], "reason": "server repair"},
-        ),
-    ])
+    client = SequenceAIClient(
+        [
+            AIToolCall(
+                name="play_cards",
+                arguments={
+                    "card_ids": [first_card["id"]],
+                    "reason": "first try",
+                },
+            ),
+            AIToolCall(
+                name="play_cards",
+                arguments={
+                    "card_ids": [repaired_card["id"]],
+                    "reason": "server repair",
+                },
+            ),
+        ]
+    )
     player = ai.AIPlayer(index=0, config=_config(), client=client)
 
     await player.on_state(game, make_state_message(snap, seq=13))
     await asyncio.sleep(0.05)
-    await player.on_state(game, make_state_message(snap, seq=13, error="illegal play"))
+    await player.on_state(
+        game, make_state_message(snap, seq=13, error="illegal play")
+    )
     await asyncio.sleep(0.05)
 
     assert game.receive.await_count == 2
     first_message = game.receive.await_args_list[0].args[1]
     second_message = game.receive.await_args_list[1].args[1]
     assert first_message.seq == 13
-    assert first_message.raw == {"type": "play", "cards": [first_card["id"]]}
+    assert first_message.raw == {
+        "type": "play",
+        "cards": [first_card["id"]],
+    }
     assert second_message.seq == 13
-    assert second_message.raw == {"type": "play", "cards": [repaired_card["id"]]}
+    assert second_message.raw == {
+        "type": "play",
+        "cards": [repaired_card["id"]],
+    }
     assert len(client.prompts) == 2
     assert "illegal play" in client.prompts[1].user
     assert "error_type: rule" in client.prompts[1].user
@@ -493,7 +601,9 @@ async def test_ai_player_repairs_server_rejected_tool_call() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ai_player_repairs_play_not_matching_action_hint() -> None:
+async def test_ai_player_repairs_play_not_matching_action_hint() -> (
+    None
+):
     hint_card_1 = card("diamonds", "2")
     hint_card_2 = card("hearts", "10")
     other_card = card("spades", "A")
@@ -504,16 +614,24 @@ async def test_ai_player_repairs_play_not_matching_action_hint() -> None:
         action_hints=[[hint_card_1, hint_card_2]],
     )
     game = make_game(snap)
-    client = SequenceAIClient([
-        AIToolCall(
-            name="play_cards",
-            arguments={"card_ids": [hint_card_2["id"]], "reason": "partial hint"},
-        ),
-        AIToolCall(
-            name="play_cards",
-            arguments={"card_ids": [hint_card_1["id"], hint_card_2["id"]], "reason": "full hint"},
-        ),
-    ])
+    client = SequenceAIClient(
+        [
+            AIToolCall(
+                name="play_cards",
+                arguments={
+                    "card_ids": [hint_card_2["id"]],
+                    "reason": "partial hint",
+                },
+            ),
+            AIToolCall(
+                name="play_cards",
+                arguments={
+                    "card_ids": [hint_card_1["id"], hint_card_2["id"]],
+                    "reason": "full hint",
+                },
+            ),
+        ]
+    )
     player = ai.AIPlayer(index=0, config=_config(), client=client)
 
     await player.on_state(game, make_state_message(snap, seq=12))
@@ -527,7 +645,10 @@ async def test_ai_player_repairs_play_not_matching_action_hint() -> None:
     }
     assert len(client.prompts) == 2
     assert "error_type: format" in client.prompts[1].user
-    assert "card_ids 必须完整等于 action_hints 里的某一组" in client.prompts[1].user
+    assert (
+        "card_ids 必须完整等于 action_hints 里的某一组"
+        in client.prompts[1].user
+    )
     assert "legal_action_hint_groups" in client.prompts[1].user
 
 
@@ -541,16 +662,24 @@ async def test_ai_player_repairs_invalid_card_id_once() -> None:
         player_hand=[valid_card],
     )
     game = make_game(snap)
-    client = SequenceAIClient([
-        AIToolCall(
-            name="play_cards",
-            arguments={"card_ids": [invalid_card_id], "reason": "bad id"},
-        ),
-        AIToolCall(
-            name="play_cards",
-            arguments={"card_ids": [valid_card["id"]], "reason": "repaired id"},
-        ),
-    ])
+    client = SequenceAIClient(
+        [
+            AIToolCall(
+                name="play_cards",
+                arguments={
+                    "card_ids": [invalid_card_id],
+                    "reason": "bad id",
+                },
+            ),
+            AIToolCall(
+                name="play_cards",
+                arguments={
+                    "card_ids": [valid_card["id"]],
+                    "reason": "repaired id",
+                },
+            ),
+        ]
+    )
     player = ai.AIPlayer(index=0, config=_config(), client=client)
 
     await player.on_state(game, make_state_message(snap, seq=9))
@@ -559,15 +688,23 @@ async def test_ai_player_repairs_invalid_card_id_once() -> None:
     game.receive.assert_awaited()
     assert game.receive.call_args[0][0] == 0
     assert game.receive.call_args[0][1].seq == 9
-    assert game.receive.call_args[0][1].raw == {"type": "play", "cards": [valid_card["id"]]}
+    assert game.receive.call_args[0][1].raw == {
+        "type": "play",
+        "cards": [valid_card["id"]],
+    }
     assert len(client.prompts) == 2
-    assert f"牌 {invalid_card_id} 不在你的当前手牌里" in client.prompts[1].user
+    assert (
+        f"牌 {invalid_card_id} 不在你的当前手牌里"
+        in client.prompts[1].user
+    )
     assert "error_type: format" in client.prompts[1].user
     assert valid_card["id"] in client.prompts[1].user
 
 
 @pytest.mark.asyncio
-async def test_ai_player_stops_after_invalid_card_id_repair_fails() -> None:
+async def test_ai_player_stops_after_invalid_card_id_repair_fails() -> (
+    None
+):
     valid_card = card("hearts", "A")
     invalid_card_id = "D2-diamonds-A"
     snap = make_snapshot(
@@ -576,16 +713,24 @@ async def test_ai_player_stops_after_invalid_card_id_repair_fails() -> None:
         player_hand=[valid_card],
     )
     game = make_game(snap)
-    client = SequenceAIClient([
-        AIToolCall(
-            name="play_cards",
-            arguments={"card_ids": [invalid_card_id], "reason": "bad id"},
-        ),
-        AIToolCall(
-            name="play_cards",
-            arguments={"card_ids": [invalid_card_id], "reason": "still bad"},
-        ),
-    ])
+    client = SequenceAIClient(
+        [
+            AIToolCall(
+                name="play_cards",
+                arguments={
+                    "card_ids": [invalid_card_id],
+                    "reason": "bad id",
+                },
+            ),
+            AIToolCall(
+                name="play_cards",
+                arguments={
+                    "card_ids": [invalid_card_id],
+                    "reason": "still bad",
+                },
+            ),
+        ]
+    )
     player = ai.AIPlayer(index=0, config=_config(), client=client)
 
     await player.on_state(game, make_state_message(snap, seq=10))
@@ -605,7 +750,13 @@ def test_openai_client_uses_chat_completions_tool_shape() -> None:
     payload = build_chat_completions_payload(
         _config(),
         AIDecisionPrompt(system="system text", user="user text"),
-        [AIToolSpec(name="confirm_next_round", description="confirm", parameters=parameters)],
+        [
+            AIToolSpec(
+                name="confirm_next_round",
+                description="confirm",
+                parameters=parameters,
+            )
+        ],
     )
 
     assert payload["model"] == "test-model"
@@ -628,7 +779,9 @@ def test_openai_client_uses_chat_completions_tool_shape() -> None:
     ]
 
 
-def test_ai_config_defaults_to_larger_output_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ai_config_defaults_to_larger_output_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("TRACTOR_AI_MAX_OUTPUT_TOKENS", raising=False)
 
     config = ai_config.AIConfig.from_env()
@@ -652,7 +805,7 @@ def test_ai_tool_schema_limits_play_card_ids_to_current_hand() -> None:
     assert _card_id_enum(tools[0]) == [card1["id"], card2["id"]]
 
 
-def test_ai_tool_schema_limits_play_card_ids_to_action_hints_when_present() -> None:
+def test_ai_play_schema_uses_action_hint_ids() -> None:
     card1 = card("hearts", "A")
     card2 = card("diamonds", "2")
     card3 = card("spades", "K")
@@ -685,15 +838,25 @@ def test_ai_play_tool_rejects_partial_action_hint() -> None:
         snap,
         AIToolCall(
             name="play_cards",
-            arguments={"card_ids": [card2["id"]], "reason": "partial hint"},
+            arguments={
+                "card_ids": [card2["id"]],
+                "reason": "partial hint",
+            },
         ),
     )
 
     assert isinstance(result, Rejected)
     assert isinstance(result, AIToolRejected)
     assert result.feedback.error_type == "format"
-    assert result.reason == "card_ids 必须完整等于 action_hints 里的某一组：不能只选其中一部分，也不能混合多组。"
-    assert result.feedback.repair == "从 legal_action_hint_groups 中复制一整组 card_ids。"
+    assert (
+        result.reason
+        == "card_ids 必须完整等于 action_hints 里的某一组："
+        "不能只选其中一部分，也不能混合多组。"
+    )
+    assert (
+        result.feedback.repair
+        == "从 legal_action_hint_groups 中复制一整组 card_ids。"
+    )
 
 
 def test_openai_client_always_disables_thinking() -> None:
@@ -713,16 +876,18 @@ def test_openai_client_always_disables_thinking() -> None:
     payload = build_chat_completions_payload(
         config,
         AIDecisionPrompt(system="system text", user="user text"),
-        [AIToolSpec(
-            name="confirm_next_round",
-            description="confirm",
-            parameters={
-                "type": "object",
-                "properties": {"reason": {"type": "string"}},
-                "required": ["reason"],
-                "additionalProperties": False,
-            },
-        )],
+        [
+            AIToolSpec(
+                name="confirm_next_round",
+                description="confirm",
+                parameters={
+                    "type": "object",
+                    "properties": {"reason": {"type": "string"}},
+                    "required": ["reason"],
+                    "additionalProperties": False,
+                },
+            )
+        ],
     )
 
     assert payload["thinking"] == {"type": "disabled"}
@@ -731,10 +896,16 @@ def test_openai_client_always_disables_thinking() -> None:
 def test_openai_client_extracts_chat_completion_tool_call() -> None:
     arguments: JSONObject = {"card_ids": ["card-1"], "reason": "test"}
 
-    result = extract_chat_completion_tool_call(_chat_completion_response(tool_name="play_cards", arguments=arguments))
+    result = extract_chat_completion_tool_call(
+        _chat_completion_response(
+            tool_name="play_cards", arguments=arguments
+        )
+    )
 
     assert isinstance(result, Ok)
-    assert result.value == AIToolCall(name="play_cards", arguments=arguments)
+    assert result.value == AIToolCall(
+        name="play_cards", arguments=arguments
+    )
 
 
 def test_openai_client_reports_length_finish_before_tool_call() -> None:
@@ -763,11 +934,15 @@ def test_openai_client_reports_length_finish_before_tool_call() -> None:
     )
 
 
-def test_openai_client_message_log_includes_content_and_tool_calls() -> None:
+def test_openai_message_log_includes_content_and_tool_calls() -> None:
     arguments: JSONObject = {"card_ids": ["card-1"], "reason": "test"}
-    response = _chat_completion_response(tool_name="play_cards", arguments=arguments)
+    response = _chat_completion_response(
+        tool_name="play_cards", arguments=arguments
+    )
 
-    message_log = chat_completion_message_log(response, include_tool_calls=True)
+    message_log = chat_completion_message_log(
+        response, include_tool_calls=True
+    )
 
     assert "play_cards" in message_log
     assert "card-1" in message_log
@@ -776,9 +951,13 @@ def test_openai_client_message_log_includes_content_and_tool_calls() -> None:
 
 def test_openai_client_message_log_can_hide_tool_calls() -> None:
     arguments: JSONObject = {"card_ids": ["card-1"], "reason": "test"}
-    response = _chat_completion_response(tool_name="play_cards", arguments=arguments)
+    response = _chat_completion_response(
+        tool_name="play_cards", arguments=arguments
+    )
 
-    message_log = chat_completion_message_log(response, include_tool_calls=False)
+    message_log = chat_completion_message_log(
+        response, include_tool_calls=False
+    )
 
     assert "card-1" not in message_log
     assert '"tool_calls": "<hidden>"' in message_log
@@ -790,7 +969,10 @@ async def test_openai_client_decide_uses_async_http_transport() -> None:
     arguments: JSONObject = {"reason": "ready"}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert str(request.url) == "https://example.test/v1/chat/completions"
+        assert (
+            str(request.url)
+            == "https://example.test/v1/chat/completions"
+        )
         assert request.headers["authorization"] == "Bearer test-key"
         parsed: object = json.loads(request.content.decode("utf-8"))
         assert is_json_object(parsed)
@@ -813,20 +995,24 @@ async def test_openai_client_decide_uses_async_http_transport() -> None:
 
     result = await client.decide(
         AIDecisionPrompt(system="system", user="user"),
-        [AIToolSpec(
-            name="confirm_next_round",
-            description="confirm",
-            parameters={
-                "type": "object",
-                "properties": {"reason": {"type": "string"}},
-                "required": ["reason"],
-                "additionalProperties": False,
-            },
-        )],
+        [
+            AIToolSpec(
+                name="confirm_next_round",
+                description="confirm",
+                parameters={
+                    "type": "object",
+                    "properties": {"reason": {"type": "string"}},
+                    "required": ["reason"],
+                    "additionalProperties": False,
+                },
+            )
+        ],
     )
 
     assert isinstance(result, Ok)
-    assert result.value.tool_call == AIToolCall(name="confirm_next_round", arguments=arguments)
+    assert result.value.tool_call == AIToolCall(
+        name="confirm_next_round", arguments=arguments
+    )
     assert len(captured_payloads) == 1
     assert captured_payloads[0]["model"] == "test-model"
     assert result.value.api.request is not None
@@ -848,10 +1034,12 @@ async def test_openai_client_retries_timeout_then_succeeds() -> None:
             raise httpx.ReadTimeout("timeout", request=request)
         return httpx.Response(
             status_code=200,
-            content=json.dumps(_chat_completion_response(
-                tool_name="confirm_next_round",
-                arguments=arguments,
-            )).encode("utf-8"),
+            content=json.dumps(
+                _chat_completion_response(
+                    tool_name="confirm_next_round",
+                    arguments=arguments,
+                )
+            ).encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
 
@@ -862,21 +1050,25 @@ async def test_openai_client_retries_timeout_then_succeeds() -> None:
 
     result = await client.decide(
         AIDecisionPrompt(system="system", user="user"),
-        [AIToolSpec(
-            name="confirm_next_round",
-            description="confirm",
-            parameters={
-                "type": "object",
-                "properties": {"reason": {"type": "string"}},
-                "required": ["reason"],
-                "additionalProperties": False,
-            },
-        )],
+        [
+            AIToolSpec(
+                name="confirm_next_round",
+                description="confirm",
+                parameters={
+                    "type": "object",
+                    "properties": {"reason": {"type": "string"}},
+                    "required": ["reason"],
+                    "additionalProperties": False,
+                },
+            )
+        ],
     )
 
     assert isinstance(result, Ok)
     assert calls == 2
-    assert result.value.tool_call == AIToolCall(name="confirm_next_round", arguments=arguments)
+    assert result.value.tool_call == AIToolCall(
+        name="confirm_next_round", arguments=arguments
+    )
     assert result.value.api.request is not None
     assert result.value.api.response is not None
     assert result.value.api.error is not None
@@ -886,7 +1078,7 @@ async def test_openai_client_retries_timeout_then_succeeds() -> None:
 
 
 @pytest.mark.asyncio
-async def test_openai_client_does_not_retry_non_retryable_http_error() -> None:
+async def test_openai_does_not_retry_non_retryable_http_error() -> None:
     calls = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -905,16 +1097,18 @@ async def test_openai_client_does_not_retry_non_retryable_http_error() -> None:
 
     result = await client.decide(
         AIDecisionPrompt(system="system", user="user"),
-        [AIToolSpec(
-            name="confirm_next_round",
-            description="confirm",
-            parameters={
-                "type": "object",
-                "properties": {"reason": {"type": "string"}},
-                "required": ["reason"],
-                "additionalProperties": False,
-            },
-        )],
+        [
+            AIToolSpec(
+                name="confirm_next_round",
+                description="confirm",
+                parameters={
+                    "type": "object",
+                    "properties": {"reason": {"type": "string"}},
+                    "required": ["reason"],
+                    "additionalProperties": False,
+                },
+            )
+        ],
     )
 
     assert isinstance(result, AIClientRejected)
@@ -943,7 +1137,12 @@ class StaticAIClient(AIClient):
         self.tools.append(tools)
         if isinstance(self.result, Rejected):
             return self.result
-        return Ok(AIDecision(assistant_content="static test decision", tool_call=self.result))
+        return Ok(
+            AIDecision(
+                assistant_content="static test decision",
+                tool_call=self.result,
+            )
+        )
 
 
 class SequenceAIClient(AIClient):
@@ -965,7 +1164,12 @@ class SequenceAIClient(AIClient):
             self.index += 1
         if isinstance(result, Rejected):
             return result
-        return Ok(AIDecision(assistant_content="sequence test decision", tool_call=result))
+        return Ok(
+            AIDecision(
+                assistant_content="sequence test decision",
+                tool_call=result,
+            )
+        )
 
 
 class ListLogHandler(logging.Handler):
@@ -1014,7 +1218,9 @@ def _duration_ms(payload: JSONObject) -> int:
     raise AssertionError("duration_ms missing")
 
 
-def _chat_completion_response(*, tool_name: str, arguments: JSONObject) -> JSONObject:
+def _chat_completion_response(
+    *, tool_name: str, arguments: JSONObject
+) -> JSONObject:
     return {
         "id": "chatcmpl-test",
         "model": "test-model",
@@ -1030,14 +1236,16 @@ def _chat_completion_response(*, tool_name: str, arguments: JSONObject) -> JSONO
                                 "arguments": json.dumps(arguments),
                             },
                         }
-                    ]
+                    ],
                 }
             }
         ],
     }
 
 
-def _config(*, log_tool_use: bool = True, max_retries: int = 2) -> AIConfig:
+def _config(
+    *, log_tool_use: bool = True, max_retries: int = 2
+) -> AIConfig:
     return AIConfig(
         provider="openai",
         base_url="https://example.test/v1",

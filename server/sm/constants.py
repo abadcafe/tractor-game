@@ -25,14 +25,17 @@ TEAM_1: tuple[int, ...] = (1, 2)
 # ---- Counterclockwise Rotation ----
 
 # Per spec: 0→1→3→2→0 (counterclockwise)
-CCW_NEXT: MappingProxyType[int, int] = MappingProxyType({0: 1, 1: 3, 3: 2, 2: 0})
+CCW_NEXT: MappingProxyType[int, int] = MappingProxyType(
+    {0: 1, 1: 3, 3: 2, 2: 0}
+)
 
 
 def _validate_player(player: int) -> None:
     """Raise ValueError if player is not in [0, PLAYER_COUNT)."""
     if player < 0 or player >= PLAYER_COUNT:
         raise ValueError(
-            f"Invalid player index {player!r}; must be an int in [0, {PLAYER_COUNT})"
+            f"Invalid player index {player!r}; must be an int in [0,"
+            f"{PLAYER_COUNT})"
         )
 
 
@@ -66,9 +69,19 @@ TOTAL_POINTS: int = 200  # 2 decks × (4 suits × (5+10+10))
 # ---- Level Progression ----
 
 LEVELS: tuple[Rank, ...] = (
-    Rank.TWO, Rank.THREE, Rank.FOUR, Rank.FIVE,
-    Rank.SIX, Rank.SEVEN, Rank.EIGHT, Rank.NINE,
-    Rank.TEN, Rank.JACK, Rank.QUEEN, Rank.KING, Rank.ACE,
+    Rank.TWO,
+    Rank.THREE,
+    Rank.FOUR,
+    Rank.FIVE,
+    Rank.SIX,
+    Rank.SEVEN,
+    Rank.EIGHT,
+    Rank.NINE,
+    Rank.TEN,
+    Rank.JACK,
+    Rank.QUEEN,
+    Rank.KING,
+    Rank.ACE,
 )
 
 
@@ -109,7 +122,13 @@ class ScoreThreshold:
 # 级别永不倒退。闲家≥80分时，庄家换人，新庄家（原闲家）升级数
 # = max(0, (闲家得分 - 80) // 40)，上不封顶。
 SCORE_THRESHOLDS: tuple[ScoreThreshold, ...] = (
-    ScoreThreshold(max_points=0,   declarer_change=3,  switch_declarer=False),
-    ScoreThreshold(max_points=39,  declarer_change=2,  switch_declarer=False),
-    ScoreThreshold(max_points=79,  declarer_change=1,  switch_declarer=False),
+    ScoreThreshold(
+        max_points=0, declarer_change=3, switch_declarer=False
+    ),
+    ScoreThreshold(
+        max_points=39, declarer_change=2, switch_declarer=False
+    ),
+    ScoreThreshold(
+        max_points=79, declarer_change=1, switch_declarer=False
+    ),
 )

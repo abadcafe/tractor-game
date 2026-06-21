@@ -28,7 +28,12 @@ class RuleBook:
                 sections[current] = []
             elif current is not None:
                 sections[current].append(line)
-        return cls({name: "\n".join(lines).strip() for name, lines in sections.items()})
+        return cls(
+            {
+                name: "\n".join(lines).strip()
+                for name, lines in sections.items()
+            }
+        )
 
     def select(self, snapshot: StateSnapshot) -> str:
         keys = ["common"]
@@ -40,7 +45,9 @@ class RuleBook:
         elif awaiting == "discard":
             keys.extend(["discard", "scoring"])
         elif awaiting == "play":
-            keys.append("play_lead" if _is_leading(snapshot) else "play_follow")
+            keys.append(
+                "play_lead" if _is_leading(snapshot) else "play_follow"
+            )
             keys.append("scoring")
         selected: list[str] = []
         for key in keys:

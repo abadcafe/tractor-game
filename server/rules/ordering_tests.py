@@ -1,17 +1,23 @@
 """Tests for rules.ordering module."""
+
 from typing import Literal
 
-from server.rules.cards import Card, POINTS_MAP, Suit, Rank
+from server.rules.cards import POINTS_MAP, Card, Rank, Suit
 from server.rules.ordering import (
-    trump_order, effective_suit, sort_by_trump_order,
-    is_trump_card, bid_value, trump_rank_order,
+    bid_value,
+    effective_suit,
+    is_trump_card,
+    sort_by_trump_order,
+    trump_order,
+    trump_rank_order,
 )
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
     return Card(
         id=f"D{deck}-{suit.value}-{rank.value}",
-        suit=suit, rank=rank,
+        suit=suit,
+        rank=rank,
         points=POINTS_MAP[rank],
     )
 
@@ -50,7 +56,9 @@ class TestTrumpOrder:
         assert trump_order(c, Suit.HEARTS, Rank.TWO) == 12
 
     def test_trump_order_no_trump_suit(self) -> None:
-        """When trump_suit is None, only jokers and trump_rank are trump."""
+        """
+        When trump_suit is None, only jokers and trump_rank are trump.
+        """
         bj = _card(Suit.JOKER, Rank.BIG_JOKER)
         sj = _card(Suit.JOKER, Rank.SMALL_JOKER)
         tr = _card(Suit.HEARTS, Rank.TWO)
@@ -85,7 +93,9 @@ class TestEffectiveSuit:
         assert effective_suit(c, Suit.HEARTS, Rank.TWO) == Suit.SPADES
 
     def test_effective_suit_none_trump_suit(self) -> None:
-        """When trump_suit=None, only jokers and trump rank are trump."""
+        """
+        When trump_suit=None, only jokers and trump rank are trump.
+        """
         c = _card(Suit.HEARTS, Rank.ACE)
         assert effective_suit(c, None, Rank.TWO) == Suit.HEARTS
 
@@ -158,8 +168,12 @@ class TestSortByTrumpOrder:
 
 class TestSUITOffset:
     def test_suit_offset_matches_spec(self) -> None:
-        """SUIT_OFFSET must match spec section 2.3: diamond=0, club=1, heart=2, spade=3."""
+        """
+        SUIT_OFFSET must match spec section 2.3: diamond=0, club=1,
+        heart=2, spade=3.
+        """
         from server.rules.ordering import SUIT_OFFSET
+
         assert SUIT_OFFSET[Suit.DIAMONDS] == 0
         assert SUIT_OFFSET[Suit.CLUBS] == 1
         assert SUIT_OFFSET[Suit.HEARTS] == 2
@@ -182,7 +196,9 @@ class TestTrumpRankOrder:
         c = _card(Suit.HEARTS, Rank.TWO)
         assert trump_rank_order(c, Suit.HEARTS, Rank.TWO) == 80
 
-    def test_trump_rank_order_trump_rank_other_suit_diamonds(self) -> None:
+    def test_trump_rank_order_trump_rank_other_suit_diamonds(
+        self,
+    ) -> None:
         """Trump rank in diamond outside trump suit = 70."""
         c = _card(Suit.DIAMONDS, Rank.TWO)
         assert trump_rank_order(c, Suit.HEARTS, Rank.TWO) == 70
@@ -192,26 +208,36 @@ class TestTrumpRankOrder:
         c = _card(Suit.CLUBS, Rank.TWO)
         assert trump_rank_order(c, Suit.HEARTS, Rank.TWO) == 70
 
-    def test_trump_rank_order_trump_rank_other_suit_spades(self) -> None:
+    def test_trump_rank_order_trump_rank_other_suit_spades(
+        self,
+    ) -> None:
         """Trump rank in spade outside trump suit = 70."""
         c = _card(Suit.SPADES, Rank.TWO)
         assert trump_rank_order(c, Suit.HEARTS, Rank.TWO) == 70
 
-    def test_trump_rank_order_other_suit_level_cards_are_equal(self) -> None:
-        """Off-suit trump-rank cards are equal during play comparison."""
+    def test_trump_rank_order_other_suit_level_cards_are_equal(
+        self,
+    ) -> None:
+        """
+        Off-suit trump-rank cards are equal during play comparison.
+        """
         diamond = _card(Suit.DIAMONDS, Rank.TWO)
         spade = _card(Suit.SPADES, Rank.TWO)
-        assert trump_rank_order(diamond, Suit.HEARTS, Rank.TWO) == trump_rank_order(
-            spade, Suit.HEARTS, Rank.TWO
-        )
+        assert trump_rank_order(
+            diamond, Suit.HEARTS, Rank.TWO
+        ) == trump_rank_order(spade, Suit.HEARTS, Rank.TWO)
 
     def test_trump_rank_order_trump_suit_non_rank_low(self) -> None:
-        """Trump suit non-rank low card: 45 + RANK_ORDER[3] = 45 + 3 = 48."""
+        """
+        Trump suit non-rank low card: 45 + RANK_ORDER[3] = 45 + 3 = 48.
+        """
         c = _card(Suit.HEARTS, Rank.THREE)
         assert trump_rank_order(c, Suit.HEARTS, Rank.TWO) == 48
 
     def test_trump_rank_order_trump_suit_non_rank_ace(self) -> None:
-        """Trump suit non-rank ACE: 45 + RANK_ORDER[14] = 45 + 14 = 59."""
+        """
+        Trump suit non-rank ACE: 45 + RANK_ORDER[14] = 45 + 14 = 59.
+        """
         c = _card(Suit.HEARTS, Rank.ACE)
         assert trump_rank_order(c, Suit.HEARTS, Rank.TWO) == 59
 
@@ -249,10 +275,15 @@ class TestTrumpRankOrder:
         ]
         # Must be strictly increasing
         for i in range(1, len(vals)):
-            assert vals[i] > vals[i - 1], f"Order violation at index {i}: {vals[i-1]} vs {vals[i]}"
+            assert vals[i] > vals[i - 1], (
+                f"Order violation at index {i}: {vals[i - 1]} vs"
+                f"{vals[i]}"
+            )
 
     def test_trump_rank_order_no_trump_suit(self) -> None:
-        """When trump_suit=None, all trump rank suits get the same order."""
+        """
+        When trump_suit=None, all trump rank suits get the same order.
+        """
         c = _card(Suit.DIAMONDS, Rank.TWO)
         assert trump_rank_order(c, None, Rank.TWO) == 70
         c2 = _card(Suit.SPADES, Rank.TWO)

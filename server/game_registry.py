@@ -9,7 +9,8 @@ from typing import Any
 class GameRegistry:
     """In-memory storage and lifecycle management of Game objects.
 
-    Provides create, get, delete, list_games, and cleanup_expired operations.
+    Provides create, get, delete, list_games, and cleanup_expired
+    operations.
     """
 
     def __init__(self, clock: Callable[[], float] = time.time):

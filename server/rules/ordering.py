@@ -1,9 +1,10 @@
 """Trump-aware card ordering rules for Shengji/Tractor.
 
-Provides trump ordering, effective suit determination, and play comparison.
+Provides trump ordering, effective suit determination, and play
+comparison.
 """
 
-from .cards import Card, Suit, Rank
+from .cards import Card, Rank, Suit
 from .types import EffectiveSuit
 
 # ---- Constants ----
@@ -50,7 +51,9 @@ _BID_JOKER_ORDER: dict[Rank, int] = {
 # ---- Trump Order ----
 
 
-def is_trump_card(card: Card, trump_suit: Suit | None, trump_rank: Rank) -> bool:
+def is_trump_card(
+    card: Card, trump_suit: Suit | None, trump_rank: Rank
+) -> bool:
     """Determine if a card is a trump card.
 
     Trump cards: jokers, cards of trump_rank, or cards of trump_suit.
@@ -65,7 +68,9 @@ def is_trump_card(card: Card, trump_suit: Suit | None, trump_rank: Rank) -> bool
     return False
 
 
-def trump_order(card: Card, trump_suit: Suit | None, trump_rank: Rank) -> int:
+def trump_order(
+    card: Card, trump_suit: Suit | None, trump_rank: Rank
+) -> int:
     """Return the trump order value of a card.
 
     Higher value = stronger card. Ordering:
@@ -89,10 +94,13 @@ def trump_order(card: Card, trump_suit: Suit | None, trump_rank: Rank) -> int:
     return RANK_ORDER[card.rank] - 2
 
 
-def trump_rank_order(card: Card, trump_suit: Suit | None, trump_rank: Rank) -> int:
+def trump_rank_order(
+    card: Card, trump_suit: Suit | None, trump_rank: Rank
+) -> int:
     """Return the trump rank order of a card.
 
-    Identical to trump_order. Named separately to distinguish semantic use:
+    Identical to trump_order. Named separately to distinguish semantic
+    use:
     trump_order is for comparing play strength; trump_rank_order is for
     decompose's trump-group tractor detection (spec section 2.3).
 
@@ -109,7 +117,8 @@ def effective_suit(
 ) -> EffectiveSuit:
     """Return the effective suit of a card.
 
-    Returns "trump" if the card is a trump card, otherwise the card's actual suit.
+    Returns "trump" if the card is a trump card, otherwise the card's
+    actual suit.
     """
     if is_trump_card(card, trump_suit, trump_rank):
         return "trump"
@@ -174,4 +183,8 @@ def sort_by_trump_order(
     cards: list[Card], trump_suit: Suit | None, trump_rank: Rank
 ) -> list[Card]:
     """Sort cards in descending trump order."""
-    return sorted(cards, key=lambda c: trump_order(c, trump_suit, trump_rank), reverse=True)
+    return sorted(
+        cards,
+        key=lambda c: trump_order(c, trump_suit, trump_rank),
+        reverse=True,
+    )

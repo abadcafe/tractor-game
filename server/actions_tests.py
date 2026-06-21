@@ -13,7 +13,7 @@ from server.actions import (
     SkipStirAction,
     StirAction,
 )
-from server.rules.cards import Card, POINTS_MAP, Rank, Suit
+from server.rules.cards import POINTS_MAP, Card, Rank, Suit
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:

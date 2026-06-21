@@ -9,7 +9,9 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from .cards import Card, Suit
 
 type EffectiveSuit = Suit | Literal["trump"]
-type PlayShapeKind = Literal["empty", "single", "pair", "tractor", "cards"]
+type PlayShapeKind = Literal[
+    "empty", "single", "pair", "tractor", "cards"
+]
 
 
 class SubPlay(BaseModel):
@@ -18,6 +20,7 @@ class SubPlay(BaseModel):
     pair_count: 0=single, 1=pair, >=2=tractor
     suit: effective suit of this sub-play ("trump" or a Suit enum)
     """
+
     model_config = ConfigDict(frozen=True)
 
     pair_count: int
@@ -29,10 +32,13 @@ class SubPlay(BaseModel):
         if self.pair_count < 0:
             raise ValueError("pair_count must be >= 0")
         if len(self.cards) > 0:
-            expected = 1 if self.pair_count == 0 else self.pair_count * 2
+            expected = (
+                1 if self.pair_count == 0 else self.pair_count * 2
+            )
             if len(self.cards) != expected:
                 raise ValueError(
-                    f"cards count ({len(self.cards)}) must equal {expected} "
+                    f"cards count ({len(self.cards)}) must equal"
+                    f"{expected}"
                     f"for pair_count={self.pair_count}"
                 )
         return self

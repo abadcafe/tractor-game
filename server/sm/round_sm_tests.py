@@ -1,24 +1,40 @@
 """Tests for sm.round_sm module."""
+
 import random
 from collections import Counter
 from itertools import combinations
 from typing import Literal
 
 import pytest
-from server.rules.cards import Card, POINTS_MAP, Suit, Rank
-from .types import BidEvent, CompletedTrick
-from .round_sm import (
-    RoundState, RoundInput, create_round,
-    deal_next_card, reveal, pass_stir, stir, stir_discard, play,
-    is_round_complete, get_round_result, finalize_deal_bid,
-)
-from . import trick_sm as trick_mod
+
 from server.result import Ok, Rejected
+from server.rules.cards import POINTS_MAP, Card, Rank, Suit
 
-type CompletedTrickKey = tuple[int, int, int, tuple[tuple[int, tuple[str, ...]], ...]]
+from . import trick_sm as trick_mod
+from .round_sm import (
+    RoundInput,
+    RoundState,
+    create_round,
+    deal_next_card,
+    finalize_deal_bid,
+    get_round_result,
+    is_round_complete,
+    pass_stir,
+    play,
+    reveal,
+    stir,
+    stir_discard,
+)
+from .types import BidEvent, CompletedTrick
+
+type CompletedTrickKey = tuple[
+    int, int, int, tuple[tuple[int, tuple[str, ...]], ...]
+]
 
 
-def _completed_trick_key(trick: CompletedTrick | None) -> CompletedTrickKey | None:
+def _completed_trick_key(
+    trick: CompletedTrick | None,
+) -> CompletedTrickKey | None:
     if trick is None:
         return None
     return (
@@ -45,12 +61,16 @@ def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
 def _deal(state: RoundState) -> RoundState:
     """Unwrap deal_next_card result, asserting Ok."""
     result = deal_next_card(state)
-    assert isinstance(result, Ok), f"deal_next_card rejected: {result.reason}"
+    assert isinstance(result, Ok), (
+        f"deal_next_card rejected: {result.reason}"
+    )
     return result.value
 
 
 def _play_first_legal(state: RoundState) -> RoundState:
-    """Play the first accepted play for the current player in the trick."""
+    """
+    Play the first accepted play for the current player in the trick.
+    """
     trick = state.trick_state
     assert trick is not None
     cur = trick.cur
@@ -67,7 +87,9 @@ def _play_first_legal(state: RoundState) -> RoundState:
 
     for size in candidate_sizes:
         for candidate in combinations(hand, size):
-            result = play(state, player_index=cur, cards=list(candidate))
+            result = play(
+                state, player_index=cur, cards=list(candidate)
+            )
             if isinstance(result, Ok):
                 return result.value
     raise AssertionError(f"No accepted play for player {cur}")
@@ -75,8 +97,13 @@ def _play_first_legal(state: RoundState) -> RoundState:
 
 def _deal_all_cards(state: RoundState) -> RoundState:
     """Deal all 100 cards in the deal-bid phase."""
-    while state.phase == "DEAL_BID" and state.deal_bid_state is not None:
-        if state.deal_bid_state.phase != "DEALING" or state.deal_bid_state.all_dealt:
+    while (
+        state.phase == "DEAL_BID" and state.deal_bid_state is not None
+    ):
+        if (
+            state.deal_bid_state.phase != "DEALING"
+            or state.deal_bid_state.all_dealt
+        ):
             break
         state = _deal(state)
     return state
@@ -86,9 +113,15 @@ def _complete_deal_bid_no_bid(state: RoundState) -> RoundState:
     """Complete deal-bid without any reveals (results in NO_BID)."""
     state = _deal_all_cards(state)
     # After all cards dealt, finalize to transition to STIRRING
-    if state.phase == "DEAL_BID" and state.deal_bid_state is not None and state.deal_bid_state.all_dealt:
+    if (
+        state.phase == "DEAL_BID"
+        and state.deal_bid_state is not None
+        and state.deal_bid_state.all_dealt
+    ):
         result = finalize_deal_bid(state)
-        assert isinstance(result, Ok), f"finalize_deal_bid rejected: {result.reason}"
+        assert isinstance(result, Ok), (
+            f"finalize_deal_bid rejected: {result.reason}"
+        )
         state = result.value
     return state
 
@@ -97,19 +130,32 @@ def _complete_deal_bid_with_reveal(state: RoundState) -> RoundState:
     """Complete deal-bid with one reveal (results in COMPLETE)."""
     # Deal some cards first
     for _ in range(20):
-        if state.deal_bid_state is None or state.deal_bid_state.phase != "DEALING":
+        if (
+            state.deal_bid_state is None
+            or state.deal_bid_state.phase != "DEALING"
+        ):
             break
         state = _deal(state)
 
     # Find a trump rank card in any hand and reveal it
-    if state.deal_bid_state is not None and state.deal_bid_state.phase == "DEALING":
+    if (
+        state.deal_bid_state is not None
+        and state.deal_bid_state.phase == "DEALING"
+    ):
         for p in range(4):
-            trump_cards = [c for c in state.deal_bid_state.players_hand[p]
-                          if c.rank == state.trump_rank and not c.is_joker]
+            trump_cards = [
+                c
+                for c in state.deal_bid_state.players_hand[p]
+                if c.rank == state.trump_rank and not c.is_joker
+            ]
             if trump_cards:
                 event = BidEvent(
-                    player=p, cards=[trump_cards[0]], kind="trump_rank",
-                    suit=trump_cards[0].suit, joker_type=None, count=1,
+                    player=p,
+                    cards=[trump_cards[0]],
+                    kind="trump_rank",
+                    suit=trump_cards[0].suit,
+                    joker_type=None,
+                    count=1,
                 )
                 result = reveal(state, event)
                 if isinstance(result, Ok):
@@ -119,32 +165,46 @@ def _complete_deal_bid_with_reveal(state: RoundState) -> RoundState:
     # Deal remaining cards
     state = _deal_all_cards(state)
     # After all cards dealt, finalize to transition to STIRRING
-    if state.phase == "DEAL_BID" and state.deal_bid_state is not None and state.deal_bid_state.all_dealt:
+    if (
+        state.phase == "DEAL_BID"
+        and state.deal_bid_state is not None
+        and state.deal_bid_state.all_dealt
+    ):
         result = finalize_deal_bid(state)
-        assert isinstance(result, Ok), f"finalize_deal_bid rejected: {result.reason}"
+        assert isinstance(result, Ok), (
+            f"finalize_deal_bid rejected: {result.reason}"
+        )
         state = result.value
     return state
 
 
 def _complete_stirring_all_pass(state: RoundState) -> RoundState:
-    """Complete stirring by handling initial EXCHANGING then having others pass.
+    """
+    Complete stirring by handling initial EXCHANGING then having others
+    pass.
 
     The stirring phase starts in EXCHANGING sub-phase: the declarer must
     exchange (stir_discard) bottom cards first. After that, the three
-    non-exchanging players pass, and stirring completes, transitioning directly to PLAYING.
+    non-exchanging players pass, and stirring completes, transitioning
+    directly to PLAYING.
     """
     assert state.phase == "STIRRING"
     assert state.stirring_state is not None
 
-    # Step 1: Handle initial EXCHANGING sub-phase (declarer exchanges bottom cards)
+    # Step 1: Handle initial EXCHANGING sub-phase (declarer exchanges
+    # bottom cards)
     if state.stirring_state.phase == "EXCHANGING":
         assert state.stirring_state.exchange_state is not None
         ex = state.stirring_state.exchange_state
         declarer = state.stirring_state.exchanging_player
         assert declarer is not None
-        discarded = ex.hand_after_pickup[:ex.count]
-        result = stir_discard(state, player_index=declarer, cards=discarded)
-        assert isinstance(result, Ok), f"stir_discard rejected: {result.reason}"
+        discarded = ex.hand_after_pickup[: ex.count]
+        result = stir_discard(
+            state, player_index=declarer, cards=discarded
+        )
+        assert isinstance(result, Ok), (
+            f"stir_discard rejected: {result.reason}"
+        )
         state = result.value
 
     # Step 2: The three non-exchanging players pass.
@@ -153,37 +213,45 @@ def _complete_stirring_all_pass(state: RoundState) -> RoundState:
             break
         if state.stirring_state is None:
             break
-        # If stirring is in EXCHANGING (e.g. after a stir), handle it first
+        # If stirring is in EXCHANGING (e.g. after a stir), handle it
+        # first
         if state.stirring_state.phase == "EXCHANGING":
             assert state.stirring_state.exchange_state is not None
             ex = state.stirring_state.exchange_state
             exchanging = state.stirring_state.exchanging_player
             assert exchanging is not None
-            discarded = ex.hand_after_pickup[:ex.count]
-            result = stir_discard(state, player_index=exchanging, cards=discarded)
-            assert isinstance(result, Ok), f"stir_discard rejected: {result.reason}"
+            discarded = ex.hand_after_pickup[: ex.count]
+            result = stir_discard(
+                state, player_index=exchanging, cards=discarded
+            )
+            assert isinstance(result, Ok), (
+                f"stir_discard rejected: {result.reason}"
+            )
             state = result.value
         if state.phase != "STIRRING" or state.stirring_state is None:
             break
         cur = state.stirring_state.current_player
         result = pass_stir(state, player_index=cur)
-        assert isinstance(result, Ok), f"pass_stir rejected: {result.reason}"
+        assert isinstance(result, Ok), (
+            f"pass_stir rejected: {result.reason}"
+        )
         state = result.value
 
     return state
 
 
-
 class TestCreateRound:
     def test_create_round_initial_state(self) -> None:
         """Initial round state: DEAL_BID phase."""
-        state = create_round(RoundInput(
-            declarer_team=None,
-            trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
-        ))
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         assert state.phase == "DEAL_BID"
         assert state.declarer_team is None
         assert state.trump_rank == Rank.TWO
@@ -191,28 +259,37 @@ class TestCreateRound:
 
     def test_create_round_with_declarer(self) -> None:
         """Subsequent round starts dealing from the fixed declarer."""
-        state = create_round(RoundInput(
-            declarer_team=0,
-            trump_rank=Rank.THREE,
-            next_declarer_player=0,
-            team0_level=Rank.THREE,
-            team1_level=Rank.TWO,
-        ))
+        state = create_round(
+            RoundInput(
+                declarer_team=0,
+                trump_rank=Rank.THREE,
+                next_declarer_player=0,
+                team0_level=Rank.THREE,
+                team1_level=Rank.TWO,
+            )
+        )
         assert state.declarer_team == 0
         assert state.trump_rank == Rank.THREE
         assert state.start_player == 0
         assert state.deal_bid_state is not None
         assert state.deal_bid_state.deal_target == 0
 
-    def test_create_round_with_nonzero_declarer_starts_dealing_there(self) -> None:
-        """Subsequent round deal starts from the fixed declarer, not player 0."""
-        state = create_round(RoundInput(
-            declarer_team=1,
-            trump_rank=Rank.FIVE,
-            next_declarer_player=2,
-            team0_level=Rank.THREE,
-            team1_level=Rank.FIVE,
-        ))
+    def test_create_round_with_nonzero_declarer_starts_dealing_there(
+        self,
+    ) -> None:
+        """
+        Subsequent round deal starts from the fixed declarer, not player
+        0.
+        """
+        state = create_round(
+            RoundInput(
+                declarer_team=1,
+                trump_rank=Rank.FIVE,
+                next_declarer_player=2,
+                team0_level=Rank.THREE,
+                team1_level=Rank.FIVE,
+            )
+        )
         assert state.start_player == 2
         assert state.deal_bid_state is not None
         assert state.deal_bid_state.deal_target == 2
@@ -220,12 +297,18 @@ class TestCreateRound:
 
 class TestDealBidPhase:
     def test_deal_next_card_advances_deal_bid(self) -> None:
-        """deal_next_card during DEAL_BID advances the deal-bid sub-state."""
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        """
+        deal_next_card during DEAL_BID advances the deal-bid sub-state.
+        """
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         assert state.phase == "DEAL_BID"
         assert state.deal_bid_state is not None
         initial_cursor = state.deal_bid_state.deal_cursor
@@ -235,11 +318,15 @@ class TestDealBidPhase:
 
     def test_reveal_during_deal_bid(self) -> None:
         """reveal during DEAL_BID adds a bid event."""
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         # Deal some cards first
         for _ in range(20):
             state = _deal(state)
@@ -247,12 +334,19 @@ class TestDealBidPhase:
         # Find a trump rank card and reveal
         assert state.deal_bid_state is not None
         for p in range(4):
-            trump_cards = [c for c in state.deal_bid_state.players_hand[p]
-                          if c.rank == Rank.TWO and not c.is_joker]
+            trump_cards = [
+                c
+                for c in state.deal_bid_state.players_hand[p]
+                if c.rank == Rank.TWO and not c.is_joker
+            ]
             if trump_cards:
                 event = BidEvent(
-                    player=p, cards=[trump_cards[0]], kind="trump_rank",
-                    suit=trump_cards[0].suit, joker_type=None, count=1,
+                    player=p,
+                    cards=[trump_cards[0]],
+                    kind="trump_rank",
+                    suit=trump_cards[0].suit,
+                    joker_type=None,
+                    count=1,
                 )
                 assert state.deal_bid_state is not None
                 old_events = len(state.deal_bid_state.bid_events)
@@ -264,13 +358,19 @@ class TestDealBidPhase:
                 break
 
     def test_deal_bid_to_stirring_with_winner(self) -> None:
-        """After deal-bid completes with a winner, round enters STIRRING."""
+        """
+        After deal-bid completes with a winner, round enters STIRRING.
+        """
         random.seed(42)
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _complete_deal_bid_with_reveal(state)
         assert state.deal_bid_state is not None
         assert state.deal_bid_state.bid_winner is not None
@@ -278,19 +378,28 @@ class TestDealBidPhase:
         assert state.declarer_player is not None
         assert state.trump_suit is not None
 
-    def test_deal_bid_single_winner_enters_stirring_with_single_priority(self) -> None:
-        """Deal-bid must preserve whether the winning bid was single or pair."""
+    def test_single_winner_enters_stirring_with_single_priority(
+        self,
+    ) -> None:
+        """
+        Deal-bid must preserve whether the winning bid was single or
+        pair.
+        """
         bid_card = _card(Suit.SPADES, Rank.FIVE, 1)
         over_stir_pair = [
             _card(Suit.DIAMONDS, Rank.FIVE, 1),
             _card(Suit.DIAMONDS, Rank.FIVE, 2),
         ]
         hands = [[bid_card], over_stir_pair, [], []]
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.FIVE,
-            next_declarer_player=None,
-            team0_level=Rank.FIVE, team1_level=Rank.TWO,
-        ))
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.FIVE,
+                next_declarer_player=None,
+                team0_level=Rank.FIVE,
+                team1_level=Rank.TWO,
+            )
+        )
         bid_event = BidEvent(
             player=0,
             cards=[bid_card],
@@ -300,16 +409,20 @@ class TestDealBidPhase:
             count=1,
         )
         assert state.deal_bid_state is not None
-        db_state = state.deal_bid_state.model_copy(update={
-            "all_dealt": True,
-            "bid_winner": bid_event,
-            "bid_events": [bid_event],
-            "players_hand": hands,
-        })
-        state = state.model_copy(update={
-            "deal_bid_state": db_state,
-            "players_hand": hands,
-        })
+        db_state = state.deal_bid_state.model_copy(
+            update={
+                "all_dealt": True,
+                "bid_winner": bid_event,
+                "bid_events": [bid_event],
+                "players_hand": hands,
+            }
+        )
+        state = state.model_copy(
+            update={
+                "deal_bid_state": db_state,
+                "players_hand": hands,
+            }
+        )
 
         result = finalize_deal_bid(state)
 
@@ -323,12 +436,19 @@ class TestDealBidPhase:
         assert result.value.trump_suit == Suit.DIAMONDS
 
     def test_deal_bid_to_stirring_no_bid(self) -> None:
-        """After deal-bid with no bids, round enters STIRRING with empty trump."""
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        """
+        After deal-bid with no bids, round enters STIRRING with empty
+        trump.
+        """
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _complete_deal_bid_no_bid(state)
         assert state.phase == "STIRRING"
         assert state.trump_suit is None  # empty trump
@@ -337,8 +457,10 @@ class TestDealBidPhase:
 def _complete_initial_exchange(state: RoundState) -> RoundState:
     """Complete the initial EXCHANGING sub-phase of stirring.
 
-    After deal-bid, stirring starts in EXCHANGING sub-phase where the declarer
-    must exchange (stir_discard) bottom cards before any pass/stir actions.
+    After deal-bid, stirring starts in EXCHANGING sub-phase where the
+    declarer
+    must exchange (stir_discard) bottom cards before any pass/stir
+    actions.
     """
     assert state.phase == "STIRRING"
     assert state.stirring_state is not None
@@ -347,20 +469,28 @@ def _complete_initial_exchange(state: RoundState) -> RoundState:
     ex = state.stirring_state.exchange_state
     exchanging = state.stirring_state.exchanging_player
     assert exchanging is not None
-    discarded = ex.hand_after_pickup[:ex.count]
-    result = stir_discard(state, player_index=exchanging, cards=discarded)
-    assert isinstance(result, Ok), f"stir_discard rejected: {result.reason}"
+    discarded = ex.hand_after_pickup[: ex.count]
+    result = stir_discard(
+        state, player_index=exchanging, cards=discarded
+    )
+    assert isinstance(result, Ok), (
+        f"stir_discard rejected: {result.reason}"
+    )
     return result.value
 
 
 class TestStirringPhase:
     def test_stirring_starts_in_exchanging(self) -> None:
         """After deal-bid, stirring starts in EXCHANGING sub-phase."""
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _complete_deal_bid_no_bid(state)
         assert state.phase == "STIRRING"
         assert state.stirring_state is not None
@@ -368,25 +498,40 @@ class TestStirringPhase:
         assert state.stirring_state.exchange_state is not None
 
     def test_stir_discard_completes_initial_exchange(self) -> None:
-        """stir_discard during initial EXCHANGING transitions to WAITING."""
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        """
+        stir_discard during initial EXCHANGING transitions to WAITING.
+        """
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _complete_deal_bid_no_bid(state)
         state = _complete_initial_exchange(state)
         assert state.phase == "STIRRING"
         assert state.stirring_state is not None
         assert state.stirring_state.phase == "WAITING"
 
-    def test_stir_discard_after_max_stir_transitions_round_to_playing(self) -> None:
-        """A max-priority stir that completes during exchange advances the round."""
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+    def test_stir_discard_after_max_stir_transitions_round_to_playing(
+        self,
+    ) -> None:
+        """
+        A max-priority stir that completes during exchange advances the
+        round.
+        """
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _complete_deal_bid_no_bid(state)
         state = _complete_initial_exchange(state)
         assert state.phase == "STIRRING"
@@ -400,13 +545,19 @@ class TestStirringPhase:
         hands = [list(hand) for hand in state.players_hand]
         hands[cur].extend(big_jokers)
         assert state.stirring_state is not None
-        state = state.model_copy(update={
-            "players_hand": hands,
-            "stirring_state": state.stirring_state.model_copy(update={"players_hand": hands}),
-        })
+        state = state.model_copy(
+            update={
+                "players_hand": hands,
+                "stirring_state": state.stirring_state.model_copy(
+                    update={"players_hand": hands}
+                ),
+            }
+        )
 
         stir_result = stir(state, player_index=cur, cards=big_jokers)
-        assert isinstance(stir_result, Ok), f"stir rejected: {stir_result.reason}"
+        assert isinstance(stir_result, Ok), (
+            f"stir rejected: {stir_result.reason}"
+        )
         state = stir_result.value
         assert state.phase == "STIRRING"
         assert state.stirring_state is not None
@@ -419,25 +570,36 @@ class TestStirringPhase:
         discard_result = stir_discard(
             state,
             player_index=exchanging,
-            cards=ex.hand_after_pickup[:ex.count],
+            cards=ex.hand_after_pickup[: ex.count],
         )
-        assert isinstance(discard_result, Ok), f"stir_discard rejected: {discard_result.reason}"
+        assert isinstance(discard_result, Ok), (
+            f"stir_discard rejected: {discard_result.reason}"
+        )
         state = discard_result.value
         assert state.phase == "PLAYING"
         assert state.trick_state is not None
 
     def test_pass_stir_during_stirring(self) -> None:
-        """pass_stir during STIRRING WAITING sub-phase advances current player."""
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        """
+        pass_stir during STIRRING WAITING sub-phase advances current
+        player.
+        """
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _complete_deal_bid_no_bid(state)
         state = _complete_initial_exchange(state)
         assert state.phase == "STIRRING"
         assert state.stirring_state is not None
-        result = pass_stir(state, player_index=state.stirring_state.current_player)
+        result = pass_stir(
+            state, player_index=state.stirring_state.current_player
+        )
         assert isinstance(result, Ok)
         state = result.value
         assert state.stirring_state is not None
@@ -446,15 +608,20 @@ class TestStirringPhase:
     def test_stir_during_stirring(self) -> None:
         """stir during STIRRING WAITING sub-phase changes trump suit."""
         random.seed(10)
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _complete_deal_bid_no_bid(state)
         state = _complete_initial_exchange(state)
         assert state.phase == "STIRRING"
-        # With empty trump, find a trump-rank pair in the current player's hand
+        # With empty trump, find a trump-rank pair in the current
+        # player's hand
         assert state.stirring_state is not None
         cur = state.stirring_state.current_player
         hand = state.players_hand[cur]
@@ -470,10 +637,17 @@ class TestStirringPhase:
                 target_suit = s
                 break
         assert target_suit is not None, (
-            f"No trump-rank pair available in player {cur}'s hand for stirring. "
+            f"No trump-rank pair available in player {cur}'s hand for"
+            f"stirring."
             f"Hand: {[c.id for c in hand]}"
         )
-        pair = [c for c in hand if c.rank == state.trump_rank and not c.is_joker and c.suit == target_suit][:2]
+        pair = [
+            c
+            for c in hand
+            if c.rank == state.trump_rank
+            and not c.is_joker
+            and c.suit == target_suit
+        ][:2]
         result = stir(state, player_index=cur, cards=pair)
         assert isinstance(result, Ok)
         state = result.value
@@ -484,12 +658,18 @@ class TestStirringPhase:
         assert state.bid_winner.suit == target_suit
 
     def test_stir_cards_not_in_hand_rejected(self) -> None:
-        """stir with cards not in current player's hand returns Rejected."""
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        """
+        stir with cards not in current player's hand returns Rejected.
+        """
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _complete_deal_bid_no_bid(state)
         state = _complete_initial_exchange(state)
         assert state.phase == "STIRRING"
@@ -499,17 +679,28 @@ class TestStirringPhase:
             _card(Suit.CLUBS, Rank.TWO, 1),
             _card(Suit.CLUBS, Rank.TWO, 2),
         ]
-        result = stir(state, player_index=state.stirring_state.current_player, cards=fake_cards)
+        result = stir(
+            state,
+            player_index=state.stirring_state.current_player,
+            cards=fake_cards,
+        )
         assert isinstance(result, Rejected)
         assert "不在" in result.reason and "手牌中" in result.reason
 
     def test_stir_rejected_by_stirring_module(self) -> None:
-        """stir with in-hand cards that the stirring module rejects returns Rejected."""
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        """
+        stir with in-hand cards that the stirring module rejects returns
+        Rejected.
+        """
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _complete_deal_bid_no_bid(state)
         state = _complete_initial_exchange(state)
         assert state.phase == "STIRRING"
@@ -524,26 +715,39 @@ class TestStirringPhase:
             assert "对子" in result.reason
 
     def test_stirring_all_pass_to_playing(self) -> None:
-        """After all players pass stirring, round enters PLAYING directly."""
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        """
+        After all players pass stirring, round enters PLAYING directly.
+        """
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _complete_deal_bid_no_bid(state)
         state = _complete_stirring_all_pass(state)
         assert state.phase == "PLAYING"
 
     def test_stirrer_is_skipped_after_exchange(self) -> None:
-        """A player who just stirred is skipped after exchanging bottom cards."""
+        """
+        A player who just stirred is skipped after exchanging bottom
+        cards.
+        """
         from collections import Counter
 
         random.seed(10)
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _complete_deal_bid_no_bid(state)
         state = _complete_initial_exchange(state)
         assert state.phase == "STIRRING"
@@ -565,8 +769,13 @@ class TestStirringPhase:
         if target_suit is None:
             pytest.skip("No trump-rank pair available for this test")
 
-        pair = [c for c in hand
-                if c.rank == state.trump_rank and not c.is_joker and c.suit == target_suit][:2]
+        pair = [
+            c
+            for c in hand
+            if c.rank == state.trump_rank
+            and not c.is_joker
+            and c.suit == target_suit
+        ][:2]
 
         # First stir succeeds
         result = stir(state, player_index=cur, cards=pair)
@@ -581,12 +790,17 @@ class TestStirringPhase:
             ex = state.stirring_state.exchange_state
             exchanging = state.stirring_state.exchanging_player
             assert exchanging is not None
-            discarded = ex.hand_after_pickup[:ex.count]
-            result = stir_discard(state, player_index=exchanging, cards=discarded)
-            assert isinstance(result, Ok), f"stir_discard rejected: {result.reason}"
+            discarded = ex.hand_after_pickup[: ex.count]
+            result = stir_discard(
+                state, player_index=exchanging, cards=discarded
+            )
+            assert isinstance(result, Ok), (
+                f"stir_discard rejected: {result.reason}"
+            )
             state = result.value
 
-        # The other three players pass; the turn must not come back to the stirrer.
+        # The other three players pass; the turn must not come back to
+        # the stirrer.
         for _ in range(3):
             if state.phase != "STIRRING":
                 break
@@ -596,15 +810,21 @@ class TestStirringPhase:
                 ex = state.stirring_state.exchange_state
                 exchanging = state.stirring_state.exchanging_player
                 assert exchanging is not None
-                discarded = ex.hand_after_pickup[:ex.count]
-                result = stir_discard(state, player_index=exchanging, cards=discarded)
-                assert isinstance(result, Ok), f"stir_discard rejected: {result.reason}"
+                discarded = ex.hand_after_pickup[: ex.count]
+                result = stir_discard(
+                    state, player_index=exchanging, cards=discarded
+                )
+                assert isinstance(result, Ok), (
+                    f"stir_discard rejected: {result.reason}"
+                )
                 state = result.value
             if state.stirring_state is None:
                 break
             p = state.stirring_state.current_player
             result = pass_stir(state, player_index=p)
-            assert isinstance(result, Ok), f"pass_stir rejected: {result.reason}"
+            assert isinstance(result, Ok), (
+                f"pass_stir rejected: {result.reason}"
+            )
             state = result.value
 
         assert state.phase == "PLAYING"
@@ -612,15 +832,18 @@ class TestStirringPhase:
         assert state.stirring_state.current_player != cur
 
 
-
 class TestPlayingPhase:
     def test_play_during_playing_first_trick(self) -> None:
         """First play during PLAYING is the lead player's turn."""
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _complete_deal_bid_no_bid(state)
         state = _complete_stirring_all_pass(state)
         assert state.phase == "PLAYING"
@@ -629,12 +852,18 @@ class TestPlayingPhase:
         assert state.trick_state.phase == "LEADING"
 
     def test_playing_trick_resolved_starts_next(self) -> None:
-        """After a trick resolves, the next trick starts automatically."""
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        """
+        After a trick resolves, the next trick starts automatically.
+        """
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _complete_deal_bid_no_bid(state)
         state = _complete_stirring_all_pass(state)
         # Play a complete trick: 4 players play
@@ -649,11 +878,13 @@ class TestPlayingPhase:
                 break
             state = _play_first_legal(state)
 
-        # After the trick, a new trick should have started (or we moved to scoring)
+        # After the trick, a new trick should have started (or we moved
+        # to scoring)
         assert state.last_completed_trick is not None
         assert state.defender_points >= 0
         if state.phase == "PLAYING":
-            # New trick started: lead player is the winner of the first trick
+            # New trick started: lead player is the winner of the first
+            # trick
             new_trick = state.trick_state
             assert new_trick is not None
             assert new_trick.phase == "LEADING"
@@ -661,17 +892,24 @@ class TestPlayingPhase:
             assert new_trick.lead_player == winner
 
     def test_playing_all_tricks_to_scoring(self) -> None:
-        """Playing phase progresses through tricks and eventually completes.
+        """
+        Playing phase progresses through tricks and eventually
+        completes.
 
         Multi-card plays (pairs, tractors) may cause players to run out
-        of cards before 25 tricks. The game should still complete and transition to
+        of cards before 25 tricks. The game should still complete and
+        transition to
         SCORING/COMPLETE once all cards are played or 25 tricks finish.
         """
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _complete_deal_bid_no_bid(state)
         state = _complete_stirring_all_pass(state)
         # Play tricks until phase changes from PLAYING or no progress
@@ -690,8 +928,11 @@ class TestPlayingPhase:
                 trick = state.trick_state
                 if trick is None:
                     break
-            # Check for no progress (all hands empty, trick can't resolve)
-            completed_trick_key = _completed_trick_key(state.last_completed_trick)
+            # Check for no progress (all hands empty, trick can't
+            # resolve)
+            completed_trick_key = _completed_trick_key(
+                state.last_completed_trick
+            )
             if completed_trick_key == prev_completed_trick_key:
                 break
             prev_completed_trick_key = completed_trick_key
@@ -705,13 +946,18 @@ class TestScoringPhase:
         """SCORING phase computes and stores RoundResult.
 
         Plays tricks until the round completes. With multi-card plays,
-        the round may complete before 25 tricks if players run out of cards.
+        the round may complete before 25 tricks if players run out of
+        cards.
         """
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _complete_deal_bid_no_bid(state)
         state = _complete_stirring_all_pass(state)
         # Play tricks until phase changes or no progress
@@ -729,7 +975,9 @@ class TestScoringPhase:
                 trick = state.trick_state
                 if trick is None:
                     break
-            completed_trick_key = _completed_trick_key(state.last_completed_trick)
+            completed_trick_key = _completed_trick_key(
+                state.last_completed_trick
+            )
             if completed_trick_key == prev_completed_trick_key:
                 break
             prev_completed_trick_key = completed_trick_key
@@ -740,13 +988,19 @@ class TestScoringPhase:
 
 class TestRoundDeclarer:
     def test_round_first_round_declarer_from_bid(self) -> None:
-        """First round: declarer_team is None until deal-bid completes."""
+        """
+        First round: declarer_team is None until deal-bid completes.
+        """
         random.seed(42)
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         assert state.declarer_team is None
         state = _complete_deal_bid_with_reveal(state)
         assert state.deal_bid_state is not None
@@ -755,35 +1009,55 @@ class TestRoundDeclarer:
 
     def test_round_subsequent_round_declarer_fixed(self) -> None:
         """Subsequent round: declarer_team is pre-determined."""
-        state = create_round(RoundInput(
-            declarer_team=1, trump_rank=Rank.THREE,
-            next_declarer_player=1,
-            team0_level=Rank.TWO, team1_level=Rank.THREE,
-        ))
+        state = create_round(
+            RoundInput(
+                declarer_team=1,
+                trump_rank=Rank.THREE,
+                next_declarer_player=1,
+                team0_level=Rank.TWO,
+                team1_level=Rank.THREE,
+            )
+        )
         assert state.declarer_team == 1
 
-    def test_round_subsequent_round_bid_winner_only_sets_trump(self) -> None:
-        """Subsequent round: bid winner does not replace fixed declarer."""
+    def test_round_subsequent_round_bid_winner_only_sets_trump(
+        self,
+    ) -> None:
+        """
+        Subsequent round: bid winner does not replace fixed declarer.
+        """
         random.seed(3)
-        state = create_round(RoundInput(
-            declarer_team=0, trump_rank=Rank.TWO,
-            next_declarer_player=3,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        state = create_round(
+            RoundInput(
+                declarer_team=0,
+                trump_rank=Rank.TWO,
+                next_declarer_player=3,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _deal_all_cards(state)
-        # Find a trump rank card outside the fixed declarer player's hand.
+        # Find a trump rank card outside the fixed declarer player's
+        # hand.
         assert state.deal_bid_state is not None
         bid_player: int | None = None
         bid_suit: Suit | None = None
         for p in [0, 1, 2]:
-            trump_cards = [c for c in state.deal_bid_state.players_hand[p]
-                           if c.rank == Rank.TWO and not c.is_joker]
+            trump_cards = [
+                c
+                for c in state.deal_bid_state.players_hand[p]
+                if c.rank == Rank.TWO and not c.is_joker
+            ]
             if trump_cards:
                 bid_player = p
                 bid_suit = trump_cards[0].suit
                 event = BidEvent(
-                    player=p, cards=[trump_cards[0]], kind="trump_rank",
-                    suit=trump_cards[0].suit, joker_type=None, count=1,
+                    player=p,
+                    cards=[trump_cards[0]],
+                    kind="trump_rank",
+                    suit=trump_cards[0].suit,
+                    joker_type=None,
+                    count=1,
                 )
                 result = reveal(state, event)
                 assert isinstance(result, Ok)
@@ -792,7 +1066,10 @@ class TestRoundDeclarer:
         assert bid_player is not None
         assert bid_suit is not None
         # Finalize deal-bid to transition to STIRRING
-        if state.deal_bid_state is not None and state.deal_bid_state.all_dealt:
+        if (
+            state.deal_bid_state is not None
+            and state.deal_bid_state.all_dealt
+        ):
             result = finalize_deal_bid(state)
             assert isinstance(result, Ok)
             state = result.value
@@ -805,28 +1082,44 @@ class TestRoundDeclarer:
         assert state.bid_winner.player == bid_player
         assert state.trump_suit == bid_suit
 
-    def test_round_subsequent_round_other_team_bid_still_sets_trump(self) -> None:
-        """Subsequent round: any player's bid can choose suit without changing declarer."""
+    def test_round_subsequent_round_other_team_bid_still_sets_trump(
+        self,
+    ) -> None:
+        """
+        Subsequent round: any player's bid can choose suit without
+        changing declarer.
+        """
         random.seed(3)
-        state = create_round(RoundInput(
-            declarer_team=0, trump_rank=Rank.TWO,
-            next_declarer_player=0,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        state = create_round(
+            RoundInput(
+                declarer_team=0,
+                trump_rank=Rank.TWO,
+                next_declarer_player=0,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _deal_all_cards(state)
         # Find trump rank card in team 1 player's hand (players 1, 2)
         assert state.deal_bid_state is not None
         bid_player: int | None = None
         bid_suit: Suit | None = None
         for p in [1, 2]:
-            trump_cards = [c for c in state.deal_bid_state.players_hand[p]
-                           if c.rank == Rank.TWO and not c.is_joker]
+            trump_cards = [
+                c
+                for c in state.deal_bid_state.players_hand[p]
+                if c.rank == Rank.TWO and not c.is_joker
+            ]
             if trump_cards:
                 bid_player = p
                 bid_suit = trump_cards[0].suit
                 event = BidEvent(
-                    player=p, cards=[trump_cards[0]], kind="trump_rank",
-                    suit=trump_cards[0].suit, joker_type=None, count=1,
+                    player=p,
+                    cards=[trump_cards[0]],
+                    kind="trump_rank",
+                    suit=trump_cards[0].suit,
+                    joker_type=None,
+                    count=1,
                 )
                 result = reveal(state, event)
                 assert isinstance(result, Ok)
@@ -835,7 +1128,10 @@ class TestRoundDeclarer:
         assert bid_player is not None
         assert bid_suit is not None
         # Finalize deal-bid to transition to STIRRING
-        if state.deal_bid_state is not None and state.deal_bid_state.all_dealt:
+        if (
+            state.deal_bid_state is not None
+            and state.deal_bid_state.all_dealt
+        ):
             result = finalize_deal_bid(state)
             assert isinstance(result, Ok)
             state = result.value
@@ -848,38 +1144,56 @@ class TestRoundDeclarer:
 
     def test_round_empty_trump_no_bid(self) -> None:
         """No bid = empty trump, declarer_player from start_player."""
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _complete_deal_bid_no_bid(state)
         assert state.trump_suit is None
         # First round no-bid: declarer_player should be start_player (0)
         assert state.declarer_player == 0
 
     def test_round_subsequent_round_no_bid(self) -> None:
-        """Subsequent round no-bid: declarer_player = next_declarer_player."""
-        state = create_round(RoundInput(
-            declarer_team=1, trump_rank=Rank.THREE,
-            next_declarer_player=2,
-            team0_level=Rank.TWO, team1_level=Rank.THREE,
-        ))
+        """
+        Subsequent round no-bid: declarer_player = next_declarer_player.
+        """
+        state = create_round(
+            RoundInput(
+                declarer_team=1,
+                trump_rank=Rank.THREE,
+                next_declarer_player=2,
+                team0_level=Rank.TWO,
+                team1_level=Rank.THREE,
+            )
+        )
         state = _complete_deal_bid_no_bid(state)
         assert state.trump_suit is None
-        # Subsequent round no-bid: declarer_player = next_declarer_player
+        # Subsequent round no-bid: declarer_player =
+        # next_declarer_player
         assert state.declarer_player == 2
         assert state.declarer_team == 1  # unchanged
 
 
 class TestRoundValidation:
     def test_round_wrong_phase_operation_rejected(self) -> None:
-        """Calling a phase-specific operation in the wrong phase raises error."""
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        """
+        Calling a phase-specific operation in the wrong phase raises
+        error.
+        """
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         assert state.phase == "DEAL_BID"
         # Cannot stir during DEAL_BID
         cards = [
@@ -894,11 +1208,15 @@ class TestRoundValidation:
 class TestRoundFullFlow:
     def test_round_full_round_flow(self) -> None:
         """Integration: complete round from deal-bid to scoring."""
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         # Deal-bid: no bids
         state = _complete_deal_bid_no_bid(state)
         assert state.phase == "STIRRING"
@@ -922,7 +1240,9 @@ class TestRoundFullFlow:
                 trick = state.trick_state
                 if trick is None:
                     break
-            completed_trick_key = _completed_trick_key(state.last_completed_trick)
+            completed_trick_key = _completed_trick_key(
+                state.last_completed_trick
+            )
             if completed_trick_key == prev_completed_trick_key:
                 break
             prev_completed_trick_key = completed_trick_key
@@ -939,28 +1259,43 @@ class TestRoundFullFlow:
 
 
 class TestPlayerIdentityValidation:
-    """Bug 4 regression: pass_stir, stir, and stir_discard must reject wrong player_index."""
+    """
+    Bug 4 regression: pass_stir, stir, and stir_discard must reject
+    wrong player_index.
+    """
 
     def test_pass_stir_rejects_wrong_player(self) -> None:
-        """pass_stir rejects when player_index doesn't match current_player."""
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        """
+        pass_stir rejects when player_index doesn't match
+        current_player.
+        """
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _complete_deal_bid_no_bid(state)
         assert state.phase == "STIRRING"
         assert state.stirring_state is not None
-        # Stirring starts in EXCHANGING sub-phase, so pass_stir is rejected
+        # Stirring starts in EXCHANGING sub-phase, so pass_stir is
+        # rejected
         # regardless of player identity. First complete the exchange.
         assert state.stirring_state.phase == "EXCHANGING"
         assert state.stirring_state.exchange_state is not None
         ex = state.stirring_state.exchange_state
         exchanging = state.stirring_state.exchanging_player
         assert exchanging is not None
-        discarded = ex.hand_after_pickup[:ex.count]
-        result = stir_discard(state, player_index=exchanging, cards=discarded)
-        assert isinstance(result, Ok), f"stir_discard rejected: {result.reason}"
+        discarded = ex.hand_after_pickup[: ex.count]
+        result = stir_discard(
+            state, player_index=exchanging, cards=discarded
+        )
+        assert isinstance(result, Ok), (
+            f"stir_discard rejected: {result.reason}"
+        )
         state = result.value
         # Now in WAITING sub-phase, test wrong player
         assert state.stirring_state is not None
@@ -971,12 +1306,18 @@ class TestPlayerIdentityValidation:
         assert "不是你的回合" in result.reason
 
     def test_stir_rejects_wrong_player(self) -> None:
-        """stir rejects when player_index doesn't match current_player."""
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        """
+        stir rejects when player_index doesn't match current_player.
+        """
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _complete_deal_bid_no_bid(state)
         assert state.phase == "STIRRING"
         assert state.stirring_state is not None
@@ -986,29 +1327,43 @@ class TestPlayerIdentityValidation:
         ex = state.stirring_state.exchange_state
         exchanging = state.stirring_state.exchanging_player
         assert exchanging is not None
-        discarded = ex.hand_after_pickup[:ex.count]
-        result = stir_discard(state, player_index=exchanging, cards=discarded)
-        assert isinstance(result, Ok), f"stir_discard rejected: {result.reason}"
+        discarded = ex.hand_after_pickup[: ex.count]
+        result = stir_discard(
+            state, player_index=exchanging, cards=discarded
+        )
+        assert isinstance(result, Ok), (
+            f"stir_discard rejected: {result.reason}"
+        )
         state = result.value
         assert state.stirring_state is not None
         cur = state.stirring_state.current_player
         wrong_player = (cur + 1) % 4
-        # Use any cards; the player identity check happens before card validation
+        # Use any cards; the player identity check happens before card
+        # validation
         fake_cards = [
             _card(Suit.CLUBS, Rank.TWO, 1),
             _card(Suit.CLUBS, Rank.TWO, 2),
         ]
-        result = stir(state, player_index=wrong_player, cards=fake_cards)
+        result = stir(
+            state, player_index=wrong_player, cards=fake_cards
+        )
         assert isinstance(result, Rejected)
         assert "不是你的回合" in result.reason
 
     def test_stir_discard_rejects_wrong_player(self) -> None:
-        """stir_discard rejects when player_index doesn't match exchanging_player."""
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        """
+        stir_discard rejects when player_index doesn't match
+        exchanging_player.
+        """
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _complete_deal_bid_no_bid(state)
         assert state.phase == "STIRRING"
         assert state.stirring_state is not None
@@ -1017,21 +1372,30 @@ class TestPlayerIdentityValidation:
         exchanging = state.stirring_state.exchanging_player
         assert exchanging is not None
         wrong_player = (exchanging + 1) % 4
-        # Use any cards; the player identity check happens before card validation
+        # Use any cards; the player identity check happens before card
+        # validation
         fake_cards = [
             _card(Suit.CLUBS, Rank.TWO, 1),
         ]
-        result = stir_discard(state, player_index=wrong_player, cards=fake_cards)
+        result = stir_discard(
+            state, player_index=wrong_player, cards=fake_cards
+        )
         assert isinstance(result, Rejected)
         assert "炒主者" in result.reason
 
     def test_pass_stir_accepts_correct_player(self) -> None:
-        """pass_stir succeeds when player_index matches current_player."""
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        """
+        pass_stir succeeds when player_index matches current_player.
+        """
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _complete_deal_bid_no_bid(state)
         assert state.phase == "STIRRING"
         assert state.stirring_state is not None
@@ -1041,9 +1405,13 @@ class TestPlayerIdentityValidation:
         ex = state.stirring_state.exchange_state
         exchanging = state.stirring_state.exchanging_player
         assert exchanging is not None
-        discarded = ex.hand_after_pickup[:ex.count]
-        result = stir_discard(state, player_index=exchanging, cards=discarded)
-        assert isinstance(result, Ok), f"stir_discard rejected: {result.reason}"
+        discarded = ex.hand_after_pickup[: ex.count]
+        result = stir_discard(
+            state, player_index=exchanging, cards=discarded
+        )
+        assert isinstance(result, Ok), (
+            f"stir_discard rejected: {result.reason}"
+        )
         state = result.value
         assert state.stirring_state is not None
         cur = state.stirring_state.current_player
@@ -1051,12 +1419,19 @@ class TestPlayerIdentityValidation:
         assert isinstance(result, Ok)
 
     def test_stir_discard_accepts_correct_player(self) -> None:
-        """stir_discard succeeds when player_index matches exchanging_player."""
-        state = create_round(RoundInput(
-            declarer_team=None, trump_rank=Rank.TWO,
-            next_declarer_player=None,
-            team0_level=Rank.TWO, team1_level=Rank.TWO,
-        ))
+        """
+        stir_discard succeeds when player_index matches
+        exchanging_player.
+        """
+        state = create_round(
+            RoundInput(
+                declarer_team=None,
+                trump_rank=Rank.TWO,
+                next_declarer_player=None,
+                team0_level=Rank.TWO,
+                team1_level=Rank.TWO,
+            )
+        )
         state = _complete_deal_bid_no_bid(state)
         assert state.phase == "STIRRING"
         assert state.stirring_state is not None
@@ -1065,13 +1440,18 @@ class TestPlayerIdentityValidation:
         ex = state.stirring_state.exchange_state
         exchanging = state.stirring_state.exchanging_player
         assert exchanging is not None
-        discarded = ex.hand_after_pickup[:ex.count]
-        result = stir_discard(state, player_index=exchanging, cards=discarded)
+        discarded = ex.hand_after_pickup[: ex.count]
+        result = stir_discard(
+            state, player_index=exchanging, cards=discarded
+        )
         assert isinstance(result, Ok)
 
 
-def test_play_leading_accepts_legal_partial_throw_not_in_enumerated_hints() -> None:
-    """Round play delegates leading validation to trick_sm, allowing partial throws."""
+def test_play_leading_accepts_partial_throw_not_in_hints() -> None:
+    """
+    Round play delegates leading validation to trick_sm, allowing
+    partial throws.
+    """
     hands = [
         [
             _card(Suit.SPADES, Rank.ACE),
@@ -1082,14 +1462,16 @@ def test_play_leading_accepts_legal_partial_throw_not_in_enumerated_hints() -> N
         [_card(Suit.HEARTS, Rank.THREE)],
         [_card(Suit.CLUBS, Rank.THREE)],
     ]
-    trick = trick_mod.create_trick(trick_mod.TrickInput(
-        lead_player=0,
-        hands=hands,
-        trump_suit=Suit.HEARTS,
-        trump_rank=Rank.TWO,
-        defender_points=0,
-        declarer_team=0,
-    ))
+    trick = trick_mod.create_trick(
+        trick_mod.TrickInput(
+            lead_player=0,
+            hands=hands,
+            trump_suit=Suit.HEARTS,
+            trump_rank=Rank.TWO,
+            defender_points=0,
+            declarer_team=0,
+        )
+    )
     state = RoundState(
         phase="PLAYING",
         declarer_team=0,
@@ -1125,22 +1507,29 @@ def test_play_leading_accepts_legal_partial_throw_not_in_enumerated_hints() -> N
     assert result.value.trick_state.failed_throw is None
 
 
-def test_play_leading_failed_throw_records_public_penalty_event() -> None:
-    """Round play advances failed throws and keeps attempted/forced cards public."""
+def test_play_leading_failed_throw_records_public_penalty_event() -> (
+    None
+):
+    """
+    Round play advances failed throws and keeps attempted/forced cards
+    public.
+    """
     hands = [
         [_card(Suit.SPADES, Rank.KING), _card(Suit.SPADES, Rank.QUEEN)],
         [_card(Suit.SPADES, Rank.ACE)],
         [_card(Suit.HEARTS, Rank.THREE)],
         [_card(Suit.CLUBS, Rank.THREE)],
     ]
-    trick = trick_mod.create_trick(trick_mod.TrickInput(
-        lead_player=0,
-        hands=hands,
-        trump_suit=Suit.HEARTS,
-        trump_rank=Rank.TWO,
-        defender_points=0,
-        declarer_team=0,
-    ))
+    trick = trick_mod.create_trick(
+        trick_mod.TrickInput(
+            lead_player=0,
+            hands=hands,
+            trump_suit=Suit.HEARTS,
+            trump_rank=Rank.TWO,
+            defender_points=0,
+            declarer_team=0,
+        )
+    )
     state = RoundState(
         phase="PLAYING",
         declarer_team=0,
@@ -1171,5 +1560,10 @@ def test_play_leading_failed_throw_records_public_penalty_event() -> None:
     assert result.value.trick_state.slots[0].cards == [hands[0][1]]
     assert result.value.players_hand[0] == [hands[0][0]]
     assert result.value.trick_state.failed_throw is not None
-    assert result.value.trick_state.failed_throw.attempted_cards == hands[0]
-    assert result.value.trick_state.failed_throw.forced_cards == [hands[0][1]]
+    assert (
+        result.value.trick_state.failed_throw.attempted_cards
+        == hands[0]
+    )
+    assert result.value.trick_state.failed_throw.forced_cards == [
+        hands[0][1]
+    ]

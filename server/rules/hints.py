@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from itertools import combinations, product as iterproduct
+from itertools import combinations
+from itertools import product as iterproduct
 
 from server.result import Ok, Rejected
 
 from .cards import Card, Rank, Suit
-from .decompose import extract_tractor_pairs, decompose
+from .decompose import decompose, extract_tractor_pairs
 from .follow import is_legal_follow
 from .ordering import effective_suit, trump_order
 from .rejections import TooManyPlayHintsRejected
@@ -17,7 +18,9 @@ from .types import SubPlay
 MAX_PLAY_ACTION_HINTS: int = 25
 TOO_MANY_PLAY_HINTS: str = TooManyPlayHintsRejected.reason_text
 
-type PlayActionHintSortKey = tuple[int, int, tuple[int, ...], tuple[str, ...]]
+type PlayActionHintSortKey = tuple[
+    int, int, tuple[int, ...], tuple[str, ...]
+]
 
 
 def get_legal_play_hints(
@@ -29,23 +32,29 @@ def get_legal_play_hints(
 ) -> Ok[list[list[Card]]] | Rejected:
     """Return a bounded complete hint set for following plays.
 
-    Empty lead cards return no hints because leading/throwing is free-form.
-    Following candidates are enumerated until either the complete unique legal
+    Empty lead cards return no hints because leading/throwing is
+    free-form.
+    Following candidates are enumerated until either the complete unique
+    legal
     set is found within max_hints or the max_hints + 1-th unique legal
-    candidate is discovered, in which case no closed hint set should be shown.
+    candidate is discovered, in which case no closed hint set should be
+    shown.
     """
     assert max_hints >= 0
     if lead_cards is None or len(lead_cards) == 0:
         return Ok([])
 
     return _collect_bounded_follow_hints(
-        _iter_follow_play_candidates(hand, lead_cards, trump_suit, trump_rank),
+        _iter_follow_play_candidates(
+            hand, lead_cards, trump_suit, trump_rank
+        ),
         hand,
         lead_cards,
         trump_suit,
         trump_rank,
         max_hints,
     )
+
 
 def sort_play_action_hints(
     hints: list[list[Card]],
@@ -60,6 +69,7 @@ def sort_play_action_hints(
         ),
     )
 
+
 def _play_action_hint_sort_key(
     cards: list[Card],
     trump_suit: Suit | None,
@@ -68,10 +78,13 @@ def _play_action_hint_sort_key(
     subs = decompose(cards, trump_suit, trump_rank) if cards else []
     max_sub_level = max((sub.sub_level for sub in subs), default=0)
     card_orders = tuple(
-        sorted(trump_order(card, trump_suit, trump_rank) for card in cards)
+        sorted(
+            trump_order(card, trump_suit, trump_rank) for card in cards
+        )
     )
     card_ids = tuple(sorted(card.id for card in cards))
     return (len(cards), max_sub_level, card_orders, card_ids)
+
 
 def _collect_bounded_follow_hints(
     candidates: Iterator[list[Card]],
@@ -84,7 +97,9 @@ def _collect_bounded_follow_hints(
     result: list[list[Card]] = []
     seen: set[frozenset[str]] = set()
     for candidate in candidates:
-        if not is_legal_follow(hand, candidate, lead_cards, trump_suit, trump_rank):
+        if not is_legal_follow(
+            hand, candidate, lead_cards, trump_suit, trump_rank
+        ):
             continue
         key = frozenset(card.id for card in candidate)
         if key in seen:
@@ -94,6 +109,7 @@ def _collect_bounded_follow_hints(
         if len(result) > max_hints:
             return TooManyPlayHintsRejected()
     return Ok(result)
+
 
 def _iter_follow_play_candidates(
     hand: list[Card],
@@ -113,8 +129,16 @@ def _iter_follow_play_candidates(
     lead_count = len(lead_cards)
 
     # Separate hand into same effective suit vs other
-    suit_cards = [c for c in hand if effective_suit(c, trump_suit, trump_rank) == lead_eff]
-    other_cards = [c for c in hand if effective_suit(c, trump_suit, trump_rank) != lead_eff]
+    suit_cards = [
+        c
+        for c in hand
+        if effective_suit(c, trump_suit, trump_rank) == lead_eff
+    ]
+    other_cards = [
+        c
+        for c in hand
+        if effective_suit(c, trump_suit, trump_rank) != lead_eff
+    ]
 
     if not suit_cards:
         for cards in combinations(other_cards, lead_count):
@@ -126,12 +150,17 @@ def _iter_follow_play_candidates(
     lead_pair_count = sum(s.pair_count for s in lead_subs)
 
     # Decompose suit cards
-    suit_subs = decompose(suit_cards, trump_suit, trump_rank) if suit_cards else []
+    suit_subs = (
+        decompose(suit_cards, trump_suit, trump_rank)
+        if suit_cards
+        else []
+    )
 
     # Enumerate all valid pair extraction branches
     yield from _iter_follow_branches(
         suit_subs, other_cards, lead_count, lead_pair_count, suit_cards
     )
+
 
 def _iter_follow_branches(
     suit_subs: list[SubPlay],
@@ -142,8 +171,10 @@ def _iter_follow_branches(
 ) -> Iterator[list[Card]]:
     """Yield branches for following a lead.
 
-    Each branch represents a choice of how many pairs to extract from which
-    sub-plays (with branching for tractor starting positions), then fills
+    Each branch represents a choice of how many pairs to extract from
+    which
+    sub-plays (with branching for tractor starting positions), then
+    fills
     the remaining slots.
     """
     # Separate suit subs by type
@@ -157,11 +188,17 @@ def _iter_follow_branches(
     pairs_must = min(avail_pair_count, lead_pair_count)
 
     # Generate all valid pair extraction combos
-    # Expand each combo into branches, considering all tractor starting positions.
-    # Each combo is a list of (SubPlay, extracted_count). For tractor sub-plays,
-    # there are (N - K + 1) possible consecutive K-pair starting positions.
-    for combo in _iter_extractions(tractor_subs, pair_subs, pairs_must, lead_count):
-        # Build a list of "options" for each active extraction in the combo.
+    # Expand each combo into branches, considering all tractor starting
+    # positions.
+    # Each combo is a list of (SubPlay, extracted_count). For tractor
+    # sub-plays,
+    # there are (N - K + 1) possible consecutive K-pair starting
+    # positions.
+    for combo in _iter_extractions(
+        tractor_subs, pair_subs, pairs_must, lead_count
+    ):
+        # Build a list of "options" for each active extraction in the
+        # combo.
         # Each option is a list of cards extracted from that sub-play.
         extraction_options: list[list[list[Card]]] = []
         for sub, extracted in combo:
@@ -202,6 +239,7 @@ def _iter_follow_branches(
                 remaining_needed,
             )
 
+
 def _iter_fill_branches(
     selected_cards: list[Card],
     used_card_ids: set[str],
@@ -210,21 +248,24 @@ def _iter_fill_branches(
     remaining_needed: int,
 ) -> Iterator[list[Card]]:
     remaining_suit_cards = [
-        card for card in all_suit_cards
-        if card.id not in used_card_ids
+        card for card in all_suit_cards if card.id not in used_card_ids
     ]
     if len(remaining_suit_cards) >= remaining_needed:
-        for fill_suit in combinations(remaining_suit_cards, remaining_needed):
+        for fill_suit in combinations(
+            remaining_suit_cards, remaining_needed
+        ):
             yield selected_cards + list(fill_suit)
         return
 
     off_suit_needed = remaining_needed - len(remaining_suit_cards)
     remaining_other_cards = [
-        card for card in other_cards
-        if card.id not in used_card_ids
+        card for card in other_cards if card.id not in used_card_ids
     ]
-    for fill_other in combinations(remaining_other_cards, off_suit_needed):
+    for fill_other in combinations(
+        remaining_other_cards, off_suit_needed
+    ):
         yield selected_cards + remaining_suit_cards + list(fill_other)
+
 
 def _iter_extractions(
     tractor_subs: list[SubPlay],
@@ -264,7 +305,8 @@ def _iter_extractions(
 
         for s, extracted in zip(all_subs, extraction_values):
             combo.append((s, extracted))
-            # Only pairs (pair_count >= 1) contribute to the pair count floor
+            # Only pairs (pair_count >= 1) contribute to the pair count
+            # floor
             if s.pair_count >= 1:
                 total_pair_count += extracted
                 total_card_count += extracted * 2

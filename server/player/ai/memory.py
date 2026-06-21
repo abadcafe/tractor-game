@@ -8,7 +8,9 @@ from server.player.ai.formatting import card_text
 from server.protocol import CompletedTrickSnapshot, StateSnapshot
 from server.rules.cards import Suit
 
-type AITrickKey = tuple[int, int, int, tuple[tuple[int, tuple[str, ...]], ...]]
+type AITrickKey = tuple[
+    int, int, int, tuple[tuple[int, tuple[str, ...]], ...]
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,8 +65,12 @@ class AIMemory:
 
     bids: list[AIBidRecord] = field(default_factory=_empty_bids)
     tricks: list[AITrickRecord] = field(default_factory=_empty_tricks)
-    seen_trick_keys: set[AITrickKey] = field(default_factory=_empty_trick_keys)
-    failed_throws: list[AIFailedThrowRecord] = field(default_factory=_empty_failed_throws)
+    seen_trick_keys: set[AITrickKey] = field(
+        default_factory=_empty_trick_keys
+    )
+    failed_throws: list[AIFailedThrowRecord] = field(
+        default_factory=_empty_failed_throws
+    )
     last_seq: int | None = None
 
     def update(self, snapshot: StateSnapshot, *, seq: int) -> None:
@@ -91,8 +97,14 @@ class AIMemory:
         if snapshot.failed_throw is not None:
             record = AIFailedThrowRecord(
                 player=snapshot.failed_throw.player,
-                attempted_cards=tuple(card_text(card) for card in snapshot.failed_throw.attempted_cards),
-                forced_cards=tuple(card_text(card) for card in snapshot.failed_throw.forced_cards),
+                attempted_cards=tuple(
+                    card_text(card)
+                    for card in snapshot.failed_throw.attempted_cards
+                ),
+                forced_cards=tuple(
+                    card_text(card)
+                    for card in snapshot.failed_throw.forced_cards
+                ),
             )
             if record not in self.failed_throws:
                 self.failed_throws.append(record)
@@ -104,7 +116,8 @@ class AIMemory:
         if self.bids:
             last_bid = self.bids[-1]
             lines.append(
-                f"- last_bid: player={last_bid.player}, cards={list(last_bid.cards)}, "
+                f"- last_bid: player={last_bid.player},"
+                f"cards={list(last_bid.cards)},"
                 f"suit={last_bid.suit}, count={last_bid.count}"
             )
         lines.append(f"- completed_tricks: {len(self.tricks)}")
@@ -115,13 +128,15 @@ class AIMemory:
             )
             lines.append(
                 f"- trick {trick.index}: lead={trick.lead_player}, "
-                f"winner={trick.winner}, points={trick.points}, {play_text}"
+                f"winner={trick.winner}, points={trick.points},"
+                f"{play_text}"
             )
         if self.failed_throws:
             for item in self.failed_throws[-3:]:
                 lines.append(
                     f"- failed_throw: player={item.player}, "
-                    f"attempted={list(item.attempted_cards)}, forced={list(item.forced_cards)}"
+                    f"attempted={list(item.attempted_cards)},"
+                    f"forced={list(item.forced_cards)}"
                 )
         return "\n".join(lines)
 
@@ -138,7 +153,9 @@ def _trick_key(trick: CompletedTrickSnapshot) -> AITrickKey:
     )
 
 
-def _trick_record(index: int, trick: CompletedTrickSnapshot) -> AITrickRecord:
+def _trick_record(
+    index: int, trick: CompletedTrickSnapshot
+) -> AITrickRecord:
     return AITrickRecord(
         index=index,
         lead_player=trick.lead_player,

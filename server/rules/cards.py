@@ -1,4 +1,5 @@
-"""Card data model and deck creation for 升级 (Shengji/Tractor) card game.
+"""
+Card data model and deck creation for 升级 (Shengji/Tractor) card game.
 
 Uses 2 standard 54-card decks = 108 cards total:
   2 x (4 suits x 13 ranks + 2 jokers) = 104 suited + 4 jokers
@@ -11,7 +12,6 @@ from enum import Enum
 from typing import Literal, Self, overload
 
 from pydantic import BaseModel, ConfigDict, model_validator
-
 
 # ---- Enums ----
 
@@ -47,9 +47,19 @@ class Rank(str, Enum):
 _JOKER_RANKS: tuple[Rank, ...] = (Rank.SMALL_JOKER, Rank.BIG_JOKER)
 
 SUITED_RANKS: tuple[Rank, ...] = (
-    Rank.TWO, Rank.THREE, Rank.FOUR, Rank.FIVE,
-    Rank.SIX, Rank.SEVEN, Rank.EIGHT, Rank.NINE,
-    Rank.TEN, Rank.JACK, Rank.QUEEN, Rank.KING, Rank.ACE,
+    Rank.TWO,
+    Rank.THREE,
+    Rank.FOUR,
+    Rank.FIVE,
+    Rank.SIX,
+    Rank.SEVEN,
+    Rank.EIGHT,
+    Rank.NINE,
+    Rank.TEN,
+    Rank.JACK,
+    Rank.QUEEN,
+    Rank.KING,
+    Rank.ACE,
 )
 
 _SUIT_SYMBOLS: dict[Suit, str] = {
@@ -60,17 +70,39 @@ _SUIT_SYMBOLS: dict[Suit, str] = {
 }
 
 _RANK_DISPLAY: dict[Rank, str] = {
-    Rank.TWO: "2", Rank.THREE: "3", Rank.FOUR: "4", Rank.FIVE: "5",
-    Rank.SIX: "6", Rank.SEVEN: "7", Rank.EIGHT: "8", Rank.NINE: "9",
-    Rank.TEN: "10", Rank.JACK: "J", Rank.QUEEN: "Q", Rank.KING: "K",
-    Rank.ACE: "A", Rank.SMALL_JOKER: "小", Rank.BIG_JOKER: "大",
+    Rank.TWO: "2",
+    Rank.THREE: "3",
+    Rank.FOUR: "4",
+    Rank.FIVE: "5",
+    Rank.SIX: "6",
+    Rank.SEVEN: "7",
+    Rank.EIGHT: "8",
+    Rank.NINE: "9",
+    Rank.TEN: "10",
+    Rank.JACK: "J",
+    Rank.QUEEN: "Q",
+    Rank.KING: "K",
+    Rank.ACE: "A",
+    Rank.SMALL_JOKER: "小",
+    Rank.BIG_JOKER: "大",
 }
 
 POINTS_MAP: dict[Rank, int] = {
-    Rank.TWO: 0, Rank.THREE: 0, Rank.FOUR: 0, Rank.FIVE: 5,
-    Rank.SIX: 0, Rank.SEVEN: 0, Rank.EIGHT: 0, Rank.NINE: 0,
-    Rank.TEN: 10, Rank.JACK: 0, Rank.QUEEN: 0, Rank.KING: 10,
-    Rank.ACE: 0, Rank.SMALL_JOKER: 0, Rank.BIG_JOKER: 0,
+    Rank.TWO: 0,
+    Rank.THREE: 0,
+    Rank.FOUR: 0,
+    Rank.FIVE: 5,
+    Rank.SIX: 0,
+    Rank.SEVEN: 0,
+    Rank.EIGHT: 0,
+    Rank.NINE: 0,
+    Rank.TEN: 10,
+    Rank.JACK: 0,
+    Rank.QUEEN: 0,
+    Rank.KING: 10,
+    Rank.ACE: 0,
+    Rank.SMALL_JOKER: 0,
+    Rank.BIG_JOKER: 0,
 }
 
 
@@ -100,7 +132,9 @@ class Card(BaseModel):
         if id_rank != self.rank:
             raise ValueError("card id rank does not match rank")
         if self.suit == Suit.JOKER and self.rank not in _JOKER_RANKS:
-            raise ValueError("suit=JOKER requires rank to be SMALL_JOKER or BIG_JOKER")
+            raise ValueError(
+                "suit=JOKER requires rank to be SMALL_JOKER orBIG_JOKER"
+            )
         if self.suit != Suit.JOKER and self.rank in _JOKER_RANKS:
             raise ValueError("Joker ranks require suit=JOKER")
         if self.points != POINTS_MAP[self.rank]:
@@ -154,7 +188,9 @@ def _card_id(deck: Literal[1, 2], suit: Suit, rank: Rank) -> str:
 def _parse_card_id(card_id: str) -> tuple[Literal[1, 2], Suit, Rank]:
     parts = card_id.split("-")
     if len(parts) != 3:
-        raise ValueError("card id must have format D{deck}-{suit}-{rank}")
+        raise ValueError(
+            "card id must have format D{deck}-{suit}-{rank}"
+        )
     deck_raw, suit_raw, rank_raw = parts
     if deck_raw == "D1":
         deck: Literal[1, 2] = 1
@@ -193,7 +229,12 @@ def create_decks() -> list[Card]:
     """Create 2 full 54-card decks = 108 cards."""
     cards: list[Card] = []
     for deck in (1, 2):
-        for suit in (Suit.HEARTS, Suit.SPADES, Suit.DIAMONDS, Suit.CLUBS):
+        for suit in (
+            Suit.HEARTS,
+            Suit.SPADES,
+            Suit.DIAMONDS,
+            Suit.CLUBS,
+        ):
             for rank in SUITED_RANKS:
                 cards.append(_make_card(suit, rank, deck))
         cards.append(_make_card(Suit.JOKER, Rank.SMALL_JOKER, deck))

@@ -11,18 +11,18 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict
 
 from server.result import Ok, Rejected
-
-from server.rules.cards import Card, Rank, Suit
 from server.rules import bid as bid_rules
+from server.rules.cards import Card, Rank, Suit
+from server.rules.rejections import CardNotInHandRejected
+
 from .constants import next_player_ccw
 from .rejections import (
     AllCardsDealtRejected,
     BidNotAllowedInDealBidPhaseRejected,
+    DealCardNotAllowedInDealBidPhaseRejected,
     DealNotCompleteRejected,
     InvalidPlayerIndexRejected,
-    DealCardNotAllowedInDealBidPhaseRejected,
 )
-from server.rules.rejections import CardNotInHandRejected
 from .types import BidEvent, DealBidPhase
 
 MAX_BID_ACTION_HINTS: int = bid_rules.MAX_BID_ACTION_HINTS
@@ -98,7 +98,8 @@ def deal_next_card(state: DealBidState) -> Ok[DealBidState] | Rejected:
     with all_dealt=True so the last card recipient can bid or skip.
     Call finalize_dealing() after their action to complete the phase.
 
-    Returns Ok(new_state) on success, Rejected(reason) if not in DEALING phase
+    Returns Ok(new_state) on success, Rejected(reason) if not in DEALING
+    phase
     or all cards have already been dealt.
     """
     if state.phase != "DEALING":
@@ -118,36 +119,52 @@ def deal_next_card(state: DealBidState) -> Ok[DealBidState] | Rejected:
     new_cursor = cursor + 1
     new_target = next_player_ccw(target)
 
-    # After the last card, keep phase as DEALING so the recipient can act.
+    # After the last card, keep phase as DEALING so the recipient can
+    # act.
     # Set all_dealt=True so Game can finalize after their action.
     all_dealt = new_cursor >= 100
 
-    return Ok(state.model_copy(update={
-        "phase": "DEALING",
-        "deal_cursor": new_cursor,
-        "deal_target": new_target,
-        "players_hand": new_hands,
-        "all_dealt": all_dealt,
-    }))
+    return Ok(
+        state.model_copy(
+            update={
+                "phase": "DEALING",
+                "deal_cursor": new_cursor,
+                "deal_target": new_target,
+                "players_hand": new_hands,
+                "all_dealt": all_dealt,
+            }
+        )
+    )
 
 
-def get_bid_action_hints(state: DealBidState, player: int) -> list[list[Card]]:
+def get_bid_action_hints(
+    state: DealBidState, player: int
+) -> list[list[Card]]:
     """Compute accepted logical bid hints for one player.
 
-    The returned options are advisory UI hints, so a non-empty result must
-    match the same validation path used by real bid actions. Candidate card
-    groups are generated from the player's hand as logical bid options, then
+    The returned options are advisory UI hints, so a non-empty result
+    must
+    match the same validation path used by real bid actions. Candidate
+    card
+    groups are generated from the player's hand as logical bid options,
+    then
     filtered through reveal() against the full deal-bid state so current
     bid-priority and card-ownership rules are respected.
     """
     if state.phase != "DEALING" or player < 0 or player >= 4:
         return []
 
-    current_cards = state.bid_winner.cards if state.bid_winner is not None else None
-    return bid_rules.legal_bid_hints(state.players_hand[player], state.trump_rank, current_cards)
+    current_cards = (
+        state.bid_winner.cards if state.bid_winner is not None else None
+    )
+    return bid_rules.legal_bid_hints(
+        state.players_hand[player], state.trump_rank, current_cards
+    )
 
 
-def reveal(state: DealBidState, event: BidEvent) -> Ok[DealBidState] | Rejected:
+def reveal(
+    state: DealBidState, event: BidEvent
+) -> Ok[DealBidState] | Rejected:
     """Process a reveal (bid) event from a player.
 
     Validates the bid per spec section 5 and updates the bid_winner
@@ -190,8 +207,12 @@ def reveal(state: DealBidState, event: BidEvent) -> Ok[DealBidState] | Rejected:
         case Rejected() as rejected:
             return rejected
 
-    current_cards = state.bid_winner.cards if state.bid_winner is not None else None
-    match bid_rules.bid_beats_current(event.cards, current_cards, state.trump_rank):
+    current_cards = (
+        state.bid_winner.cards if state.bid_winner is not None else None
+    )
+    match bid_rules.bid_beats_current(
+        event.cards, current_cards, state.trump_rank
+    ):
         case Ok():
             pass
         case Rejected() as rejected:
@@ -200,14 +221,22 @@ def reveal(state: DealBidState, event: BidEvent) -> Ok[DealBidState] | Rejected:
     # Valid bid: update state
     new_bid_events = state.bid_events + [event]
 
-    return Ok(state.model_copy(update={
-        "bid_winner": event,
-        "bid_events": new_bid_events,
-    }))
+    return Ok(
+        state.model_copy(
+            update={
+                "bid_winner": event,
+                "bid_events": new_bid_events,
+            }
+        )
+    )
 
 
-def finalize_dealing(state: DealBidState) -> Ok[DealBidState] | Rejected:
-    """After all cards are dealt and the last recipient has acted, finalize.
+def finalize_dealing(
+    state: DealBidState,
+) -> Ok[DealBidState] | Rejected:
+    """
+    After all cards are dealt and the last recipient has acted,
+    finalize.
 
     Transitions phase to COMPLETE (if bid_winner exists) or NO_BID.
     Must only be called when all_dealt=True.

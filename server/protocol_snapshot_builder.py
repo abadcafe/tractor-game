@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from server.rules.cards import Card, Suit
-from server.sm.types import BidEvent, CompletedTrick, FailedThrow
 from server.protocol import (
     BidEventSnapshot,
     CompletedTrickSnapshot,
@@ -14,6 +12,8 @@ from server.protocol import (
     TrickSlotSnapshot,
     TrickSnapshot,
 )
+from server.rules.cards import Card, Suit
+from server.sm.types import BidEvent, CompletedTrick, FailedThrow
 
 
 def bid_event_snapshot(event: BidEvent) -> BidEventSnapshot:
@@ -27,7 +27,9 @@ def bid_event_snapshot(event: BidEvent) -> BidEventSnapshot:
     )
 
 
-def optional_bid_event_snapshot(event: BidEvent | None) -> BidEventSnapshot | None:
+def optional_bid_event_snapshot(
+    event: BidEvent | None,
+) -> BidEventSnapshot | None:
     if event is None:
         return None
     return bid_event_snapshot(event)
@@ -41,13 +43,17 @@ def failed_throw_snapshot(event: FailedThrow) -> FailedThrowSnapshot:
     )
 
 
-def optional_failed_throw_snapshot(event: FailedThrow | None) -> FailedThrowSnapshot | None:
+def optional_failed_throw_snapshot(
+    event: FailedThrow | None,
+) -> FailedThrowSnapshot | None:
     if event is None:
         return None
     return failed_throw_snapshot(event)
 
 
-def completed_trick_snapshot(trick: CompletedTrick) -> CompletedTrickSnapshot:
+def completed_trick_snapshot(
+    trick: CompletedTrick,
+) -> CompletedTrickSnapshot:
     return CompletedTrickSnapshot(
         lead_player=trick.lead_player,
         slots=[
@@ -67,7 +73,9 @@ def optional_completed_trick_snapshot(
     return completed_trick_snapshot(trick)
 
 
-def trick_slot_snapshot(player: int, cards: list[Card]) -> TrickSlotSnapshot:
+def trick_slot_snapshot(
+    player: int, cards: list[Card]
+) -> TrickSlotSnapshot:
     return TrickSlotSnapshot(player=player, cards=cards)
 
 

@@ -9,9 +9,12 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict
 
 from server.result import Ok, Rejected
-
 from server.rules.cards import Rank
-from .rejections import CannotProcessRoundResultRejected, CannotStartGameRejected
+
+from .rejections import (
+    CannotProcessRoundResultRejected,
+    CannotStartGameRejected,
+)
 from .scoring import RoundResult
 
 
@@ -54,26 +57,34 @@ def start_game(state: GameState) -> Ok[GameState] | Rejected:
 
     Sets both team levels to TWO and round_number to 1.
 
-    Returns Ok(new_state) on success, Rejected(reason) if the game already
+    Returns Ok(new_state) on success, Rejected(reason) if the game
+    already
     started or has ended.
     """
     if state.round_number != 0 or state.winning_team is not None:
         return CannotStartGameRejected()
-    return Ok(state.model_copy(update={
-        "team0_level": Rank.TWO,
-        "team1_level": Rank.TWO,
-        "round_number": 1,
-    }))
+    return Ok(
+        state.model_copy(
+            update={
+                "team0_level": Rank.TWO,
+                "team1_level": Rank.TWO,
+                "round_number": 1,
+            }
+        )
+    )
 
 
-def process_round_result(state: GameState, result: RoundResult) -> Ok[GameState] | Rejected:
+def process_round_result(
+    state: GameState, result: RoundResult
+) -> Ok[GameState] | Rejected:
     """Process a round result and update game state.
 
     Updates team levels from the result. If either team reaches ACE,
     records winning_team. Otherwise updates declarer info and increments
     round_number.
 
-    Returns Ok(new_state) on success, Rejected(reason) if the game has not
+    Returns Ok(new_state) on success, Rejected(reason) if the game has
+    not
     started or has already ended.
     """
     if state.round_number <= 0 or state.winning_team is not None:
@@ -85,32 +96,43 @@ def process_round_result(state: GameState, result: RoundResult) -> Ok[GameState]
     team0_gain = _level_gain_for_team(result, 0)
     team1_gain = _level_gain_for_team(result, 1)
 
-    # Check game over: a team must already be playing ACE and then gain again.
+    # Check game over: a team must already be playing ACE and then gain
+    # again.
     # Reaching ACE only schedules an ACE round; it is not a win yet.
     team0_passed_ace = state.team0_level == Rank.ACE and team0_gain > 0
     team1_passed_ace = state.team1_level == Rank.ACE and team1_gain > 0
     if team0_passed_ace or team1_passed_ace:
         winning = 0 if team0_passed_ace else 1
-        return Ok(state.model_copy(update={
-            "team0_level": new_team0,
-            "team1_level": new_team1,
-            "winning_team": winning,
-            "declarer_team": None,
-            "next_declarer_player": None,
-        }))
+        return Ok(
+            state.model_copy(
+                update={
+                    "team0_level": new_team0,
+                    "team1_level": new_team1,
+                    "winning_team": winning,
+                    "declarer_team": None,
+                    "next_declarer_player": None,
+                }
+            )
+        )
 
     # Game continues
-    return Ok(state.model_copy(update={
-        "team0_level": new_team0,
-        "team1_level": new_team1,
-        "declarer_team": result.next_declarer_team,
-        "next_declarer_player": result.next_declarer_player,
-        "round_number": state.round_number + 1,
-    }))
+    return Ok(
+        state.model_copy(
+            update={
+                "team0_level": new_team0,
+                "team1_level": new_team1,
+                "declarer_team": result.next_declarer_team,
+                "next_declarer_player": result.next_declarer_player,
+                "round_number": state.round_number + 1,
+            }
+        )
+    )
 
 
 def _level_gain_for_team(result: RoundResult, team: int) -> int:
-    """Return the positive level gain awarded to *team* by a round result."""
+    """
+    Return the positive level gain awarded to *team* by a round result.
+    """
     if result.next_declarer_team != team:
         return 0
     if result.switch_declarer:

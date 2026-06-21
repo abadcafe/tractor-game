@@ -8,7 +8,9 @@ This is NOT a state machine -- it is a pure function.
 
 from pydantic import BaseModel, ConfigDict
 
-from server.rules.cards import Card, Suit, Rank
+from server.rules.cards import Card, Rank, Suit
+from server.rules.decompose import decompose
+
 from .constants import (
     SCORE_THRESHOLDS,
     advance_level,
@@ -17,7 +19,6 @@ from .constants import (
     next_player_ccw,
 )
 from .types import CompletedTrick
-from server.rules.decompose import decompose
 
 
 class RoundResult(BaseModel):
@@ -41,12 +42,16 @@ def _compute_ambush_multiplier(
     trump_suit: Suit | None,
     trump_rank: Rank,
 ) -> int:
-    """Compute the ambush multiplier based on the last trick's lead cards.
+    """
+    Compute the ambush multiplier based on the last trick's lead cards.
 
-    Uses decompose to determine the lead play structure from the lead cards.
-    For a single sub-play: single (pair_count=0) -> x2, pair (pair_count=1) -> x4,
+    Uses decompose to determine the lead play structure from the lead
+    cards.
+    For a single sub-play: single (pair_count=0) -> x2, pair
+    (pair_count=1) -> x4,
     tractor (pair_count>=2) -> 2^(card_count).
-    For multiple sub-plays (throw): take the max multiplier across sub-plays.
+    For multiple sub-plays (throw): take the max multiplier across
+    sub-plays.
     """
     lead_cards = _find_lead_cards(last_trick)
     if not lead_cards:
@@ -66,7 +71,8 @@ def _compute_ambush_multiplier(
         else:
             return 2 ** len(sub.cards)  # tractor
 
-    # Multiple sub-plays: it's a throw -> max multiplier across sub-plays
+    # Multiple sub-plays: it's a throw -> max multiplier across
+    # sub-plays
     best = 2
     for sub in subs:
         if sub.pair_count == 0:
@@ -91,7 +97,9 @@ def _find_lead_cards(last_trick: CompletedTrick) -> list[Card]:
 
 
 def _determine_level_change(total_points: int) -> tuple[int, bool, int]:
-    """Return (declarer_level_change, switch_declarer, defender_level_gain).
+    """
+    Return (declarer_level_change, switch_declarer,
+    defender_level_gain).
 
     Levels never retreat. When defenders score >= 80, the declarer team
     gets 0 change and the defender team (who becomes the new declarer)
@@ -102,7 +110,11 @@ def _determine_level_change(total_points: int) -> tuple[int, bool, int]:
     """
     for threshold in SCORE_THRESHOLDS:
         if total_points <= threshold.max_points:
-            return (threshold.declarer_change, threshold.switch_declarer, 0)
+            return (
+                threshold.declarer_change,
+                threshold.switch_declarer,
+                0,
+            )
 
     # Defenders >= 80: switch declarer, new declarer gains levels
     defender_gain = max(0, (total_points - 80) // 40)
@@ -135,7 +147,9 @@ def calculate_score(
 
     # Compute ambush bonus
     if is_ambush:
-        multiplier = _compute_ambush_multiplier(last_trick, trump_suit, trump_rank)
+        multiplier = _compute_ambush_multiplier(
+            last_trick, trump_suit, trump_rank
+        )
         bottom_card_bonus = bottom_base * multiplier
     else:
         bottom_card_bonus = 0
@@ -143,11 +157,14 @@ def calculate_score(
     total_defender_points = defender_points + bottom_card_bonus
 
     # Determine level change from scoring table
-    declarer_change, switch, defender_gain = _determine_level_change(total_defender_points)
+    declarer_change, switch, defender_gain = _determine_level_change(
+        total_defender_points
+    )
 
     # Compute new levels (levels never retreat)
     if switch:
-        # Declarer team: 0 change; defender team (new declarer): +defender_gain
+        # Declarer team: 0 change; defender team (new declarer):
+        # +defender_gain
         if declarer_team == 0:
             team0_new_level = advance_level(team0_level, 0)
             team1_new_level = advance_level(team1_level, defender_gain)
@@ -157,11 +174,15 @@ def calculate_score(
     else:
         # Declarer team: +declarer_change; defender team: 0 change
         if declarer_team == 0:
-            team0_new_level = advance_level(team0_level, declarer_change)
+            team0_new_level = advance_level(
+                team0_level, declarer_change
+            )
             team1_new_level = advance_level(team1_level, 0)
         else:
             team0_new_level = advance_level(team0_level, 0)
-            team1_new_level = advance_level(team1_level, declarer_change)
+            team1_new_level = advance_level(
+                team1_level, declarer_change
+            )
 
     # Determine next declarer
     if switch:

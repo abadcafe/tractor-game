@@ -1,12 +1,23 @@
 """Tests for sm.constants module."""
+
 from types import MappingProxyType
 
 from server.rules.cards import Rank
+
 from .constants import (
-    PLAYER_COUNT, BOTTOM_CARD_COUNT, TOTAL_CARDS,
-    TEAM_0, TEAM_1, CCW_NEXT, LEVELS, TOTAL_POINTS,
-    get_team_index, get_partner_index, next_player_ccw,
-    advance_level, SCORE_THRESHOLDS,
+    BOTTOM_CARD_COUNT,
+    CCW_NEXT,
+    LEVELS,
+    PLAYER_COUNT,
+    SCORE_THRESHOLDS,
+    TEAM_0,
+    TEAM_1,
+    TOTAL_CARDS,
+    TOTAL_POINTS,
+    advance_level,
+    get_partner_index,
+    get_team_index,
+    next_player_ccw,
 )
 
 
@@ -95,7 +106,10 @@ class TestScoringConstants:
     def test_score_thresholds_ordering(self) -> None:
         """Thresholds must be strictly increasing in max_points."""
         for i in range(len(SCORE_THRESHOLDS) - 1):
-            assert SCORE_THRESHOLDS[i].max_points < SCORE_THRESHOLDS[i + 1].max_points
+            assert (
+                SCORE_THRESHOLDS[i].max_points
+                < SCORE_THRESHOLDS[i + 1].max_points
+            )
 
 
 class TestImmutability:
@@ -116,10 +130,13 @@ class TestImmutability:
 
     def test_score_threshold_is_frozen_dataclass(self) -> None:
         from dataclasses import FrozenInstanceError
+
         st = SCORE_THRESHOLDS[0]
         try:
             setattr(st, "max_points", 999)
-            raise AssertionError("Should have raised FrozenInstanceError")
+            raise AssertionError(
+                "Should have raised FrozenInstanceError"
+            )
         except FrozenInstanceError:
             pass
 
@@ -127,15 +144,18 @@ class TestImmutability:
 class TestInputValidation:
     def test_next_player_ccw_invalid(self) -> None:
         import pytest
+
         with pytest.raises(ValueError, match="Invalid player index"):
             next_player_ccw(99)
 
     def test_get_team_index_invalid(self) -> None:
         import pytest
+
         with pytest.raises(ValueError, match="Invalid player index"):
             get_team_index(-1)
 
     def test_get_partner_index_invalid(self) -> None:
         import pytest
+
         with pytest.raises(ValueError, match="Invalid player index"):
             get_partner_index(4)

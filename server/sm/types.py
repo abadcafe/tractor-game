@@ -10,10 +10,11 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from server.rules.cards import Card, Suit
 
-
 # ---- State / domain aliases ----
 
-type RoundPhase = Literal["DEAL_BID", "STIRRING", "PLAYING", "SCORING", "WAITING"]
+type RoundPhase = Literal[
+    "DEAL_BID", "STIRRING", "PLAYING", "SCORING", "WAITING"
+]
 type DealBidPhase = Literal["DEALING", "COMPLETE", "NO_BID"]
 type StirringPhase = Literal["WAITING", "EXCHANGING", "COMPLETE"]
 type ExchangePhase = Literal["PICKED_UP", "COMPLETE"]
@@ -45,7 +46,9 @@ class BidEvent(BaseModel):
 
 
 class StirAction(BaseModel):
-    """Records a player's stir (change suit) or pass during the stir phase."""
+    """
+    Records a player's stir (change suit) or pass during the stir phase.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -61,7 +64,9 @@ class StirAction(BaseModel):
 
 
 class FailedThrow(BaseModel):
-    """Public event for a failed throw that forced a smaller sub-play."""
+    """
+    Public event for a failed throw that forced a smaller sub-play.
+    """
 
     model_config = ConfigDict(frozen=True)
 

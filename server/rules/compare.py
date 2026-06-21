@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .cards import Card, Rank, Suit
-from .decompose import non_trump_rank_order, decompose
+from .decompose import decompose, non_trump_rank_order
 from .ordering import effective_suit, trump_rank_order
 from .types import EffectiveSuit
 
@@ -14,16 +14,21 @@ def can_win(
     trump_suit: Suit | None,
     trump_rank: Rank,
 ) -> bool:
-    """Check whether a player's cards are eligible to win the trick (spec 8.2).
+    """
+    Check whether a player's cards are eligible to win the trick (spec
+    8.2).
 
-    For each card: if effective_suit is neither lead_eff nor "trump" -> False.
-    Otherwise True.  When lead_eff is "trump", only trump cards are eligible.
+    For each card: if effective_suit is neither lead_eff nor "trump" ->
+    False.
+    Otherwise True.  When lead_eff is "trump", only trump cards are
+    eligible.
     """
     for card in played_cards:
         eff = effective_suit(card, trump_suit, trump_rank)
         if eff != lead_eff and eff != "trump":
             return False
     return True
+
 
 def _compare_same_suit(
     a_cards: list[Card],
@@ -32,7 +37,8 @@ def _compare_same_suit(
     trump_rank: Rank,
     is_trump: bool,
 ) -> int:
-    """Compare two plays that share the same effective suit (spec 8.3-8.4).
+    """
+    Compare two plays that share the same effective suit (spec 8.3-8.4).
 
     Uses decompose to extract sub-plays, then compares:
     1. Max sub_level (tractor > pair > single)
@@ -63,9 +69,11 @@ def _compare_same_suit(
 
     # Get the max rank order across all highest-level sub-plays
     if is_trump:
-        # Use trump_rank_order (comparator) which distinguishes sub-types:
+        # Use trump_rank_order (comparator) which distinguishes
+        # sub-types:
         #   trump-suit level=80, other-suit level=70, etc.
-        # rank_order_for_effective_suit only gives组内 position (1-15), which
+        # rank_order_for_effective_suit only gives组内 position (1-15),
+        # which
         # collapses different sub-types at the same rank.
         a_max_rank = max(
             trump_rank_order(c, trump_suit, trump_rank)
@@ -90,6 +98,7 @@ def _compare_same_suit(
         )
 
     return a_max_rank - b_max_rank
+
 
 def compare_plays(
     a_cards: list[Card],
@@ -118,10 +127,12 @@ def compare_plays(
 
     # Both eligible: determine effective suit groups
     a_all_trump = all(
-        effective_suit(c, trump_suit, trump_rank) == "trump" for c in a_cards
+        effective_suit(c, trump_suit, trump_rank) == "trump"
+        for c in a_cards
     )
     b_all_trump = all(
-        effective_suit(c, trump_suit, trump_rank) == "trump" for c in b_cards
+        effective_suit(c, trump_suit, trump_rank) == "trump"
+        for c in b_cards
     )
 
     if a_all_trump and not b_all_trump:
@@ -130,7 +141,11 @@ def compare_plays(
         return -1
 
     if a_all_trump and b_all_trump:
-        return _compare_same_suit(a_cards, b_cards, trump_suit, trump_rank, is_trump=True)
+        return _compare_same_suit(
+            a_cards, b_cards, trump_suit, trump_rank, is_trump=True
+        )
 
     # Both lead-suit (non-trump)
-    return _compare_same_suit(a_cards, b_cards, trump_suit, trump_rank, is_trump=False)
+    return _compare_same_suit(
+        a_cards, b_cards, trump_suit, trump_rank, is_trump=False
+    )

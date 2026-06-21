@@ -35,7 +35,9 @@ _BID_SUIT_ORDER: tuple[Suit, ...] = (
 MAX_BID_ACTION_HINTS: int = 10
 
 
-def bid_card_candidates(hand: list[Card], trump_rank: Rank) -> list[list[Card]]:
+def bid_card_candidates(
+    hand: list[Card], trump_rank: Rank
+) -> list[list[Card]]:
     """Compute logical bid card groups from a player's hand."""
     suit_groups: dict[Suit, list[Card]] = {}
     small_jokers: list[Card] = []
@@ -69,12 +71,22 @@ def bid_card_candidates(hand: list[Card], trump_rank: Rank) -> list[list[Card]]:
     return result
 
 
-def bid_hint_sort_key(cards: list[Card], trump_rank: Rank) -> tuple[int, tuple[str, ...]]:
-    return (bid_value(cards, trump_rank), tuple(sorted(card.id for card in cards)))
+def bid_hint_sort_key(
+    cards: list[Card], trump_rank: Rank
+) -> tuple[int, tuple[str, ...]]:
+    return (
+        bid_value(cards, trump_rank),
+        tuple(sorted(card.id for card in cards)),
+    )
 
 
-def sort_bid_action_hints(hints: list[list[Card]], trump_rank: Rank) -> list[list[Card]]:
-    return sorted([list(cards) for cards in hints], key=lambda cards: bid_hint_sort_key(cards, trump_rank))
+def sort_bid_action_hints(
+    hints: list[list[Card]], trump_rank: Rank
+) -> list[list[Card]]:
+    return sorted(
+        [list(cards) for cards in hints],
+        key=lambda cards: bid_hint_sort_key(cards, trump_rank),
+    )
 
 
 def legal_bid_hints(
@@ -82,10 +94,14 @@ def legal_bid_hints(
     trump_rank: Rank,
     current_bid_cards: list[Card] | None,
 ) -> list[list[Card]]:
-    """Return legal bid hints from a hand, ordered weakest to strongest."""
+    """
+    Return legal bid hints from a hand, ordered weakest to strongest.
+    """
     result: list[list[Card]] = []
     for candidate in bid_card_candidates(hand, trump_rank):
-        match bid_beats_current(candidate, current_bid_cards, trump_rank):
+        match bid_beats_current(
+            candidate, current_bid_cards, trump_rank
+        ):
             case Ok():
                 result.append(candidate)
             case Rejected():
@@ -93,7 +109,9 @@ def legal_bid_hints(
     return sort_bid_action_hints(result, trump_rank)
 
 
-def validate_distinct_bid_cards(cards: list[Card]) -> Ok[None] | Rejected:
+def validate_distinct_bid_cards(
+    cards: list[Card],
+) -> Ok[None] | Rejected:
     if len(set(card.id for card in cards)) != len(cards):
         return DuplicateBidCardsRejected()
     return Ok(None)
@@ -114,11 +132,15 @@ def validate_bid_cards(
             if card.rank != trump_rank:
                 return BidCardWrongRankRejected(card.id, trump_rank)
             if card.suit != declared_suit:
-                return BidCardSuitMismatchRejected(card.suit, declared_suit)
+                return BidCardSuitMismatchRejected(
+                    card.suit, declared_suit
+                )
         if declared_count not in (1, 2):
             return BidCountRejected(declared_count)
         if len(cards) != declared_count:
-            return BidCardsCountMismatchRejected(len(cards), declared_count)
+            return BidCardsCountMismatchRejected(
+                len(cards), declared_count
+            )
         return Ok(None)
 
     if declared_count != 2:

@@ -1,4 +1,6 @@
-"""Shared Result primitives for operations that may reject normal input."""
+"""
+Shared Result primitives for operations that may reject normal input.
+"""
 
 from __future__ import annotations
 

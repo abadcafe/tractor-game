@@ -1,16 +1,19 @@
 """End-to-end integration tests for the Tractor game server.
 
 These tests exercise the full pipeline: REST -> WebSocket -> Game -> sm.
-They are NOT unit tests -- they test the integration between all modules.
+They are NOT unit tests -- they test the integration between all
+modules.
 They use only public interfaces (REST API, WebSocket).
-They do NOT directly access Game._game_state, Game._dealing_task, or other private
-fields. They do NOT directly access GameRegistry._last_access or _games -- they use
-the controllable clock injected via GameRegistry(clock=...) or the public API.
+They do NOT directly access Game._game_state, Game._dealing_task, or
+other private
+fields. They do NOT directly access GameRegistry._last_access or _games
+-- they use
+the controllable clock injected via GameRegistry(clock=...) or the
+public API.
 """
 
 import json
 import time
-
 from collections.abc import AsyncGenerator, Generator
 from typing import Protocol, TypeGuard
 
@@ -67,7 +70,9 @@ def _as_list(val: object) -> list[object]:
 
 
 def _as_str(val: object) -> str:
-    assert isinstance(val, str), f"Expected str, got {type(val).__name__}"
+    assert isinstance(val, str), (
+        f"Expected str, got {type(val).__name__}"
+    )
     return val
 
 
@@ -112,12 +117,16 @@ def _receive_ws_json(
             return json.loads(text)
         except WouldBlock as exc:
             if time.monotonic() >= deadline:
-                raise WsReceiveTimeout("timed out waiting for websocket message") from exc
+                raise WsReceiveTimeout(
+                    "timed out waiting for websocket message"
+                ) from exc
             time.sleep(0.001)
 
 
 @pytest.fixture(autouse=True)
-def clean_registry(sync_client: SyncServerClient) -> Generator[None, None, None]:
+def clean_registry(
+    sync_client: SyncServerClient,
+) -> Generator[None, None, None]:
     """Reset the global registry before each test.
 
     Uses public API only: GET /api/game + DELETE /api/game/{id}.
@@ -137,15 +146,22 @@ def clean_registry(sync_client: SyncServerClient) -> Generator[None, None, None]
 
 @pytest.fixture
 async def client() -> AsyncGenerator[AsyncRestClient, None]:
-    """Async test client using httpx with ASGI transport for REST tests."""
+    """
+    Async test client using httpx with ASGI transport for REST tests.
+    """
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test"
+    ) as ac:
         yield ac
 
 
 @pytest.fixture
 def sync_client() -> Generator[SyncServerClient, None, None]:
-    """Synchronous test client using Starlette TestClient for WebSocket tests."""
+    """
+    Synchronous test client using Starlette TestClient for WebSocket
+    tests.
+    """
     with TestClient(app, backend_options={"use_uvloop": True}) as c:
         yield c
 
@@ -171,7 +187,8 @@ def test_full_game_flow(sync_client: SyncServerClient) -> None:
     """Test creating a game, connecting, and verifying initial state."""
     game_id = _create_game_sync(sync_client)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:
-        # Client must send seq=0 to get initial state (no auto-push on connect)
+        # Client must send seq=0 to get initial state (no auto-push on
+        # connect)
         ws.send_json({"seq": 0})
         data = _as_dict(_receive_ws_json(ws))
         assert data["type"] == "state"
@@ -212,10 +229,15 @@ async def test_concurrent_games(client: AsyncRestClient) -> None:
     assert game_ids == {game_id_1, game_id_2}
 
 
-def test_invalid_action_returns_error(sync_client: SyncServerClient) -> None:
-    """Test that invalid actions through WebSocket return error in state message.
+def test_invalid_action_returns_error(
+    sync_client: SyncServerClient,
+) -> None:
+    """
+    Test that invalid actions through WebSocket return error in state
+    message.
 
-    Sends an unknown action type. The server's player-message parser rejects it
+    Sends an unknown action type. The server's player-message parser
+    rejects it
     and returns a state message with an "error" field.
     """
     game_id = _create_game_sync(sync_client)
@@ -233,7 +255,9 @@ def test_invalid_action_returns_error(sync_client: SyncServerClient) -> None:
         assert resp.get("error") is not None
 
 
-def test_delete_game_disconnects_ws(sync_client: SyncServerClient) -> None:
+def test_delete_game_disconnects_ws(
+    sync_client: SyncServerClient,
+) -> None:
     """Test that deleting a game while connected closes cleanly."""
     game_id = _create_game_sync(sync_client)
     with sync_client.websocket_connect(f"/game/{game_id}") as ws:

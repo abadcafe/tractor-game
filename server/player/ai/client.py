@@ -7,7 +7,15 @@ from typing import ClassVar, Protocol, TypeGuard
 
 from server.result import Ok, Rejected
 
-type JSONValue = str | int | float | bool | None | list[JSONValue] | dict[str, JSONValue]
+type JSONValue = (
+    str
+    | int
+    | float
+    | bool
+    | None
+    | list[JSONValue]
+    | dict[str, JSONValue]
+)
 type JSONObject = dict[str, JSONValue]
 
 
@@ -61,14 +69,18 @@ class AIClientDisabledRejected(Rejected):
 
 
 class OpenAIAPIKeyMissingRejected(Rejected):
-    reason_text: ClassVar[str] = "TRACTOR_AI_API_KEY or OPENAI_API_KEY is not set"
+    reason_text: ClassVar[str] = (
+        "TRACTOR_AI_API_KEY or OPENAI_API_KEY is not set"
+    )
 
     def __init__(self) -> None:
         super().__init__(self.reason_text)
 
 
 class OpenAIRequestNotAttemptedRejected(Rejected):
-    reason_text: ClassVar[str] = "OpenAI-compatible request was not attempted"
+    reason_text: ClassVar[str] = (
+        "OpenAI-compatible request was not attempted"
+    )
 
     def __init__(self) -> None:
         super().__init__(self.reason_text)
@@ -94,21 +106,27 @@ class OpenAIHTTPStatusRejected(Rejected):
 
 
 class OpenAIInvalidJSONRejected(Rejected):
-    reason_text: ClassVar[str] = "OpenAI-compatible returned invalid JSON"
+    reason_text: ClassVar[str] = (
+        "OpenAI-compatible returned invalid JSON"
+    )
 
     def __init__(self) -> None:
         super().__init__(self.reason_text)
 
 
 class OpenAIResponseNotJSONObjectRejected(Rejected):
-    reason_text: ClassVar[str] = "OpenAI-compatible response is not a JSON object"
+    reason_text: ClassVar[str] = (
+        "OpenAI-compatible response is not a JSON object"
+    )
 
     def __init__(self) -> None:
         super().__init__(self.reason_text)
 
 
 class OpenAIChoicesMissingRejected(Rejected):
-    reason_text: ClassVar[str] = "OpenAI-compatible response has no choices list"
+    reason_text: ClassVar[str] = (
+        "OpenAI-compatible response has no choices list"
+    )
 
     def __init__(self) -> None:
         super().__init__(self.reason_text)
@@ -117,19 +135,24 @@ class OpenAIChoicesMissingRejected(Rejected):
 class OpenAIChoiceCountRejected(Rejected):
     def __init__(self, choice_count: int) -> None:
         super().__init__(
-            f"OpenAI-compatible returned {choice_count} choices; expected exactly one"
+            f"OpenAI-compatible returned {choice_count} choices;"
+            f"expected exactly one"
         )
 
 
 class OpenAIChoiceNotObjectRejected(Rejected):
-    reason_text: ClassVar[str] = "OpenAI-compatible choice is not an object"
+    reason_text: ClassVar[str] = (
+        "OpenAI-compatible choice is not an object"
+    )
 
     def __init__(self) -> None:
         super().__init__(self.reason_text)
 
 
 class OpenAIMessageMissingRejected(Rejected):
-    reason_text: ClassVar[str] = "OpenAI-compatible choice has no message object"
+    reason_text: ClassVar[str] = (
+        "OpenAI-compatible choice has no message object"
+    )
 
     def __init__(self) -> None:
         super().__init__(self.reason_text)
@@ -147,7 +170,9 @@ class OpenAIResponseLengthRejected(Rejected):
 
 
 class OpenAIToolCallsMissingRejected(Rejected):
-    reason_text: ClassVar[str] = "OpenAI-compatible message has no tool_calls list"
+    reason_text: ClassVar[str] = (
+        "OpenAI-compatible message has no tool_calls list"
+    )
 
     def __init__(self) -> None:
         super().__init__(self.reason_text)
@@ -156,47 +181,60 @@ class OpenAIToolCallsMissingRejected(Rejected):
 class OpenAIToolCallCountRejected(Rejected):
     def __init__(self, tool_call_count: int) -> None:
         super().__init__(
-            f"OpenAI-compatible returned {tool_call_count} tool calls; expected exactly one"
+            f"OpenAI-compatible returned {tool_call_count} tool calls;"
+            f"expected exactly one"
         )
 
 
 class OpenAIToolCallNotObjectRejected(Rejected):
-    reason_text: ClassVar[str] = "OpenAI-compatible tool_call is not an object"
+    reason_text: ClassVar[str] = (
+        "OpenAI-compatible tool_call is not an object"
+    )
 
     def __init__(self) -> None:
         super().__init__(self.reason_text)
 
 
 class OpenAIToolCallNotFunctionRejected(Rejected):
-    reason_text: ClassVar[str] = "OpenAI-compatible tool_call is not a function call"
+    reason_text: ClassVar[str] = (
+        "OpenAI-compatible tool_call is not a function call"
+    )
 
     def __init__(self) -> None:
         super().__init__(self.reason_text)
 
 
 class OpenAIToolCallMissingFunctionRejected(Rejected):
-    reason_text: ClassVar[str] = "OpenAI-compatible tool_call missing function object"
+    reason_text: ClassVar[str] = (
+        "OpenAI-compatible tool_call missing function object"
+    )
 
     def __init__(self) -> None:
         super().__init__(self.reason_text)
 
 
 class OpenAIFunctionCallMissingNameOrArgumentsRejected(Rejected):
-    reason_text: ClassVar[str] = "OpenAI-compatible function call missing name or arguments"
+    reason_text: ClassVar[str] = (
+        "OpenAI-compatible function call missing name or arguments"
+    )
 
     def __init__(self) -> None:
         super().__init__(self.reason_text)
 
 
 class OpenAIFunctionCallArgumentsInvalidJSONRejected(Rejected):
-    reason_text: ClassVar[str] = "OpenAI-compatible function call arguments are not valid JSON"
+    reason_text: ClassVar[str] = (
+        "OpenAI-compatible function call arguments are not valid JSON"
+    )
 
     def __init__(self) -> None:
         super().__init__(self.reason_text)
 
 
 class OpenAIFunctionCallArgumentsNotJSONObjectRejected(Rejected):
-    reason_text: ClassVar[str] = "OpenAI-compatible function call arguments are not a JSON object"
+    reason_text: ClassVar[str] = (
+        "OpenAI-compatible function call arguments are not a JSONobject"
+    )
 
     def __init__(self) -> None:
         super().__init__(self.reason_text)
@@ -204,7 +242,9 @@ class OpenAIFunctionCallArgumentsNotJSONObjectRejected(Rejected):
 
 @dataclass(frozen=True, slots=True)
 class AIDecision:
-    """One assistant response plus the tool call selected for the game."""
+    """
+    One assistant response plus the tool call selected for the game.
+    """
 
     assistant_content: str | None
     tool_call: AIToolCall
@@ -238,14 +278,20 @@ def is_json_value(value: object) -> TypeGuard[JSONValue]:
     if _is_object_list(value):
         return all(is_json_value(item) for item in value)
     if _is_object_dict(value):
-        return all(isinstance(key, str) and is_json_value(item) for key, item in value.items())
+        return all(
+            isinstance(key, str) and is_json_value(item)
+            for key, item in value.items()
+        )
     return False
 
 
 def is_json_object(value: object) -> TypeGuard[JSONObject]:
     if not _is_object_dict(value):
         return False
-    return all(isinstance(key, str) and is_json_value(item) for key, item in value.items())
+    return all(
+        isinstance(key, str) and is_json_value(item)
+        for key, item in value.items()
+    )
 
 
 def _is_object_list(value: object) -> TypeGuard[list[object]]:

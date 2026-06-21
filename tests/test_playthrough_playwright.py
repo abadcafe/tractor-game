@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Visible Playwright playthrough pytest test for the Tractor browser UI.
+"""
+Visible Playwright playthrough pytest test for the Tractor browser UI.
 
 Default behavior:
 - build the frontend into static/
 - start uvicorn with websockets-sansio
-- open a tab in an existing debug-enabled Chromium when available, otherwise
+- open a tab in an existing debug-enabled Chromium when available,
+otherwise
   launch a visible Chromium window
 - drive a full game through the rendered UI
 - write screenshots and reports under test-results/playthrough/
@@ -15,7 +17,6 @@ from __future__ import annotations
 import importlib
 import json
 import os
-import pytest
 import shutil
 import socket
 import subprocess
@@ -31,11 +32,15 @@ from urllib.error import URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+import pytest
+
 type JsonPrimitive = str | int | float | bool | None
 type JsonValue = JsonPrimitive | list[JsonValue] | dict[str, JsonValue]
 type JsonObject = dict[str, JsonValue]
 type Severity = Literal["critical", "high", "medium", "low"]
-type UiActionKind = Literal["bid", "next_round", "stir_pass", "discard", "play"]
+type UiActionKind = Literal[
+    "bid", "next_round", "stir_pass", "discard", "play"
+]
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "test-results" / "playthrough"
@@ -75,7 +80,9 @@ class LocatorLike(Protocol):
 
     def is_enabled(self, *, timeout: float | None = None) -> bool: ...
 
-    def scroll_into_view_if_needed(self, *, timeout: float | None = None) -> None: ...
+    def scroll_into_view_if_needed(
+        self, *, timeout: float | None = None
+    ) -> None: ...
 
 
 class PageLike(Protocol):
@@ -93,9 +100,13 @@ class PageLike(Protocol):
 
     def screenshot(self, *, path: str, full_page: bool) -> None: ...
 
-    def goto(self, url: str, *, wait_until: str | None = None) -> object: ...
+    def goto(
+        self, url: str, *, wait_until: str | None = None
+    ) -> object: ...
 
-    def on(self, event: str, callback: Callable[[object], None]) -> None: ...
+    def on(
+        self, event: str, callback: Callable[[object], None]
+    ) -> None: ...
 
     def close(self) -> None: ...
 
@@ -112,7 +123,9 @@ class BrowserLike(Protocol):
     @property
     def contexts(self) -> list[BrowserContextLike]: ...
 
-    def new_context(self, *, viewport: dict[str, int]) -> BrowserContextLike: ...
+    def new_context(
+        self, *, viewport: dict[str, int]
+    ) -> BrowserContextLike: ...
 
     def close(self) -> None: ...
 
@@ -162,6 +175,7 @@ class RequestLike(Protocol):
     @property
     def url(self) -> str: ...
 
+
 INJECTED_SCRIPT = r"""
 (() => {
   if (window.__TRACTOR_PLAYWRIGHT_INSTALLED) return;
@@ -171,14 +185,20 @@ INJECTED_SCRIPT = r"""
   window.__TRACTOR_ERRORS = [];
 
   function saveEvents() {
-    window.__TRACTOR_EVENTS_JSON = JSON.stringify(window.__TRACTOR_EVENTS);
-    window.__TRACTOR_ERRORS_JSON = JSON.stringify(window.__TRACTOR_ERRORS);
+    window.__TRACTOR_EVENTS_JSON = JSON.stringify(
+      window.__TRACTOR_EVENTS
+    );
+    window.__TRACTOR_ERRORS_JSON = JSON.stringify(
+      window.__TRACTOR_ERRORS
+    );
   }
 
   function record(type, data) {
     const entry = { time: Date.now(), type, data };
     window.__TRACTOR_EVENTS.push(entry);
-    if (window.__TRACTOR_EVENTS.length > 1000) window.__TRACTOR_EVENTS.shift();
+    if (window.__TRACTOR_EVENTS.length > 1000) {
+      window.__TRACTOR_EVENTS.shift();
+    }
     saveEvents();
     console.log("[TRACTOR_PLAYWRIGHT]", type, JSON.stringify(data));
   }
@@ -198,7 +218,10 @@ INJECTED_SCRIPT = r"""
             record("error_toast", { text });
           }
           if (node.classList.contains("game-over-overlay")) {
-            record("game_over_overlay", { text: node.textContent || "" });
+            record(
+              "game_over_overlay",
+              { text: node.textContent || "" }
+            );
           }
           if (node.classList.contains("scoring-overlay")) {
             record("scoring_overlay", { text: node.textContent || "" });
@@ -230,7 +253,9 @@ INJECTED_SCRIPT = r"""
             seq: message.seq,
             awaiting: state.awaiting_action,
             phase: state.phase,
-            current_player: state.trick ? state.trick.current_player : null
+            current_player: state.trick
+              ? state.trick.current_player
+              : null
           });
         }
       } catch (error) {
@@ -331,7 +356,12 @@ class Recorder:
     events: list[EventEntry] = field(default_factory=list[EventEntry])
     bugs: list[BugEntry] = field(default_factory=list[BugEntry])
 
-    def event(self, category: str, message: str, data: JsonObject | None = None) -> None:
+    def event(
+        self,
+        category: str,
+        message: str,
+        data: JsonObject | None = None,
+    ) -> None:
         entry = EventEntry(
             timestamp=utc_now(),
             category=category,
@@ -351,7 +381,10 @@ class Recorder:
         data: JsonObject | None = None,
     ) -> None:
         for existing in self.bugs:
-            if existing.category == category and existing.description == description:
+            if (
+                existing.category == category
+                and existing.description == description
+            ):
                 return
         self.bugs.append(
             BugEntry(
@@ -406,7 +439,10 @@ def utc_now() -> str:
 
 
 def load_playwright_module() -> PlaywrightModuleLike:
-    return cast(PlaywrightModuleLike, importlib.import_module("playwright.sync_api"))
+    return cast(
+        PlaywrightModuleLike,
+        importlib.import_module("playwright.sync_api"),
+    )
 
 
 def playwright_exception_types() -> tuple[type[Exception], ...]:
@@ -472,7 +508,11 @@ def string_field(data: JsonObject, key: str) -> str | None:
 
 def int_field(data: JsonObject, key: str) -> int | None:
     value = data.get(key)
-    return value if isinstance(value, int) and not isinstance(value, bool) else None
+    return (
+        value
+        if isinstance(value, int) and not isinstance(value, bool)
+        else None
+    )
 
 
 def card_id(card: JsonObject) -> str:
@@ -524,7 +564,9 @@ def card_points(card: JsonObject) -> int:
     return 0
 
 
-def is_trump(card: JsonObject, trump_suit: str | None, trump_rank: str) -> bool:
+def is_trump(
+    card: JsonObject, trump_suit: str | None, trump_rank: str
+) -> bool:
     return (
         card_suit(card) == "joker"
         or card_rank(card) == trump_rank
@@ -535,14 +577,20 @@ def is_trump(card: JsonObject, trump_suit: str | None, trump_rank: str) -> bool:
 def choose_discard_cards(state: JsonObject) -> tuple[str, ...]:
     hand = card_list(state.get("player_hand"))
     stirring_state = object_field(state, "stirring_state")
-    count = int_field(stirring_state, "exchange_count") if stirring_state is not None else None
+    count = (
+        int_field(stirring_state, "exchange_count")
+        if stirring_state is not None
+        else None
+    )
     if count is None or count <= 0:
         count = 8
     trump_suit = string_field(state, "trump_suit")
     trump_rank = string_field(state, "trump_rank") or "2"
 
     def discard_key(card: JsonObject) -> tuple[int, int, int]:
-        trump_weight = 1 if is_trump(card, trump_suit, trump_rank) else 0
+        trump_weight = (
+            1 if is_trump(card, trump_suit, trump_rank) else 0
+        )
         return (trump_weight, card_points(card), rank_value(card))
 
     chosen = sorted(hand, key=discard_key)[:count]
@@ -552,7 +600,9 @@ def choose_discard_cards(state: JsonObject) -> tuple[str, ...]:
 def action_hint_candidates(state: JsonObject) -> list[tuple[str, ...]]:
     result: list[tuple[str, ...]] = []
     for candidate in card_matrix(state.get("action_hints")):
-        card_ids = tuple(card_id(card) for card in candidate if card_id(card))
+        card_ids = tuple(
+            card_id(card) for card in candidate if card_id(card)
+        )
         if card_ids:
             result.append(card_ids)
     return result
@@ -572,7 +622,9 @@ def choose_play_candidates(state: JsonObject) -> list[tuple[str, ...]]:
     return pick_free_play_candidates(state)
 
 
-def pick_free_play_candidates(state: JsonObject, limit: int = 80) -> list[tuple[str, ...]]:
+def pick_free_play_candidates(
+    state: JsonObject, limit: int = 80
+) -> list[tuple[str, ...]]:
     hand = card_list(state.get("player_hand"))
     if not hand:
         return []
@@ -592,32 +644,41 @@ def pick_free_play_candidates(state: JsonObject, limit: int = 80) -> list[tuple[
 
     if not lead_cards:
         return [
-            (card_id(card),)
-            for card in hand[:limit]
-            if card_id(card)
+            (card_id(card),) for card in hand[:limit] if card_id(card)
         ]
 
     trump_suit = string_field(state, "trump_suit")
     trump_rank = string_field(state, "trump_rank") or "2"
-    lead_effective_suit = effective_suit(lead_cards[0], trump_suit, trump_rank)
+    lead_effective_suit = effective_suit(
+        lead_cards[0], trump_suit, trump_rank
+    )
     same_suit_cards = [
         card
         for card in hand
-        if effective_suit(card, trump_suit, trump_rank) == lead_effective_suit
+        if effective_suit(card, trump_suit, trump_rank)
+        == lead_effective_suit
     ]
     other_cards = [card for card in hand if card not in same_suit_cards]
 
     candidates: list[list[JsonObject]] = []
     if len(same_suit_cards) >= lead_count:
-        candidates.extend(card_combinations_prefer_pairs(same_suit_cards, lead_count, limit))
+        candidates.extend(
+            card_combinations_prefer_pairs(
+                same_suit_cards, lead_count, limit
+            )
+        )
     elif same_suit_cards:
         needed = lead_count - len(same_suit_cards)
-        for fill in card_combinations_prefer_pairs(other_cards, needed, limit):
+        for fill in card_combinations_prefer_pairs(
+            other_cards, needed, limit
+        ):
             candidates.append(same_suit_cards + fill)
             if len(candidates) >= limit:
                 break
     else:
-        candidates.extend(card_combinations_prefer_pairs(hand, lead_count, limit))
+        candidates.extend(
+            card_combinations_prefer_pairs(hand, lead_count, limit)
+        )
 
     return dedupe_card_candidates(candidates, limit)
 
@@ -633,19 +694,29 @@ def card_combinations_prefer_pairs(
         return []
     combos = [list(combo) for combo in combinations(cards, count)]
     if count == 2:
-        combos.sort(key=lambda combo: 0 if same_rank_pair(combo[0], combo[1]) else 1)
+        combos.sort(
+            key=lambda combo: (
+                0 if same_rank_pair(combo[0], combo[1]) else 1
+            )
+        )
     return combos[:limit]
 
 
 def same_rank_pair(first: JsonObject, second: JsonObject) -> bool:
-    return card_suit(first) == card_suit(second) and card_rank(first) == card_rank(second)
+    return card_suit(first) == card_suit(second) and card_rank(
+        first
+    ) == card_rank(second)
 
 
-def dedupe_card_candidates(candidates: Sequence[Sequence[JsonObject]], limit: int) -> list[tuple[str, ...]]:
+def dedupe_card_candidates(
+    candidates: Sequence[Sequence[JsonObject]], limit: int
+) -> list[tuple[str, ...]]:
     seen: set[tuple[str, ...]] = set()
     result: list[tuple[str, ...]] = []
     for candidate in candidates:
-        key = tuple(sorted(card_id(card) for card in candidate if card_id(card)))
+        key = tuple(
+            sorted(card_id(card) for card in candidate if card_id(card))
+        )
         if not key or key in seen:
             continue
         seen.add(key)
@@ -655,10 +726,16 @@ def dedupe_card_candidates(candidates: Sequence[Sequence[JsonObject]], limit: in
     return result
 
 
-def effective_suit(card: JsonObject, trump_suit: str | None, trump_rank: str) -> str:
+def effective_suit(
+    card: JsonObject, trump_suit: str | None, trump_rank: str
+) -> str:
     suit = card_suit(card)
     rank = card_rank(card)
-    if suit == "joker" or rank == trump_rank or (trump_suit is not None and suit == trump_suit):
+    if (
+        suit == "joker"
+        or rank == trump_rank
+        or (trump_suit is not None and suit == trump_suit)
+    ):
         return "trump"
     return suit
 
@@ -682,7 +759,9 @@ def plan_action(
         return UiAction(kind="stir_pass")
     if awaiting == "discard":
         cards = choose_discard_cards(state)
-        return UiAction(kind="discard", card_ids=cards) if cards else None
+        return (
+            UiAction(kind="discard", card_ids=cards) if cards else None
+        )
     if awaiting == "play":
         for cards in choose_play_candidates(state):
             if cards not in rejected_play_candidates:
@@ -695,14 +774,22 @@ def css_attr_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def click_button(page: PageLike, name: str, timeout_ms: int = 5000) -> None:
-    page.get_by_role("button", name=name, exact=True).first.click(timeout=timeout_ms)
+def click_button(
+    page: PageLike, name: str, timeout_ms: int = 5000
+) -> None:
+    page.get_by_role("button", name=name, exact=True).first.click(
+        timeout=timeout_ms
+    )
 
 
 def click_clear_selection_if_available(page: PageLike) -> None:
-    locator = page.get_by_role("button", name=CLEAR_SELECTION_BUTTON, exact=True)
+    locator = page.get_by_role(
+        "button", name=CLEAR_SELECTION_BUTTON, exact=True
+    )
     try:
-        if locator.count() > 0 and locator.first.is_enabled(timeout=500):
+        if locator.count() > 0 and locator.first.is_enabled(
+            timeout=500
+        ):
             locator.first.click(timeout=1000)
     except PLAYWRIGHT_EXCEPTIONS:
         return
@@ -711,7 +798,9 @@ def click_clear_selection_if_available(page: PageLike) -> None:
 def click_cards(page: PageLike, card_ids: Sequence[str]) -> None:
     click_clear_selection_if_available(page)
     for card in card_ids:
-        selector = f'.hand-view .card[data-card-id="{css_attr_value(card)}"]'
+        selector = (
+            f'.hand-view .card[data-card-id="{css_attr_value(card)}"]'
+        )
         locator = page.locator(selector).first
         locator.scroll_into_view_if_needed(timeout=3000)
         locator.click(timeout=3000)
@@ -732,7 +821,9 @@ def click_next_round(page: PageLike) -> None:
     click_button(page, "下一轮")
 
 
-def perform_action(page: PageLike, action: UiAction, recorder: Recorder) -> bool:
+def perform_action(
+    page: PageLike, action: UiAction, recorder: Recorder
+) -> bool:
     try:
         if action.kind == "bid":
             click_first_bid_option(page)
@@ -756,7 +847,10 @@ def perform_action(page: PageLike, action: UiAction, recorder: Recorder) -> bool
     recorder.event(
         "ui_action",
         f"{action.kind} {','.join(action.card_ids)}".strip(),
-        {"kind": action.kind, "card_ids": json_string_list(action.card_ids)},
+        {
+            "kind": action.kind,
+            "card_ids": json_string_list(action.card_ids),
+        },
     )
     return True
 
@@ -767,7 +861,9 @@ def page_string(page: PageLike, expression: str) -> str | None:
 
 
 def latest_state(page: PageLike) -> JsonObject | None:
-    raw = page_string(page, "() => window.__TRACTOR_LAST_STATE_JSON || ''")
+    raw = page_string(
+        page, "() => window.__TRACTOR_LAST_STATE_JSON || ''"
+    )
     if raw is None or raw == "":
         return None
     return parse_json_object(raw)
@@ -797,13 +893,17 @@ def drain_browser_errors(page: PageLike) -> list[str]:
 
 def browser_events(page: PageLike) -> list[JsonValue]:
     try:
-        raw = page_string(page, "() => window.__TRACTOR_EVENTS_JSON || '[]'")
+        raw = page_string(
+            page, "() => window.__TRACTOR_EVENTS_JSON || '[]'"
+        )
     except PLAYWRIGHT_EXCEPTIONS:
         return []
     return parse_json_list(raw) if raw is not None else []
 
 
-def wait_for_initial_state(page: PageLike, timeout_seconds: int, recorder: Recorder) -> JsonObject | None:
+def wait_for_initial_state(
+    page: PageLike, timeout_seconds: int, recorder: Recorder
+) -> JsonObject | None:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         try:
@@ -817,7 +917,9 @@ def wait_for_initial_state(page: PageLike, timeout_seconds: int, recorder: Recor
     return None
 
 
-def take_screenshot(page: PageLike, output_dir: Path, name: str, recorder: Recorder) -> str | None:
+def take_screenshot(
+    page: PageLike, output_dir: Path, name: str, recorder: Recorder
+) -> str | None:
     path = output_dir / "screenshots" / f"{slug(name)}.png"
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -850,15 +952,19 @@ def run_build(config: Config, recorder: Recorder) -> None:
 
 def server_ready(server_url: str) -> bool:
     try:
-        with urlopen(Request(f"{server_url}/docs"), timeout=1) as response:
+        with urlopen(
+            Request(f"{server_url}/docs"), timeout=1
+        ) as response:
             return response.status == 200
-    except (OSError, URLError, TimeoutError):
+    except OSError, URLError, TimeoutError:
         return False
 
 
 def start_server(config: Config, recorder: Recorder) -> ManagedServer:
     config.output_dir.mkdir(parents=True, exist_ok=True)
-    log_file = (config.output_dir / "uvicorn.log").open("w", encoding="utf-8")
+    log_file = (config.output_dir / "uvicorn.log").open(
+        "w", encoding="utf-8"
+    )
     command = [
         sys.executable,
         "-m",
@@ -871,7 +977,11 @@ def start_server(config: Config, recorder: Recorder) -> ManagedServer:
         "--ws",
         "websockets-sansio",
     ]
-    recorder.event("server", "starting uvicorn", {"command": json_string_list(command)})
+    recorder.event(
+        "server",
+        "starting uvicorn",
+        {"command": json_string_list(command)},
+    )
     process: subprocess.Popen[str] = subprocess.Popen(
         command,
         cwd=config.project_root,
@@ -884,13 +994,17 @@ def start_server(config: Config, recorder: Recorder) -> ManagedServer:
     while time.monotonic() < deadline:
         if process.poll() is not None:
             managed.stop()
-            raise SystemExit(f"uvicorn exited early with code {process.returncode}")
+            raise SystemExit(
+                f"uvicorn exited early with code {process.returncode}"
+            )
         if server_ready(config.server_url):
             recorder.event("server", f"ready at {config.server_url}")
             return managed
         time.sleep(0.5)
     managed.stop()
-    raise SystemExit(f"server did not become ready at {config.server_url}")
+    raise SystemExit(
+        f"server did not become ready at {config.server_url}"
+    )
 
 
 def find_chromium(explicit_path: str | None) -> str | None:
@@ -920,7 +1034,7 @@ def cdp_url_ready(url: str) -> bool:
     try:
         with urlopen(Request(version_url), timeout=0.5) as response:
             return response.status == 200
-    except (OSError, URLError, TimeoutError):
+    except OSError, URLError, TimeoutError:
         return False
 
 
@@ -936,16 +1050,58 @@ def known_devtools_paths() -> list[tuple[str, str, Path]]:
     home = Path.home()
     if sys.platform == "darwin":
         return [
-            ("chrome", "Chrome", home / "Library/Application Support/Google/Chrome/DevToolsActivePort"),
-            ("chrome-canary", "Chrome Canary", home / "Library/Application Support/Google/Chrome Canary/DevToolsActivePort"),
-            ("chromium", "Chromium", home / "Library/Application Support/Chromium/DevToolsActivePort"),
-            ("edge", "Microsoft Edge", home / "Library/Application Support/Microsoft Edge/DevToolsActivePort"),
+            (
+                "chrome",
+                "Chrome",
+                home
+                / "Library/Application Support"
+                / "Google"
+                / "Chrome"
+                / "DevToolsActivePort",
+            ),
+            (
+                "chrome-canary",
+                "Chrome Canary",
+                home
+                / "Library/Application Support"
+                / "Google"
+                / "Chrome Canary"
+                / "DevToolsActivePort",
+            ),
+            (
+                "chromium",
+                "Chromium",
+                home
+                / "Library/Application Support"
+                / "Chromium"
+                / "DevToolsActivePort",
+            ),
+            (
+                "edge",
+                "Microsoft Edge",
+                home
+                / "Library/Application Support"
+                / "Microsoft Edge"
+                / "DevToolsActivePort",
+            ),
         ]
     if sys.platform.startswith("linux"):
         return [
-            ("chrome", "Chrome", home / ".config/google-chrome/DevToolsActivePort"),
-            ("chromium", "Chromium", home / ".config/chromium/DevToolsActivePort"),
-            ("edge", "Microsoft Edge", home / ".config/microsoft-edge/DevToolsActivePort"),
+            (
+                "chrome",
+                "Chrome",
+                home / ".config/google-chrome/DevToolsActivePort",
+            ),
+            (
+                "chromium",
+                "Chromium",
+                home / ".config/chromium/DevToolsActivePort",
+            ),
+            (
+                "edge",
+                "Microsoft Edge",
+                home / ".config/microsoft-edge/DevToolsActivePort",
+            ),
         ]
     if sys.platform == "win32":
         local_app_data = os.environ.get("LOCALAPPDATA")
@@ -953,9 +1109,21 @@ def known_devtools_paths() -> list[tuple[str, str, Path]]:
             return []
         root = Path(local_app_data)
         return [
-            ("chrome", "Chrome", root / "Google/Chrome/User Data/DevToolsActivePort"),
-            ("chromium", "Chromium", root / "Chromium/User Data/DevToolsActivePort"),
-            ("edge", "Microsoft Edge", root / "Microsoft/Edge/User Data/DevToolsActivePort"),
+            (
+                "chrome",
+                "Chrome",
+                root / "Google/Chrome/User Data/DevToolsActivePort",
+            ),
+            (
+                "chromium",
+                "Chromium",
+                root / "Chromium/User Data/DevToolsActivePort",
+            ),
+            (
+                "edge",
+                "Microsoft Edge",
+                root / "Microsoft/Edge/User Data/DevToolsActivePort",
+            ),
         ]
     return []
 
@@ -967,7 +1135,11 @@ def discover_devtools_endpoints() -> list[BrowserEndpoint]:
             content = path.read_text(encoding="utf-8")
         except OSError:
             continue
-        lines = [line.strip() for line in content.splitlines() if line.strip()]
+        lines = [
+            line.strip()
+            for line in content.splitlines()
+            if line.strip()
+        ]
         if not lines:
             continue
         try:
@@ -998,7 +1170,11 @@ def discover_devtools_endpoints() -> list[BrowserEndpoint]:
 
 def running_chromium_commands() -> list[str]:
     commands: list[str] = []
-    for process_name in ("chromium", "chromium-browser", "google-chrome"):
+    for process_name in (
+        "chromium",
+        "chromium-browser",
+        "google-chrome",
+    ):
         result = subprocess.run(
             ["pgrep", "-a", process_name],
             cwd=PROJECT_ROOT,
@@ -1017,7 +1193,9 @@ def running_chromium_commands() -> list[str]:
     return commands
 
 
-def choose_existing_cdp_url(config: Config, recorder: Recorder) -> str | None:
+def choose_existing_cdp_url(
+    config: Config, recorder: Recorder
+) -> str | None:
     if not config.prefer_existing_browser:
         return None
     if config.cdp_url is not None:
@@ -1025,7 +1203,8 @@ def choose_existing_cdp_url(config: Config, recorder: Recorder) -> str | None:
             return config.cdp_url
         raise SystemExit(
             f"CDP endpoint is not reachable: {config.cdp_url}. "
-            "Start Chromium with --remote-debugging-port=9222 or omit --cdp-url."
+            "Start Chromium with --remote-debugging-port=9222 or omit"
+            "--cdp-url."
         )
     endpoints = discover_devtools_endpoints()
     if endpoints:
@@ -1043,20 +1222,26 @@ def choose_existing_cdp_url(config: Config, recorder: Recorder) -> str | None:
     for port in (9222, 9223, 9224):
         candidate = f"http://127.0.0.1:{port}"
         if cdp_url_ready(candidate):
-            recorder.event("browser", f"using existing Chromium at {candidate}")
+            recorder.event(
+                "browser", f"using existing Chromium at {candidate}"
+            )
             return candidate
     running_commands = running_chromium_commands()
     if running_commands:
         command_preview = running_commands[0]
         raise SystemExit(
-            "Chromium is already running, but it does not expose a reachable "
+            "Chromium is already running, but it does not expose a"
+            "reachable"
             "remote debugging endpoint on 9222/9223/9224.\n"
             f"Detected Chromium: {command_preview}\n"
-            "Playwright cannot attach to a normal Chromium process after it "
-            "has started. To reuse your browser window, fully quit Chromium "
+            "Playwright cannot attach to a normal Chromium process"
+            "after it"
+            "has started. To reuse your browser window, fully quit"
+            "Chromium"
             "and start it with:\n"
             "  chromium --remote-debugging-port=9222\n"
-            "Then run this script again. To intentionally launch a separate "
+            "Then run this script again. To intentionally launch a"
+            "separate"
             "visible browser, pass --new-browser."
         )
     recorder.event(
@@ -1077,8 +1262,12 @@ def setup_browser(config: Config, recorder: Recorder) -> BrowserSession:
         if browser.contexts:
             context = browser.contexts[0]
         else:
-            context = browser.new_context(viewport={"width": 1400, "height": 950})
-        context.add_init_script(script="localStorage.removeItem('tractor-game-id');")
+            context = browser.new_context(
+                viewport={"width": 1400, "height": 950}
+            )
+        context.add_init_script(
+            script="localStorage.removeItem('tractor-game-id');"
+        )
         context.add_init_script(script=INJECTED_SCRIPT)
         page = context.new_page()
         return BrowserSession(
@@ -1099,8 +1288,12 @@ def setup_browser(config: Config, recorder: Recorder) -> BrowserSession:
             "--window-size=1400,950",
         ],
     )
-    context = browser.new_context(viewport={"width": 1400, "height": 950})
-    context.add_init_script(script="localStorage.removeItem('tractor-game-id');")
+    context = browser.new_context(
+        viewport={"width": 1400, "height": 950}
+    )
+    context.add_init_script(
+        script="localStorage.removeItem('tractor-game-id');"
+    )
     context.add_init_script(script=INJECTED_SCRIPT)
     page = context.new_page()
     return BrowserSession(
@@ -1170,18 +1363,25 @@ def run_playthrough(config: Config) -> None:
         recorder.event("navigation", config.server_url)
         page.goto(config.server_url, wait_until="domcontentloaded")
 
-        initial_state = wait_for_initial_state(page, timeout_seconds=30, recorder=recorder)
+        initial_state = wait_for_initial_state(
+            page, timeout_seconds=30, recorder=recorder
+        )
         if initial_state is None:
-            screenshot = take_screenshot(page, config.output_dir, "no_initial_state", recorder)
+            screenshot = take_screenshot(
+                page, config.output_dir, "no_initial_state", recorder
+            )
             recorder.bug(
                 "initial_state_timeout",
-                "browser did not receive a state message within 30 seconds",
+                "browser did not receive a state message within 30"
+                "seconds",
                 "critical",
                 screenshot=screenshot,
             )
             return
 
-        take_screenshot(page, config.output_dir, "initial_state", recorder)
+        take_screenshot(
+            page, config.output_dir, "initial_state", recorder
+        )
 
         last_phase: str | None = None
         last_phase_time = time.monotonic()
@@ -1197,10 +1397,13 @@ def run_playthrough(config: Config) -> None:
         while True:
             elapsed = time.monotonic() - start_time
             if elapsed > config.max_seconds:
-                screenshot = take_screenshot(page, config.output_dir, "timeout", recorder)
+                screenshot = take_screenshot(
+                    page, config.output_dir, "timeout", recorder
+                )
                 recorder.bug(
                     "timeout",
-                    f"game did not finish within {config.max_seconds} seconds",
+                    f"game did not finish within {config.max_seconds}"
+                    f"seconds",
                     "critical",
                     phase=last_phase,
                     screenshot=screenshot,
@@ -1215,36 +1418,59 @@ def run_playthrough(config: Config) -> None:
             final_state = state_message
             state = object_field(state_message, "state")
             if state is None:
-                recorder.bug("bad_state_message", "state message missing state object", "critical")
+                recorder.bug(
+                    "bad_state_message",
+                    "state message missing state object",
+                    "critical",
+                )
                 break
 
             seq = int_field(state_message, "seq")
             phase = string_field(state, "phase") or "UNKNOWN"
             team0_level = string_field(state, "team0_level") or "?"
             team1_level = string_field(state, "team1_level") or "?"
-            defender_points = int_from_state(state, "defender_points", 0)
+            defender_points = int_from_state(
+                state, "defender_points", 0
+            )
 
             for text in drain_browser_errors(page):
                 if last_action is not None:
                     last_action_seq = None
                     if last_action.kind == "play":
-                        rejected_play_candidates.add(last_action.card_ids)
+                        rejected_play_candidates.add(
+                            last_action.card_ids
+                        )
                         if "出牌" in text or "play" in text.lower():
                             recorder.event(
                                 "candidate_rejected",
                                 text,
-                                {"kind": last_action.kind, "card_ids": json_string_list(last_action.card_ids)},
+                                {
+                                    "kind": last_action.kind,
+                                    "card_ids": json_string_list(
+                                        last_action.card_ids
+                                    ),
+                                },
                             )
                             continue
                     if last_action.kind == "bid":
                         recorder.event(
                             "bid_error_toast",
                             text,
-                            {"kind": last_action.kind, "card_ids": json_string_list(last_action.card_ids)},
+                            {
+                                "kind": last_action.kind,
+                                "card_ids": json_string_list(
+                                    last_action.card_ids
+                                ),
+                            },
                         )
-                recorder.bug("browser_error_toast", text, "medium", phase=phase)
+                recorder.bug(
+                    "browser_error_toast", text, "medium", phase=phase
+                )
 
-            if team0_level != last_team0_level or team1_level != last_team1_level:
+            if (
+                team0_level != last_team0_level
+                or team1_level != last_team1_level
+            ):
                 rounds.append(
                     RoundEntry(
                         index=len(rounds) + 1,
@@ -1255,7 +1481,8 @@ def run_playthrough(config: Config) -> None:
                 )
                 recorder.event(
                     "round",
-                    f"{last_team0_level}->{team0_level}, {last_team1_level}->{team1_level}",
+                    f"{last_team0_level}->{team0_level},"
+                    f"{last_team1_level}->{team1_level}",
                 )
                 last_team0_level = team0_level
                 last_team1_level = team1_level
@@ -1266,22 +1493,32 @@ def run_playthrough(config: Config) -> None:
                     phase,
                     {
                         "seq": seq,
-                        "awaiting": string_field(state, "awaiting_action"),
+                        "awaiting": string_field(
+                            state, "awaiting_action"
+                        ),
                         "team0_level": team0_level,
                         "team1_level": team1_level,
                         "defender_points": defender_points,
                     },
                 )
-                take_screenshot(page, config.output_dir, f"phase_{phase}_{int(elapsed)}", recorder)
+                take_screenshot(
+                    page,
+                    config.output_dir,
+                    f"phase_{phase}_{int(elapsed)}",
+                    recorder,
+                )
                 last_phase = phase
                 last_phase_time = time.monotonic()
                 rejected_play_candidates.clear()
 
             if time.monotonic() - last_phase_time > phase_stuck_seconds:
-                screenshot = take_screenshot(page, config.output_dir, f"stuck_{phase}", recorder)
+                screenshot = take_screenshot(
+                    page, config.output_dir, f"stuck_{phase}", recorder
+                )
                 recorder.bug(
                     "phase_stuck",
-                    f"phase {phase} did not change for {phase_stuck_seconds} seconds",
+                    f"phase {phase} did not change for"
+                    f"{phase_stuck_seconds} seconds",
                     "critical",
                     phase=phase,
                     screenshot=screenshot,
@@ -1289,12 +1526,19 @@ def run_playthrough(config: Config) -> None:
                 break
 
             if time.monotonic() - last_screenshot_time > 30:
-                take_screenshot(page, config.output_dir, f"tick_{int(elapsed)}", recorder)
+                take_screenshot(
+                    page,
+                    config.output_dir,
+                    f"tick_{int(elapsed)}",
+                    recorder,
+                )
                 last_screenshot_time = time.monotonic()
 
             if state.get("winning_team") is not None:
                 game_completed = True
-                take_screenshot(page, config.output_dir, "game_over", recorder)
+                take_screenshot(
+                    page, config.output_dir, "game_over", recorder
+                )
                 recorder.event(
                     "result",
                     "game over",
@@ -1307,8 +1551,12 @@ def run_playthrough(config: Config) -> None:
                 break
 
             if seq is not None and seq != last_action_seq:
-                action = plan_action(state_message, rejected_play_candidates)
-                if action is not None and perform_action(page, action, recorder):
+                action = plan_action(
+                    state_message, rejected_play_candidates
+                )
+                if action is not None and perform_action(
+                    page, action, recorder
+                ):
                     last_action_seq = seq
                     last_action = action
                     action_count += 1
@@ -1317,7 +1565,8 @@ def run_playthrough(config: Config) -> None:
 
         recorder.event(
             "summary",
-            f"actions={action_count}, rounds={len(rounds)}, bugs={len(recorder.bugs)}",
+            f"actions={action_count}, rounds={len(rounds)},"
+            f"bugs={len(recorder.bugs)}",
         )
     finally:
         browser_event_log: list[JsonValue] = []
@@ -1333,7 +1582,10 @@ def run_playthrough(config: Config) -> None:
                 browser_event_log=browser_event_log,
             )
         if config.keep_open and page is not None:
-            recorder.event("keep_open", "press Ctrl+C in this terminal to close the browser")
+            recorder.event(
+                "keep_open",
+                "press Ctrl+C in this terminal to close the browser",
+            )
             try:
                 while True:
                     time.sleep(1)
@@ -1391,7 +1643,7 @@ def write_reports(
         f"- Time: {utc_now()}",
         f"- Server: {config.server_url}",
         f"- Duration: {duration_seconds:.1f}s",
-        f"- Headless: false",
+        "- Headless: false",
         f"- Game completed: {str(game_completed).lower()}",
         f"- Rounds: {len(rounds)}",
         f"- Bugs: {len(recorder.bugs)}",
@@ -1410,28 +1662,43 @@ def write_reports(
         )
         for entry in rounds:
             markdown_lines.append(
-                f"| {entry.index} | {entry.team0} | {entry.team1} | {entry.defender_points} |"
+                f"| {entry.index} | {entry.team0} | {entry.team1} |"
+                f"{entry.defender_points} |"
             )
         markdown_lines.append("")
 
     markdown_lines.extend(["## Bugs", ""])
     if recorder.bugs:
         for index, bug in enumerate(recorder.bugs, start=1):
-            markdown_lines.append(f"{index}. [{bug.severity}] {bug.category}: {bug.description}")
+            markdown_lines.append(
+                f"{index}. [{bug.severity}] {bug.category}:"
+                f"{bug.description}"
+            )
             if bug.phase is not None:
                 markdown_lines.append(f"   Phase: {bug.phase}")
             if bug.screenshot is not None:
-                markdown_lines.append(f"   Screenshot: `{bug.screenshot}`")
+                markdown_lines.append(
+                    f"   Screenshot: `{bug.screenshot}`"
+                )
     else:
-        markdown_lines.append("No bugs recorded by the playthrough runner.")
+        markdown_lines.append(
+            "No bugs recorded by the playthrough runner."
+        )
     markdown_lines.append("")
-    markdown_path.write_text("\n".join(markdown_lines), encoding="utf-8")
+    markdown_path.write_text(
+        "\n".join(markdown_lines), encoding="utf-8"
+    )
     print(f"Report written to {markdown_path}", flush=True)
 
 
 def _env_bool(name: str) -> bool:
     value = os.environ.get(name)
-    return value is not None and value.lower() in ("1", "true", "yes", "on")
+    return value is not None and value.lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
 
 def _env_int(name: str, default: int) -> int:
@@ -1459,12 +1726,16 @@ def _explicitly_selected_by_pytest() -> bool:
 
 
 def _should_run_playthrough() -> bool:
-    return _explicitly_selected_by_pytest() or _env_bool("TRACTOR_PLAYTHROUGH")
+    return _explicitly_selected_by_pytest() or _env_bool(
+        "TRACTOR_PLAYTHROUGH"
+    )
 
 
 def _load_report(path: Path) -> JsonObject:
     parsed = parse_json_object(path.read_text(encoding="utf-8"))
-    assert parsed is not None, f"playthrough report is not valid JSON: {path}"
+    assert parsed is not None, (
+        f"playthrough report is not valid JSON: {path}"
+    )
     return parsed
 
 
@@ -1497,7 +1768,7 @@ def test_plan_action_bids_first_hint_candidate() -> None:
     assert action == UiAction(kind="bid", card_ids=("D1-spades-2",))
 
 
-def test_plan_action_waits_for_frontend_auto_pass_when_bid_has_no_hints() -> None:
+def test_plan_action_waits_for_auto_pass_without_bid_hints() -> None:
     state: JsonObject = {
         "action_hints": [],
         "player_hand": [_card("D1-spades-7", "spades", "7")],
@@ -1537,12 +1808,14 @@ def test_plan_action_skips_rejected_play_hint_candidate() -> None:
         ],
     }
 
-    action = plan_action(_state_message("play", state), {("D1-diamonds-5",)})
+    action = plan_action(
+        _state_message("play", state), {("D1-diamonds-5",)}
+    )
 
     assert action == UiAction(kind="play", card_ids=("D1-diamonds-K",))
 
 
-def test_plan_action_falls_back_to_free_lead_when_play_has_no_hints() -> None:
+def test_plan_action_free_leads_when_play_has_no_hints() -> None:
     state: JsonObject = {
         "action_hints": [],
         "player_hand": [
@@ -1565,21 +1838,30 @@ def test_visible_playwright_full_game_playthrough() -> None:
     if not _should_run_playthrough():
         pytest.skip(
             "visible browser playthrough is skipped by default; run "
-            "`python -m pytest tests/test_playthrough_playwright.py -s` "
+            "`python -m pytest tests/test_playthrough_playwright.py"
+            "-s`"
             "or set TRACTOR_PLAYTHROUGH=1"
         )
 
     port = _env_int("TRACTOR_PLAYTHROUGH_PORT", 8787)
-    output_dir = _env_path("TRACTOR_PLAYTHROUGH_OUTPUT_DIR", DEFAULT_OUTPUT_DIR)
+    output_dir = _env_path(
+        "TRACTOR_PLAYTHROUGH_OUTPUT_DIR", DEFAULT_OUTPUT_DIR
+    )
     config = Config(
         project_root=PROJECT_ROOT,
         output_dir=output_dir,
         server_url=f"http://127.0.0.1:{port}",
         port=port,
-        max_seconds=_env_int("TRACTOR_PLAYTHROUGH_MAX_SECONDS", DEFAULT_MAX_SECONDS),
-        browser_executable=os.environ.get("TRACTOR_PLAYTHROUGH_BROWSER"),
+        max_seconds=_env_int(
+            "TRACTOR_PLAYTHROUGH_MAX_SECONDS", DEFAULT_MAX_SECONDS
+        ),
+        browser_executable=os.environ.get(
+            "TRACTOR_PLAYTHROUGH_BROWSER"
+        ),
         cdp_url=os.environ.get("TRACTOR_PLAYTHROUGH_CDP_URL"),
-        prefer_existing_browser=not _env_bool("TRACTOR_PLAYTHROUGH_NEW_BROWSER"),
+        prefer_existing_browser=not _env_bool(
+            "TRACTOR_PLAYTHROUGH_NEW_BROWSER"
+        ),
         start_server=True,
         build_frontend=not _env_bool("TRACTOR_PLAYTHROUGH_NO_BUILD"),
         keep_open=_env_bool("TRACTOR_PLAYTHROUGH_KEEP_OPEN"),

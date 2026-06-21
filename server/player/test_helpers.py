@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Literal, TypeGuard
 from unittest.mock import AsyncMock, MagicMock
 
-from server.protocol import StateMessage
 from server.protocol import (
     AwaitingAction,
     BidEventSnapshot,
@@ -13,13 +12,16 @@ from server.protocol import (
     FailedThrowSnapshot,
     RoundPhase,
     ScoringSnapshot,
+    StateMessage,
     StateSnapshot,
     StirringStateSnapshot,
     TrickSnapshot,
 )
-from server.rules.cards import Card, POINTS_MAP, Rank, Suit
+from server.rules.cards import POINTS_MAP, Card, Rank, Suit
 
-type TestSuit = Literal["hearts", "spades", "diamonds", "clubs", "joker"]
+type TestSuit = Literal[
+    "hearts", "spades", "diamonds", "clubs", "joker"
+]
 type TestRank = Literal[
     "2",
     "3",
@@ -92,14 +94,18 @@ def make_snapshot(
         trump_rank=Rank(trump_rank),
         trump_suit=Suit(trump_suit) if trump_suit is not None else None,
         player_hand=player_hand if player_hand is not None else [],
-        player_hand_counts=player_hand_counts if player_hand_counts is not None else [0, 0, 0, 0],
+        player_hand_counts=player_hand_counts
+        if player_hand_counts is not None
+        else [0, 0, 0, 0],
         bottom_cards=bottom_cards if bottom_cards is not None else [],
         declarer_team=declarer_team,
         declarer_player=declarer_player,
         defender_points=defender_points,
         trick=trick,
         last_completed_trick=last_completed_trick,
-        defender_point_cards=defender_point_cards if defender_point_cards is not None else [],
+        defender_point_cards=defender_point_cards
+        if defender_point_cards is not None
+        else [],
         failed_throw=failed_throw,
         bid_events=bid_events if bid_events is not None else [],
         bid_winner=bid_winner,
@@ -108,7 +114,9 @@ def make_snapshot(
         winning_team=winning_team,
         team0_level=Rank(team0_level),
         team1_level=Rank(team1_level),
-        next_round_confirmed=next_round_confirmed if next_round_confirmed is not None else [],
+        next_round_confirmed=next_round_confirmed
+        if next_round_confirmed is not None
+        else [],
     )
 
 

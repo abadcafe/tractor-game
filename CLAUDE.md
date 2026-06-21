@@ -10,7 +10,9 @@
 - 禁止 `Any`、禁止裸 `list` / `dict` / `tuple`（必须写泛型参数如 `list[str]`）
 - 禁止使用 `# pyright: ignore` 和 `# type: ignore` 掩盖错误
 - 优先使用 `Pydantic` 而不是 `cast`
-- 必须通过 `pyright --pythonversion 3.14` **strict 模式**，**0 errors, 0 warnings**
+- 必须通过 `pyright` **strict 模式**，**0 errors, 0 warnings**
+- 必须通过 `ruff check` 和 `ruff format --check`，**0 errors, 0 warnings**
+- Python 代码风格、import 排序、格式化必须服从项目 Ruff 配置，禁止提交未格式化或 lint 未通过的代码
 - Python 版本：3.14，必须使用 `type` 类型别名语法和泛型函数语法
 
 ### 2. TypeScript：禁止 any
@@ -28,7 +30,7 @@
 
 ### 4. 代码修改后必须立即验证
 
-- 修改任何 `.py` 文件（包括测试文件）后，必须运行 `pyright` 全量验证确认无任何警告和错误
+- 修改任何 `.py` 文件（包括测试文件）后，必须运行 `ruff check`、`ruff format --check`、`pyright` 全量验证确认无任何警告和错误
 - 修改任何 `.ts` 文件后，必须运行 `deno task build` 确认 tsc 编译零错误（含类型检查）
 
 ## 项目技术栈

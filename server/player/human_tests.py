@@ -13,7 +13,10 @@ from .test_helpers import make_game, make_snapshot, make_state_message
 
 @pytest.mark.asyncio
 async def test_human_player_handle_connection_accepts_ws() -> None:
-    """HumanPlayer.handle_connection accepts WS and waits for player messages."""
+    """
+    HumanPlayer.handle_connection accepts WS and waits for player
+    messages.
+    """
     ws = AsyncMock()
     ws.receive_json = AsyncMock(side_effect=WebSocketDisconnect())
     snap = make_snapshot()

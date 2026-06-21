@@ -15,10 +15,10 @@ import httpx
 
 from server.player.ai.client import (
     AIAPIInteraction,
-    AIDecision,
-    AIDecisionPrompt,
     AIClient,
     AIClientRejected,
+    AIDecision,
+    AIDecisionPrompt,
     AIToolCall,
     AIToolSpec,
     JSONObject,
@@ -43,8 +43,8 @@ from server.player.ai.client import (
     OpenAIToolCallNotFunctionRejected,
     OpenAIToolCallNotObjectRejected,
     OpenAIToolCallsMissingRejected,
-    is_json_value,
     is_json_object,
+    is_json_value,
 )
 from server.player.ai.config import AIConfig
 from server.result import Ok, Rejected
@@ -60,7 +60,9 @@ class _OpenAIHTTPResponse:
 
 @dataclass(frozen=True, slots=True)
 class OpenAIChatCompletionsClient(AIClient):
-    """Minimal async wrapper around OpenAI-compatible chat completions."""
+    """
+    Minimal async wrapper around OpenAI-compatible chat completions.
+    """
 
     config: AIConfig
     transport: httpx.AsyncBaseTransport | None = None
@@ -81,38 +83,54 @@ class OpenAIChatCompletionsClient(AIClient):
                     ),
                 ),
             )
-        payload = build_chat_completions_payload(self.config, prompt, tools)
+        payload = build_chat_completions_payload(
+            self.config, prompt, tools
+        )
         endpoint = _chat_completions_endpoint(self.config.base_url)
         tool_names = [tool.name for tool in tools]
         if self.config.log_tool_use:
             logger.debug(
-                "AI OpenAI-compatible request: model=%s tools=%s input_chars=%d",
+                "AI OpenAI-compatible request: model=%s tools=%s"
+                "input_chars=%d",
                 self.config.model,
                 tool_names,
                 len(prompt.user),
             )
         else:
             logger.debug(
-                "AI OpenAI-compatible request: model=%s tool_count=%d input_chars=%d",
+                "AI OpenAI-compatible request: model=%s tool_count=%d"
+                "input_chars=%d",
                 self.config.model,
                 len(tool_names),
                 len(prompt.user),
             )
         if self.config.log_payloads:
-            logger.debug("AI OpenAI-compatible request payload: %s", json.dumps(payload, ensure_ascii=False))
+            logger.debug(
+                "AI OpenAI-compatible request payload: %s",
+                json.dumps(payload, ensure_ascii=False),
+            )
         result = await self._post(endpoint, payload)
         if isinstance(result, Rejected):
             return result
         response = result.value.body
         response_id = _optional_str(response.get("id"))
         model = _optional_str(response.get("model"))
-        logger.debug("AI OpenAI-compatible response: id=%s model=%s", response_id, model)
+        logger.debug(
+            "AI OpenAI-compatible response: id=%s model=%s",
+            response_id,
+            model,
+        )
         logger.debug(
             "AI OpenAI-compatible response message: %s",
-            chat_completion_message_log(response, include_tool_calls=self.config.log_tool_use),
+            chat_completion_message_log(
+                response, include_tool_calls=self.config.log_tool_use
+            ),
         )
         if self.config.log_payloads:
-            logger.debug("AI OpenAI-compatible response payload: %s", json.dumps(response, ensure_ascii=False))
+            logger.debug(
+                "AI OpenAI-compatible response payload: %s",
+                json.dumps(response, ensure_ascii=False),
+            )
         call_result = extract_chat_completion_tool_call(response)
         if isinstance(call_result, Ok):
             if self.config.log_tool_use:
@@ -121,16 +139,21 @@ class OpenAIChatCompletionsClient(AIClient):
                     call_result.value.name,
                     call_result.value.arguments,
                 )
-            return Ok(AIDecision(
-                assistant_content=assistant_content(response),
-                tool_call=call_result.value,
-                api=result.value.api,
-            ))
+            return Ok(
+                AIDecision(
+                    assistant_content=assistant_content(response),
+                    tool_call=call_result.value,
+                    api=result.value.api,
+                )
+            )
         return AIClientRejected(
             call_result.reason,
             api=_api_with_error(
                 result.value.api,
-                _api_error_content(title="API TOOL CALL ERROR", reason=call_result.reason),
+                _api_error_content(
+                    title="API TOOL CALL ERROR",
+                    reason=call_result.reason,
+                ),
             ),
         )
 
@@ -154,7 +177,12 @@ class OpenAIChatCompletionsClient(AIClient):
             transport=self.transport,
         ) as client:
             for attempt in range(1, max_attempts + 1):
-                result, retryable, api_response, api_error = await self._post_once(
+                (
+                    result,
+                    retryable,
+                    api_response,
+                    api_error,
+                ) = await self._post_once(
                     client=client,
                     endpoint=endpoint,
                     payload=payload,
@@ -165,14 +193,18 @@ class OpenAIChatCompletionsClient(AIClient):
                 if api_error is not None:
                     api_errors.append(api_error)
                 if isinstance(result, Ok):
-                    return Ok(_OpenAIHTTPResponse(
-                        body=result.value,
-                        api=AIAPIInteraction(
-                            request=api_request,
-                            response=api_response,
-                            error=_combine_api_errors(api_errors, final_reason=None),
-                        ),
-                    ))
+                    return Ok(
+                        _OpenAIHTTPResponse(
+                            body=result.value,
+                            api=AIAPIInteraction(
+                                request=api_request,
+                                response=api_response,
+                                error=_combine_api_errors(
+                                    api_errors, final_reason=None
+                                ),
+                            ),
+                        )
+                    )
                 last_rejection = result
                 if retryable and attempt < max_attempts:
                     await asyncio.sleep(self.config.retry_delay_seconds)
@@ -183,7 +215,9 @@ class OpenAIChatCompletionsClient(AIClient):
             last_rejection.reason,
             api=AIAPIInteraction(
                 request=api_request,
-                error=_combine_api_errors(api_errors, final_reason=last_rejection.reason),
+                error=_combine_api_errors(
+                    api_errors, final_reason=last_rejection.reason
+                ),
             ),
         )
 
@@ -219,7 +253,12 @@ class OpenAIChatCompletionsClient(AIClient):
                 attempt,
                 max_attempts,
             )
-            return (OpenAIRequestTimedOutRejected(), True, None, error_content)
+            return (
+                OpenAIRequestTimedOutRejected(),
+                True,
+                None,
+                error_content,
+            )
         except httpx.RequestError as exc:
             duration_ms = _elapsed_ms(started_at)
             error_content = _api_request_error_content(
@@ -231,7 +270,8 @@ class OpenAIChatCompletionsClient(AIClient):
                 error=exc,
             )
             logger.warning(
-                "AI OpenAI-compatible request error: attempt=%d/%d error=%s",
+                "AI OpenAI-compatible request error: attempt=%d/%d"
+                "error=%s",
                 attempt,
                 max_attempts,
                 exc,
@@ -252,18 +292,24 @@ class OpenAIChatCompletionsClient(AIClient):
                 body=exc.response.text,
             )
             logger.warning(
-                "AI OpenAI-compatible HTTP error: attempt=%d/%d status=%s body=%s",
+                "AI OpenAI-compatible HTTP error: attempt=%d/%d"
+                "status=%s body=%s",
                 attempt,
                 max_attempts,
                 status_code,
                 _truncate(exc.response.text),
             )
             rejection = OpenAIHTTPStatusRejected(status_code)
-            return (rejection, _retryable_status(status_code), None, error_content)
+            return (
+                rejection,
+                _retryable_status(status_code),
+                None,
+                error_content,
+            )
 
         response_body = response.text
         logger.debug(
-            "AI OpenAI-compatible HTTP success: attempt=%d/%d status=%s",
+            "AI OpenAI-compatible HTTP success: attempt=%d/%dstatus=%s",
             attempt,
             max_attempts,
             response.status_code,
@@ -279,13 +325,18 @@ class OpenAIChatCompletionsClient(AIClient):
                 status_code=response.status_code,
                 body=response_body,
             )
-            logger.warning("AI OpenAI-compatible returned invalid JSON: %s", _truncate(response_body))
+            logger.warning(
+                "AI OpenAI-compatible returned invalid JSON: %s",
+                _truncate(response_body),
+            )
             rejection = OpenAIInvalidJSONRejected()
             return (
                 rejection,
                 False,
                 response_content,
-                _api_error_content(title="API JSON ERROR", reason=rejection.reason),
+                _api_error_content(
+                    title="API JSON ERROR", reason=rejection.reason
+                ),
             )
 
         if not is_json_object(parsed):
@@ -351,7 +402,9 @@ def _tool_to_json(tool: AIToolSpec) -> JSONObject:
     }
 
 
-def extract_chat_completion_tool_call(response: JSONObject) -> Ok[AIToolCall] | Rejected:
+def extract_chat_completion_tool_call(
+    response: JSONObject,
+) -> Ok[AIToolCall] | Rejected:
     message_result = _extract_message(response)
     if isinstance(message_result, Rejected):
         return message_result
@@ -372,7 +425,9 @@ def extract_chat_completion_tool_call(response: JSONObject) -> Ok[AIToolCall] | 
     return Ok(calls[0])
 
 
-def chat_completion_message_log(response: JSONObject, *, include_tool_calls: bool) -> str:
+def chat_completion_message_log(
+    response: JSONObject, *, include_tool_calls: bool
+) -> str:
     message_result = _extract_message(response)
     if isinstance(message_result, Rejected):
         return f"<invalid message: {message_result.reason}>"
@@ -381,7 +436,9 @@ def chat_completion_message_log(response: JSONObject, *, include_tool_calls: boo
     tool_calls = message.get("tool_calls")
     tool_calls_log: object
     if include_tool_calls:
-        tool_calls_log = tool_calls if _is_object_list(tool_calls) else None
+        tool_calls_log = (
+            tool_calls if _is_object_list(tool_calls) else None
+        )
     else:
         tool_calls_log = "<hidden>"
     return json.dumps(
@@ -403,7 +460,9 @@ def assistant_content(response: JSONObject) -> str | None:
     return None
 
 
-def _extract_message(response: JSONObject) -> Ok[dict[str, object]] | Rejected:
+def _extract_message(
+    response: JSONObject,
+) -> Ok[dict[str, object]] | Rejected:
     choices = response.get("choices")
     if not _is_object_list(choices):
         return OpenAIChoicesMissingRejected()
@@ -567,20 +626,28 @@ def _api_error_content(
     )
 
 
-def _api_with_error(api: AIAPIInteraction, error: str) -> AIAPIInteraction:
+def _api_with_error(
+    api: AIAPIInteraction, error: str
+) -> AIAPIInteraction:
     return AIAPIInteraction(
         request=api.request,
         response=api.response,
-        error=_combine_api_errors([api.error, error], final_reason=None),
+        error=_combine_api_errors(
+            [api.error, error], final_reason=None
+        ),
     )
 
 
-def _combine_api_errors(errors: Sequence[str | None], *, final_reason: str | None) -> str | None:
+def _combine_api_errors(
+    errors: Sequence[str | None], *, final_reason: str | None
+) -> str | None:
     present = [error for error in errors if error is not None]
     if not present:
         if final_reason is None:
             return None
-        return _api_error_content(title="API ERROR", reason=final_reason)
+        return _api_error_content(
+            title="API ERROR", reason=final_reason
+        )
     if len(present) == 1 and final_reason is None:
         return present[0]
     parsed_errors = [_raw_json_value(error) for error in present]
