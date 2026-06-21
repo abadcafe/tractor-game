@@ -43,8 +43,9 @@ def rule_feedback(reason: str) -> AIRejectionFeedback:
         error_type="rule",
         reason=reason,
         repair=(
-            "请根据当前 state 重新选择合法动作；如果 action_hints "
-            "非空，完整复制其中一组。"
+            "请根据当前 state 重新选择合法动作；"
+            "如果 legal_action_groups "
+            "非空，它是合法动作约束，必须完整复制其中一组。"
         ),
     )
 

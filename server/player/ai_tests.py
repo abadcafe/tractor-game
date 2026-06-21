@@ -9,6 +9,7 @@ import logging
 import httpx
 import pytest
 
+from server.protocol import TrickSlotSnapshot, TrickSnapshot
 from server.result import Ok, Rejected
 
 from . import ai, auto, base
@@ -24,7 +25,6 @@ from .ai.client import (
     is_json_object,
 )
 from .ai.config import AIConfig
-from .ai.context import build_decision_prompt
 from .ai.memory import AIMemory
 from .ai.openai_client import (
     OpenAIChatCompletionsClient,
@@ -32,8 +32,8 @@ from .ai.openai_client import (
     chat_completion_message_log,
     extract_chat_completion_tool_call,
 )
+from .ai.prompt import RuleBook, build_decision_prompt
 from .ai.rejections import AIToolRejected
-from .ai.rules import RuleBook
 from .ai.tools import allowed_tool_specs, tool_call_to_message
 from .test_helpers import (
     card,
@@ -68,7 +68,7 @@ def test_ai_decision_prompt_uses_chinese_game_labels() -> None:
         declarer_player=2,
         defender_points=35,
     )
-    rules = RuleBook.from_markdown("## common\n- 测试规则")
+    rules = RuleBook({"common": "- 测试规则"})
 
     prompt = build_decision_prompt(
         player_index=1,
@@ -82,11 +82,66 @@ def test_ai_decision_prompt_uses_chinese_game_labels() -> None:
     assert "- 当前需要你：出牌" in prompt.user
     assert "- 主花色：黑桃" in prompt.user
     assert "当前墩：无" in prompt.user
-    assert "可选提示（action_hints）：无" in prompt.user
+    assert "合法动作约束（legal_action_groups）：无" in prompt.user
     assert "phase:" not in prompt.user
     assert "awaiting_action:" not in prompt.user
     assert "trump_suit:" not in prompt.user
     assert "not_played" not in prompt.user
+
+
+def test_ai_rulebook_selects_common_play_lead_and_scoring() -> None:
+    rules = RuleBook(
+        {
+            "common": "common rules",
+            "play": "play rules",
+            "play_lead": "lead rules",
+            "play_follow": "follow rules",
+            "scoring": "scoring rules",
+        }
+    )
+    snap = make_snapshot(phase="PLAYING", awaiting_action="play")
+
+    selected = rules.select(snap)
+
+    assert "规则: common\ncommon rules" in selected
+    assert "规则: play\nplay rules" in selected
+    assert "规则: play_lead\nlead rules" in selected
+    assert "规则: scoring\nscoring rules" in selected
+    assert "follow rules" not in selected
+
+
+def test_ai_rulebook_selects_common_play_follow_and_scoring() -> None:
+    rules = RuleBook(
+        {
+            "common": "common rules",
+            "play": "play rules",
+            "play_lead": "lead rules",
+            "play_follow": "follow rules",
+            "scoring": "scoring rules",
+        }
+    )
+    lead_card = card("hearts", "A")
+    trick = TrickSnapshot(
+        lead_player=0,
+        current_player=1,
+        slots=[
+            TrickSlotSnapshot(player=0, cards=[lead_card]),
+            TrickSlotSnapshot(player=1, cards=[]),
+            TrickSlotSnapshot(player=2, cards=[]),
+            TrickSlotSnapshot(player=3, cards=[]),
+        ],
+    )
+    snap = make_snapshot(
+        phase="PLAYING", awaiting_action="play", trick=trick
+    )
+
+    selected = rules.select(snap)
+
+    assert "规则: common\ncommon rules" in selected
+    assert "规则: play\nplay rules" in selected
+    assert "规则: play_follow\nfollow rules" in selected
+    assert "规则: scoring\nscoring rules" in selected
+    assert "lead rules" not in selected
 
 
 @pytest.mark.asyncio
@@ -684,10 +739,10 @@ async def test_ai_player_repairs_play_not_matching_action_hint() -> (
     assert len(client.prompts) == 2
     assert "错误类型（error_type）：format" in client.prompts[1].user
     assert (
-        "card_ids 必须完整等于 action_hints 里的某一组"
-        in client.prompts[1].user
+        "legal_action_groups 是合法动作约束；card_ids "
+        "必须完整等于其中一组" in client.prompts[1].user
     )
-    assert "legal_action_hint_groups" in client.prompts[1].user
+    assert "legal_action_groups" in client.prompts[1].user
 
 
 @pytest.mark.asyncio
@@ -947,13 +1002,13 @@ def test_ai_play_tool_rejects_partial_action_hint() -> None:
     assert isinstance(result, AIToolRejected)
     assert result.feedback.error_type == "format"
     assert (
-        result.reason
-        == "card_ids 必须完整等于 action_hints 里的某一组："
+        result.reason == "legal_action_groups 是合法动作约束；"
+        "card_ids 必须完整等于其中一组："
         "不能只选其中一部分，也不能混合多组。"
     )
     assert (
         result.feedback.repair
-        == "从 legal_action_hint_groups 中复制一整组 card_ids。"
+        == "从 legal_action_groups 中复制一整组 card_ids。"
     )
 
 

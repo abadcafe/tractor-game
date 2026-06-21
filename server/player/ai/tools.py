@@ -30,8 +30,8 @@ def allowed_tool_specs(snapshot: StateSnapshot) -> list[AIToolSpec]:
             _card_tool(
                 "stir_trump",
                 "炒地皮阶段反主：card_ids 为空或省略表示不反；"
-                "要反主时，card_ids 必须完整等于 action_hints "
-                "中的一组。",
+                "要反主时，legal_action_groups 是合法反主约束，"
+                "card_ids 必须完整等于其中一组。",
                 allowed_ids,
                 require_card_ids=False,
                 require_reason=False,
@@ -52,8 +52,8 @@ def allowed_tool_specs(snapshot: StateSnapshot) -> list[AIToolSpec]:
         return [
             _card_tool(
                 "play_cards",
-                "出牌。若 action_hints 非空，card_ids 必须完整等于"
-                "其中一组，不能只取一部分。",
+                "出牌。若 legal_action_groups 非空，它是合法出牌约束；"
+                "card_ids 必须完整等于其中一组，不能只取一部分。",
                 allowed_ids,
             )
         ]
@@ -138,7 +138,8 @@ def tool_call_to_message(
             return format_rejected(
                 "出牌至少要选择一张牌。",
                 "从当前手牌中选择要出的 card_ids；如果 "
-                "action_hints 非空，完整复制其中一组。",
+                "legal_action_groups 非空，它是合法出牌约束，"
+                "必须完整复制其中一组。",
             )
         if snapshot.action_hints and not _matches_hint(
             card_ids, snapshot
@@ -238,7 +239,8 @@ def _card_ids(
         if not isinstance(item, str):
             return format_rejected(
                 "card_ids 只能包含字符串 card id。",
-                "从你的手牌或 action_hints 中逐字复制 card id 字符串。",
+                "从你的手牌或 legal_action_groups 中逐字复制 "
+                "card id 字符串。",
             )
         if item in seen:
             return format_rejected(
@@ -259,7 +261,8 @@ def _validate_card_ids_in_hand(
         if card_id not in hand_ids:
             return format_rejected(
                 f"牌 {card_id} 不在你的当前手牌里。",
-                "card_ids 只能从你的手牌或 action_hints 中逐字复制；"
+                "card_ids 只能从你的手牌或 "
+                "legal_action_groups 中逐字复制；"
                 "不要根据牌面自行编造"
                 "id。",
             )
@@ -291,9 +294,9 @@ def _tool_not_allowed(
 
 def _action_hint_rejected() -> Rejected:
     return format_rejected(
-        "card_ids 必须完整等于 action_hints 里的某一组："
-        "不能只选其中一部分，也不能混合多组。",
-        "从 legal_action_hint_groups 中复制一整组 card_ids。",
+        "legal_action_groups 是合法动作约束；card_ids "
+        "必须完整等于其中一组：不能只选其中一部分，也不能混合多组。",
+        "从 legal_action_groups 中复制一整组 card_ids。",
     )
 
 

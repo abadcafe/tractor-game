@@ -17,16 +17,15 @@ from server.player.ai.client import (
     is_json_value,
 )
 from server.player.ai.config import AIConfig
-from server.player.ai.context import build_decision_prompt
 from server.player.ai.local_actions import local_message
 from server.player.ai.memory import AIMemory
 from server.player.ai.openai_client import OpenAIChatCompletionsClient
+from server.player.ai.prompt import RuleBook, build_decision_prompt
 from server.player.ai.rejections import (
     AIRejectionFeedback,
     feedback_from_rejected,
     rule_feedback,
 )
-from server.player.ai.rules import RuleBook
 from server.player.ai.tools import (
     allowed_tool_specs,
     tool_call_to_message,
@@ -372,7 +371,7 @@ def _repair_prompt(
     legal_ids = ", ".join(card.id for card in snapshot.player_hand)
     if not legal_ids:
         legal_ids = "无"
-    hint_groups = _hint_groups_text(snapshot)
+    constraint_groups = _action_constraint_groups_text(snapshot)
     repair_text = "\n".join(
         [
             "上一次动作被拒绝。",
@@ -380,7 +379,7 @@ def _repair_prompt(
             f"- 原因：{feedback.reason}",
             f"- 修正建议：{feedback.repair}",
             f"- 当前手牌 card_ids: {legal_ids}",
-            hint_groups,
+            constraint_groups,
             "请重新调用一个允许的工具。",
         ]
     )
@@ -390,14 +389,14 @@ def _repair_prompt(
     )
 
 
-def _hint_groups_text(snapshot: StateSnapshot) -> str:
+def _action_constraint_groups_text(snapshot: StateSnapshot) -> str:
     if not snapshot.action_hints:
-        return "- 合法提示组（legal_action_hint_groups）：无"
+        return "- 合法动作约束组（legal_action_groups）：无"
     groups: list[str] = []
     for index, hint in enumerate(snapshot.action_hints):
         groups.append(
-            f"提示 {index}: [{', '.join(card.id for card in hint)}]"
+            f"约束 {index}: [{', '.join(card.id for card in hint)}]"
         )
     return (
-        f"- 合法提示组（legal_action_hint_groups）：{'; '.join(groups)}"
+        f"- 合法动作约束组（legal_action_groups）：{'; '.join(groups)}"
     )
