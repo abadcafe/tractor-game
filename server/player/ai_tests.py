@@ -1172,7 +1172,7 @@ def test_openai_client_always_disables_thinking() -> None:
         timeout_seconds=1.0,
         http_max_retries=2,
         http_retry_delay_seconds=0.0,
-        decision_retries=1,
+        decision_max_retries=1,
         max_output_tokens=200,
     )
     payload = build_chat_completions_payload(
@@ -1535,6 +1535,6 @@ def _config(*, http_max_retries: int = 2) -> AIConfig:
         timeout_seconds=1.0,
         http_max_retries=http_max_retries,
         http_retry_delay_seconds=0.0,
-        decision_retries=1,
+        decision_max_retries=1,
         max_output_tokens=200,
     )

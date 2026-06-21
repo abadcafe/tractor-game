@@ -130,7 +130,7 @@ class AIPlayer(Player):
             prompt = _repair_prompt(
                 prompt, snapshot, rule_feedback(repair_reason)
             )
-        max_attempts = max(self._config.decision_retries, 0) + 1
+        max_attempts = max(self._config.decision_max_retries, 0) + 1
         for attempt in range(start_attempt, max_attempts + 1):
             decision_result_from_client = await self._client.decide(
                 prompt, tools
@@ -259,7 +259,7 @@ class AIPlayer(Player):
             return False
         if rejected_record.attempt <= 0:
             return False
-        max_attempts = max(self._config.decision_retries, 0) + 1
+        max_attempts = max(self._config.decision_max_retries, 0) + 1
         return rejected_record.attempt < max_attempts
 
 

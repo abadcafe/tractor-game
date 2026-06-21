@@ -20,7 +20,7 @@ class AIConfig:
     timeout_seconds: float
     http_max_retries: int
     http_retry_delay_seconds: float
-    decision_retries: int
+    decision_max_retries: int
     max_output_tokens: int
 
     @classmethod
@@ -41,7 +41,7 @@ class AIConfig:
             http_retry_delay_seconds=_env_float(
                 "TRACTOR_AI_HTTP_RETRY_DELAY_SECONDS", default=3.0
             ),
-            decision_retries=_env_int(
+            decision_max_retries=_env_int(
                 "TRACTOR_AI_DECISION_MAX_RETRIES", default=2
             ),
             max_output_tokens=_env_int(
