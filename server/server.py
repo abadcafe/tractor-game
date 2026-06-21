@@ -114,10 +114,17 @@ async def create_game():
     human client does the same after opening its WebSocket.
     """
     bot_players: list[BotPlayer] = [
-        _create_bot_player(i) for i in range(3)
+        _create_bot_player(0),
+        _create_bot_player(1),
+        _create_bot_player(3),
     ]
-    human = HumanPlayer(3)
-    players: list[Player] = [*bot_players, human]
+    human = HumanPlayer(2)
+    players: list[Player] = [
+        bot_players[0],
+        bot_players[1],
+        human,
+        bot_players[2],
+    ]
     game = Game(players=players)
     game_id = registry.create(game)
     human_players[game_id] = human

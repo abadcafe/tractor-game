@@ -299,9 +299,9 @@ async def test_create_game_can_use_ai_bot_players(
 
     game = registry.get(game_id)
     assert isinstance(game, Game)
-    for index in range(3):
+    for index in (0, 1, 3):
         assert isinstance(game.get_player(index), AIPlayer)
-    assert isinstance(game.get_player(3), HumanPlayer)
+    assert isinstance(game.get_player(2), HumanPlayer)
 
 
 # ---- REST: List Games ----
@@ -393,10 +393,10 @@ def test_delete_game_after_ws_connection(
 # ---- Human player index ----
 
 
-def test_human_player_index_is_3(
+def test_human_player_index_is_2(
     sync_client: SyncServerClient, clean_registry: None
 ) -> None:
-    """The human player is always at index 3 (convention: last player).
+    """The human player is always at index 2 (south seat).
     Verify by connecting via WebSocket, sending seq=0, and confirming
     a state message is received.
     """
@@ -482,7 +482,7 @@ def test_ws_connect_takeover_closes_old_connection(
     game_id = _game_id_from(create_resp)
     game_raw = registry.get(game_id)
     assert isinstance(game_raw, Game)
-    human_player_raw = game_raw.get_player(3)
+    human_player_raw = game_raw.get_player(2)
     assert isinstance(human_player_raw, HumanPlayer)
 
     # First connection

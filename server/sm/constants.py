@@ -17,16 +17,17 @@ PLAYER_COUNT: int = 4
 
 # ---- Team Mapping ----
 
-# Team 0: North(0) + South(3)
-TEAM_0: tuple[int, ...] = (0, 3)
-# Team 1: West(1) + East(2)
-TEAM_1: tuple[int, ...] = (1, 2)
+# Team 0: North(0) + South(2)
+TEAM_0: tuple[int, ...] = (0, 2)
+# Team 1: West(1) + East(3)
+TEAM_1: tuple[int, ...] = (1, 3)
 
 # ---- Counterclockwise Rotation ----
 
-# Per spec: 0→1→3→2→0 (counterclockwise)
+# Player indexes are assigned in counterclockwise seat order:
+# North(0) → West(1) → South(2) → East(3) → North(0)
 CCW_NEXT: MappingProxyType[int, int] = MappingProxyType(
-    {0: 1, 1: 3, 3: 2, 2: 0}
+    {0: 1, 1: 2, 2: 3, 3: 0}
 )
 
 
@@ -48,16 +49,13 @@ def next_player_ccw(current: int) -> int:
 def get_team_index(player: int) -> int:
     """Return 0 or 1 indicating which team the player belongs to."""
     _validate_player(player)
-    if player in TEAM_0:
-        return 0
-    return 1
+    return player % 2
 
 
 def get_partner_index(player: int) -> int:
     """Return the partner (对家) of the given player."""
     _validate_player(player)
-    team = TEAM_0 if player in TEAM_0 else TEAM_1
-    return team[1] if team[0] == player else team[0]
+    return (player + 2) % PLAYER_COUNT
 
 
 # ---- Card Counts ----

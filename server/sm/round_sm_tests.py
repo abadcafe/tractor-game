@@ -285,14 +285,14 @@ class TestCreateRound:
             RoundInput(
                 declarer_team=1,
                 trump_rank=Rank.FIVE,
-                next_declarer_player=2,
+                next_declarer_player=3,
                 team0_level=Rank.THREE,
                 team1_level=Rank.FIVE,
             )
         )
-        assert state.start_player == 2
+        assert state.start_player == 3
         assert state.deal_bid_state is not None
-        assert state.deal_bid_state.deal_target == 2
+        assert state.deal_bid_state.deal_target == 3
 
 
 class TestDealBidPhase:
@@ -1031,7 +1031,7 @@ class TestRoundDeclarer:
             RoundInput(
                 declarer_team=0,
                 trump_rank=Rank.TWO,
-                next_declarer_player=3,
+                next_declarer_player=2,
                 team0_level=Rank.TWO,
                 team1_level=Rank.TWO,
             )
@@ -1042,7 +1042,7 @@ class TestRoundDeclarer:
         assert state.deal_bid_state is not None
         bid_player: int | None = None
         bid_suit: Suit | None = None
-        for p in [0, 1, 2]:
+        for p in [0, 1, 3]:
             trump_cards = [
                 c
                 for c in state.deal_bid_state.players_hand[p]
@@ -1077,7 +1077,7 @@ class TestRoundDeclarer:
         assert state.deal_bid_state is not None
         assert state.deal_bid_state.bid_winner is not None
         assert state.declarer_team == 0  # unchanged
-        assert state.declarer_player == 3
+        assert state.declarer_player == 2
         assert state.bid_winner is not None
         assert state.bid_winner.player == bid_player
         assert state.trump_suit == bid_suit
@@ -1100,11 +1100,11 @@ class TestRoundDeclarer:
             )
         )
         state = _deal_all_cards(state)
-        # Find trump rank card in team 1 player's hand (players 1, 2)
+        # Find trump rank card in team 1 player's hand (players 1, 3)
         assert state.deal_bid_state is not None
         bid_player: int | None = None
         bid_suit: Suit | None = None
-        for p in [1, 2]:
+        for p in [1, 3]:
             trump_cards = [
                 c
                 for c in state.deal_bid_state.players_hand[p]
@@ -1166,7 +1166,7 @@ class TestRoundDeclarer:
             RoundInput(
                 declarer_team=1,
                 trump_rank=Rank.THREE,
-                next_declarer_player=2,
+                next_declarer_player=3,
                 team0_level=Rank.TWO,
                 team1_level=Rank.THREE,
             )
@@ -1175,7 +1175,7 @@ class TestRoundDeclarer:
         assert state.trump_suit is None
         # Subsequent round no-bid: declarer_player =
         # next_declarer_player
-        assert state.declarer_player == 2
+        assert state.declarer_player == 3
         assert state.declarer_team == 1  # unchanged
 
 

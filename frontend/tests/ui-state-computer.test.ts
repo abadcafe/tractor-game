@@ -20,7 +20,7 @@ function makeSnapshot(
     trump_rank: "4",
     trump_suit: null,
     declarer_team: 0,
-    declarer_player: 3,
+    declarer_player: 2,
     defender_points: 0,
     action_hints: [[{ id: "D1-spades-4", suit: "spades", rank: "4" }]],
     trick: {
@@ -29,7 +29,7 @@ function makeSnapshot(
         player: 0,
         cards: [{ id: "D1-diamonds-A", suit: "diamonds", rank: "A" }],
       }],
-      current_player: 3,
+      current_player: 2,
     },
     last_completed_trick: null,
     defender_point_cards: [],

@@ -26,11 +26,11 @@ class TestPlayerPositioning:
         assert PLAYER_COUNT == 4
 
     def test_ccw_next_cycle(self) -> None:
-        """Counterclockwise: 0→1→3→2→0."""
+        """Counterclockwise: 0→1→2→3→0."""
         assert next_player_ccw(0) == 1
-        assert next_player_ccw(1) == 3
-        assert next_player_ccw(3) == 2
-        assert next_player_ccw(2) == 0
+        assert next_player_ccw(1) == 2
+        assert next_player_ccw(2) == 3
+        assert next_player_ccw(3) == 0
 
     def test_ccw_next_starts_from_zero(self) -> None:
         """Starting from player 0, full cycle returns to 0."""
@@ -40,32 +40,32 @@ class TestPlayerPositioning:
         assert p == 0
 
     def test_team0_members(self) -> None:
-        """Team 0: North(0) + South(3)."""
-        assert TEAM_0 == (0, 3)
+        """Team 0: North(0) + South(2)."""
+        assert TEAM_0 == (0, 2)
 
     def test_team1_members(self) -> None:
-        """Team 1: West(1) + East(2)."""
-        assert TEAM_1 == (1, 2)
+        """Team 1: West(1) + East(3)."""
+        assert TEAM_1 == (1, 3)
 
 
 class TestTeamUtils:
     def test_get_team_index_team0(self) -> None:
         assert get_team_index(0) == 0
-        assert get_team_index(3) == 0
+        assert get_team_index(2) == 0
 
     def test_get_team_index_team1(self) -> None:
         assert get_team_index(1) == 1
-        assert get_team_index(2) == 1
+        assert get_team_index(3) == 1
 
     def test_get_partner_index_team0(self) -> None:
-        """N(0) partner is S(3), S(3) partner is N(0)."""
-        assert get_partner_index(0) == 3
-        assert get_partner_index(3) == 0
+        """N(0) partner is S(2), S(2) partner is N(0)."""
+        assert get_partner_index(0) == 2
+        assert get_partner_index(2) == 0
 
     def test_get_partner_index_team1(self) -> None:
-        """W(1) partner is E(2), E(2) partner is W(1)."""
-        assert get_partner_index(1) == 2
-        assert get_partner_index(2) == 1
+        """W(1) partner is E(3), E(3) partner is W(1)."""
+        assert get_partner_index(1) == 3
+        assert get_partner_index(3) == 1
 
 
 class TestLevelProgression:

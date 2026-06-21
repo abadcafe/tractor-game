@@ -27,7 +27,7 @@ function makeSnapshot(
     trump_rank: "2",
     trump_suit: "hearts",
     declarer_team: 0,
-    declarer_player: 3,
+    declarer_player: 2,
     defender_points: 0,
     action_hints: [[{ id: "D1-hearts-5", suit: "hearts", rank: "5" }]],
     trick: null,
@@ -271,9 +271,9 @@ Deno.test("test_renderHandView_discard_button", () => {
     stirring_state: {
       phase: "WAITING",
       trump_suit: null,
-      current_player: 3,
+      current_player: 2,
       declarer_player: 0,
-      exchanging_player: 3,
+      exchanging_player: 2,
       exchange_count: 8,
     },
   });
@@ -302,7 +302,7 @@ Deno.test("test_renderHandView_stir_buttons_are_above_hand", () => {
     stirring_state: {
       phase: "WAITING",
       trump_suit: null,
-      current_player: 3,
+      current_player: 2,
       declarer_player: 0,
       exchanging_player: null,
       exchange_count: null,

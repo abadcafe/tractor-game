@@ -25,7 +25,7 @@ function makeSnapshot(
     trump_rank: "2",
     trump_suit: "hearts",
     declarer_team: 0,
-    declarer_player: 3,
+    declarer_player: 2,
     defender_points: 15,
     action_hints: [[{ id: "D1-hearts-5", suit: "hearts", rank: "5" }]],
     trick: {
@@ -114,7 +114,7 @@ Deno.test("test_render_stirring_phase", () => {
     stirring_state: {
       phase: "WAITING",
       trump_suit: null,
-      current_player: 3,
+      current_player: 2,
       declarer_player: 0,
       exchanging_player: null,
       exchange_count: null,
@@ -225,9 +225,9 @@ Deno.test("test_render_exchange_phase", () => {
     stirring_state: {
       phase: "WAITING",
       trump_suit: null,
-      current_player: 3,
+      current_player: 2,
       declarer_player: 0,
-      exchanging_player: 3,
+      exchanging_player: 2,
       exchange_count: 8,
     },
     trick: null,
@@ -454,9 +454,9 @@ Deno.test("test_render_primary_actions_are_not_duplicated", () => {
       stirring_state: {
         phase: "EXCHANGING",
         trump_suit: "spades",
-        current_player: 3,
-        declarer_player: 3,
-        exchanging_player: 3,
+        current_player: 2,
+        declarer_player: 2,
+        exchanging_player: 2,
         exchange_count: 2,
       },
     }),
@@ -479,7 +479,7 @@ Deno.test("test_render_primary_actions_are_not_duplicated", () => {
       stirring_state: {
         phase: "WAITING",
         trump_suit: "spades",
-        current_player: 3,
+        current_player: 2,
         declarer_player: 0,
         exchanging_player: null,
         exchange_count: null,

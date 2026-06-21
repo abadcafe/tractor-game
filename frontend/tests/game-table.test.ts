@@ -21,7 +21,7 @@ function makeSnapshot(
     trump_rank: "2",
     trump_suit: "hearts",
     declarer_team: 0,
-    declarer_player: 3,
+    declarer_player: 2,
     defender_points: 15,
     action_hints: [],
     trick: null,
@@ -57,14 +57,14 @@ Deno.test("test_renderGameTable_debug_avatars_use_seat_labels_not_ai_type", () =
   assertEquals(avatars.map((avatar) => avatar.textContent), [
     "同",
     "左",
-    "右",
     "你",
+    "右",
   ]);
   assertEquals(avatars.every((avatar) => avatar.textContent !== "ai"), true);
 });
 
 Deno.test("test_renderGameTable_declarer_in_status_badge", () => {
-  const snap = makeSnapshot({ declarer_player: 3 });
+  const snap = makeSnapshot({ declarer_player: 2 });
   const el = renderGameTable(snap);
   const southStatus = el.querySelector(
     '.player-area[data-position="南"] .player-status-badge',
@@ -79,7 +79,7 @@ Deno.test("test_renderGameTable_deal_bid_can_show_fixed_declarer_separate_from_b
     trump_rank: "3",
     trump_suit: null,
     declarer_team: 1,
-    declarer_player: 2,
+    declarer_player: 3,
     bid_winner: {
       player: 1,
       cards: [{ id: "D1-spades-3", suit: "spades", rank: "3" }],
@@ -173,7 +173,7 @@ Deno.test("test_renderGameTable_status_notice_in_top_right_not_bottom_bar", () =
   const snap = makeSnapshot({
     awaiting_action: "play",
     defender_points: 25,
-    trick: { lead_player: 0, slots: [], current_player: 3 },
+    trick: { lead_player: 0, slots: [], current_player: 2 },
   });
   const el = renderGameTable(snap);
   const notice = el.querySelector(".table-notice");

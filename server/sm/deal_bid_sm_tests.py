@@ -62,15 +62,15 @@ def _make_deterministic_deck() -> tuple[list[Card], list[Card]]:
     jokers
     land in specific player hands.
 
-    Layout (100-card deck, CCW order: 0->1->3->2->0):
+    Layout (100-card deck, CCW order: 0->1->2->3->0):
       Position 0 (player 0): ♠TWO deck1
       Position 1 (player 1): ♥TWO deck1
-      Position 2 (player 3): ♣TWO deck1
-      Position 3 (player 2): ♦TWO deck1
+      Position 2 (player 2): ♣TWO deck1
+      Position 3 (player 3): ♦TWO deck1
       Position 4 (player 0): ♠TWO deck2   <- gives player 0 a ♠ pair
       Position 5 (player 1): ♥TWO deck2   <- gives player 1 a ♥ pair
-      Position 6 (player 3): ♣TWO deck2   <- gives player 3 a ♣ pair
-      Position 7 (player 2): ♦TWO deck2   <- gives player 2 a ♦ pair
+      Position 6 (player 2): ♣TWO deck2   <- gives player 2 a ♣ pair
+      Position 7 (player 3): ♦TWO deck2   <- gives player 3 a ♦ pair
       Positions 8-9 (player 0): big jokers  <- for joker pair tests
       Positions 10+: remaining non-trump-rank non-joker cards shuffled
     Bottom cards: taken from the end of the remaining pool.
@@ -118,12 +118,12 @@ def _make_deterministic_deck() -> tuple[list[Card], list[Card]]:
     deck: list[Card] = [
         spade_two_1,  # pos 0 -> player 0
         heart_two_1,  # pos 1 -> player 1
-        club_two_1,  # pos 2 -> player 3
-        diamond_two_1,  # pos 3 -> player 2
+        club_two_1,  # pos 2 -> player 2
+        diamond_two_1,  # pos 3 -> player 3
         spade_two_2,  # pos 4 -> player 0 (now has ♠ pair)
         heart_two_2,  # pos 5 -> player 1 (now has ♥ pair)
-        club_two_2,  # pos 6 -> player 3 (now has ♣ pair)
-        diamond_two_2,  # pos 7 -> player 2 (now has ♦ pair)
+        club_two_2,  # pos 6 -> player 2 (now has ♣ pair)
+        diamond_two_2,  # pos 7 -> player 3 (now has ♦ pair)
         big_jokers[0],  # pos 8 -> player 0
         big_jokers[1],  # pos 9 -> player 1
     ]
@@ -145,7 +145,7 @@ def _make_joker_pair_deck() -> list[Card]:
     """Create a 100-card deck with both big jokers at positions 0 and 4.
 
     This ensures both big jokers land in player 0's hand after dealing
-    5 cards (CCW order: 0->1->3->2->0).
+    5 cards (CCW order: 0->1->2->3->0).
     """
     all_cards = create_decks()
     big_jokers = [c for c in all_cards if c.rank == Rank.BIG_JOKER]
@@ -376,21 +376,21 @@ class TestReveal:
                 start_player=0,
             )
         )
-        # Deal 8 cards so player 2 (team 0) has ♦TWO and player 0 has
+        # Deal 8 cards so player 3 (team 1) has ♦TWO and player 0 has
         # ♠TWO
         for _ in range(8):
             state = _deal(state)
-        # Player 2 reveals single ♦TWO (value 100, weakest)
+        # Player 3 reveals single ♦TWO (value 100, weakest)
         diamond_twos = [
             c
-            for c in state.players_hand[2]
+            for c in state.players_hand[3]
             if c.rank == Rank.TWO and c.suit == Suit.DIAMONDS
         ]
         assert len(diamond_twos) >= 1, (
-            "Player 2 should have at least one ♦TWO"
+            "Player 3 should have at least one ♦TWO"
         )
         low_bid = BidEvent(
-            player=2,
+            player=3,
             cards=[diamond_twos[0]],
             kind="trump_rank",
             suit=Suit.DIAMONDS,
@@ -401,7 +401,7 @@ class TestReveal:
         assert isinstance(result, Ok)
         state = result.value
         assert state.bid_winner is not None
-        assert state.bid_winner.player == 2
+        assert state.bid_winner.player == 3
         # Player 0 reveals single ♠TWO (value 103, strongest single)
         spade_twos = [
             c

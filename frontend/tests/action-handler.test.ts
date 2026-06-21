@@ -21,7 +21,7 @@ function makeSnapshot(
     trump_rank: "2",
     trump_suit: "hearts",
     declarer_team: 0,
-    declarer_player: 3,
+    declarer_player: 2,
     defender_points: 0,
     action_hints: [[{ id: "D1-spades-K", suit: "spades", rank: "K" }]],
     trick: null,

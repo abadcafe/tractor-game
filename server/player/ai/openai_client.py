@@ -153,9 +153,7 @@ class OpenAIChatCompletionsClient(AIClient):
                             api=AIAPIInteraction(
                                 request=api_request,
                                 response=api_response,
-                                error=_combine_api_errors(
-                                    api_errors, final_reason=None
-                                ),
+                                error=None,
                             ),
                         )
                     )

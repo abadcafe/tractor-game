@@ -77,7 +77,7 @@ class TestProcessRoundResult:
             team0_new_level=Rank.FIVE,
             team1_new_level=Rank.THREE,
             next_declarer_team=0,
-            next_declarer_player=3,
+            next_declarer_player=2,
             total_defender_points=20,
             declarer_level_change=2,
             defender_level_change=0,
@@ -100,7 +100,7 @@ class TestProcessRoundResult:
             team0_new_level=Rank.FOUR,
             team1_new_level=Rank.TWO,
             next_declarer_team=0,
-            next_declarer_player=3,
+            next_declarer_player=2,
             total_defender_points=50,
             declarer_level_change=1,
             defender_level_change=0,
@@ -111,7 +111,7 @@ class TestProcessRoundResult:
         assert isinstance(result, Ok)
         state = result.value
         assert state.declarer_team == 0
-        assert state.next_declarer_player == 3
+        assert state.next_declarer_player == 2
 
     def test_process_round_result_declarer_switches(self) -> None:
         """When declarer switches, next round uses opposite team."""
@@ -152,7 +152,7 @@ class TestGameOver:
             team0_new_level=Rank.ACE,
             team1_new_level=Rank.TEN,
             next_declarer_team=0,
-            next_declarer_player=3,
+            next_declarer_player=2,
             total_defender_points=0,
             declarer_level_change=3,
             defender_level_change=0,
@@ -179,7 +179,7 @@ class TestGameOver:
             team0_new_level=Rank.ACE,
             team1_new_level=Rank.TEN,
             next_declarer_team=0,
-            next_declarer_player=3,
+            next_declarer_player=2,
             total_defender_points=0,
             declarer_level_change=3,
             defender_level_change=0,
@@ -206,7 +206,7 @@ class TestGameOver:
             team0_new_level=Rank.QUEEN,
             team1_new_level=Rank.ACE,
             next_declarer_team=1,
-            next_declarer_player=2,
+            next_declarer_player=3,
             total_defender_points=150,
             declarer_level_change=0,
             defender_level_change=2,
@@ -231,7 +231,7 @@ class TestGameOver:
             team0_new_level=Rank.ACE,
             team1_new_level=Rank.TEN,
             next_declarer_team=0,
-            next_declarer_player=3,
+            next_declarer_player=2,
             total_defender_points=0,
             declarer_level_change=3,
             defender_level_change=0,
@@ -255,7 +255,7 @@ class TestGameOver:
             team0_new_level=Rank.QUEEN,
             team1_new_level=Rank.ACE,
             next_declarer_team=1,
-            next_declarer_player=2,
+            next_declarer_player=3,
             total_defender_points=150,
             declarer_level_change=0,
             defender_level_change=2,
@@ -302,7 +302,7 @@ class TestGameOver:
             team0_new_level=Rank.FIVE,
             team1_new_level=Rank.THREE,
             next_declarer_team=0,
-            next_declarer_player=3,
+            next_declarer_player=2,
             total_defender_points=30,
             declarer_level_change=2,
             defender_level_change=0,
@@ -324,7 +324,7 @@ class TestGameOver:
             team0_new_level=Rank.FIVE,
             team1_new_level=Rank.TWO,
             next_declarer_team=0,
-            next_declarer_player=3,
+            next_declarer_player=2,
             total_defender_points=20,
             declarer_level_change=2,
             defender_level_change=0,
@@ -485,7 +485,7 @@ class TestEdgeCases:
             team0_new_level=Rank.FOUR,
             team1_new_level=Rank.TWO,
             next_declarer_team=0,
-            next_declarer_player=3,
+            next_declarer_player=2,
             total_defender_points=20,
             declarer_level_change=1,
             defender_level_change=0,
@@ -498,13 +498,13 @@ class TestEdgeCases:
             update={"team0_level": Rank.ACE}
         )
         assert state.declarer_team == 0
-        assert state.next_declarer_player == 3
+        assert state.next_declarer_player == 2
         # Second round passes ACE and ends the game
         r2 = RoundResult(
             team0_new_level=Rank.ACE,
             team1_new_level=Rank.TWO,
             next_declarer_team=0,
-            next_declarer_player=3,
+            next_declarer_player=2,
             total_defender_points=0,
             declarer_level_change=3,
             defender_level_change=0,

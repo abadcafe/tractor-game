@@ -441,7 +441,7 @@ def test_subsequent_round_deal_bid_snapshot_shows_fixed_declarer() -> (
         round_sm.RoundInput(
             declarer_team=1,
             trump_rank=Rank.THREE,
-            next_declarer_player=2,
+            next_declarer_player=3,
             team0_level=Rank.TWO,
             team1_level=Rank.THREE,
         )
@@ -452,7 +452,7 @@ def test_subsequent_round_deal_bid_snapshot_shows_fixed_declarer() -> (
 
     assert snap["phase"] == "DEAL_BID"
     assert snap["declarer_team"] == 1
-    assert snap["declarer_player"] == 2
+    assert snap["declarer_player"] == 3
 
 
 def test_later_deal_bid_bid_winner_keeps_fixed_declarer() -> None:
@@ -472,7 +472,7 @@ def test_later_deal_bid_bid_winner_keeps_fixed_declarer() -> None:
         round_sm.RoundInput(
             declarer_team=1,
             trump_rank=Rank.THREE,
-            next_declarer_player=2,
+            next_declarer_player=3,
             team0_level=Rank.TWO,
             team1_level=Rank.THREE,
         )
@@ -496,7 +496,7 @@ def test_later_deal_bid_bid_winner_keeps_fixed_declarer() -> None:
         }
     ]
     assert bid_winner_wire["suit"] == "spades"
-    assert snap["declarer_player"] == 2
+    assert snap["declarer_player"] == 3
     assert snap["declarer_player"] != bid_winner.player
 
 
@@ -1433,12 +1433,12 @@ async def test_deal_bid_sync_round_robin() -> None:
     )
     assert s1["awaiting_action"] == "bid"
 
-    # Continue: player 1 skips → player 3 gets a card (CCW: 1→3)
+    # Continue: player 1 skips → player 2 gets a card (CCW: 1→2)
     await _send_action(game, players, 1, SkipBidAction())
     assert game.get_phase() == "DEAL_BID"
-    s3 = game.snapshot(3)
-    assert len(s3["player_hand"]) == 1
-    assert s3["awaiting_action"] == "bid"
+    s2 = game.snapshot(2)
+    assert len(s2["player_hand"]) == 1
+    assert s2["awaiting_action"] == "bid"
 
 
 @pytest.mark.asyncio

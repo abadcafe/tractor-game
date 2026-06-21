@@ -286,7 +286,7 @@ Deno.test("test_renderTrickView_sorts_current_trick_cards_like_hand", () => {
 
   assertEquals(
     renderedRanks(el, ".trick-slot-south .trick-card"),
-    ["A", "A", "K"],
+    ["6", "2", "2"],
   );
   assertEquals(
     renderedRanks(el, ".trick-slot-north .trick-card"),
@@ -298,7 +298,7 @@ Deno.test("test_renderTrickView_sorts_current_trick_cards_like_hand", () => {
   );
   assertEquals(
     renderedRanks(el, ".trick-slot-east .trick-card"),
-    ["6", "2", "2"],
+    ["A", "A", "K"],
   );
 });
 
@@ -357,11 +357,11 @@ Deno.test("test_renderTrickView_sorts_previous_trick_cards_like_hand", () => {
   );
   assertEquals(
     renderedRanks(el, ".trick-slot-east .trick-card"),
-    ["6", "2", "2"],
+    ["A", "A", "K"],
   );
   assertEquals(
     renderedRanks(el, ".trick-slot-south .trick-card"),
-    ["A", "A", "K"],
+    ["6", "2", "2"],
   );
 });
 

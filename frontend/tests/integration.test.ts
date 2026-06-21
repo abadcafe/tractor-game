@@ -16,7 +16,7 @@ import type {
   InteractionMode,
 } from "../engine/types.ts";
 import type { ActionCallbacks, RenderContext } from "../ui/types.ts";
-const HUMAN_PLAYER_INDEX = 3;
+const HUMAN_PLAYER_INDEX = 2;
 
 // deno-dom's Element is not structurally compatible with the DOM Element type
 // expected by render() and GameLoop. Use this helper to create a properly-typed container.
@@ -44,7 +44,7 @@ function makeSnapshot(
     trump_rank: "2",
     trump_suit: "hearts",
     declarer_team: 0,
-    declarer_player: 3,
+    declarer_player: 2,
     defender_points: 15,
     action_hints: [[{ id: "D1-hearts-5", suit: "hearts", rank: "5" }]],
     trick: null,

@@ -9,14 +9,6 @@ import { el } from "../dom.ts";
 import { cardDisplay, sortHand, suitSymbol } from "../../core/card.ts";
 import { SEAT_MAP } from "../../config.ts";
 
-/** Map player index to compass direction for trick grid positioning. */
-const PLAYER_TO_DIRECTION: Record<number, string> = {
-  0: "north",
-  1: "west",
-  2: "east",
-  3: "south",
-};
-
 /**
  * Render the current trick area showing played cards with player labels,
  * previous-trick preview, and failed-throw preview.
@@ -94,7 +86,7 @@ function renderCurrentTrickGrid(
   );
 
   for (const player of [0, 1, 2, 3]) {
-    const direction = PLAYER_TO_DIRECTION[player] ?? "north";
+    const direction = SEAT_MAP[player]?.direction ?? "north";
     const isLead = player === snapshot.trick.lead_player;
     const isCurrent = player === snapshot.trick.current_player;
     const slot = slotsByPlayer.get(player);
@@ -124,7 +116,7 @@ function renderCompletedTrickGrid(
   );
 
   for (const player of [0, 1, 2, 3]) {
-    const direction = PLAYER_TO_DIRECTION[player] ?? "north";
+    const direction = SEAT_MAP[player]?.direction ?? "north";
     const slot = slotsByPlayer.get(player);
     let slotClass = `trick-slot trick-slot-${direction}`;
     const isLead = player === trick.lead_player;

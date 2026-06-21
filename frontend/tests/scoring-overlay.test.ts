@@ -24,7 +24,7 @@ function makeSnapshot(
     trump_rank: "2",
     trump_suit: null,
     declarer_team: 0,
-    declarer_player: 3,
+    declarer_player: 2,
     defender_points: 30,
     action_hints: [],
     trick: null,
@@ -123,7 +123,7 @@ Deno.test("test_renderScoringOverlay_eight_bottom_cards_use_centered_layout", ()
 });
 
 Deno.test("test_renderScoringOverlay_no_button_when_human_ready", () => {
-  const snap = makeSnapshot({ next_round_confirmed: [3] });
+  const snap = makeSnapshot({ next_round_confirmed: [2] });
   const el = renderScoringOverlay(snap, null);
   const buttons = el.querySelectorAll("button");
   assertEquals(buttons.length, 0);

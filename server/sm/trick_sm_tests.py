@@ -869,7 +869,7 @@ class TestPlayResolveNewComparison:
         state = _play_unwrap(state, player=0, cards=hands[0])
 
         result = _get_result(state)
-        assert result.winner == 3
+        assert result.winner == 2
 
     def test_resolve_pair_beats_single_same_suit(self) -> None:
         """When all 4 play pairs, the highest pair wins."""
@@ -959,7 +959,7 @@ def _play_unwrap(
 class TestTractorRanking:
     def test_resolve_tractor_ranking(self) -> None:
         """Four tractors at different ranks: highest tractor wins."""
-        # CCW order: 0 -> 1 -> 3 -> 2
+        # CCW order: 0 -> 1 -> 2 -> 3
         hands = [
             [
                 _card(Suit.HEARTS, Rank.THREE, 1),
@@ -1040,7 +1040,7 @@ class TestTractorRanking:
                 declarer_team=0,
             )
         )
-        # CCW order: 0 -> 1 -> 3 -> 2
+        # CCW order: 0 -> 1 -> 2 -> 3
         state = _play_unwrap(state, player=0, cards=hands[0])
         result = _get_result(state)
         assert result.winner == 2  # trump tractor wins

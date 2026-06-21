@@ -118,7 +118,7 @@ Deno.test("test_handleMessage_stirring_our_turn", () => {
     stirring_state: {
       phase: "WAITING",
       trump_suit: null,
-      current_player: 3,
+      current_player: 2,
       declarer_player: 0,
       exchanging_player: null,
       exchange_count: null,
@@ -160,9 +160,9 @@ Deno.test("test_handleMessage_exchange_our_turn", () => {
     stirring_state: {
       phase: "EXCHANGING",
       trump_suit: null,
-      current_player: 3,
+      current_player: 2,
       declarer_player: 0,
-      exchanging_player: 3,
+      exchanging_player: 2,
       exchange_count: 8,
     },
   });

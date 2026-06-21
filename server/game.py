@@ -62,6 +62,7 @@ from server.rules.rejections import (
     EmptyBidRejected,
 )
 from server.sm import deal_bid_sm, game_sm, round_sm
+from server.sm.constants import next_player_ccw
 from server.sm.rejections import (
     DuplicateNextRoundConfirmationRejected,
     GameNotStartedRejected,
@@ -301,7 +302,7 @@ class Game:
                 )
                 return
             # Bid succeeded — advance turn
-            self._bid_turn = (self._bid_turn + 1) % 4
+            self._bid_turn = next_player_ccw(self._bid_turn)
             self._round_state = rs
             if (
                 rs.deal_bid_state is not None
@@ -331,7 +332,7 @@ class Game:
                 )
                 return
             # Skip succeeded — advance turn
-            self._bid_turn = (self._bid_turn + 1) % 4
+            self._bid_turn = next_player_ccw(self._bid_turn)
             self._round_state = rs
             if (
                 rs.deal_bid_state is not None

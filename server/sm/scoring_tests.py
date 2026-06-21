@@ -144,7 +144,7 @@ class TestCalculateScore:
         assert result.declarer_level_change == 3
         assert result.switch_declarer is False
         assert result.next_declarer_team == 0
-        assert result.next_declarer_player == 3  # partner of player 0
+        assert result.next_declarer_player == 2  # partner of player 0
         assert result.team0_new_level == Rank.FIVE  # TWO + 3 = FIVE
         assert result.team1_new_level == Rank.TWO  # unchanged
 
@@ -556,7 +556,7 @@ class TestDeclarerRotation:
             trump_rank=_TRUMP_RANK,
         )
         assert result.next_declarer_team == 0
-        assert result.next_declarer_player == 3  # partner of 0
+        assert result.next_declarer_player == 2  # partner of 0
         assert result.team0_new_level == Rank.FIVE  # TWO + 3 = FIVE
         assert result.team1_new_level == Rank.TWO  # unchanged
 
@@ -642,7 +642,7 @@ class TestDeclarerTeam1:
         assert result.declarer_level_change == 3
         assert result.switch_declarer is False
         assert result.next_declarer_team == 1
-        assert result.next_declarer_player == 2  # partner of player 1
+        assert result.next_declarer_player == 3  # partner of player 1
         assert result.team1_new_level == Rank.FIVE  # TWO + 3 = FIVE
         assert result.team0_new_level == Rank.TWO  # unchanged
 
@@ -663,7 +663,7 @@ class TestDeclarerTeam1:
         assert result.defender_level_change == 0
         assert result.switch_declarer is True
         assert result.next_declarer_team == 0
-        assert result.next_declarer_player == 3  # CCW next of 1 is 3
+        assert result.next_declarer_player == 2  # CCW next of 1 is 2
         assert (
             result.team1_new_level == Rank.TWO
         )  # declarer team unchanged (levels never retreat)

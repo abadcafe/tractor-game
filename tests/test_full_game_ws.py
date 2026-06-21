@@ -43,6 +43,7 @@ _WS_ERRORS: tuple[type[Exception], ...] = (
     EndOfStream,
 )
 _DEFAULT_WS_RECEIVE_TIMEOUT_SECONDS: float = 5.0
+_HUMAN_PLAYER_INDEX: int = 2
 
 
 class WsReceiveTimeout(TimeoutError):
@@ -694,7 +695,7 @@ class WsGameDriver:
             if state.get("phase") != "WAITING":
                 return msg
             confirmed = _as_list(state.get("next_round_confirmed", []))
-            if 3 in confirmed:
+            if _HUMAN_PLAYER_INDEX in confirmed:
                 return msg
             if _awaiting(msg) == "next_round" and attempts < 4:
                 attempts += 1
@@ -1718,7 +1719,7 @@ def _play_stirring_exchange(
     # responses
     msg: dict[str, object] = {}
 
-    if exchanging_player == 3:
+    if exchanging_player == 2:
         hand = _hand_dicts(state)
         discard_ids: list[str] = []
         for c in hand[-exchange_count:]:
@@ -2305,8 +2306,8 @@ def test_full_game(sync_client: SyncServerClient) -> None:
     - Verify state fields and phase transitions
     - Let AutoPlayers handle their turns automatically
 
-    The human player (index 3) acts when awaiting_action matches.
-    AutoPlayers (indices 0-2) act automatically via the server.
+    The human player (index 2) acts when awaiting_action matches.
+    AutoPlayers (indices 0, 1, 3) act automatically via the server.
     """
     print(">>> test_full_game starting <<<", flush=True)
     resp = sync_client.post("/api/game")
@@ -2319,7 +2320,8 @@ def test_full_game(sync_client: SyncServerClient) -> None:
         driver.connect(game_id)
         print(">>> connected <<<", flush=True)
 
-        # Game starts in WAITING phase. AutoPlayers (0-2) request state
+        # Game starts in WAITING phase. AutoPlayers (0, 1, 3)
+        # request state
         # with
         # seq=0 and confirm automatically via run(). The human client
         # must

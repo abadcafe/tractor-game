@@ -1344,10 +1344,8 @@ async def test_openai_client_retries_timeout_then_succeeds() -> None:
     )
     assert result.value.api.request is not None
     assert result.value.api.response is not None
-    assert result.value.api.error is not None
-    assert "API TIMEOUT" in result.value.api.error
+    assert result.value.api.error is None
     assert _duration_ms(_json_object(result.value.api.response)) >= 0
-    assert _duration_ms(_json_object(result.value.api.error)) >= 0
 
 
 @pytest.mark.asyncio
