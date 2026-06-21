@@ -33,7 +33,7 @@ class AIConfig:
             api_key=os.environ.get("TRACTOR_AI_API_KEY"),
             model=os.environ.get("TRACTOR_AI_MODEL", "gpt-5-mini"),
             timeout_seconds=_env_float(
-                "TRACTOR_AI_TIMEOUT_SECONDS", default=8.0
+                "TRACTOR_AI_HTTP_TIMEOUT_SECONDS", default=8.0
             ),
             http_max_retries=_env_int(
                 "TRACTOR_AI_HTTP_MAX_RETRIES", default=2
