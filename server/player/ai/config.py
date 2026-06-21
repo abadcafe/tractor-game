@@ -42,7 +42,7 @@ class AIConfig:
                 "TRACTOR_AI_HTTP_RETRY_DELAY_SECONDS", default=3.0
             ),
             decision_retries=_env_int(
-                "TRACTOR_AI_DECISION_RETRIES", default=1
+                "TRACTOR_AI_DECISION_MAX_RETRIES", default=2
             ),
             max_output_tokens=_env_int(
                 "TRACTOR_AI_MAX_OUTPUT_TOKENS", default=2400
