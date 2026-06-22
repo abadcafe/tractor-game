@@ -8,28 +8,6 @@ from .ordering import effective_suit, trump_rank_order
 from .types import EffectiveSuit
 
 
-def can_win(
-    played_cards: list[Card],
-    lead_eff: EffectiveSuit,
-    trump_suit: Suit | None,
-    trump_rank: Rank,
-) -> bool:
-    """
-    Check whether a player's cards are eligible to win the trick (spec
-    8.2).
-
-    For each card: if effective_suit is neither lead_eff nor "trump" ->
-    False.
-    Otherwise True.  When lead_eff is "trump", only trump cards are
-    eligible.
-    """
-    for card in played_cards:
-        eff = effective_suit(card, trump_suit, trump_rank)
-        if eff != lead_eff and eff != "trump":
-            return False
-    return True
-
-
 def _compare_same_suit(
     a_cards: list[Card],
     b_cards: list[Card],
@@ -152,7 +130,7 @@ def _can_win_against_lead(
     return False
 
 
-def compare_plays_against_lead(
+def compare_plays(
     a_cards: list[Card],
     b_cards: list[Card],
     lead_cards: list[Card],
@@ -198,57 +176,6 @@ def compare_plays_against_lead(
         return _compare_same_suit(
             a_cards, b_cards, trump_suit, trump_rank, is_trump=True
         )
-    return _compare_same_suit(
-        a_cards, b_cards, trump_suit, trump_rank, is_trump=False
-    )
-
-
-def compare_plays(
-    a_cards: list[Card],
-    b_cards: list[Card],
-    lead_eff: EffectiveSuit,
-    trump_suit: Suit | None,
-    trump_rank: Rank,
-) -> int:
-    """Compare two plays using sub-level decomposition (spec 8.3-8.4).
-
-    Returns >0 if a wins, <0 if b wins, 0 if tie.
-
-    1. can_win eligibility gating (spec 8.2)
-    2. Trump vs non-trump
-    3. Same suit: decompose-based comparison
-    """
-    a_eligible = can_win(a_cards, lead_eff, trump_suit, trump_rank)
-    b_eligible = can_win(b_cards, lead_eff, trump_suit, trump_rank)
-
-    if a_eligible and not b_eligible:
-        return 1
-    if b_eligible and not a_eligible:
-        return -1
-    if not a_eligible and not b_eligible:
-        return 0
-
-    # Both eligible: determine effective suit groups
-    a_all_trump = all(
-        effective_suit(c, trump_suit, trump_rank) == "trump"
-        for c in a_cards
-    )
-    b_all_trump = all(
-        effective_suit(c, trump_suit, trump_rank) == "trump"
-        for c in b_cards
-    )
-
-    if a_all_trump and not b_all_trump:
-        return 1  # trump beats non-trump
-    if b_all_trump and not a_all_trump:
-        return -1
-
-    if a_all_trump and b_all_trump:
-        return _compare_same_suit(
-            a_cards, b_cards, trump_suit, trump_rank, is_trump=True
-        )
-
-    # Both lead-suit (non-trump)
     return _compare_same_suit(
         a_cards, b_cards, trump_suit, trump_rank, is_trump=False
     )

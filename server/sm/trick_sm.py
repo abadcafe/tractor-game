@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict
 
 from server.result import Ok, Rejected
 from server.rules.cards import Card, Rank, Suit
-from server.rules.compare import compare_plays_against_lead
+from server.rules.compare import compare_plays
 from server.rules.follow import (
     illegal_follow_rejection,
     is_legal_follow,
@@ -314,7 +314,7 @@ def _resolve(state: TrickState) -> TrickState:
             raise ValueError(
                 f"Player {p}'s cards must exist at resolution"
             )
-        cmp = compare_plays_against_lead(
+        cmp = compare_plays(
             p_cards,
             best_cards,
             lead_cards,
