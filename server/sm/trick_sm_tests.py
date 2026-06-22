@@ -1086,3 +1086,53 @@ class TestThrowResolution:
         state = _play_unwrap(state, player=0, cards=hands[0])
         result = _get_result(state)
         assert result.winner == 0  # throw wins
+
+    def test_trump_kill_must_match_throw_structure(self) -> None:
+        """
+        Killing a non-trump throw requires the same decomposed shape.
+
+        Player 1's low trump pair + singles can kill the pair+singles
+        throw. Player 2 has big jokers but only singles, so that play
+        is padding and cannot win.
+        """
+        hands = [
+            [
+                _card(Suit.HEARTS, Rank.ACE, 1),
+                _card(Suit.HEARTS, Rank.ACE, 2),
+                _card(Suit.HEARTS, Rank.KING, 1),
+                _card(Suit.HEARTS, Rank.QUEEN, 1),
+            ],
+            [
+                _card(Suit.SPADES, Rank.FOUR, 1),
+                _card(Suit.SPADES, Rank.FOUR, 2),
+                _card(Suit.SPADES, Rank.FIVE, 1),
+                _card(Suit.SPADES, Rank.SIX, 1),
+            ],
+            [
+                _card(Suit.JOKER, Rank.BIG_JOKER, 1),
+                _card(Suit.JOKER, Rank.SMALL_JOKER, 1),
+                _card(Suit.SPADES, Rank.ACE, 1),
+                _card(Suit.SPADES, Rank.KING, 1),
+            ],
+            [
+                _card(Suit.SPADES, Rank.THREE, 1),
+                _card(Suit.SPADES, Rank.THREE, 2),
+                _card(Suit.SPADES, Rank.SEVEN, 1),
+                _card(Suit.SPADES, Rank.EIGHT, 1),
+            ],
+        ]
+        state = create_trick(
+            TrickInput(
+                lead_player=0,
+                hands=hands,
+                trump_suit=Suit.SPADES,
+                trump_rank=Rank.TWO,
+                defender_points=0,
+                declarer_team=0,
+            )
+        )
+
+        state = _play_unwrap(state, player=0, cards=hands[0])
+        result = _get_result(state)
+
+        assert result.winner == 1

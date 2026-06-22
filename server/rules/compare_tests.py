@@ -3,7 +3,11 @@
 from typing import Literal
 
 from server.rules.cards import POINTS_MAP, Card, Rank, Suit
-from server.rules.compare import can_win, compare_plays
+from server.rules.compare import (
+    can_win,
+    compare_plays,
+    compare_plays_against_lead,
+)
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
@@ -269,6 +273,125 @@ class TestComparePlays:
             a, b, Suit.SPADES, Suit.HEARTS, Rank.KING
         )
         assert result < 0
+
+
+class TestComparePlaysAgainstLead:
+    def test_structurally_invalid_trump_kill_cannot_win(self) -> None:
+        lead = [
+            _card(Suit.HEARTS, Rank.ACE, 1),
+            _card(Suit.HEARTS, Rank.ACE, 2),
+            _card(Suit.HEARTS, Rank.KING, 1),
+            _card(Suit.HEARTS, Rank.QUEEN, 1),
+        ]
+        valid_kill = [
+            _card(Suit.SPADES, Rank.FOUR, 1),
+            _card(Suit.SPADES, Rank.FOUR, 2),
+            _card(Suit.SPADES, Rank.FIVE, 1),
+            _card(Suit.SPADES, Rank.SIX, 1),
+        ]
+        invalid_big_cards = [
+            _card(Suit.JOKER, Rank.BIG_JOKER, 1),
+            _card(Suit.JOKER, Rank.SMALL_JOKER, 1),
+            _card(Suit.SPADES, Rank.ACE, 1),
+            _card(Suit.SPADES, Rank.KING, 1),
+        ]
+
+        result = compare_plays_against_lead(
+            invalid_big_cards,
+            valid_kill,
+            lead,
+            Suit.SPADES,
+            Rank.TWO,
+        )
+
+        assert result < 0
+
+    def test_matching_trump_kills_compare_by_main_pattern(
+        self,
+    ) -> None:
+        lead = [
+            _card(Suit.HEARTS, Rank.ACE, 1),
+            _card(Suit.HEARTS, Rank.ACE, 2),
+            _card(Suit.HEARTS, Rank.KING, 1),
+            _card(Suit.HEARTS, Rank.QUEEN, 1),
+        ]
+        high_pair_kill = [
+            _card(Suit.SPADES, Rank.KING, 1),
+            _card(Suit.SPADES, Rank.KING, 2),
+            _card(Suit.SPADES, Rank.THREE, 1),
+            _card(Suit.SPADES, Rank.FOUR, 1),
+        ]
+        low_pair_with_big_jokers = [
+            _card(Suit.SPADES, Rank.QUEEN, 1),
+            _card(Suit.SPADES, Rank.QUEEN, 2),
+            _card(Suit.JOKER, Rank.BIG_JOKER, 1),
+            _card(Suit.JOKER, Rank.SMALL_JOKER, 1),
+        ]
+
+        result = compare_plays_against_lead(
+            high_pair_kill,
+            low_pair_with_big_jokers,
+            lead,
+            Suit.SPADES,
+            Rank.TWO,
+        )
+
+        assert result > 0
+
+    def test_all_single_throw_kills_compare_by_highest_trump(
+        self,
+    ) -> None:
+        lead = [
+            _card(Suit.HEARTS, Rank.ACE),
+            _card(Suit.HEARTS, Rank.KING),
+            _card(Suit.HEARTS, Rank.QUEEN),
+        ]
+        big_joker_kill = [
+            _card(Suit.JOKER, Rank.BIG_JOKER),
+            _card(Suit.SPADES, Rank.THREE),
+            _card(Suit.SPADES, Rank.FOUR),
+        ]
+        small_joker_kill = [
+            _card(Suit.JOKER, Rank.SMALL_JOKER),
+            _card(Suit.SPADES, Rank.ACE),
+            _card(Suit.SPADES, Rank.KING),
+        ]
+
+        result = compare_plays_against_lead(
+            big_joker_kill,
+            small_joker_kill,
+            lead,
+            Suit.SPADES,
+            Rank.TWO,
+        )
+
+        assert result > 0
+
+    def test_same_highest_trump_returns_tie_for_play_order(
+        self,
+    ) -> None:
+        lead = [
+            _card(Suit.HEARTS, Rank.ACE),
+            _card(Suit.HEARTS, Rank.KING),
+        ]
+        first_kill = [
+            _card(Suit.JOKER, Rank.BIG_JOKER, 1),
+            _card(Suit.SPADES, Rank.THREE, 1),
+        ]
+        later_kill = [
+            _card(Suit.JOKER, Rank.BIG_JOKER, 2),
+            _card(Suit.SPADES, Rank.FOUR, 1),
+        ]
+
+        result = compare_plays_against_lead(
+            first_kill,
+            later_kill,
+            lead,
+            Suit.SPADES,
+            Rank.TWO,
+        )
+
+        assert result == 0
 
 
 class TestSubLevelComparison:

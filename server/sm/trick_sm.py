@@ -8,12 +8,11 @@ from pydantic import BaseModel, ConfigDict
 
 from server.result import Ok, Rejected
 from server.rules.cards import Card, Rank, Suit
-from server.rules.compare import compare_plays
+from server.rules.compare import compare_plays_against_lead
 from server.rules.follow import (
     illegal_follow_rejection,
     is_legal_follow,
 )
-from server.rules.ordering import effective_suit
 from server.rules.rejections import (
     CardsNotInHandRejected,
     EmptyPlayRejected,
@@ -297,10 +296,6 @@ def _resolve(state: TrickState) -> TrickState:
     lead_cards = lead_slot.cards
     if len(lead_cards) == 0:
         raise ValueError("Lead cards must exist at resolution")
-    lead_eff = effective_suit(
-        lead_cards[0], state.trump_suit, state.trump_rank
-    )
-
     # Find winner in real play order so equal-ranked plays keep the
     # earlier winner.
     winner = state.lead_player
@@ -319,10 +314,10 @@ def _resolve(state: TrickState) -> TrickState:
             raise ValueError(
                 f"Player {p}'s cards must exist at resolution"
             )
-        cmp = compare_plays(
+        cmp = compare_plays_against_lead(
             p_cards,
             best_cards,
-            lead_eff,
+            lead_cards,
             state.trump_suit,
             state.trump_rank,
         )
