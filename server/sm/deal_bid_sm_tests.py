@@ -426,6 +426,117 @@ class TestReveal:
         assert state.bid_winner.player == 0
         assert state.bid_winner.suit == Suit.SPADES
 
+    def test_current_bid_winner_cannot_rebid_self(self) -> None:
+        """
+        Current winner cannot use a higher bid to override their own
+        bid.
+        """
+        diamond_two = _card(Suit.DIAMONDS, Rank.TWO, 1)
+        spade_two = _card(Suit.SPADES, Rank.TWO, 1)
+        state = DealBidState(
+            phase="DEALING",
+            deck=[],
+            deal_cursor=0,
+            deal_target=0,
+            bid_winner=None,
+            bid_events=[],
+            players_hand=[[diamond_two, spade_two], [], [], []],
+            declarer_team=None,
+            trump_rank=Rank.TWO,
+            start_player=0,
+        )
+
+        first_bid = BidEvent(
+            player=0,
+            cards=[diamond_two],
+            kind="trump_rank",
+            suit=Suit.DIAMONDS,
+            joker_type=None,
+            count=1,
+        )
+        result = reveal(state, first_bid)
+        assert isinstance(result, Ok)
+        state = result.value
+
+        self_rebid = BidEvent(
+            player=0,
+            cards=[spade_two],
+            kind="trump_rank",
+            suit=Suit.SPADES,
+            joker_type=None,
+            count=1,
+        )
+        result = reveal(state, self_rebid)
+
+        assert isinstance(result, Rejected)
+        assert "不能再次抢自己的主" in result.reason
+        assert state.bid_winner is not None
+        assert state.bid_winner.cards == [diamond_two]
+        assert state.bid_winner.player == 0
+
+    def test_previous_bid_winner_can_rebid_after_other_player_wins(
+        self,
+    ) -> None:
+        """
+        A player may bid again after another player has taken current
+        winner.
+        """
+        diamond_two = _card(Suit.DIAMONDS, Rank.TWO, 1)
+        spade_two = _card(Suit.SPADES, Rank.TWO, 1)
+        club_two = _card(Suit.CLUBS, Rank.TWO, 1)
+        state = DealBidState(
+            phase="DEALING",
+            deck=[],
+            deal_cursor=0,
+            deal_target=0,
+            bid_winner=None,
+            bid_events=[],
+            players_hand=[[diamond_two, spade_two], [club_two], [], []],
+            declarer_team=None,
+            trump_rank=Rank.TWO,
+            start_player=0,
+        )
+
+        first_bid = BidEvent(
+            player=0,
+            cards=[diamond_two],
+            kind="trump_rank",
+            suit=Suit.DIAMONDS,
+            joker_type=None,
+            count=1,
+        )
+        result = reveal(state, first_bid)
+        assert isinstance(result, Ok)
+        state = result.value
+
+        steal_bid = BidEvent(
+            player=1,
+            cards=[club_two],
+            kind="trump_rank",
+            suit=Suit.CLUBS,
+            joker_type=None,
+            count=1,
+        )
+        result = reveal(state, steal_bid)
+        assert isinstance(result, Ok)
+        state = result.value
+
+        reclaim_bid = BidEvent(
+            player=0,
+            cards=[spade_two],
+            kind="trump_rank",
+            suit=Suit.SPADES,
+            joker_type=None,
+            count=1,
+        )
+        result = reveal(state, reclaim_bid)
+
+        assert isinstance(result, Ok)
+        state = result.value
+        assert state.bid_winner is not None
+        assert state.bid_winner.player == 0
+        assert state.bid_winner.cards == [spade_two]
+
     def test_reveal_same_value_rejected(self) -> None:
         """
         Bid with equal or lower value is rejected (strict greater
@@ -1186,6 +1297,84 @@ def test_get_bid_action_hints_singles_and_pairs() -> None:
     assert "D2-clubs-2" in all_bid_card_ids
     assert "D1-spades-2" in all_bid_card_ids
     assert "D1-hearts-5" not in all_bid_card_ids
+
+
+def test_get_bid_action_hints_empty_for_current_bid_winner() -> None:
+    """
+    Current bid winner should not see options to bid over themselves.
+    """
+    trump_rank = Rank.TWO
+    diamond_two = _card(Suit.DIAMONDS, Rank.TWO, 1)
+    spade_two = _card(Suit.SPADES, Rank.TWO, 1)
+    state = DealBidState(
+        phase="DEALING",
+        deck=[],
+        deal_cursor=0,
+        deal_target=0,
+        bid_winner=BidEvent(
+            player=0,
+            cards=[diamond_two],
+            kind="trump_rank",
+            suit=Suit.DIAMONDS,
+            joker_type=None,
+            count=1,
+        ),
+        bid_events=[],
+        players_hand=[[diamond_two, spade_two], [], [], []],
+        declarer_team=None,
+        trump_rank=trump_rank,
+        start_player=0,
+    )
+
+    hints = get_bid_action_hints(state, player=0)
+
+    assert hints == []
+
+
+def test_get_bid_action_hints_allow_previous_winner_after_stolen() -> (
+    None
+):
+    """
+    Previous winner can see stronger options after another player wins.
+    """
+    trump_rank = Rank.TWO
+    diamond_two = _card(Suit.DIAMONDS, Rank.TWO, 1)
+    spade_two = _card(Suit.SPADES, Rank.TWO, 1)
+    club_two = _card(Suit.CLUBS, Rank.TWO, 1)
+    state = DealBidState(
+        phase="DEALING",
+        deck=[],
+        deal_cursor=0,
+        deal_target=0,
+        bid_winner=BidEvent(
+            player=1,
+            cards=[club_two],
+            kind="trump_rank",
+            suit=Suit.CLUBS,
+            joker_type=None,
+            count=1,
+        ),
+        bid_events=[
+            BidEvent(
+                player=0,
+                cards=[diamond_two],
+                kind="trump_rank",
+                suit=Suit.DIAMONDS,
+                joker_type=None,
+                count=1,
+            )
+        ],
+        players_hand=[[diamond_two, spade_two], [club_two], [], []],
+        declarer_team=None,
+        trump_rank=trump_rank,
+        start_player=0,
+    )
+
+    hints = get_bid_action_hints(state, player=0)
+
+    assert [[card.id for card in hint] for hint in hints] == [
+        ["D1-spades-2"]
+    ]
 
 
 def test_get_bid_action_hints_ordered_from_small_to_large() -> None:

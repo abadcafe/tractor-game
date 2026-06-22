@@ -13,7 +13,10 @@ from pydantic import BaseModel, ConfigDict
 from server.result import Ok, Rejected
 from server.rules import bid as bid_rules
 from server.rules.cards import Card, Rank, Suit
-from server.rules.rejections import CardNotInHandRejected
+from server.rules.rejections import (
+    CardNotInHandRejected,
+    CurrentBidWinnerCannotRebidRejected,
+)
 
 from .constants import next_player_ccw
 from .rejections import (
@@ -153,6 +156,11 @@ def get_bid_action_hints(
     """
     if state.phase != "DEALING" or player < 0 or player >= 4:
         return []
+    if (
+        state.bid_winner is not None
+        and state.bid_winner.player == player
+    ):
+        return []
 
     current_cards = (
         state.bid_winner.cards if state.bid_winner is not None else None
@@ -210,6 +218,11 @@ def reveal(
     current_cards = (
         state.bid_winner.cards if state.bid_winner is not None else None
     )
+    if (
+        state.bid_winner is not None
+        and state.bid_winner.player == event.player
+    ):
+        return CurrentBidWinnerCannotRebidRejected()
     match bid_rules.bid_beats_current(
         event.cards, current_cards, state.trump_rank
     ):

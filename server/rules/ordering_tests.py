@@ -7,6 +7,7 @@ from server.rules.ordering import (
     bid_value,
     effective_suit,
     is_trump_card,
+    sort_by_display_order,
     sort_by_trump_order,
     trump_order,
     trump_rank_order,
@@ -164,6 +165,56 @@ class TestSortByTrumpOrder:
         assert sorted_cards[0].rank == Rank.BIG_JOKER
         assert sorted_cards[1].rank == Rank.TWO
         assert sorted_cards[2].rank == Rank.ACE
+
+
+class TestSortByDisplayOrder:
+    def test_sort_by_display_order_matches_frontend_hand_order(
+        self,
+    ) -> None:
+        cards = [
+            _card(Suit.CLUBS, Rank.KING),
+            _card(Suit.SPADES, Rank.THREE),
+            _card(Suit.DIAMONDS, Rank.TWO),
+            _card(Suit.JOKER, Rank.SMALL_JOKER),
+            _card(Suit.HEARTS, Rank.ACE),
+            _card(Suit.SPADES, Rank.TWO),
+            _card(Suit.JOKER, Rank.BIG_JOKER),
+            _card(Suit.DIAMONDS, Rank.ACE),
+        ]
+
+        sorted_cards = sort_by_display_order(
+            cards, Suit.SPADES, Rank.TWO
+        )
+
+        assert [card.id for card in sorted_cards] == [
+            "D1-joker-BJ",
+            "D1-joker-SJ",
+            "D1-spades-2",
+            "D1-diamonds-2",
+            "D1-spades-3",
+            "D1-hearts-A",
+            "D1-clubs-K",
+            "D1-diamonds-A",
+        ]
+
+    def test_sort_by_display_order_no_trump_has_four_side_suits(
+        self,
+    ) -> None:
+        cards = [
+            _card(Suit.DIAMONDS, Rank.ACE),
+            _card(Suit.CLUBS, Rank.KING),
+            _card(Suit.HEARTS, Rank.ACE),
+            _card(Suit.SPADES, Rank.KING),
+        ]
+
+        sorted_cards = sort_by_display_order(cards, None, Rank.TWO)
+
+        assert [card.id for card in sorted_cards] == [
+            "D1-spades-K",
+            "D1-hearts-A",
+            "D1-clubs-K",
+            "D1-diamonds-A",
+        ]
 
 
 class TestSUITOffset:

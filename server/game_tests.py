@@ -455,6 +455,62 @@ def test_subsequent_round_deal_bid_snapshot_shows_fixed_declarer() -> (
     assert snap["declarer_player"] == 3
 
 
+def test_snapshot_player_hand_is_sorted_by_display_order() -> None:
+    """
+    StateSnapshot.player_hand is protocol output, so it is sorted in
+    the same order the frontend displays hands.
+    """
+    hands = [
+        [
+            _card(Suit.CLUBS, Rank.KING),
+            _card(Suit.SPADES, Rank.THREE),
+            _card(Suit.DIAMONDS, Rank.TWO),
+            _card(Suit.JOKER, Rank.SMALL_JOKER),
+            _card(Suit.HEARTS, Rank.ACE),
+            _card(Suit.SPADES, Rank.TWO),
+            _card(Suit.JOKER, Rank.BIG_JOKER),
+        ],
+        [],
+        [],
+        [],
+    ]
+    state = round_sm.RoundState(
+        phase="PLAYING",
+        declarer_team=0,
+        declarer_player=0,
+        defender_team=1,
+        trump_suit=Suit.SPADES,
+        trump_rank=Rank.TWO,
+        bid_winner=None,
+        players_hand=hands,
+        bottom_cards=[],
+        defender_points=0,
+        last_completed_trick=None,
+        defender_point_cards=[],
+        deal_bid_state=None,
+        stirring_state=None,
+        trick_state=None,
+        result=None,
+        team0_level=Rank.TWO,
+        team1_level=Rank.TWO,
+        start_player=0,
+        next_declarer_player=None,
+    )
+    game = _game_with_round_state(state)
+
+    snap = game.snapshot(for_player=0)
+
+    assert [card.id for card in snap.player_hand] == [
+        "D1-joker-BJ",
+        "D1-joker-SJ",
+        "D1-spades-2",
+        "D1-diamonds-2",
+        "D1-spades-3",
+        "D1-hearts-A",
+        "D1-clubs-K",
+    ]
+
+
 def test_later_deal_bid_bid_winner_keeps_fixed_declarer() -> None:
     """
     In later rounds, bid_winner chooses trump only; declarer remains

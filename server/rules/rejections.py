@@ -122,6 +122,13 @@ class BidPriorityTooLowRejected(Rejected):
         super().__init__("抢主优先级不足")
 
 
+class CurrentBidWinnerCannotRebidRejected(Rejected):
+    def __init__(self) -> None:
+        super().__init__(
+            "当前抢主胜者不能再次抢自己的主；被别人抢走后才能再抢回来。"
+        )
+
+
 class EmptyPlayRejected(Rejected):
     def __init__(self) -> None:
         super().__init__("必须至少出一张牌")

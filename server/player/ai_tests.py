@@ -77,6 +77,7 @@ def test_ai_decision_prompt_uses_chinese_game_labels() -> None:
     )
 
     assert "- 你是：玩家 1" in prompt.user
+    assert "- 队友：玩家 3" in prompt.user
     assert "- 阶段：出牌阶段" in prompt.user
     assert "- 当前需要你：出牌" in prompt.user
     assert "- 主花色：黑桃" in prompt.user
@@ -86,6 +87,82 @@ def test_ai_decision_prompt_uses_chinese_game_labels() -> None:
     assert "awaiting_action:" not in prompt.user
     assert "trump_suit:" not in prompt.user
     assert "not_played" not in prompt.user
+
+
+def test_ai_decision_prompt_groups_and_sorts_hand() -> None:
+    hand = [
+        card("hearts", "3"),
+        card("spades", "3"),
+        card("diamonds", "2"),
+        card("hearts", "A"),
+        card("joker", "BJ"),
+        card("clubs", "K"),
+        card("spades", "2"),
+    ]
+    snap = make_snapshot(
+        phase="PLAYING",
+        awaiting_action="play",
+        trump_suit="spades",
+        trump_rank="2",
+        player_hand=hand,
+    )
+
+    prompt = build_decision_prompt(
+        player_index=0,
+        snapshot=snap,
+        memory=AIMemory(),
+        rules=RuleBook({"common": "- 测试规则"}),
+    )
+
+    assert "- 主牌:" in prompt.user
+    assert "- 黑桃副牌:" not in prompt.user
+    assert "- 红桃副牌:" in prompt.user
+    assert "- 梅花副牌:" in prompt.user
+    assert "- 方片副牌:" in prompt.user
+    assert prompt.user.index("D1-joker-BJ") < prompt.user.index(
+        "D1-spades-2"
+    )
+    assert prompt.user.index("D1-spades-2") < prompt.user.index(
+        "D1-diamonds-2"
+    )
+    assert prompt.user.index("D1-diamonds-2") < prompt.user.index(
+        "D1-spades-3"
+    )
+    assert prompt.user.index("D1-hearts-A") < prompt.user.index(
+        "D1-hearts-3"
+    )
+
+
+def test_ai_decision_prompt_no_trump_groups_four_side_suits() -> None:
+    snap = make_snapshot(
+        phase="PLAYING",
+        awaiting_action="play",
+        trump_suit=None,
+        trump_rank="2",
+        player_hand=[card("hearts", "A"), card("spades", "K")],
+    )
+
+    prompt = build_decision_prompt(
+        player_index=0,
+        snapshot=snap,
+        memory=AIMemory(),
+        rules=RuleBook({"common": "- 测试规则"}),
+    )
+
+    assert "- 主牌:" in prompt.user
+    assert "- 黑桃副牌:" in prompt.user
+    assert "- 红桃副牌:" in prompt.user
+    assert "- 梅花副牌:" in prompt.user
+    assert "- 方片副牌:" in prompt.user
+    assert prompt.user.index("- 黑桃副牌:") < prompt.user.index(
+        "- 红桃副牌:"
+    )
+    assert prompt.user.index("- 红桃副牌:") < prompt.user.index(
+        "- 梅花副牌:"
+    )
+    assert prompt.user.index("- 梅花副牌:") < prompt.user.index(
+        "- 方片副牌:"
+    )
 
 
 def test_ai_rulebook_selects_common_play_lead_and_scoring() -> None:

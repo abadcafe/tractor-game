@@ -57,6 +57,7 @@ from server.result import Ok, Rejected
 from server.rules import bid as bid_rules
 from server.rules import hints as play_rules
 from server.rules.cards import Card, Rank
+from server.rules.ordering import sort_by_display_order
 from server.rules.rejections import (
     CardNotInHandRejected,
     EmptyBidRejected,
@@ -569,6 +570,10 @@ class Game:
                 rs.stirring_state.exchange_state.hand_after_pickup
             )
             player_hand_counts[for_player] = len(player_hand)
+
+        player_hand = sort_by_display_order(
+            player_hand, rs.trump_suit, rs.trump_rank
+        )
 
         can_act_in_playing = (
             False  # whether current player can act in PLAYING

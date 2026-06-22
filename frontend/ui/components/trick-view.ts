@@ -42,7 +42,9 @@ export function renderTrickView(
     trickView.appendChild(grid);
   }
   if (showingFailedThrow) {
-    trickView.appendChild(renderFailedThrowPreview(failedThrowPreview));
+    trickView.appendChild(
+      renderFailedThrowPreview(failedThrowPreview, snapshot),
+    );
   }
 
   return trickView;
@@ -182,7 +184,10 @@ function trickCardClass(card: Card): string {
   return className;
 }
 
-function renderFailedThrowPreview(event: FailedThrow): HTMLElement {
+function renderFailedThrowPreview(
+  event: FailedThrow,
+  snapshot: StateSnapshot,
+): HTMLElement {
   const seatInfo = SEAT_MAP[event.player];
   const playerLabel = seatInfo?.label ?? `玩家 ${event.player}`;
   const preview = el("div", { class: "failed-throw-preview" });
@@ -194,10 +199,15 @@ function renderFailedThrowPreview(event: FailedThrow): HTMLElement {
     ),
   );
   preview.appendChild(
-    renderFailedThrowRow("暴露", event.attempted_cards, false),
+    renderFailedThrowRow(
+      "暴露",
+      event.attempted_cards,
+      false,
+      snapshot,
+    ),
   );
   preview.appendChild(
-    renderFailedThrowRow("捡小", event.forced_cards, true),
+    renderFailedThrowRow("捡小", event.forced_cards, true, snapshot),
   );
   return preview;
 }
@@ -206,6 +216,7 @@ function renderFailedThrowRow(
   label: string,
   cards: Card[],
   forced: boolean,
+  snapshot: StateSnapshot,
 ): HTMLElement {
   const row = el("div", {
     class: forced
@@ -216,7 +227,11 @@ function renderFailedThrowRow(
     el("span", { class: "failed-throw-preview__label" }, label),
   );
   const cardsEl = el("div", { class: "failed-throw-preview__cards" });
-  for (const card of cards) {
+  for (const card of sortHand(
+    cards,
+    snapshot.trump_suit,
+    snapshot.trump_rank,
+  )) {
     cardsEl.appendChild(renderTrickCard(card));
   }
   row.appendChild(cardsEl);

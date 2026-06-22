@@ -1,4 +1,7 @@
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  assert,
+  assertEquals,
+} from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { DOMParser } from "jsr:@b-fuze/deno-dom@0.1.56";
 import { renderTrickView } from "../ui/components/trick-view.ts";
 import type { CompletedTrick, StateSnapshot } from "../core/types.ts";
@@ -161,7 +164,7 @@ Deno.test("test_renderTrickView_previous_trick_preview_shows_four_players", () =
 });
 
 Deno.test("test_renderTrickView_failed_throw_preview_shows_attempted_and_forced_cards", () => {
-  const snap = makeSnapshot();
+  const snap = makeSnapshot({ trump_suit: "spades", trump_rank: "2" });
   const previousTrick: CompletedTrick = {
     lead_player: 0,
     winner: 0,
@@ -179,11 +182,14 @@ Deno.test("test_renderTrickView_failed_throw_preview_shows_attempted_and_forced_
   const el = renderTrickView(snap, previousTrick, {
     player: 0,
     attempted_cards: [
-      { id: "D1-spades-K", suit: "spades", rank: "K" },
       { id: "D1-spades-Q", suit: "spades", rank: "Q" },
+      { id: "D1-joker-SJ", suit: "joker", rank: "SJ" },
+      { id: "D1-spades-K", suit: "spades", rank: "K" },
     ],
     forced_cards: [
       { id: "D1-spades-Q", suit: "spades", rank: "Q" },
+      { id: "D1-spades-A", suit: "spades", rank: "A" },
+      { id: "D1-spades-K", suit: "spades", rank: "K" },
     ],
   });
 
@@ -197,8 +203,26 @@ Deno.test("test_renderTrickView_failed_throw_preview_shows_attempted_and_forced_
   assertEquals(
     el.querySelectorAll(".failed-throw-preview__cards .trick-card")
       .length,
-    3,
+    6,
   );
+  const rows = Array.from(
+    el.querySelectorAll(".failed-throw-preview__row"),
+  );
+  assertEquals(rows.length, 2);
+  const exposedRow = rows[0];
+  const forcedRow = rows[1];
+  assert(exposedRow !== undefined);
+  assert(forcedRow !== undefined);
+  assertEquals(renderedRanks(exposedRow, ".trick-card"), [
+    "SJ",
+    "K",
+    "Q",
+  ]);
+  assertEquals(renderedRanks(forcedRow, ".trick-card"), [
+    "A",
+    "K",
+    "Q",
+  ]);
 });
 
 Deno.test("test_renderTrickView_player_labels", () => {

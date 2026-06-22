@@ -47,6 +47,14 @@ _BID_JOKER_ORDER: dict[Rank, int] = {
     Rank.BIG_JOKER: 5,
 }
 
+DISPLAY_SUIT_ORDER: dict[Suit, int] = {
+    Suit.SPADES: 0,
+    Suit.HEARTS: 1,
+    Suit.CLUBS: 2,
+    Suit.DIAMONDS: 3,
+    Suit.JOKER: -1,
+}
+
 
 # ---- Trump Order ----
 
@@ -187,4 +195,63 @@ def sort_by_trump_order(
         cards,
         key=lambda c: trump_order(c, trump_suit, trump_rank),
         reverse=True,
+    )
+
+
+def display_hand_order_key(
+    card: Card, trump_suit: Suit | None, trump_rank: Rank
+) -> tuple[int, int, int]:
+    """
+    Return the player-facing hand display sort key.
+
+    Lower key values render earlier:
+      trump cards first as 大王、小王、主级牌、副级牌、其他主牌;
+      then side suits as 黑桃、红桃、梅花、方片, each high to low.
+    This mirrors frontend/core/card.ts sortHand().
+    """
+    if is_trump_card(card, trump_suit, trump_rank):
+        return (
+            0,
+            _display_trump_priority(card, trump_suit, trump_rank),
+            _display_trump_tiebreaker(card, trump_suit, trump_rank),
+        )
+    return (1, DISPLAY_SUIT_ORDER[card.suit], -RANK_ORDER[card.rank])
+
+
+def _display_trump_priority(
+    card: Card, trump_suit: Suit | None, trump_rank: Rank
+) -> int:
+    if card.rank == Rank.BIG_JOKER:
+        return 0
+    if card.rank == Rank.SMALL_JOKER:
+        return 1
+    if card.rank == trump_rank:
+        if trump_suit is not None and card.suit == trump_suit:
+            return 2
+        return 3
+    return 4
+
+
+def _display_trump_tiebreaker(
+    card: Card, trump_suit: Suit | None, trump_rank: Rank
+) -> int:
+    priority = _display_trump_priority(card, trump_suit, trump_rank)
+    if priority == 3:
+        return DISPLAY_SUIT_ORDER[card.suit]
+    if priority == 4:
+        return -RANK_ORDER[card.rank]
+    return 0
+
+
+def sort_by_display_order(
+    cards: list[Card], trump_suit: Suit | None, trump_rank: Rank
+) -> list[Card]:
+    """
+    Sort cards in the same order used by the frontend hand display.
+    """
+    return sorted(
+        cards,
+        key=lambda card: display_hand_order_key(
+            card, trump_suit, trump_rank
+        ),
     )

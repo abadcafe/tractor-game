@@ -17,6 +17,7 @@ from server.protocol import (
     TrickSnapshot,
 )
 from server.rules.cards import Card, Rank, Suit
+from server.rules.ordering import is_trump_card, sort_by_display_order
 
 COMMON_RULES: Final[str] = """
 - 你是升级/拖拉机游戏里的玩家，你要以游戏**最终**胜利为目标，根据当前状
@@ -26,7 +27,7 @@ COMMON_RULES: Final[str] = """
   出牌选项；此时你如果要提供 card_ids ，那它必须完整等于其中一个元素
 - 当前墩、历史记忆、叫牌记录里的牌只用于判断局势，不能作为 card_ids。
 - 不要输出自然语言动作；reason 字段只用于日志。
-- 每人都与自己的对家是队友，即 player 0 和 2 一队, 1 和 3 一队
+- player 0 - 3 一共4个人玩：0 和 2 是队友, 1 和 3 是队友，要认清自己队友
 - 花色有5种：
   ♠=黑桃（spades），♥=红桃（hearts），♣=梅花（clubs），♦=方片（diamonds），
   以及大小王（joker）
@@ -67,8 +68,8 @@ DISCARD_RULES: Final[str] = """
 """.strip()
 
 PLAY_RULES: Final[str] = """
-- 根据自己的手牌和整体出牌记录，推测对家和对手手里分别有什么牌，才能配合
-  对家并压制对手
+- 根据自己的手牌和整体出牌记录，推测队友和对手手里分别有什么牌，才能配合
+  队友并压制对手
 - 每次只能出一门花色的牌，不同花色不可混出
 - 谨慎出分牌，要大概率该分能被己方得到才出分牌
 - 如果对手大概率能赢，尽量垫低价值牌
@@ -83,16 +84,16 @@ PLAY_LEAD_RULES: Final[str] = """
   - 但一旦被压制，对手就可以乘机上很多分
 - 如果某种花色你有大概率最大的牌，并通过出牌记录和手牌分析所有对手很可能
   也有该花色的牌，那你可以把最大的牌一起甩出来，对手就必须跟你同花色的牌，
-  对家也因此有机会出分牌
-- 副牌没有好牌时，可以选择出很小的主牌，谓之调主，低风险地转移牌权给对家
+  队友也因此有机会出分牌
+- 副牌没有好牌时，可以选择出很小的主牌，谓之调主，低风险地转移牌权给队友
 """.strip()
 
 PLAY_FOLLOW_RULES: Final[str] = """
 - 同门花色有一样牌型时必须优先跟该牌型，没有一样牌型时必须优先跟同门花色
   - 如果都不满足，则不讲究牌型和花色随意跟牌（优先小牌），谨慎跟主牌分牌
   - 跟牌数量必须与首出牌数量一致
-- 如果对家的牌明显大于对手已出和估计要出的牌，应当多出分牌
-- 如果对家出的副牌花色你全部没有，可以用主牌杀，从而转移牌权给自己
+- 如果队友的牌明显大于对手已出和估计要出的牌，应当多出分牌
+- 如果队友出的副牌花色你全部没有，可以用主牌杀，从而转移牌权给自己
   - 如果拿到牌权也不知道出什么牌，那也不一定非要杀
 """.strip()
 
@@ -159,6 +160,13 @@ _RANK_TEXT: dict[Rank, str] = {
     Rank.BIG_JOKER: "大王",
 }
 
+_SIDE_SUIT_ORDER: Final[tuple[Suit, ...]] = (
+    Suit.SPADES,
+    Suit.HEARTS,
+    Suit.CLUBS,
+    Suit.DIAMONDS,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class RuleBook:
@@ -203,7 +211,11 @@ def build_decision_prompt(
 
     user_parts = [
         _state_summary(player_index, snapshot),
-        _hand_summary(snapshot.player_hand),
+        _hand_summary(
+            snapshot.player_hand,
+            snapshot.trump_suit,
+            snapshot.trump_rank,
+        ),
         _trick_summary(snapshot.trick),
         memory.summary(),
         _action_constraints_summary(snapshot),
@@ -220,6 +232,7 @@ def _state_summary(player_index: int, snapshot: StateSnapshot) -> str:
     return f"""
 当前状态:
 - 你是：{_player_text(player_index)}
+- 队友：{_player_text(_teammate_index(player_index))}
 - 阶段：{_phase_text(snapshot.phase)}
 - 当前需要你：{_awaiting_text(snapshot.awaiting_action)}
 - 主级牌：{_rank_text(snapshot.trump_rank)}
@@ -231,15 +244,44 @@ def _state_summary(player_index: int, snapshot: StateSnapshot) -> str:
 """.strip()
 
 
-def _hand_summary(hand: list[Card]) -> str:
+def _hand_summary(
+    hand: list[Card], trump_suit: Suit | None, trump_rank: Rank
+) -> str:
     lines = ["你的手牌:"]
-    if not hand:
-        lines.append("- 无")
-    for card in hand:
-        lines.append(
-            f"- {card.id}: {card_text(card)}，分值={card_points(card)}"
-        )
+    for label, cards in _hand_groups(hand, trump_suit, trump_rank):
+        lines.append(f"- {label}:")
+        if not cards:
+            lines.append("  - 无")
+            continue
+        for card in cards:
+            lines.append(
+                f"  - {card.id}: {card_text(card)}，"
+                f"分值={card_points(card)}"
+            )
     return "\n".join(lines)
+
+
+def _hand_groups(
+    hand: list[Card], trump_suit: Suit | None, trump_rank: Rank
+) -> list[tuple[str, list[Card]]]:
+    sorted_hand = sort_by_display_order(hand, trump_suit, trump_rank)
+    trump_cards = [
+        card
+        for card in sorted_hand
+        if is_trump_card(card, trump_suit, trump_rank)
+    ]
+    groups: list[tuple[str, list[Card]]] = [("主牌", trump_cards)]
+    for suit in _SIDE_SUIT_ORDER:
+        if trump_suit is not None and suit == trump_suit:
+            continue
+        suit_cards = [
+            card
+            for card in sorted_hand
+            if card.suit == suit
+            and not is_trump_card(card, trump_suit, trump_rank)
+        ]
+        groups.append((f"{_SUIT_TEXT[suit]}副牌", suit_cards))
+    return groups
 
 
 def _trick_summary(trick: TrickSnapshot | None) -> str:
@@ -292,6 +334,10 @@ def _optional_suit_text(suit: Suit | None) -> str:
 
 def _player_text(player: int) -> str:
     return f"玩家 {player}"
+
+
+def _teammate_index(player: int) -> int:
+    return (player + 2) % 4
 
 
 def _optional_player_text(player: int | None) -> str:
