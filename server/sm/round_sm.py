@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict
 
 from server.result import Ok, Rejected
 from server.rules.cards import Card, Rank, Suit, create_decks
-from server.rules.rejections import CardNotInHandRejected
+from server.rules.rejections.card import CardNotInHandRejected
 
 from . import deal_bid_sm as db
 from . import scoring
@@ -26,7 +26,7 @@ from .constants import (
     BOTTOM_CARD_COUNT,
     get_team_index,
 )
-from .rejections import (
+from .rejections.round import (
     BidNotAllowedInRoundPhaseRejected,
     DealCardNotAllowedInRoundPhaseRejected,
     DiscardNotAllowedInRoundPhaseRejected,
@@ -37,8 +37,8 @@ from .rejections import (
     RoundMissingTrickStateRejected,
     SkipStirNotAllowedInRoundPhaseRejected,
     StirNotAllowedInRoundPhaseRejected,
-    WrongTurnRejected,
 )
+from .rejections.turn import WrongTurnRejected
 from .scoring import RoundResult
 from .types import BidEvent, CompletedTrick, RoundPhase
 

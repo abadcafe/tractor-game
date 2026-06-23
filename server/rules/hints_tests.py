@@ -9,7 +9,7 @@ from server.rules.hints import (
     get_legal_play_hints,
     sort_play_action_hints,
 )
-from server.rules.rejections import TooManyPlayHintsRejected
+from server.rules.rejections.hints import TooManyPlayHintsRejected
 
 
 def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:

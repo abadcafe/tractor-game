@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict
 from server.result import Ok, Rejected
 from server.rules.cards import Rank
 
-from .rejections import (
+from .rejections.game import (
     CannotProcessRoundResultRejected,
     CannotStartGameRejected,
 )

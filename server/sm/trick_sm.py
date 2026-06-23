@@ -13,14 +13,13 @@ from server.rules.follow import (
     illegal_follow_rejection,
     is_legal_follow,
 )
-from server.rules.rejections import (
-    CardsNotInHandRejected,
-    EmptyPlayRejected,
-)
+from server.rules.rejections.card import CardsNotInHandRejected
+from server.rules.rejections.play import EmptyPlayRejected
 from server.rules.throw import resolve_lead_throw
 
 from .constants import get_team_index, next_player_ccw
-from .rejections import TrickResolvedRejected, WrongTurnRejected
+from .rejections.trick import TrickResolvedRejected
+from .rejections.turn import WrongTurnRejected
 from .types import (
     CompletedTrick,
     CompletedTrickSlot,

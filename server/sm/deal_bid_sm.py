@@ -13,18 +13,18 @@ from pydantic import BaseModel, ConfigDict
 from server.result import Ok, Rejected
 from server.rules import bid as bid_rules
 from server.rules.cards import Card, Rank, Suit
-from server.rules.rejections import (
-    CardNotInHandRejected,
+from server.rules.rejections.bid import (
     CurrentBidWinnerCannotRebidRejected,
 )
+from server.rules.rejections.card import CardNotInHandRejected
 
 from .constants import next_player_ccw
-from .rejections import (
+from .rejections.protocol import InvalidPlayerIndexRejected
+from .rejections.round import (
     AllCardsDealtRejected,
     BidNotAllowedInDealBidPhaseRejected,
     DealCardNotAllowedInDealBidPhaseRejected,
     DealNotCompleteRejected,
-    InvalidPlayerIndexRejected,
 )
 from .types import BidEvent, DealBidPhase
 

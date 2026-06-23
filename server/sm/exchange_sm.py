@@ -10,12 +10,12 @@ from pydantic import BaseModel, ConfigDict
 
 from server.result import Ok, Rejected
 from server.rules.cards import Card
-from server.rules.rejections import (
+from server.rules.rejections.card import (
     CardNotInHandRejected,
     DuplicateCardRejected,
 )
 
-from .rejections import InvalidExchangeCountRejected
+from .rejections.stirring import InvalidExchangeCountRejected
 from .types import ExchangePhase
 
 # ---- Models ----

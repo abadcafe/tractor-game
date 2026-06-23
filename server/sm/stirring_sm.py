@@ -29,11 +29,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from server.result import Ok, Rejected
 from server.rules.cards import POINTS_MAP, Card, Rank, Suit
 from server.rules.ordering import bid_value
-from server.rules.rejections import MixedJokerPairRejected
+from server.rules.rejections.bid import MixedJokerPairRejected
 
 from . import exchange_sm as exc
 from .constants import next_player_ccw
-from .rejections import (
+from .rejections.stirring import (
     CannotPassStirWhileExchangingRejected,
     CannotStirConsecutivelyRejected,
     CannotStirNowRejected,
@@ -45,8 +45,8 @@ from .rejections import (
     StirMustBePairRejected,
     StirPriorityTooLowRejected,
     StirringMissingExchangeStateRejected,
-    WrongTurnRejected,
 )
+from .rejections.turn import WrongTurnRejected
 from .types import StirAction, StirringPhase
 
 # ---- Priority Mapping ----

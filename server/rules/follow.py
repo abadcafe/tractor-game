@@ -11,8 +11,8 @@ from .decompose import (
     rank_order_in_trump_group,
 )
 from .ordering import effective_suit
-from .rejections import (
-    CardNotInHandRejected,
+from .rejections.card import CardNotInHandRejected
+from .rejections.play import (
     EmptyFollowRejected,
     EmptyLeadRejected,
     IllegalFollowShapeRejected,

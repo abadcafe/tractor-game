@@ -2,22 +2,24 @@
 
 from __future__ import annotations
 
+from .bid_snapshot import BidEventSnapshot
 from .messages import (
     PlayerMessage,
     StateMessage,
 )
-from .snapshot import (
+from .scoring_snapshot import ScoringSnapshot
+from .snapshot import StateSnapshot
+from .snapshot_common import (
     AwaitingAction,
     BidEventKind,
-    BidEventSnapshot,
-    CompletedTrickSnapshot,
-    FailedThrowSnapshot,
     JokerType,
     RoundPhase,
-    ScoringSnapshot,
-    StateSnapshot,
     StirringPhase,
-    StirringStateSnapshot,
+)
+from .stirring_snapshot import StirringStateSnapshot
+from .trick_snapshot import (
+    CompletedTrickSnapshot,
+    FailedThrowSnapshot,
     TrickSlotSnapshot,
     TrickSnapshot,
 )

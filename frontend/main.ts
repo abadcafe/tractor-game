@@ -1,9 +1,4 @@
 import { StateManager } from "./core/state.ts";
-import type {
-  CompletedTrick,
-  FailedThrow,
-  StateSnapshot,
-} from "./core/types.ts";
 import type { ClientAction, ServerMessage } from "./core/protocol.ts";
 import type {
   BidOption,
@@ -30,46 +25,14 @@ import {
   computeStirButtonState,
   isSelectionStillLegal,
 } from "./engine/ui-state-computer.ts";
-import {
-  computeBidOptionsFromHints,
-  computeBidPriority,
-  computeDealBidAction,
-} from "./engine/bid-logic.ts";
+import { PendingBidController } from "./engine/pending-bid-controller.ts";
+import { TrickPreviewController } from "./engine/trick-preview-controller.ts";
 
 const GAME_ID_STORAGE_KEY = "tractor-game-id";
 const DEAL_BID_PLAYBACK_INTERVAL_MS = 125;
 const DEFAULT_PLAYBACK_INTERVAL_MS = 500;
 const PREVIOUS_TRICK_PREVIEW_MS = 2000;
 const FAILED_THROW_PREVIEW_MS = 5000;
-
-function filterAllowedBidOptions(
-  options: BidOption[],
-  snapshot: StateSnapshot,
-): BidOption[] {
-  if (snapshot.phase !== "DEAL_BID") {
-    return [];
-  }
-  const handIds = new Set(snapshot.player_hand.map((card) => card.id));
-  const currentBidPriority = snapshot.bid_winner === null
-    ? 0
-    : computeBidPriority(snapshot.bid_winner.cards, snapshot.trump_rank);
-  return options.filter((option) =>
-    option.priority > currentBidPriority &&
-    option.cardIds.every((cardId) => handIds.has(cardId))
-  );
-}
-
-function containsBidOption(
-  options: BidOption[],
-  target: BidOption,
-): boolean {
-  const targetKey = bidOptionKey(target);
-  return options.some((option) => bidOptionKey(option) === targetKey);
-}
-
-function bidOptionKey(option: BidOption): string {
-  return [...option.cardIds].sort().join(",");
-}
 
 function main() {
   const containerEl = document.querySelector("#app");
@@ -89,21 +52,13 @@ function main() {
   let actionPending = false;
   let playbackCaughtUp = true;
   let playbackQueue: StatePlaybackQueue<ServerMessage> | null = null;
-  let hasSeenState = false;
-  let lastSeenCompletedTrickKey: string | null = null;
-  let previousTrickPreview: CompletedTrick | null = null;
-  let previousTrickPreviewTimer: ReturnType<typeof setTimeout> | null =
-    null;
-  let failedThrowPreview: FailedThrow | null = null;
-  let failedThrowPreviewTimer: ReturnType<typeof setTimeout> | null =
-    null;
-  let lastFailedThrowKey: string | null = null;
   let currentGameId: string | null = null;
-
-  // Auto-bid state
-  let pendingBidIntent: BidOption | null = null;
-  let visibleBidOptions: BidOption[] = [];
-  let pendingBidInFlight = false;
+  const trickPreviewController = new TrickPreviewController(
+    PREVIOUS_TRICK_PREVIEW_MS,
+    FAILED_THROW_PREVIEW_MS,
+    reRender,
+  );
+  const pendingBidController = new PendingBidController();
 
   // Shared render context
   const renderCtx: RenderContext = {
@@ -121,35 +76,22 @@ function main() {
       snap,
       effectiveInteractionMode,
     );
-    const currentBidOptions = computeBidOptionsFromHints(
-      snap.action_hints ?? [],
-      snap.trump_rank,
+    const bidState = pendingBidController.updateRenderState(
+      snap,
+      effectiveInteractionMode,
     );
-    if (snap.phase !== "DEAL_BID") {
-      visibleBidOptions = [];
-      pendingBidIntent = null;
-      pendingBidInFlight = false;
-    } else if (effectiveInteractionMode === "bid") {
-      visibleBidOptions = currentBidOptions;
-    }
-    visibleBidOptions = filterAllowedBidOptions(visibleBidOptions, snap);
-    if (
-      !pendingBidInFlight &&
-      pendingBidIntent !== null &&
-      !containsBidOption(visibleBidOptions, pendingBidIntent)
-    ) {
-      pendingBidIntent = null;
-    }
-    renderCtx.bidOptions = snap.phase === "DEAL_BID" ? visibleBidOptions : [];
-    renderCtx.pendingBidIntent = pendingBidIntent;
+    renderCtx.bidOptions = bidState.bidOptions;
+    renderCtx.pendingBidIntent = bidState.pendingBidIntent;
     renderCtx.stirButtonState = computeStirButtonState(
       snap,
       selectedCardIds,
     );
     renderCtx.compactHand = compactHand;
     renderCtx.gameId = currentGameId;
-    renderCtx.previousTrickPreview = previousTrickPreview;
-    renderCtx.failedThrowPreview = failedThrowPreview;
+    renderCtx.previousTrickPreview =
+      trickPreviewController.previousTrickPreview;
+    renderCtx.failedThrowPreview =
+      trickPreviewController.failedThrowPreview;
     renderCtx.levelChange = snap.scoring
       ? computeLevelChangeInfo(snap.scoring.total_defender_points)
       : undefined;
@@ -183,125 +125,6 @@ function main() {
     return true;
   }
 
-  function clearPreviousTrickPreview(): void {
-    previousTrickPreview = null;
-    if (previousTrickPreviewTimer !== null) {
-      clearTimeout(previousTrickPreviewTimer);
-      previousTrickPreviewTimer = null;
-    }
-  }
-
-  function clearFailedThrowPreview(): void {
-    failedThrowPreview = null;
-    lastFailedThrowKey = null;
-    if (failedThrowPreviewTimer !== null) {
-      clearTimeout(failedThrowPreviewTimer);
-      failedThrowPreviewTimer = null;
-    }
-  }
-
-  function showPreviousTrickPreview(
-    trick: CompletedTrick,
-    renderNow: boolean,
-  ): void {
-    clearFailedThrowPreview();
-    previousTrickPreview = trick;
-    if (previousTrickPreviewTimer !== null) {
-      clearTimeout(previousTrickPreviewTimer);
-    }
-    previousTrickPreviewTimer = setTimeout(() => {
-      previousTrickPreview = null;
-      previousTrickPreviewTimer = null;
-      reRender();
-    }, PREVIOUS_TRICK_PREVIEW_MS);
-    if (renderNow) {
-      reRender();
-    }
-  }
-
-  function completedTrickKey(trick: CompletedTrick | null): string | null {
-    if (trick === null) {
-      return null;
-    }
-    const slotParts = trick.slots.map((slot) =>
-      `${slot.player}:${slot.cards.map((card) => card.id).join(",")}`
-    );
-    return [
-      trick.lead_player,
-      trick.winner,
-      trick.points,
-      ...slotParts,
-    ].join("|");
-  }
-
-  function failedThrowKey(
-    snapshot: StateSnapshot,
-    event: FailedThrow,
-  ): string {
-    const attemptedIds = event.attempted_cards.map((card) => card.id)
-      .join(",");
-    const forcedIds = event.forced_cards.map((card) => card.id).join(
-      ",",
-    );
-    return [
-      completedTrickKey(snapshot.last_completed_trick) ?? "none",
-      event.player,
-      attemptedIds,
-      forcedIds,
-    ].join("|");
-  }
-
-  function updateFailedThrowPreview(snapshot: StateSnapshot): void {
-    if (snapshot.phase !== "PLAYING") {
-      clearFailedThrowPreview();
-      return;
-    }
-
-    const event = snapshot.failed_throw;
-    if (event === null) {
-      return;
-    }
-
-    const key = failedThrowKey(snapshot, event);
-    if (key === lastFailedThrowKey) {
-      return;
-    }
-
-    lastFailedThrowKey = key;
-    failedThrowPreview = event;
-    clearPreviousTrickPreview();
-    if (failedThrowPreviewTimer !== null) {
-      clearTimeout(failedThrowPreviewTimer);
-    }
-    failedThrowPreviewTimer = setTimeout(() => {
-      if (lastFailedThrowKey === key) {
-        failedThrowPreview = null;
-        failedThrowPreviewTimer = null;
-        reRender();
-      }
-    }, FAILED_THROW_PREVIEW_MS);
-  }
-
-  function updatePreviousTrickPreview(snapshot: StateSnapshot): void {
-    const trickKey = completedTrickKey(snapshot.last_completed_trick);
-    if (!hasSeenState) {
-      hasSeenState = true;
-      lastSeenCompletedTrickKey = trickKey;
-      return;
-    }
-    if (trickKey === lastSeenCompletedTrickKey) {
-      return;
-    }
-
-    lastSeenCompletedTrickKey = trickKey;
-    if (snapshot.last_completed_trick === null) {
-      clearPreviousTrickPreview();
-      clearFailedThrowPreview();
-      return;
-    }
-    showPreviousTrickPreview(snapshot.last_completed_trick, false);
-  }
-
   /** Send action, clear selection, re-render. */
   function sendAndClear(action: ClientAction) {
     if (!sendAction(action)) {
@@ -323,22 +146,15 @@ function main() {
   }
 
   /** Auto-bid: send skip or pending intent when it's the human's turn to bid. */
-  function handleAutoBid(
-    snapshot: StateSnapshot,
-    interactionMode: InteractionMode,
-  ) {
-    if (interactionMode !== "bid" || pendingBidInFlight) return;
+  function handleAutoBid(interactionMode: InteractionMode) {
+    if (interactionMode !== "bid" || pendingBidController.isInFlight) {
+      return;
+    }
     const seq = currentSeq();
 
-    const decision = computeDealBidAction(
-      snapshot.action_hints ?? [],
-      pendingBidIntent,
-      seq,
-    );
+    const decision = pendingBidController.computeDealBidAction(seq);
     if (sendAction(decision.action)) {
-      if (decision.matchedPending) {
-        pendingBidInFlight = true;
-      }
+      pendingBidController.markActionSent(decision);
       reRender();
     }
   }
@@ -393,7 +209,10 @@ function main() {
       const snap = stateManager.get();
       const latestTrick = snap?.last_completed_trick ?? null;
       if (latestTrick === null) return;
-      showPreviousTrickPreview(latestTrick, true);
+      trickPreviewController.showPreviousTrickPreview(
+        latestTrick,
+        true,
+      );
     },
 
     onAction(action: GameAction) {
@@ -422,15 +241,12 @@ function main() {
 
     onBidOptionSelect(option: BidOption) {
       const snap = stateManager.get();
-      if (
-        snap?.phase !== "DEAL_BID" ||
-        pendingBidIntent !== null ||
-        !containsBidOption(visibleBidOptions, option)
-      ) {
+      if (snap?.phase !== "DEAL_BID") {
         return;
       }
-      pendingBidIntent = option;
-      reRender();
+      if (pendingBidController.select(option)) {
+        reRender();
+      }
     },
 
     onStir(cardIds: string[]) {
@@ -447,15 +263,11 @@ function main() {
 
     onNewGame() {
       selectedCardIds.clear();
-      pendingBidIntent = null;
-      pendingBidInFlight = false;
+      pendingBidController.reset();
       playbackQueue?.clear();
       actionPending = false;
       playbackCaughtUp = true;
-      hasSeenState = false;
-      lastSeenCompletedTrickKey = null;
-      clearPreviousTrickPreview();
-      clearFailedThrowPreview();
+      trickPreviewController.reset();
       stateManager.reset();
       localStorage.removeItem(GAME_ID_STORAGE_KEY);
       currentGameId = null;
@@ -473,22 +285,19 @@ function main() {
       if (!isSelectionStillLegal(snapshot, selectedCardIds)) {
         selectedCardIds.clear();
       }
-      updatePreviousTrickPreview(snapshot);
-      updateFailedThrowPreview(snapshot);
+      trickPreviewController.update(snapshot);
       precomputeAndRender(snapshot);
 
       // Auto-bid after render
       if (!interactionBlocked()) {
-        handleAutoBid(snapshot, interactionMode);
+        handleAutoBid(interactionMode);
       }
     },
     container,
     undefined,
     () => wsClient.isReconnecting,
     (message) => {
-      if (pendingBidInFlight) {
-        pendingBidIntent = null;
-        pendingBidInFlight = false;
+      if (pendingBidController.consumeInFlightFailure()) {
         reRender();
         showErrorToast(`抢主失败：${message}`, container);
         return;
@@ -500,10 +309,7 @@ function main() {
   playbackQueue = new StatePlaybackQueue<ServerMessage>(
     (msg) => {
       actionPending = false;
-      if (msg.type === "state" && !msg.error && pendingBidInFlight) {
-        pendingBidInFlight = false;
-        pendingBidIntent = null;
-      }
+      pendingBidController.acknowledgeMessage(msg);
       gameLoop.handleMessage(msg);
     },
     {

@@ -8,7 +8,7 @@ from server.result import Ok, Rejected
 
 from .cards import Card, Rank, Suit
 from .ordering import bid_value
-from .rejections import (
+from .rejections.bid import (
     BidCardsCountMismatchRejected,
     BidCardSuitMismatchRejected,
     BidCardWrongRankRejected,

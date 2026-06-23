@@ -12,7 +12,7 @@ from .cards import Card, Rank, Suit
 from .decompose import decompose, extract_tractor_pairs
 from .follow import is_legal_follow
 from .ordering import effective_suit, trump_order
-from .rejections import TooManyPlayHintsRejected
+from .rejections.hints import TooManyPlayHintsRejected
 from .types import SubPlay
 
 MAX_PLAY_ACTION_HINTS: int = 25

@@ -4,7 +4,7 @@ from typing import Literal
 
 from server.result import Ok, Rejected
 from server.rules.cards import POINTS_MAP, Card, Rank, Suit
-from server.rules.rejections import MustFollowLeadSuitRejected
+from server.rules.rejections.play import MustFollowLeadSuitRejected
 
 from .trick_sm import (
     TrickInput,
