@@ -1,8 +1,4 @@
-import type {
-  CompletedTrick,
-  FailedThrow,
-  StateSnapshot,
-} from "../core/types.ts";
+import type { CompletedTrick, FailedThrow } from "../core/types.ts";
 import type {
   BidOption,
   GameAction,

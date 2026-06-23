@@ -5,7 +5,7 @@ import {
 import { DOMParser } from "jsr:@b-fuze/deno-dom@0.1.56";
 import { renderHandView } from "../ui/components/hand-view.ts";
 import type { StateSnapshot } from "../core/types.ts";
-import type { BidOption, InteractionMode } from "../engine/types.ts";
+import type { BidOption } from "../engine/types.ts";
 
 const doc = new DOMParser().parseFromString(
   `<html><body><div id="app"></div></body></html>`,

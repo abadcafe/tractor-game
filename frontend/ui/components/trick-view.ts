@@ -227,11 +227,13 @@ function renderFailedThrowRow(
     el("span", { class: "failed-throw-preview__label" }, label),
   );
   const cardsEl = el("div", { class: "failed-throw-preview__cards" });
-  for (const card of sortHand(
-    cards,
-    snapshot.trump_suit,
-    snapshot.trump_rank,
-  )) {
+  for (
+    const card of sortHand(
+      cards,
+      snapshot.trump_suit,
+      snapshot.trump_rank,
+    )
+  ) {
     cardsEl.appendChild(renderTrickCard(card));
   }
   row.appendChild(cardsEl);

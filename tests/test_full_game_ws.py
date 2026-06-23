@@ -745,16 +745,14 @@ def test_list_games(sync_client: SyncServerClient) -> None:
     # Don't narrow resp_data with _is_dict — it would make
     # resp_data["games"]
     # return `object` (non-iterable in pyright strict). Keep resp_data
-    # as Any
-    # so list iteration works with proper type narrowing on each
-    # element.
+    # in its inferred TestClient response shape so list iteration works
+    # with proper type narrowing on each element.
     games = resp_data["games"]
     assert len(games) >= 1
     game_ids = [_as_str(g["game_id"]) for g in games]
     assert game_id in game_ids
-    # Each game should have a phase field
     for g in games:
-        assert "phase" in g
+        assert "phase" not in g
 
 
 def test_delete_game_closes_ws(sync_client: SyncServerClient) -> None:

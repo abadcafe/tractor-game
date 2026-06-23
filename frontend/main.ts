@@ -343,10 +343,10 @@ function main() {
   });
 
   function currentWsHost(): string {
-    const protocol = window.location.protocol === "https:"
+    const protocol = globalThis.location.protocol === "https:"
       ? "wss:"
       : "ws:";
-    return `${protocol}//${window.location.host}`;
+    return `${protocol}//${globalThis.location.host}`;
   }
 
   async function connectToGame(gameId: string): Promise<void> {

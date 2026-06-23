@@ -335,7 +335,7 @@ async def test_list_games_with_games(
     assert len(games_raw) == 1
     first_game = games_raw[0]
     assert "game_id" in first_game
-    assert "phase" in first_game
+    assert "phase" not in first_game
 
 
 # ---- REST: Delete Game ----

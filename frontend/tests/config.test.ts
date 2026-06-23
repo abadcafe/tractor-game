@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { SEAT_MAP, WS_PATH, API_BASE } from "../config.ts";
+import { API_BASE, SEAT_MAP, WS_PATH } from "../config.ts";
 
 Deno.test("test_ws_path_format", () => {
   assertEquals(WS_PATH("abc123"), "/game/abc123");

@@ -1,9 +1,8 @@
 """Game aggregate root for the Tractor game.
 
 Wraps sm state machines, manages 4 Player instances, drives the sync
-round-robin bidding, and provides receive(), snapshot(),
-is_over(), get_phase(), set_on_game_over(), get_player(), and
-resolve_cards() interfaces.
+round-robin bidding, and provides receive(), snapshot(), is_over(),
+set_on_game_over(), get_player(), and resolve_cards() interfaces.
 
 Game lifecycle: WAITING (confirm to start) → DEAL_BID → STIRRING →
 PLAYING → WAITING (confirm for next round) → ...
@@ -215,7 +214,7 @@ class Game:
         Seq validation happens in receive() before action parsing.
         """
         rs = self._round_state
-        phase = self.get_phase()
+        phase = self._current_phase()
         logger.debug(
             "Game.receive: player=%d action=%s phase=%s",
             player_index,
@@ -441,7 +440,7 @@ class Game:
         """Return True if the game is over."""
         return self._game_state.winning_team is not None
 
-    def get_phase(self) -> RoundPhase:
+    def _current_phase(self) -> RoundPhase:
         """Return the current round/player-visible phase.
 
         WAITING: game not started yet (_round_state is None) or round

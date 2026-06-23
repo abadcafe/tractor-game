@@ -10,16 +10,27 @@ const MAX_VISIBLE_TOASTS = 3;
  * and auto-removes after TOAST_DURATION_MS.
  * Limits visible toasts to MAX_VISIBLE_TOASTS to prevent spam.
  */
-export function showErrorToast(message: string, container?: Element): void {
-  const target = container ?? (typeof document !== "undefined" ? document.querySelector("#app") : null);
+export function showErrorToast(
+  message: string,
+  container?: Element,
+): void {
+  const target = container ??
+    (typeof document !== "undefined"
+      ? document.querySelector("#app")
+      : null);
   if (!target) {
-    console.warn(`showErrorToast: no container found for message "${message}"`);
+    console.warn(
+      `showErrorToast: no container found for message "${message}"`,
+    );
     return;
   }
 
-  const doc = target.ownerDocument ?? (typeof document !== "undefined" ? document : null);
+  const doc = target.ownerDocument ??
+    (typeof document !== "undefined" ? document : null);
   if (!doc) {
-    console.warn(`showErrorToast: no document available for message "${message}"`);
+    console.warn(
+      `showErrorToast: no document available for message "${message}"`,
+    );
     return;
   }
 

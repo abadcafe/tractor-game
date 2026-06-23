@@ -101,7 +101,10 @@ Deno.test("test_handleMessage_deal_bid_not_our_turn_shows_null", () => {
   lastInteractionMode = null;
   const stateManager = new StateManager();
   const loop = new GameLoop(stateManager, mockRender, mockContainer);
-  const msg = makeStateMsg({ phase: "DEAL_BID", awaiting_action: null });
+  const msg = makeStateMsg({
+    phase: "DEAL_BID",
+    awaiting_action: null,
+  });
   loop.handleMessage(msg);
   assertEquals(lastRenderedSnapshot !== null, true);
   assertEquals(lastInteractionMode, null);

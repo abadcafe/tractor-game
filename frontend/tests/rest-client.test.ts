@@ -8,7 +8,9 @@ async function withMockServer(
 ): Promise<void> {
   const server = Deno.serve({ port: 0 }, handler);
   const addr = server.addr;
-  const port = typeof addr === "object" && "port" in addr ? addr.port : 0;
+  const port = typeof addr === "object" && "port" in addr
+    ? addr.port
+    : 0;
   const baseUrl = `http://localhost:${port}`;
   try {
     await fn(baseUrl);
@@ -20,7 +22,10 @@ async function withMockServer(
 Deno.test("test_createGame_success", async () => {
   await withMockServer(
     (req) => {
-      if (req.method === "POST" && new URL(req.url).pathname === "/api/game") {
+      if (
+        req.method === "POST" &&
+        new URL(req.url).pathname === "/api/game"
+      ) {
         return new Response(JSON.stringify({ game_id: "test-123" }), {
           headers: { "Content-Type": "application/json" },
         });

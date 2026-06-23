@@ -1193,13 +1193,11 @@ body {
   letter-spacing: 0;
   text-decoration: none;
   text-transform: uppercase;
-  background:
-    linear-gradient(145deg, #f6d76c, #f1a93d);
+  background: linear-gradient(145deg, #f6d76c, #f1a93d);
 }
 
 .player-avatar--debug.team1 {
-  background:
-    linear-gradient(145deg, #84d7ff, #3c97d4);
+  background: linear-gradient(145deg, #84d7ff, #3c97d4);
 }
 
 .player-avatar--debug:hover {

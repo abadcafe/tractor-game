@@ -100,7 +100,9 @@ export function renderGameTable(
     const area = el("div", attrs);
 
     const header = el("div", { class: "player-area__header" });
-    header.appendChild(renderDebugAvatar(i, seat.team, seat.label, gameId));
+    header.appendChild(
+      renderDebugAvatar(i, seat.team, seat.label, gameId),
+    );
     const labelClass = `player-label team${seat.team}`;
     header.appendChild(el("span", { class: labelClass }, seat.label));
     header.appendChild(

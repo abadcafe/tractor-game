@@ -34,7 +34,7 @@ export function renderHandView(
   onAction?: (action: GameAction) => void,
   onClearSelection?: () => void,
   onUseHint?: () => void,
-  onToggleCompact?: () => void,
+  _onToggleCompact?: () => void,
   compactHand?: boolean,
   onStir?: (cardIds: string[]) => void,
   onPass?: () => void,

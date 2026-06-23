@@ -23,7 +23,12 @@ export type RoundPhase =
   | "SCORING"
   | "WAITING";
 export type StirringPhase = "WAITING" | "EXCHANGING" | "COMPLETE";
-export type AwaitingAction = "bid" | "stir" | "discard" | "play" | "next_round";
+export type AwaitingAction =
+  | "bid"
+  | "stir"
+  | "discard"
+  | "play"
+  | "next_round";
 export type BidEventKind = "trump_rank" | "joker";
 export type JokerType = "big" | "small";
 

@@ -16,7 +16,11 @@ type ReconnectingProvider = () => boolean;
  */
 export class GameLoop {
   private stateManager: StateManager;
-  private renderFn: (snapshot: StateSnapshot, container: Element, interactionMode: InteractionMode) => void;
+  private renderFn: (
+    snapshot: StateSnapshot,
+    container: Element,
+    interactionMode: InteractionMode,
+  ) => void;
   private container: Element;
   private isReconnecting: ReconnectingProvider;
   private onError: ErrorHandler | null;
@@ -24,7 +28,11 @@ export class GameLoop {
 
   constructor(
     stateManager: StateManager,
-    renderFn: (snapshot: StateSnapshot, container: Element, interactionMode: InteractionMode) => void,
+    renderFn: (
+      snapshot: StateSnapshot,
+      container: Element,
+      interactionMode: InteractionMode,
+    ) => void,
     container: Element,
     _humanPlayerIndex?: number,
     isReconnecting?: ReconnectingProvider,
@@ -77,7 +85,9 @@ export class GameLoop {
    * - Game over: null, because awaiting_action is null
    * - Reconnecting: null (all interaction disabled)
    */
-  private computeInteractionMode(state: StateSnapshot): InteractionMode {
+  private computeInteractionMode(
+    state: StateSnapshot,
+  ): InteractionMode {
     // Disable all interaction while reconnecting
     if (this.isReconnecting()) {
       return null;

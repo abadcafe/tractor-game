@@ -2,6 +2,7 @@
 
 import subprocess
 import time
+from collections.abc import Generator
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -12,7 +13,7 @@ PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
 
 
 @pytest.fixture(scope="session")
-def live_server():
+def live_server() -> Generator[str, None, None]:
     """Start the FastAPI server for E2E tests."""
     proc = subprocess.Popen(
         [

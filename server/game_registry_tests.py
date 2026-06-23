@@ -3,20 +3,23 @@ Tests for server/game_registry.py -- in-memory game registry with
 timeout cleanup.
 """
 
-from unittest.mock import MagicMock
+from dataclasses import dataclass
 
 from server.game_registry import GameRegistry
 
 
-def _make_game(phase: str = "IN_PROGRESS") -> MagicMock:
+@dataclass(slots=True)
+class _FakeGame:
+    name: str = "fake"
+
+
+def _make_game(name: str = "fake") -> _FakeGame:
     """Create a mock Game object for testing."""
-    game = MagicMock()
-    game.get_phase.return_value = phase
-    return game
+    return _FakeGame(name=name)
 
 
-def test_create_stores_and_returns_id():
-    registry = GameRegistry()
+def test_create_stores_and_returns_id() -> None:
+    registry: GameRegistry[_FakeGame] = GameRegistry()
     game = _make_game()
     game_id = registry.create(game)
     assert isinstance(game_id, str)
@@ -25,8 +28,8 @@ def test_create_stores_and_returns_id():
     assert retrieved is game
 
 
-def test_create_generates_unique_ids():
-    registry = GameRegistry()
+def test_create_generates_unique_ids() -> None:
+    registry: GameRegistry[_FakeGame] = GameRegistry()
     game1 = _make_game()
     game2 = _make_game()
     id1 = registry.create(game1)
@@ -34,20 +37,20 @@ def test_create_generates_unique_ids():
     assert id1 != id2
 
 
-def test_get_returns_game():
-    registry = GameRegistry()
+def test_get_returns_game() -> None:
+    registry: GameRegistry[_FakeGame] = GameRegistry()
     game = _make_game()
     game_id = registry.create(game)
     result = registry.get(game_id)
     assert result is game
 
 
-def test_get_missing_returns_none():
-    registry = GameRegistry()
+def test_get_missing_returns_none() -> None:
+    registry: GameRegistry[_FakeGame] = GameRegistry()
     assert registry.get("nonexistent") is None
 
 
-def test_get_updates_last_access():
+def test_get_updates_last_access() -> None:
     """get() should update the last access timestamp for the game.
 
     Uses a controllable clock (lambda returning incrementing timestamps)
@@ -60,11 +63,11 @@ def test_get_updates_last_access():
     # call
     clock_calls = [0]
 
-    def fake_clock():
+    def fake_clock() -> float:
         clock_calls[0] += 1
         return float(clock_calls[0] * 100)
 
-    registry = GameRegistry(clock=fake_clock)
+    registry: GameRegistry[_FakeGame] = GameRegistry(clock=fake_clock)
     game = _make_game()
     game_id = registry.create(game)  # clock returns 100.0
 
@@ -81,7 +84,7 @@ def test_get_updates_last_access():
 
     # Now test the positive case: get() updates timestamp so game is NOT
     # expired
-    registry2 = GameRegistry(clock=fake_clock)
+    registry2: GameRegistry[_FakeGame] = GameRegistry(clock=fake_clock)
     clock_calls[0] = 0
     game2 = _make_game()
     game_id2 = registry2.create(game2)  # clock returns 100.0
@@ -98,52 +101,49 @@ def test_get_updates_last_access():
     assert removed2 == 0
 
 
-def test_delete_removes_game():
-    registry = GameRegistry()
+def test_delete_removes_game() -> None:
+    registry: GameRegistry[_FakeGame] = GameRegistry()
     game = _make_game()
     game_id = registry.create(game)
     registry.delete(game_id)
     assert registry.get(game_id) is None
 
 
-def test_delete_missing_is_noop():
-    registry = GameRegistry()
+def test_delete_missing_is_noop() -> None:
+    registry: GameRegistry[_FakeGame] = GameRegistry()
     # Should not raise
     registry.delete("nonexistent")
 
 
-def test_list_games_returns_phase_info():
-    registry = GameRegistry()
-    game1 = _make_game(phase="DEAL_BID")
-    game2 = _make_game(phase="WAITING")
+def test_list_games_returns_game_ids() -> None:
+    registry: GameRegistry[_FakeGame] = GameRegistry()
+    game1 = _make_game(name="one")
+    game2 = _make_game(name="two")
     id1 = registry.create(game1)
     id2 = registry.create(game2)
     result = registry.list_games()
     assert len(result) == 2
     ids_in_result = {r["game_id"] for r in result}
     assert ids_in_result == {id1, id2}
-    phases = {r["game_id"]: r["phase"] for r in result}
-    assert phases[id1] == "DEAL_BID"
-    assert phases[id2] == "WAITING"
 
 
-def test_list_games_empty():
-    registry = GameRegistry()
+def test_list_games_empty() -> None:
+    registry: GameRegistry[_FakeGame] = GameRegistry()
     assert registry.list_games() == []
 
 
-def test_cleanup_expired_removes_old():
+def test_cleanup_expired_removes_old() -> None:
     """cleanup_expired removes games older than max_age using the clock.
 
     Uses a controllable clock instead of modifying private _last_access.
     """
     clock_calls = [0]
 
-    def fake_clock():
+    def fake_clock() -> float:
         clock_calls[0] += 1
         return float(clock_calls[0] * 100)
 
-    registry = GameRegistry(clock=fake_clock)
+    registry: GameRegistry[_FakeGame] = GameRegistry(clock=fake_clock)
     game = _make_game()
     game_id = registry.create(
         game
@@ -156,18 +156,18 @@ def test_cleanup_expired_removes_old():
     assert registry.get(game_id) is None
 
 
-def test_cleanup_expired_keeps_recent():
+def test_cleanup_expired_keeps_recent() -> None:
     """cleanup_expired keeps games within max_age using the clock.
 
     Uses a controllable clock instead of modifying private _last_access.
     """
     clock_calls = [0]
 
-    def fake_clock():
+    def fake_clock() -> float:
         clock_calls[0] += 1
         return float(clock_calls[0] * 100)
 
-    registry = GameRegistry(clock=fake_clock)
+    registry: GameRegistry[_FakeGame] = GameRegistry(clock=fake_clock)
     game = _make_game()
     game_id = registry.create(game)  # clock returns 100.0
 
@@ -179,7 +179,7 @@ def test_cleanup_expired_keeps_recent():
     assert registry.get(game_id) is game
 
 
-def test_cleanup_expired_mixed():
+def test_cleanup_expired_mixed() -> None:
     """cleanup_expired correctly handles a mix of old and recent games.
 
     Uses a controllable clock to simulate time passage without
@@ -187,11 +187,11 @@ def test_cleanup_expired_mixed():
     """
     clock_calls = [0]
 
-    def fake_clock():
+    def fake_clock() -> float:
         clock_calls[0] += 1
         return float(clock_calls[0] * 100)
 
-    registry = GameRegistry(clock=fake_clock)
+    registry: GameRegistry[_FakeGame] = GameRegistry(clock=fake_clock)
     old_game = _make_game()
     new_game = _make_game()
     old_id = registry.create(old_game)  # clock returns 100.0
@@ -211,23 +211,3 @@ def test_cleanup_expired_mixed():
     assert removed == 1
     assert registry.get(old_id) is None
     assert registry.get(new_id) is new_game
-
-
-def test_list_games_returns_real_phase():
-    """
-    list_games should use game.get_phase() for phase info, not a simple
-    is_over() check.
-    """
-    from unittest.mock import MagicMock
-
-    registry = GameRegistry()
-    game1 = MagicMock()
-    game1.get_phase.return_value = "DEAL_BID"
-    game2 = MagicMock()
-    game2.get_phase.return_value = "PLAYING"
-    id1 = registry.create(game1)
-    id2 = registry.create(game2)
-    result = registry.list_games()
-    phases = {r["game_id"]: r["phase"] for r in result}
-    assert phases[id1] == "DEAL_BID"
-    assert phases[id2] == "PLAYING"

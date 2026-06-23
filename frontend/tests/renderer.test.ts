@@ -5,11 +5,7 @@ import {
 import { DOMParser } from "jsr:@b-fuze/deno-dom@0.1.56";
 import { render } from "../ui/renderer.ts";
 import type { StateSnapshot } from "../core/types.ts";
-import type {
-  BidOption,
-  GameAction,
-  InteractionMode,
-} from "../engine/types.ts";
+import type { BidOption, GameAction } from "../engine/types.ts";
 import type { ActionCallbacks } from "../ui/types.ts";
 
 function makeSnapshot(

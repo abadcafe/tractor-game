@@ -14,7 +14,7 @@ const gameIdElement = requiredElement("game-id", HTMLDivElement);
 const views = new Map<string, ViewState>();
 
 let selectedPlayer = parsePlayer(
-  new URLSearchParams(window.location.search).get("player"),
+  new URLSearchParams(globalThis.location.search).get("player"),
 );
 let latestRecords: TranscriptRecord[] = [];
 const stream = new AITranscriptStream();
@@ -44,7 +44,7 @@ function parsePlayer(raw: string | null): number | null {
 }
 
 function gameIdFromPath(): string | null {
-  const parts = window.location.pathname.split("/").filter((part) =>
+  const parts = globalThis.location.pathname.split("/").filter((part) =>
     part !== ""
   );
   if (parts.length < 3 || parts[0] !== "debug" || parts[1] !== "ai") {

@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import FastAPI, WebSocket
 
 from server.app_state import ServerState
+from server.game_registry import ListedGame
 from server.player_factory import create_game_with_default_players
 
 
@@ -18,7 +19,7 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
         state.human_players[game_id] = human
         return {"game_id": game_id}
 
-    async def list_games() -> dict[str, object]:
+    async def list_games() -> dict[str, list[ListedGame]]:
         return {"games": state.registry.list_games()}
 
     async def delete_game(game_id: str) -> dict[str, bool]:

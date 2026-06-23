@@ -50,7 +50,7 @@ async function copyText(
 ): Promise<void> {
   if (text === "") return;
   try {
-    if (navigator.clipboard && window.isSecureContext) {
+    if (navigator.clipboard && globalThis.isSecureContext) {
       await navigator.clipboard.writeText(text);
     } else {
       fallbackCopy(text);

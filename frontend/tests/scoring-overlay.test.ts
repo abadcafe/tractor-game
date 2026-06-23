@@ -5,7 +5,6 @@ import {
 import { DOMParser } from "jsr:@b-fuze/deno-dom@0.1.56";
 import { renderScoringOverlay } from "../ui/components/scoring-overlay.ts";
 import type { StateSnapshot } from "../core/types.ts";
-import type { InteractionMode } from "../engine/types.ts";
 
 const doc = new DOMParser().parseFromString(
   `<html><body><div id="app"></div></body></html>`,

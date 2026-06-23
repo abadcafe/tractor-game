@@ -74,11 +74,7 @@ Deno.test("test_renderGameOverOverlay_null_winning_team", () => {
 
 Deno.test("test_renderGameOverOverlay_new_game_button", () => {
   const snap = makeSnapshot();
-  let newGameCalled = false;
-  const onNewGame = () => {
-    newGameCalled = true;
-  };
-  const el = renderGameOverOverlay(snap, onNewGame);
+  const el = renderGameOverOverlay(snap, () => {});
   const buttons = el.querySelectorAll("button");
   const buttonTexts = Array.from(buttons).map((b) => b.textContent);
   assertEquals(buttonTexts.includes("新游戏"), true);

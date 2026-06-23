@@ -60,7 +60,10 @@ Deno.test("test_renderGameTable_debug_avatars_use_seat_labels_not_ai_type", () =
     "你",
     "右",
   ]);
-  assertEquals(avatars.every((avatar) => avatar.textContent !== "ai"), true);
+  assertEquals(
+    avatars.every((avatar) => avatar.textContent !== "ai"),
+    true,
+  );
 });
 
 Deno.test("test_renderGameTable_declarer_in_status_badge", () => {

@@ -13,10 +13,10 @@ export class AITranscriptStream {
     const generation = this.#generation + 1;
     this.#generation = generation;
     this.close();
-    const protocol = window.location.protocol === "https:"
+    const protocol = globalThis.location.protocol === "https:"
       ? "wss:"
       : "ws:";
-    const url = `${protocol}//${window.location.host}/ws/debug/ai/${
+    const url = `${protocol}//${globalThis.location.host}/ws/debug/ai/${
       encodeURIComponent(gameId)
     }?player=${player}`;
     this.#socket = new WebSocket(url);

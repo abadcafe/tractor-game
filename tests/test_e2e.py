@@ -269,12 +269,14 @@ def test_delete_game_disconnects_ws(
 
 
 @pytest.mark.asyncio
-async def test_list_games_shows_phase(client: AsyncRestClient) -> None:
-    """Test that listing games includes phase information."""
+async def test_list_games_shows_game_ids_only(
+    client: AsyncRestClient,
+) -> None:
+    """Test that listing games exposes only registry IDs."""
     game_id = await _create_game(client)
     resp = await client.get("/api/game")
     games_raw = _as_list(_as_dict(resp.json())["games"])
     games = [_as_dict(g) for g in games_raw]
     assert len(games) == 1
-    assert "phase" in games[0]
     assert games[0]["game_id"] == game_id
+    assert "phase" not in games[0]

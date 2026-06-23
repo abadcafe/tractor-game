@@ -22,13 +22,23 @@ interface LevelChangeResult {
  *  - defenderDelta: levels the defender team gains when they win (switch=true)
  *  - switched: whether the declarer switches to the defender team
  */
-export function computeLevelChange(totalPoints: number): LevelChangeResult {
+export function computeLevelChange(
+  totalPoints: number,
+): LevelChangeResult {
   for (const t of SCORE_THRESHOLDS) {
     if (totalPoints <= t.maxPoints) {
-      return { declarerDelta: t.declarerChange, defenderDelta: 0, switched: t.switch };
+      return {
+        declarerDelta: t.declarerChange,
+        defenderDelta: 0,
+        switched: t.switch,
+      };
     }
   }
   // defender_points >= 80: switch declarer, new declarer gains levels
   const defenderGain = Math.max(0, Math.floor((totalPoints - 80) / 40));
-  return { declarerDelta: 0, defenderDelta: defenderGain, switched: true };
+  return {
+    declarerDelta: 0,
+    defenderDelta: defenderGain,
+    switched: true,
+  };
 }

@@ -16,7 +16,10 @@ export function renderGameOverOverlay(
   const winnerText = humanWon
     ? "🏆 我们赢了！"
     : snapshot.winning_team !== null
-    ? `${TEAM_LABELS[snapshot.winning_team] ?? "队伍" + snapshot.winning_team}获胜`
+    ? `${
+      TEAM_LABELS[snapshot.winning_team] ??
+        "队伍" + snapshot.winning_team
+    }获胜`
     : "游戏结束";
 
   overlay.appendChild(
@@ -25,12 +28,19 @@ export function renderGameOverOverlay(
 
   // Final levels
   overlay.appendChild(
-    el("div", { class: "game-over-overlay__levels" },
-      `${TEAM_LABELS[0]}: ${snapshot.team0_level}    ${TEAM_LABELS[1]}: ${snapshot.team1_level}`),
+    el(
+      "div",
+      { class: "game-over-overlay__levels" },
+      `${TEAM_LABELS[0]}: ${snapshot.team0_level}    ${
+        TEAM_LABELS[1]
+      }: ${snapshot.team1_level}`,
+    ),
   );
 
   if (onNewGame) {
-    const button = el("button", { class: "btn-primary game-over-overlay__new-game" }, "新游戏");
+    const button = el("button", {
+      class: "btn-primary game-over-overlay__new-game",
+    }, "新游戏");
     button.addEventListener("click", () => onNewGame());
     overlay.appendChild(button);
   }
