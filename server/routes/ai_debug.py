@@ -15,7 +15,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, Response
 
 from server.app_state import ServerState
-from server.game import Game
+from server.game_room import GameRoom
 from server.player import AIPlayer
 from server.player.ai.transcript import TranscriptRecordDict
 
@@ -24,7 +24,7 @@ def register_ai_debug_routes(
     app: FastAPI, state: ServerState, static_dir: str
 ) -> None:
     async def ai_debug_page(game_id: str) -> Response:
-        _game_or_404(state, game_id)
+        _room_or_404(state, game_id)
         html_path = os.path.join(static_dir, "debug-ai.html")
         if os.path.isfile(html_path):
             return FileResponse(html_path)
@@ -36,11 +36,11 @@ def register_ai_debug_routes(
     async def ai_debug_stream(
         websocket: WebSocket, game_id: str, player: int | None = None
     ) -> None:
-        game = state.registry.get(game_id)
-        if game is None:
+        room = state.registry.get(game_id)
+        if room is None:
             await websocket.close(code=4404, reason="game not found")
             return
-        ai_player = _ai_player_at(game, player)
+        ai_player = _ai_player_at(room, player)
         if ai_player is None:
             await websocket.close(
                 code=4404, reason="ai player not found"
@@ -70,17 +70,19 @@ def register_ai_debug_routes(
     )
 
 
-def _game_or_404(state: ServerState, game_id: str) -> Game:
-    game = state.registry.get(game_id)
-    if game is None:
+def _room_or_404(state: ServerState, game_id: str) -> GameRoom:
+    room = state.registry.get(game_id)
+    if room is None:
         raise HTTPException(status_code=404, detail="game not found")
-    return game
+    return room
 
 
-def _ai_player_at(game: Game, player: int | None) -> AIPlayer | None:
+def _ai_player_at(
+    room: GameRoom, player: int | None
+) -> AIPlayer | None:
     if player is None or player < 0 or player >= 4:
         return None
-    candidate = game.get_player(player)
+    candidate = room.player_at(player)
     if isinstance(candidate, AIPlayer):
         return candidate
     return None

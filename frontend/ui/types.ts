@@ -1,10 +1,13 @@
 import type { CompletedTrick, FailedThrow } from "../core/types.ts";
+import type { PlayerIndex } from "../config.ts";
 import type {
   BidOption,
   GameAction,
   LevelChangeInfo,
   StirButtonState,
 } from "../engine/types.ts";
+
+export type ConnectionStatus = "connecting" | "connected" | "failed";
 
 /** Callbacks for user interactions. Created in main.ts, passed through renderer to components. */
 export interface ActionCallbacks {
@@ -37,6 +40,10 @@ export interface RenderContext {
   callbacks?: ActionCallbacks;
   /** Current game id, used for debug links that are outside the game protocol. */
   gameId?: string | null;
+  /** Current user player; every table view orients this player at south. */
+  viewerPlayer?: PlayerIndex | null;
+  /** Current WebSocket connection state for the active table page. */
+  connectionStatus?: ConnectionStatus;
   selectedCardIds: Set<string>;
   /** Pre-computed legal card IDs for hand highlighting. */
   legalCardIds: Set<string>;

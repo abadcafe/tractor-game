@@ -71,7 +71,7 @@ class AutoDecisionKey:
 
 class AutoPlayer(Player):
     """
-    Built-in client-like player driven only by player-facing snapshots.
+    Built-in user-like player driven only by player-facing snapshots.
 
     Uses create_task for actions to avoid blocking the on_state call
     chain,
@@ -197,7 +197,7 @@ class AutoPlayer(Player):
         self, snapshot: StateSnapshot, game: GameView, *, seq: int
     ) -> None:
         """
-        Pick a play using only the same snapshot information a human
+        Pick a play using only the same snapshot information a user
         sees.
         """
         candidates = self._hint_candidates(

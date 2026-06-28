@@ -46,7 +46,7 @@ async def test_auto_player_play_when_current() -> None:
 @pytest.mark.asyncio
 async def test_auto_player_play_from_action_hints() -> None:
     """
-    AutoPlayer picks from the same action_hints visible to human
+    AutoPlayer picks from the same action_hints visible to user
     players.
     """
     card1 = card("spades", "A", 1)
@@ -264,7 +264,7 @@ async def test_auto_player_discard_when_current() -> None:
 @pytest.mark.asyncio
 async def test_auto_player_stir_when_current() -> None:
     """
-    AutoPlayer can stir from the same action_hints visible to human
+    AutoPlayer can stir from the same action_hints visible to user
     players.
     """
     card1 = card("hearts", "2", 1)

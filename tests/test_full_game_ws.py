@@ -43,7 +43,13 @@ _WS_ERRORS: tuple[type[Exception], ...] = (
     EndOfStream,
 )
 _DEFAULT_WS_RECEIVE_TIMEOUT_SECONDS: float = 5.0
-_HUMAN_PLAYER_INDEX: int = 2
+_USER_PLAYER_INDEX: int = 2
+
+
+def _player_ws_path(
+    game_id: str, *, player: int = 2, user_id: str = "user-2"
+) -> str:
+    return f"/game/{game_id}/player/{player}?user_id={user_id}"
 
 
 class WsReceiveTimeout(TimeoutError):
@@ -57,6 +63,23 @@ class SyncServerClient(Protocol):
     def post(self, url: str) -> httpx.Response: ...
     def delete(self, url: str) -> httpx.Response: ...
     def websocket_connect(self, url: str) -> WebSocketTestSession: ...
+
+
+def _prepare_ws_game(
+    sync_client: SyncServerClient,
+    game_id: str,
+    *,
+    player: int = 2,
+    user_id: str = "user-2",
+) -> None:
+    attach_resp = sync_client.post(
+        f"/api/game/{game_id}/player/{player}?user_id={user_id}"
+    )
+    assert attach_resp.status_code == 200
+    fill_resp = sync_client.post(
+        f"/api/game/{game_id}/bots?kind=auto&user_id={user_id}"
+    )
+    assert fill_resp.status_code == 200
 
 
 class _ReceiveNowaitQueue(Protocol):
@@ -263,7 +286,9 @@ class WsGameDriver:
         Client must send a seq=0 state request to get the initial state.
         """
         self._game_id = game_id
-        self._ws_cm = self._client.websocket_connect(f"/game/{game_id}")
+        self._ws_cm = self._client.websocket_connect(
+            _player_ws_path(game_id)
+        )
         self._ws = self._ws_cm.__enter__()
         self._known_seq = 0
         self.last_error = None
@@ -461,7 +486,7 @@ class WsGameDriver:
 
         Sends exactly once. This test driver only calls do_action after
         it
-        has drained to the human player's turn, so automatic resends
+        has drained to the user player's turn, so automatic resends
         create
         duplicate confirmations/actions and make WS response attribution
         ambiguous.
@@ -695,7 +720,7 @@ class WsGameDriver:
             if state.get("phase") != "WAITING":
                 return msg
             confirmed = _as_list(state.get("next_round_confirmed", []))
-            if _HUMAN_PLAYER_INDEX in confirmed:
+            if _USER_PLAYER_INDEX in confirmed:
                 return msg
             if _awaiting(msg) == "next_round" and attempts < 4:
                 attempts += 1
@@ -752,6 +777,10 @@ def test_list_games(sync_client: SyncServerClient) -> None:
     game_ids = [_as_str(g["game_id"]) for g in games]
     assert game_id in game_ids
     for g in games:
+        assert g["user_count"] == 0
+        assert g["capacity"] == 4
+        assert g["user_players"] == []
+        assert len(g["players"]) == 4
         assert "phase" not in g
 
 
@@ -764,8 +793,9 @@ def test_delete_game_closes_ws(sync_client: SyncServerClient) -> None:
     data = resp.json()
     assert _is_dict(data)
     game_id = _as_str(data["game_id"])
+    _prepare_ws_game(sync_client, game_id)
 
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         raw = _receive_ws_json(ws)
         data_msg = _as_dict(raw)
@@ -784,7 +814,7 @@ def test_connect_nonexistent_game(
     """Connecting to a nonexistent game closes with code 4404."""
     with pytest.raises(WebSocketDisconnect) as exc_info:
         with sync_client.websocket_connect(
-            "/game/nonexistent_id"
+            _player_ws_path("nonexistent_id")
         ) as ws:
             _receive_ws_json(ws)
     assert exc_info.value.code == 4404
@@ -798,16 +828,19 @@ def test_connection_takeover(sync_client: SyncServerClient) -> None:
     data = resp.json()
     assert _is_dict(data)
     game_id = _as_str(data["game_id"])
+    _prepare_ws_game(sync_client, game_id)
 
     # First connection: get state
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws1:
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws1:
         ws1.send_json({"seq": 0})
         raw1 = _receive_ws_json(ws1)
         data1 = _as_dict(raw1)
         assert data1["type"] == "state"
 
         # Second connection (should kick first)
-        with sync_client.websocket_connect(f"/game/{game_id}") as ws2:
+        with sync_client.websocket_connect(
+            _player_ws_path(game_id)
+        ) as ws2:
             ws2.send_json({"seq": 0})
             raw2 = _receive_ws_json(ws2)
             data2 = _as_dict(raw2)
@@ -833,9 +866,10 @@ def test_reconnect_resumes_game(sync_client: SyncServerClient) -> None:
     data = resp.json()
     assert _is_dict(data)
     game_id = _as_str(data["game_id"])
+    _prepare_ws_game(sync_client, game_id)
 
     # First connection: get state
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws1:
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws1:
         ws1.send_json({"seq": 0})
         raw1 = _receive_ws_json(ws1)
         data1 = _as_dict(raw1)
@@ -843,7 +877,7 @@ def test_reconnect_resumes_game(sync_client: SyncServerClient) -> None:
         seq1 = _as_int(data1["seq"])
 
     # Reconnect: send seq=0 to request the current state.
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws2:
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws2:
         ws2.send_json({"seq": 0})
         raw2 = _receive_ws_json(ws2)
         data2 = _as_dict(raw2)
@@ -1142,7 +1176,7 @@ def _hand_dicts(state: dict[str, object]) -> list[dict[str, object]]:
 
 
 def _should_bid(state: dict[str, object]) -> bool:
-    """Decide whether the human should bid or pass.
+    """Decide whether the user should bid or pass.
 
     Returns True if action_hints is non-empty and we choose to bid
     (deterministic: always bid when possible in round 1, pass otherwise
@@ -1478,7 +1512,7 @@ def _play_deal_bid(
 
     In the correct DEAL_BID flow, each card dealt triggers a push.
     The player who received the card sees awaiting_action='bid' and
-    must bid or skip before the next card is dealt. The human tries
+    must bid or skip before the next card is dealt. The user tries
     to bid from action_hints when available; otherwise passes.
     """
     print(f"[round {round_count}] === DEAL_BID ===", flush=True)
@@ -1513,7 +1547,7 @@ def _play_deal_bid(
         )
 
     bid_made: bool = (
-        False  # Track if human has successfully bid this round
+        False  # Track if user has successfully bid this round
     )
     prev_bid_events_count: int = len(
         _as_list(state.get("bid_events", []))
@@ -1530,7 +1564,7 @@ def _play_deal_bid(
                 chosen = _pick_best_bid(legal_list)
                 card_ids = _extract_card_ids_from_dicts(chosen)
                 print(
-                    f"  [R{round_count}:BID] human bids: {card_ids}",
+                    f"  [R{round_count}:BID] user bids: {card_ids}",
                     flush=True,
                 )
                 _send_wrong_actions(
@@ -1625,7 +1659,7 @@ def _play_stirring(
 
     Handles both EXCHANGING sub-phase (discard) and WAITING sub-phase
     (stir/pass).
-    The human always passes during WAITING and discards during
+    The user always passes during WAITING and discards during
     EXCHANGING.
     """
     print(f"[round {round_count}] === STIRRING ===", flush=True)
@@ -1723,7 +1757,7 @@ def _play_stirring_exchange(
         for c in hand[-exchange_count:]:
             discard_ids.append(_as_str(c["id"]))
         print(
-            f"  [R{round_count}:STIR-EXCH] human discard"
+            f"  [R{round_count}:STIR-EXCH] user discard"
             f"{len(discard_ids)} cards",
             flush=True,
         )
@@ -1913,7 +1947,7 @@ def _play_playing(
     # whether it's our turn. This handles cases where the STIRRING
     # EXCHANGING sub-phase
     # didn't produce a response with awaiting="play" (e.g., when the
-    # human is not the declarer and the phase transition happened in the
+    # user is not the declarer and the phase transition happened in the
     # background).
     if _awaiting(msg) != "play" and state.get("phase") == "PLAYING":
         state, msg = _recv_until_our_turn(
@@ -2206,7 +2240,7 @@ def _play_waiting(
     # next event loop tick (triggered by receive_msg()'s portal.call).
     if _awaiting(msg) == "next_round":
         print(
-            f"  [R{round_count}:WAITING] human confirm next_round",
+            f"  [R{round_count}:WAITING] user confirm next_round",
             flush=True,
         )
         _send_wrong_actions(
@@ -2281,7 +2315,7 @@ def _verify_game_over(
     print("  game retained in registry", flush=True)
 
     print("  checking seq=0 reconnect...", flush=True)
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         raw = _receive_ws_json(ws)
         msg = _as_dict(raw)
@@ -2299,17 +2333,19 @@ def test_full_game(sync_client: SyncServerClient) -> None:
     """Play a complete game from start to winning_team.
 
     At each phase:
-    - Before every correct human action, inject 1-3 rejected requests
+    - Before every correct user action, inject 1-3 rejected requests
       covering malformed actions, invalid fields/cards, and stale seq.
     - Verify state fields and phase transitions
     - Let AutoPlayers handle their turns automatically
 
-    The human player (index 2) acts when awaiting_action matches.
+    The user player (index 2) acts when awaiting_action matches.
     AutoPlayers (indices 0, 1, 3) act automatically via the server.
     """
     print(">>> test_full_game starting <<<", flush=True)
-    resp = sync_client.post("/api/game")
+    resp = sync_client.post("/api/game/auto")
     game_id = resp.json()["game_id"]
+    assert isinstance(game_id, str)
+    _prepare_ws_game(sync_client, game_id)
     print(f"=== Created game {game_id} ===", flush=True)
 
     driver = WsGameDriver(sync_client)
@@ -2321,7 +2357,7 @@ def test_full_game(sync_client: SyncServerClient) -> None:
         # Game starts in WAITING phase. AutoPlayers (0, 1, 3)
         # request state
         # with
-        # seq=0 and confirm automatically via run(). The human client
+        # seq=0 and confirm automatically via run(). The user client
         # must
         # first request state with seq=0, then send next_round with the
         # returned

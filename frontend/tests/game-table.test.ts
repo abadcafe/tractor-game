@@ -49,16 +49,16 @@ Deno.test("test_renderGameTable_shows_four_players", () => {
   assertEquals(players.length, 4);
 });
 
-Deno.test("test_renderGameTable_debug_avatars_use_seat_labels_not_ai_type", () => {
+Deno.test("test_renderGameTable_debug_avatars_use_player_labels_not_ai_type", () => {
   const snap = makeSnapshot();
   const el = renderGameTable(snap, null, null, "game-1");
   const avatars = Array.from(el.querySelectorAll(".player-avatar"));
   assertEquals(avatars.length, 4);
   assertEquals(avatars.map((avatar) => avatar.textContent), [
-    "同",
-    "左",
-    "你",
-    "右",
+    "0",
+    "1",
+    "2",
+    "3",
   ]);
   assertEquals(
     avatars.every((avatar) => avatar.textContent !== "ai"),
@@ -66,14 +66,20 @@ Deno.test("test_renderGameTable_debug_avatars_use_seat_labels_not_ai_type", () =
   );
 });
 
-Deno.test("test_renderGameTable_declarer_in_status_badge", () => {
+Deno.test("test_renderGameTable_declarer_after_team_chip", () => {
   const snap = makeSnapshot({ declarer_player: 2 });
   const el = renderGameTable(snap);
+  const southTeamRow = el.querySelector(
+    '.player-area[data-position="南"] .player-area__team-row',
+  );
+  const southDeclarer = southTeamRow?.querySelector(".declarer-text");
   const southStatus = el.querySelector(
     '.player-area[data-position="南"] .player-status-badge',
   );
-  assertEquals(southStatus !== null, true);
-  assertEquals((southStatus?.textContent ?? "").includes("庄"), true);
+
+  assertEquals(southTeamRow?.textContent, "我方庄");
+  assertEquals(southDeclarer?.textContent, "庄");
+  assertEquals((southStatus?.textContent ?? "").includes("庄"), false);
 });
 
 Deno.test("test_renderGameTable_deal_bid_can_show_fixed_declarer_separate_from_bid_winner", () => {
@@ -138,8 +144,12 @@ Deno.test("test_renderGameTable_player_status_badges_are_grouped", () => {
   assertEquals(badges !== null, true);
   assertEquals(text.includes("♠2"), true);
   assertEquals(text.includes("0张"), true);
-  assertEquals(text.includes("庄"), true);
+  assertEquals(text.includes("庄"), false);
   assertEquals(text.includes("OK"), true);
+  assertEquals(
+    west?.querySelector(".player-area__team-row")?.textContent,
+    "对方庄",
+  );
 });
 
 Deno.test("test_renderGameTable_player_labels", () => {
@@ -147,10 +157,22 @@ Deno.test("test_renderGameTable_player_labels", () => {
   const el = renderGameTable(snap);
   const labels = el.querySelectorAll(".player-label");
   const labelTexts = Array.from(labels).map((l) => l.textContent);
-  assertEquals(labelTexts.includes("你"), true);
-  assertEquals(labelTexts.includes("同伴"), true);
-  assertEquals(labelTexts.includes("左家"), true);
-  assertEquals(labelTexts.includes("右家"), true);
+  assertEquals(labelTexts.includes("玩家 2 / 你"), true);
+  assertEquals(labelTexts.includes("玩家 0"), true);
+  assertEquals(labelTexts.includes("玩家 1"), true);
+  assertEquals(labelTexts.includes("玩家 3"), true);
+});
+
+Deno.test("test_renderGameTable_orients_viewer_player_at_south", () => {
+  const snap = makeSnapshot();
+  const el = renderGameTable(snap, null, null, "game-1", 1);
+  const southText = el.querySelector('.player-area[data-position="南"]')
+    ?.textContent ?? "";
+  const northText = el.querySelector('.player-area[data-position="北"]')
+    ?.textContent ?? "";
+
+  assertEquals(southText.includes("玩家 1 / 你"), true);
+  assertEquals(northText.includes("玩家 3"), true);
 });
 
 Deno.test("test_renderGameTable_global_info_bar_in_table", () => {

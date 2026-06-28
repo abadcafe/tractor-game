@@ -1,11 +1,11 @@
 /**
  * Create an HTML element with optional attributes and children.
  */
-export function el(
-  tag: string,
+export function el<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
   attrs?: Record<string, string>,
   ...children: (string | Node)[]
-): HTMLElement {
+): HTMLElementTagNameMap[K] {
   const element = document.createElement(tag);
   if (attrs) {
     for (const [key, value] of Object.entries(attrs)) {

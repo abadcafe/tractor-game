@@ -1,6 +1,10 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { WsClient } from "../net/ws-client.ts";
+import {
+  WsClient,
+  type WsConnectionIdentity,
+} from "../net/ws-client.ts";
 import type { ClientAction, ServerMessage } from "../core/protocol.ts";
+import { PLAYER_LEFT_WS_CLOSE_CODE } from "../config.ts";
 
 function makeStateMessage(): ServerMessage {
   return {
@@ -60,6 +64,14 @@ async function waitFor(
   }
 }
 
+function playerTarget(
+  gameId: string,
+  playerIndex: WsConnectionIdentity["playerIndex"] = 2,
+  userId: string = "user-2",
+): WsConnectionIdentity {
+  return { gameId, playerIndex, userId };
+}
+
 Deno.test("test_connect_success", async () => {
   const server = Deno.serve({ port: 0 }, (req) => {
     const upgrade = req.headers.get("upgrade") || "";
@@ -83,8 +95,10 @@ Deno.test("test_connect_success", async () => {
     received = msg;
   });
 
-  // connect takes gameId + wsHost, constructs URL internally
-  await client.connect("test-id", `ws://localhost:${port}`);
+  await client.connect(
+    playerTarget("test-id"),
+    `ws://localhost:${port}`,
+  );
 
   // Wait for message
   await waitFor(() => received !== null);
@@ -135,7 +149,10 @@ Deno.test("test_send_action", async () => {
   const client = new WsClient();
   client.onMessage(() => {});
 
-  await client.connect("test-id", `ws://localhost:${port}`);
+  await client.connect(
+    playerTarget("test-id"),
+    `ws://localhost:${port}`,
+  );
   await waitFor(() => serverReady);
 
   const action: ClientAction = {
@@ -191,9 +208,15 @@ Deno.test("stale socket close does not clear the current connection", async () =
   const client = new WsClient();
   client.onMessage(() => {});
 
-  await client.connect("old-game", `ws://localhost:${port}`);
+  await client.connect(
+    playerTarget("old-game"),
+    `ws://localhost:${port}`,
+  );
   await waitFor(() => sockets.length === 1);
-  await client.connect("new-game", `ws://localhost:${port}`);
+  await client.connect(
+    playerTarget("new-game"),
+    `ws://localhost:${port}`,
+  );
   await waitFor(() => sockets.length === 2);
 
   sockets[0].close();
@@ -206,7 +229,7 @@ Deno.test("stale socket close does not clear the current connection", async () =
   assertEquals(client.send(action), true);
 
   await waitFor(() =>
-    (receivedByPath.get("/game/new-game") ?? []).some((raw) =>
+    (receivedByPath.get("/game/new-game/player/2") ?? []).some((raw) =>
       raw === JSON.stringify(action)
     )
   );
@@ -233,7 +256,10 @@ Deno.test("failed initial connect does not schedule reconnects", async () => {
 
   let rejected = false;
   try {
-    await client.connect("missing-game", `ws://localhost:${port}`);
+    await client.connect(
+      playerTarget("missing-game"),
+      `ws://localhost:${port}`,
+    );
   } catch {
     rejected = true;
   }
@@ -271,7 +297,10 @@ Deno.test("test_onMessage_receives_state", async () => {
     received = m;
   });
 
-  await client.connect("test-id", `ws://localhost:${port}`);
+  await client.connect(
+    playerTarget("test-id"),
+    `ws://localhost:${port}`,
+  );
   await waitFor(() => received !== null);
 
   const receivedMsg = received!;
@@ -307,21 +336,27 @@ Deno.test("test_onDisconnect_called", async () => {
 
   const client = new WsClient();
   let disconnected = false;
+  let willReconnect: boolean | null = null;
   client.onMessage(() => {});
-  client.onDisconnect(() => {
+  client.onDisconnect((event) => {
     disconnected = true;
+    willReconnect = event.willReconnect;
   });
 
-  await client.connect("test-id", `ws://localhost:${port}`);
+  await client.connect(
+    playerTarget("test-id"),
+    `ws://localhost:${port}`,
+  );
   await waitFor(() => disconnected);
 
   assertEquals(disconnected, true);
+  assertEquals(willReconnect, true);
 
   client.disconnect();
   await server.shutdown();
 });
 
-Deno.test("test_connect_constructs_ws_url_from_game_id", async () => {
+Deno.test("test_connect_constructs_ws_url_from_default_player_identity", async () => {
   let requestedPath = "";
   const server = Deno.serve({ port: 0 }, (req) => {
     const upgrade = req.headers.get("upgrade") || "";
@@ -343,11 +378,52 @@ Deno.test("test_connect_constructs_ws_url_from_game_id", async () => {
   const client = new WsClient();
   client.onMessage(() => {});
 
-  await client.connect("my-game-42", `ws://localhost:${port}`);
+  await client.connect(
+    playerTarget("my-game-42"),
+    `ws://localhost:${port}`,
+  );
   await waitFor(() => requestedPath !== "");
 
-  // WsClient should have connected to /game/my-game-42
-  assertEquals(requestedPath, "/game/my-game-42");
+  assertEquals(requestedPath, "/game/my-game-42/player/2");
+
+  await server.shutdown();
+  client.disconnect();
+});
+
+Deno.test("test_connect_constructs_ws_url_escapes_player_identity", async () => {
+  const requestedUrls: URL[] = [];
+  const server = Deno.serve({ port: 0 }, (req) => {
+    const upgrade = req.headers.get("upgrade") || "";
+    if (upgrade.toLowerCase() === "websocket") {
+      requestedUrls.push(new URL(req.url));
+      const { socket, response } = Deno.upgradeWebSocket(req);
+      socket.addEventListener("open", () => {
+        sendStateOnRequest(socket);
+      });
+      return response;
+    }
+    return new Response("Not Found", { status: 404 });
+  });
+
+  const addr = server.addr;
+  const port = typeof addr === "object" && "port" in addr
+    ? addr.port
+    : 0;
+  const client = new WsClient();
+  client.onMessage(() => {});
+
+  await client.connect(
+    { gameId: "my-game-42", playerIndex: 1, userId: "user 1" },
+    `ws://localhost:${port}`,
+  );
+  await waitFor(() => requestedUrls.length > 0);
+
+  const requestedUrl = requestedUrls[0];
+  if (requestedUrl === undefined) {
+    throw new Error("expected websocket request URL");
+  }
+  assertEquals(requestedUrl.pathname, "/game/my-game-42/player/1");
+  assertEquals(requestedUrl.search, "?user_id=user%201");
 
   await server.shutdown();
   client.disconnect();
@@ -387,7 +463,10 @@ Deno.test("test_reconnects_after_server_disconnect", async () => {
   });
   client.onDisconnect(() => {});
 
-  await client.connect("test-id", `ws://localhost:${port}`);
+  await client.connect(
+    playerTarget("test-id"),
+    `ws://localhost:${port}`,
+  );
 
   // Wait for reconnection: connectionCount should become 2
   // With 1s backoff (first retry), this should happen within ~1.5s
@@ -396,6 +475,64 @@ Deno.test("test_reconnects_after_server_disconnect", async () => {
   assertEquals(connectionCount >= 2, true);
   assertEquals(latestReceived !== null, true);
   assertEquals(latestReceived!.type, "state");
+
+  client.disconnect();
+  await server.shutdown();
+});
+
+Deno.test("player left close does not reconnect", async () => {
+  let connectionCount = 0;
+  let disconnected = false;
+  let willReconnect: boolean | null = null;
+
+  const server = Deno.serve({ port: 0 }, (req) => {
+    const upgrade = req.headers.get("upgrade") || "";
+    if (upgrade.toLowerCase() === "websocket") {
+      const { socket, response } = Deno.upgradeWebSocket(req);
+      socket.addEventListener("open", () => {
+        connectionCount++;
+        socket.addEventListener("message", (event) => {
+          if (event.data === JSON.stringify({ seq: 0 })) {
+            socket.send(JSON.stringify(makeStateMessage()));
+            setTimeout(
+              () =>
+                socket.close(
+                  PLAYER_LEFT_WS_CLOSE_CODE,
+                  "player left",
+                ),
+              50,
+            );
+          }
+        });
+      });
+      return response;
+    }
+    return new Response("Not Found", { status: 404 });
+  });
+
+  const addr = server.addr;
+  const port = typeof addr === "object" && "port" in addr
+    ? addr.port
+    : 0;
+
+  const client = new WsClient();
+  client.onMessage(() => {});
+  client.onDisconnect((event) => {
+    disconnected = true;
+    willReconnect = event.willReconnect;
+  });
+
+  await client.connect(
+    playerTarget("test-id"),
+    `ws://localhost:${port}`,
+  );
+  await waitFor(() => disconnected);
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+
+  assertEquals(connectionCount, 1);
+  assertEquals(client.isConnected, false);
+  assertEquals(client.isReconnecting, false);
+  assertEquals(willReconnect, false);
 
   client.disconnect();
   await server.shutdown();
@@ -427,7 +564,10 @@ Deno.test("test_reconnect_respects_max_retries", async () => {
   client.onMessage(() => {});
   client.onDisconnect(() => {});
 
-  await client.connect("test-id", `ws://localhost:${port}`);
+  await client.connect(
+    playerTarget("test-id"),
+    `ws://localhost:${port}`,
+  );
 
   // Wait for all 3 retries: 1s + 2s + 4s = 7s, use 10s timeout to be safe
   await waitFor(() => connectionCount >= 4, 10000);
@@ -445,7 +585,7 @@ Deno.test("test_connect_rejects_without_ws_host", async () => {
 
   let threw = false;
   try {
-    await client.connect("test-id");
+    await client.connect(playerTarget("test-id"));
   } catch {
     threw = true;
   }

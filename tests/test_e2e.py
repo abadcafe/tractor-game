@@ -180,13 +180,37 @@ def _create_game_sync(sync_client: SyncServerClient) -> str:
     return _game_id_from_response(resp)
 
 
+def _player_ws_path(
+    game_id: str, *, player: int = 2, user_id: str = "user-2"
+) -> str:
+    return f"/game/{game_id}/player/{player}?user_id={user_id}"
+
+
+def _prepare_ws_game(
+    sync_client: SyncServerClient,
+    game_id: str,
+    *,
+    player: int = 2,
+    user_id: str = "user-2",
+) -> None:
+    attach_resp = sync_client.post(
+        f"/api/game/{game_id}/player/{player}?user_id={user_id}"
+    )
+    assert attach_resp.status_code == 200
+    fill_resp = sync_client.post(
+        f"/api/game/{game_id}/bots?kind=auto&user_id={user_id}"
+    )
+    assert fill_resp.status_code == 200
+
+
 # ---- Full Flow ----
 
 
 def test_full_game_flow(sync_client: SyncServerClient) -> None:
     """Test creating a game, connecting, and verifying initial state."""
     game_id = _create_game_sync(sync_client)
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+    _prepare_ws_game(sync_client, game_id)
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
         # Client must send seq=0 to get initial state (no auto-push on
         # connect)
         ws.send_json({"seq": 0})
@@ -201,13 +225,14 @@ def test_full_game_flow(sync_client: SyncServerClient) -> None:
 def test_reconnect_mid_game(sync_client: SyncServerClient) -> None:
     """Test disconnecting and reconnecting to a game."""
     game_id = _create_game_sync(sync_client)
+    _prepare_ws_game(sync_client, game_id)
     # First connection
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         data1 = _as_dict(_receive_ws_json(ws))
         assert data1["type"] == "state"
     # Reconnect
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         data2 = _as_dict(_receive_ws_json(ws))
         assert data2["type"] == "state"
@@ -241,7 +266,8 @@ def test_invalid_action_returns_error(
     and returns a state message with an "error" field.
     """
     game_id = _create_game_sync(sync_client)
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+    _prepare_ws_game(sync_client, game_id)
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
         # Get initial state via seq=0
         ws.send_json({"seq": 0})
         initial = _as_dict(_receive_ws_json(ws))
@@ -260,7 +286,8 @@ def test_delete_game_disconnects_ws(
 ) -> None:
     """Test that deleting a game while connected closes cleanly."""
     game_id = _create_game_sync(sync_client)
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+    _prepare_ws_game(sync_client, game_id)
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         _receive_ws_json(ws)
     # Delete after disconnect is fine
@@ -269,14 +296,22 @@ def test_delete_game_disconnects_ws(
 
 
 @pytest.mark.asyncio
-async def test_list_games_shows_game_ids_only(
+async def test_list_games_shows_lobby_fields(
     client: AsyncRestClient,
 ) -> None:
-    """Test that listing games exposes only registry IDs."""
+    """Test that listing games exposes lobby-safe public fields."""
     game_id = await _create_game(client)
     resp = await client.get("/api/game")
     games_raw = _as_list(_as_dict(resp.json())["games"])
     games = [_as_dict(g) for g in games_raw]
     assert len(games) == 1
     assert games[0]["game_id"] == game_id
+    assert games[0]["user_count"] == 0
+    assert games[0]["capacity"] == 4
+    assert games[0]["user_players"] == []
+    players_raw = _as_list(games[0]["players"])
+    assert len(players_raw) == 4
+    players = [_as_dict(player) for player in players_raw]
+    assert [player["index"] for player in players] == [0, 1, 2, 3]
+    assert all(player["occupied"] is False for player in players)
     assert "phase" not in games[0]

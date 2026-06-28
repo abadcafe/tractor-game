@@ -17,7 +17,6 @@ configure_server_logging()
 
 state = ServerState()
 registry = state.registry
-human_players = state.human_players
 static_dir = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "static")
 )

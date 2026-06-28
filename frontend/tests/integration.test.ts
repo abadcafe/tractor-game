@@ -113,7 +113,7 @@ Deno.test("test_integration_ws_to_render", () => {
     legalCardIds: new Set(),
   };
 
-  // Simulate WS message for PLAYING phase with human turn
+  // Simulate WS message for PLAYING phase with user turn
   const msg: ServerMessage = {
     type: "state",
     seq: 1,
@@ -365,7 +365,7 @@ Deno.test("test_integration_stir_not_human_ignored", () => {
     3,
   );
 
-  // STIRRING phase, but NOT human's turn.
+  // STIRRING phase, but NOT user's turn.
   const msg: ServerMessage = {
     type: "state",
     seq: 1,

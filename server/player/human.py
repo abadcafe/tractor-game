@@ -68,7 +68,7 @@ class HumanPlayer(Player):
                     raw = await websocket.receive_json()
                 except WebSocketDisconnect, OSError:
                     logger.debug(
-                        "WS receive loop ended (client disconnected)"
+                        "WS receive loop ended (user disconnected)"
                     )
                     break
 
@@ -96,7 +96,9 @@ class HumanPlayer(Player):
         """
         return self._ws is not None
 
-    async def close_ws(self) -> None:
+    async def close_ws(
+        self, *, code: int = 1000, reason: str = ""
+    ) -> None:
         """
         Close the WebSocket connection if active, then clear the
         reference.
@@ -105,7 +107,7 @@ class HumanPlayer(Player):
             ws = self._ws
             self._ws = None
             try:
-                await ws.close()
+                await ws.close(code=code, reason=reason)
             except WebSocketDisconnect, OSError:
                 logger.debug(
                     "Failed to close WS for player %d (already"

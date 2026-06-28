@@ -128,6 +128,13 @@ Deno.test("test_renderScoringOverlay_no_button_when_human_ready", () => {
   assertEquals(buttons.length, 0);
 });
 
+Deno.test("test_renderScoringOverlay_no_button_when_viewer_ready", () => {
+  const snap = makeSnapshot({ next_round_confirmed: [1] });
+  const el = renderScoringOverlay(snap, null, undefined, undefined, 1);
+  const buttons = el.querySelectorAll("button");
+  assertEquals(buttons.length, 0);
+});
+
 Deno.test("test_renderScoringOverlay_next_round_callback", () => {
   const snap = makeSnapshot();
   let nextRoundCalled = false;

@@ -24,7 +24,7 @@ TEAM_1: tuple[int, ...] = (1, 3)
 
 # ---- Counterclockwise Rotation ----
 
-# Player indexes are assigned in counterclockwise seat order:
+# Player indexes are assigned in counterclockwise player order:
 # North(0) → West(1) → South(2) → East(3) → North(0)
 CCW_NEXT: MappingProxyType[int, int] = MappingProxyType(
     {0: 1, 1: 2, 2: 3, 3: 0}

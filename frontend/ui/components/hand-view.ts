@@ -22,7 +22,7 @@ import {
 } from "./hand-view/selection.ts";
 
 /**
- * Render the human player's hand with card display, click selection,
+ * Render the user player's hand with card display, click selection,
  * legal action highlighting, trump card highlighting, and action buttons.
  */
 export function renderHandView(

@@ -18,6 +18,7 @@ export function render(
 ): void {
   // Clear the container
   container.innerHTML = "";
+  container.classList.remove("lobby-shell");
   container.classList.add("game-shell");
   container.classList.toggle(
     "game-shell--scoring",
@@ -31,6 +32,7 @@ export function render(
       ctx?.previousTrickPreview,
       ctx?.failedThrowPreview,
       ctx?.gameId,
+      ctx?.viewerPlayer,
     ),
   );
 
@@ -57,7 +59,13 @@ export function render(
     ),
   );
 
-  container.appendChild(renderScoreboard(snapshot));
+  container.appendChild(
+    renderScoreboard(
+      snapshot,
+      ctx?.viewerPlayer,
+      ctx?.connectionStatus,
+    ),
+  );
 
   // Scoring overlay for completed rounds that can continue.
   if (snapshot.phase === "WAITING" && snapshot.winning_team === null) {
@@ -69,6 +77,7 @@ export function render(
           ? () => ctx!.callbacks!.onAction("next_round")
           : undefined,
         ctx?.levelChange,
+        ctx?.viewerPlayer,
       ),
     );
   }
@@ -76,7 +85,11 @@ export function render(
   // Game over is represented by winning_team, not by phase.
   if (snapshot.winning_team !== null) {
     container.appendChild(
-      renderGameOverOverlay(snapshot, ctx?.callbacks?.onNewGame),
+      renderGameOverOverlay(
+        snapshot,
+        ctx?.viewerPlayer,
+        ctx?.callbacks?.onNewGame,
+      ),
     );
   }
 }

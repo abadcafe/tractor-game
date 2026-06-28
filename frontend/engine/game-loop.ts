@@ -76,9 +76,9 @@ export class GameLoop {
    * Compute the interaction mode from the state snapshot.
    *
    * Uses state.awaiting_action as the authoritative source for what action
-   * the human player should take. This correctly
+   * the user player should take. This correctly
    * handles:
-   * - DEAL_BID: only shows "bid" when awaiting_action="bid" (human's turn)
+   * - DEAL_BID: only shows "bid" when awaiting_action="bid" (user's turn)
    * - STIRRING: shows "stir" or "discard" based on awaiting_action
    * - PLAYING: shows "play" when awaiting_action="play"
    * - WAITING: shows "next_round"

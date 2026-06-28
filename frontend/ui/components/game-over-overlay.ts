@@ -1,25 +1,24 @@
 import type { StateSnapshot } from "../../core/types.ts";
 import { el } from "../dom.ts";
-import { HUMAN_TEAM, TEAM_LABELS } from "../../config.ts";
+import type { PlayerIndex } from "../../config.ts";
+import { teamLabelForViewer, viewerTeam } from "../player-view.ts";
 
 /**
  * Render a game-over overlay showing the winning team, final levels, and a "新游戏" button.
  */
 export function renderGameOverOverlay(
   snapshot: StateSnapshot,
+  viewerPlayer?: PlayerIndex | null,
   onNewGame?: () => void,
 ): HTMLElement {
   const overlay = el("div", { class: "game-over-overlay" });
 
-  const humanWon = snapshot.winning_team === HUMAN_TEAM;
+  const viewerWon = snapshot.winning_team === viewerTeam(viewerPlayer);
 
-  const winnerText = humanWon
-    ? "🏆 我们赢了！"
+  const winnerText = viewerWon
+    ? "我们赢了！"
     : snapshot.winning_team !== null
-    ? `${
-      TEAM_LABELS[snapshot.winning_team] ??
-        "队伍" + snapshot.winning_team
-    }获胜`
+    ? `${teamLabelForViewer(snapshot.winning_team, viewerPlayer)}获胜`
     : "游戏结束";
 
   overlay.appendChild(
@@ -31,9 +30,12 @@ export function renderGameOverOverlay(
     el(
       "div",
       { class: "game-over-overlay__levels" },
-      `${TEAM_LABELS[0]}: ${snapshot.team0_level}    ${
-        TEAM_LABELS[1]
-      }: ${snapshot.team1_level}`,
+      `${
+        teamLabelForViewer(0, viewerPlayer)
+      }: ${snapshot.team0_level}` +
+        `    ${
+          teamLabelForViewer(1, viewerPlayer)
+        }: ${snapshot.team1_level}`,
     ),
   );
 

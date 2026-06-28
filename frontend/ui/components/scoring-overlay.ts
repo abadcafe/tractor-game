@@ -6,11 +6,15 @@ import type {
 } from "../../engine/types.ts";
 import { el } from "../dom.ts";
 import {
-  HUMAN_SEAT,
-  HUMAN_TEAM,
-  SEAT_MAP,
-  TEAM_LABELS,
+  DEFAULT_VIEWER_PLAYER,
+  PLAYER_INDEXES,
+  type PlayerIndex,
 } from "../../config.ts";
+import {
+  playerView,
+  teamLabelForViewer,
+  viewerTeam,
+} from "../player-view.ts";
 import { cardDisplay, suitSymbol } from "../../core/card.ts";
 
 /**
@@ -22,6 +26,7 @@ export function renderScoringOverlay(
   _interactionMode: InteractionMode,
   onNextRound?: () => void,
   levelChange?: LevelChangeInfo,
+  viewerPlayer?: PlayerIndex | null,
 ): HTMLElement {
   const overlay = el("div", { class: "scoring-overlay" });
   const card = el("div", { class: "scoring-overlay__card" });
@@ -29,7 +34,9 @@ export function renderScoringOverlay(
   const confirmedSet = new Set(snapshot.next_round_confirmed);
 
   if (snapshot.scoring) {
-    card.appendChild(renderScoringSummary(snapshot, levelChange));
+    card.appendChild(
+      renderScoringSummary(snapshot, levelChange, viewerPlayer),
+    );
     card.appendChild(renderBottomCards(snapshot.scoring.bottom_cards));
   } else {
     card.appendChild(
@@ -43,7 +50,7 @@ export function renderScoringOverlay(
   }
 
   card.appendChild(
-    renderScoringActions(confirmedSet, onNextRound),
+    renderScoringActions(confirmedSet, onNextRound, viewerPlayer),
   );
 
   overlay.appendChild(card);
@@ -53,6 +60,7 @@ export function renderScoringOverlay(
 function renderScoringSummary(
   snapshot: StateSnapshot,
   levelChange?: LevelChangeInfo,
+  viewerPlayer?: PlayerIndex | null,
 ): HTMLElement {
   const scoring = snapshot.scoring;
   const summary = el("div", { class: "scoring-overlay__summary" });
@@ -64,8 +72,7 @@ function renderScoringSummary(
   }
 
   const declarerLabel = scoring.declarer_team !== null
-    ? TEAM_LABELS[scoring.declarer_team] ??
-      `队伍${scoring.declarer_team}`
+    ? teamLabelForViewer(scoring.declarer_team, viewerPlayer)
     : "—";
   summary.appendChild(
     el(
@@ -92,6 +99,7 @@ function renderScoringSummary(
   const resultText = scoringResultText(
     scoring.declarer_team,
     levelChange,
+    viewerPlayer,
   );
   if (resultText !== null) {
     summary.appendChild(
@@ -104,20 +112,21 @@ function renderScoringSummary(
 function scoringResultText(
   declarerTeam: number | null,
   levelChange?: LevelChangeInfo,
+  viewerPlayer?: PlayerIndex | null,
 ): string | null {
   if (levelChange === undefined) {
     return null;
   }
-  const isHumanDeclarer = declarerTeam === HUMAN_TEAM;
+  const isViewerDeclarer = declarerTeam === viewerTeam(viewerPlayer);
   if (levelChange.switched) {
-    const loser = isHumanDeclarer ? TEAM_LABELS[0] : TEAM_LABELS[1];
-    const winner = isHumanDeclarer ? TEAM_LABELS[1] : TEAM_LABELS[0];
+    const loser = isViewerDeclarer ? "我方" : "对方";
+    const winner = isViewerDeclarer ? "对方" : "我方";
     const gainText = levelChange.defenderDelta > 0
       ? ` / ${winner}升${levelChange.defenderDelta}级`
       : "";
     return `${loser}下庄${gainText}`;
   }
-  const who = isHumanDeclarer ? TEAM_LABELS[0] : TEAM_LABELS[1];
+  const who = isViewerDeclarer ? "我方" : "对方";
   return `${who}升${levelChange.declarerDelta}级`;
 }
 
@@ -150,17 +159,17 @@ function renderBottomCard(card: Card): HTMLElement {
 function renderScoringActions(
   confirmedSet: Set<number>,
   onNextRound?: () => void,
+  viewerPlayer?: PlayerIndex | null,
 ): HTMLElement {
   const actions = el("div", { class: "scoring-overlay__actions" });
-  // Confirmation status grid
   const confirmGrid = el("div", { class: "confirm-grid" });
-  for (let i = 0; i < 4; i++) {
-    const seat = SEAT_MAP[i];
-    const isReady = confirmedSet.has(i);
+  for (const playerIndex of PLAYER_INDEXES) {
+    const view = playerView(playerIndex, viewerPlayer);
+    const isReady = confirmedSet.has(playerIndex);
     const slotClass = `confirm-slot ${isReady ? "ready" : "pending"}`;
     const slot = el("div", { class: slotClass });
     slot.appendChild(
-      el("span", { class: "confirm-slot__name" }, seat.label),
+      el("span", { class: "confirm-slot__name" }, view.label),
     );
     slot.appendChild(
       el(
@@ -173,9 +182,10 @@ function renderScoringActions(
   }
   actions.appendChild(confirmGrid);
 
-  // Next round button (shown when human hasn't confirmed yet)
-  const humanReady = confirmedSet.has(HUMAN_SEAT);
-  if (!humanReady) {
+  const viewerReady = confirmedSet.has(
+    viewerPlayer ?? DEFAULT_VIEWER_PLAYER,
+  );
+  if (!viewerReady) {
     const button = el("button", {
       class: "btn-primary scoring-overlay__next-round",
     }, "下一轮");

@@ -260,6 +260,37 @@ Deno.test("test_render_game_table_shows_players", () => {
   assertEquals(players.length, 4);
 });
 
+Deno.test("test_render_passes_connection_status_to_scoreboard_top_title", () => {
+  const container = freshContainer();
+  const snap = makeSnapshot();
+
+  render(snap, container, null, {
+    selectedCardIds: new Set(),
+    legalCardIds: new Set(),
+    connectionStatus: "failed",
+  });
+
+  const title = container.querySelector(
+    ".scoreboard > .scoreboard__title",
+  );
+  const statusEl = title?.querySelector(
+    ".scoreboard__connection",
+  );
+  const playerSection = Array.from(
+    container.querySelectorAll(".scoreboard__section"),
+  ).find((section) =>
+    !section.classList.contains("scoreboard__chat")
+  ) ??
+    null;
+  assertEquals(statusEl?.textContent, "连接失败");
+  assertEquals(statusEl?.classList.contains("failed"), true);
+  assertEquals(
+    playerSection?.querySelector(".scoreboard__section-title"),
+    null,
+  );
+  assertEquals(container.querySelector(".info-bar__connection"), null);
+});
+
 Deno.test("test_render_trick_shows_played_cards", () => {
   const container = freshContainer();
   const snap = makeSnapshot();

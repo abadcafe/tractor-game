@@ -246,7 +246,7 @@ def create_decks() -> list[Card]:
 
 
 def card_display(card: Card) -> str:
-    """Return a human-readable display string for a card.
+    """Return a user-readable display string for a card.
 
     Examples: "♥A", "♠10", "大王", "小王"
     """

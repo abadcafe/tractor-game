@@ -50,8 +50,7 @@ Deno.test("test_renderGameOverOverlay_shows_winner", () => {
   const winnerEl = el.querySelector(".winner-text");
   assertNotEquals(winnerEl, null);
   const text = winnerEl?.textContent ?? "";
-  // Team 0 is human team, so it shows "🏆 我们赢了!"
-  assertEquals(text.includes("🏆 我们赢了！"), true);
+  assertEquals(text.includes("我们赢了！"), true);
 });
 
 Deno.test("test_renderGameOverOverlay_team1_wins", () => {
@@ -74,7 +73,7 @@ Deno.test("test_renderGameOverOverlay_null_winning_team", () => {
 
 Deno.test("test_renderGameOverOverlay_new_game_button", () => {
   const snap = makeSnapshot();
-  const el = renderGameOverOverlay(snap, () => {});
+  const el = renderGameOverOverlay(snap, null, () => {});
   const buttons = el.querySelectorAll("button");
   const buttonTexts = Array.from(buttons).map((b) => b.textContent);
   assertEquals(buttonTexts.includes("新游戏"), true);
@@ -93,7 +92,7 @@ Deno.test("test_renderGameOverOverlay_new_game_callback", () => {
   const onNewGame = () => {
     newGameCalled = true;
   };
-  const el = renderGameOverOverlay(snap, onNewGame);
+  const el = renderGameOverOverlay(snap, null, onNewGame);
   const buttons = el.querySelectorAll("button");
   const newGameButton = Array.from(buttons).find((b) =>
     b.textContent === "新游戏"
@@ -101,4 +100,11 @@ Deno.test("test_renderGameOverOverlay_new_game_callback", () => {
   assertNotEquals(newGameButton, undefined);
   newGameButton!.dispatchEvent(new Event("click", { bubbles: true }));
   assertEquals(newGameCalled, true);
+});
+
+Deno.test("test_renderGameOverOverlay_uses_viewer_team", () => {
+  const snap = makeSnapshot({ winning_team: 1 });
+  const el = renderGameOverOverlay(snap, 1);
+  const text = el.querySelector(".winner-text")?.textContent ?? "";
+  assertEquals(text.includes("我们赢了！"), true);
 });

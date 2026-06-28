@@ -1,11 +1,14 @@
 {
   "tasks": {
-    "build": "rm -rf static && mkdir -p static && tsc --project frontend/tsconfig.json && cp frontend/index.html frontend/debug-ai.html static/ && cp frontend/style.css frontend/debug-ai.css static/",
+    "build": "rm -rf static && mkdir -p static && tsc --project frontend/tsconfig.json && cp frontend/index.html frontend/debug-ai.html static/ && cp frontend/style.css frontend/debug-ai.css static/ && deno run --allow-read=static --allow-write=static scripts/cache_bust_static.ts",
     "test": "deno test --allow-net --allow-read=frontend/main.ts frontend/tests/"
   },
   "compilerOptions": {
     "lib": ["dom", "dom.iterable", "deno.ns"]
   },
-  "fmt": { "lineWidth": 72 },
+  "fmt": {
+    "lineWidth": 72,
+    "include": ["deno.json", "frontend/"]
+  },
   "lint": { "rules": { "tags": ["recommended"] } }
 }

@@ -1,31 +1,53 @@
-export type SeatDirection = "north" | "west" | "south" | "east";
-export type SeatPosition = "北" | "西" | "南" | "东";
+export type PlayerIndex = 0 | 1 | 2 | 3;
+export type TeamIndex = 0 | 1;
 
-export type SeatInfo = {
-  label: string;
-  position: SeatPosition;
-  direction: SeatDirection;
-  team: number;
-};
+export const PLAYER_INDEXES: readonly [
+  PlayerIndex,
+  PlayerIndex,
+  PlayerIndex,
+  PlayerIndex,
+] = [0, 1, 2, 3];
 
-export const HUMAN_TEAM = 0;
-export const HUMAN_SEAT = 2;
+export const DEFAULT_VIEWER_PLAYER: PlayerIndex = 2;
 
-export const SEAT_MAP: Record<number, SeatInfo> = {
-  0: { label: "同伴", position: "北", direction: "north", team: 0 },
-  1: { label: "左家", position: "西", direction: "west", team: 1 },
-  2: { label: "你", position: "南", direction: "south", team: 0 },
-  3: { label: "右家", position: "东", direction: "east", team: 1 },
-};
+export function playerIndexFromNumber(
+  value: number,
+): PlayerIndex | null {
+  switch (value) {
+    case 0:
+      return 0;
+    case 1:
+      return 1;
+    case 2:
+      return 2;
+    case 3:
+      return 3;
+    default:
+      return null;
+  }
+}
 
-export function WS_PATH(gameId: string): string {
-  return `/game/${gameId}`;
+export function WS_PATH(
+  gameId: string,
+  playerIndex: PlayerIndex,
+  userId: string,
+): string {
+  return GAME_PLAYER_PATH(gameId, playerIndex, userId);
+}
+
+export function GAME_PLAYER_PATH(
+  gameId: string,
+  playerIndex: PlayerIndex,
+  userId: string,
+): string {
+  return `/game/${encodeURIComponent(gameId)}/player/${playerIndex}` +
+    `?user_id=${encodeURIComponent(userId)}`;
 }
 
 export const API_BASE = "/api/game";
+export const PLAYER_LEFT_WS_CLOSE_CODE = 4408;
 
-/** Human-readable team labels. */
-export const TEAM_LABELS: Record<number, string> = {
-  0: "我方",
-  1: "对方",
+export const TEAM_LABELS: Record<TeamIndex, string> = {
+  0: "队伍 0",
+  1: "队伍 1",
 };

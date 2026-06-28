@@ -6,7 +6,12 @@ import type {
   StateSnapshot,
 } from "../../core/types.ts";
 import { el } from "../dom.ts";
-import { SEAT_MAP } from "../../config.ts";
+import {
+  PLAYER_INDEXES,
+  type PlayerIndex,
+  playerIndexFromNumber,
+} from "../../config.ts";
+import { playerView } from "../player-view.ts";
 import { renderTrickView } from "./trick-view.ts";
 import { suitSymbol } from "../../core/card.ts";
 
@@ -29,7 +34,10 @@ function getCurrentPlayer(snapshot: StateSnapshot): number | null {
   return null;
 }
 
-function actionText(snapshot: StateSnapshot): string {
+function actionText(
+  snapshot: StateSnapshot,
+  viewerPlayer?: PlayerIndex | null,
+): string {
   if (snapshot.winning_team !== null) return "游戏结束";
 
   switch (snapshot.awaiting_action) {
@@ -52,14 +60,20 @@ function actionText(snapshot: StateSnapshot): string {
     const player = snapshot.stirring_state.phase === "EXCHANGING"
       ? snapshot.stirring_state.exchanging_player
       : snapshot.stirring_state.current_player;
-    const seat = player !== null && player !== undefined
-      ? SEAT_MAP[player]
+    const playerIndex = player !== null && player !== undefined
+      ? playerIndexFromNumber(player)
       : null;
-    return seat ? `等待${seat.label}` : "等待反主";
+    return playerIndex !== null
+      ? `等待${playerView(playerIndex, viewerPlayer).label}`
+      : "等待反主";
   }
   if (snapshot.phase === "PLAYING" && snapshot.trick) {
-    const seat = SEAT_MAP[snapshot.trick.current_player];
-    return seat ? `等待${seat.label}出牌` : "等待出牌";
+    const playerIndex = playerIndexFromNumber(
+      snapshot.trick.current_player,
+    );
+    return playerIndex !== null
+      ? `等待${playerView(playerIndex, viewerPlayer).label}出牌`
+      : "等待出牌";
   }
   if (snapshot.phase === "WAITING") return "等待确认下一轮";
   return "观察牌局";
@@ -82,18 +96,20 @@ export function renderGameTable(
   previousTrickPreview?: CompletedTrick | null,
   failedThrowPreview?: FailedThrow | null,
   gameId?: string | null,
+  viewerPlayer?: PlayerIndex | null,
 ): HTMLElement {
   const table = el("div", { class: "game-table" });
   const currentPlayer = getCurrentPlayer(snapshot);
 
-  for (let i = 0; i < 4; i++) {
-    const seat = SEAT_MAP[i];
+  for (const playerIndex of PLAYER_INDEXES) {
+    const view = playerView(playerIndex, viewerPlayer);
     const attrs: Record<string, string> = {
       class: "player-area",
-      "data-position": seat.position,
+      "data-position": view.position,
+      "data-player": String(playerIndex),
     };
 
-    if (currentPlayer === i) {
+    if (currentPlayer === playerIndex) {
       attrs.class += " current";
     }
 
@@ -101,30 +117,43 @@ export function renderGameTable(
 
     const header = el("div", { class: "player-area__header" });
     header.appendChild(
-      renderDebugAvatar(i, seat.team, seat.label, gameId),
-    );
-    const labelClass = `player-label team${seat.team}`;
-    header.appendChild(el("span", { class: labelClass }, seat.label));
-    header.appendChild(
-      el(
-        "span",
-        { class: `team-chip team${seat.team}` },
-        seat.team === 0 ? "我方" : "对方",
+      renderDebugAvatar(
+        playerIndex,
+        view.team,
+        view.avatarText,
+        gameId,
       ),
     );
+    const labelClass = `player-label team${view.team}`;
+    header.appendChild(el("span", { class: labelClass }, view.label));
+    const teamRow = el("span", { class: "player-area__team-row" });
+    teamRow.appendChild(
+      el(
+        "span",
+        { class: `team-chip team${view.team}` },
+        view.teamLabel,
+      ),
+    );
+    const declarerBadge = renderDeclarerBadge(snapshot, playerIndex);
+    if (declarerBadge !== null) {
+      teamRow.appendChild(declarerBadge);
+    }
+    header.appendChild(teamRow);
     area.appendChild(header);
 
     const badges = el("div", { class: "player-badges" });
 
-    const bidMarker = renderBidMarker(snapshot.bid_winner, i);
+    const bidMarker = renderBidMarker(snapshot.bid_winner, playerIndex);
     if (bidMarker !== null) {
       badges.appendChild(bidMarker);
     }
 
-    badges.appendChild(renderStatusBadge(snapshot, i));
+    badges.appendChild(renderStatusBadge(snapshot, playerIndex));
 
     if (snapshot.phase === "WAITING") {
-      const isReady = snapshot.next_round_confirmed.includes(i);
+      const isReady = snapshot.next_round_confirmed.includes(
+        playerIndex,
+      );
       const status = badges.querySelector(".player-status-badge");
       status?.appendChild(
         el("span", { class: "status-separator" }, "·"),
@@ -149,29 +178,34 @@ export function renderGameTable(
       snapshot,
       previousTrickPreview,
       failedThrowPreview,
+      viewerPlayer,
     ),
   );
 
   // Render trick view in center area.
   table.appendChild(
-    renderTrickView(snapshot, previousTrickPreview, failedThrowPreview),
+    renderTrickView(
+      snapshot,
+      previousTrickPreview,
+      failedThrowPreview,
+      viewerPlayer,
+    ),
   );
 
   return table;
 }
 
 function renderDebugAvatar(
-  player: number,
+  player: PlayerIndex,
   team: number,
-  label: string,
+  avatarText: string,
   gameId?: string | null,
 ): HTMLElement {
   const attrs: Record<string, string> = {
     class: `player-avatar player-avatar--debug team${team}`,
   };
-  const text = label.slice(0, 1);
   if (gameId === null || gameId === undefined || gameId.length === 0) {
-    return el("span", attrs, text);
+    return el("span", attrs, avatarText);
   }
   return el(
     "a",
@@ -182,7 +216,7 @@ function renderDebugAvatar(
       rel: "noreferrer",
       title: `AI transcript player ${player}`,
     },
-    text,
+    avatarText,
   );
 }
 
@@ -193,11 +227,17 @@ function renderStatusBadge(
   const count = snapshot.player_hand_counts?.[player] ?? 0;
   const badge = el("div", { class: "player-status-badge" });
   badge.appendChild(el("span", { class: "card-count" }, `${count}张`));
-  if (snapshot.declarer_player === player) {
-    badge.appendChild(el("span", { class: "status-separator" }, "·"));
-    badge.appendChild(el("span", { class: "declarer-text" }, "庄"));
-  }
   return badge;
+}
+
+function renderDeclarerBadge(
+  snapshot: StateSnapshot,
+  player: number,
+): HTMLElement | null {
+  if (snapshot.declarer_player === player) {
+    return el("span", { class: "declarer-text" }, "庄");
+  }
+  return null;
 }
 
 function renderBidMarker(
@@ -287,6 +327,7 @@ function renderTableNotice(
   snapshot: StateSnapshot,
   previousTrickPreview?: CompletedTrick | null,
   failedThrowPreview?: FailedThrow | null,
+  viewerPlayer?: PlayerIndex | null,
 ): HTMLElement {
   const notice = el("div", { class: "table-notice" });
   const primary = failedThrowPreview !== null &&
@@ -295,7 +336,7 @@ function renderTableNotice(
     : previousTrickPreview !== null &&
         previousTrickPreview !== undefined
     ? `上一墩 ${previousTrickPreview.points} 分`
-    : actionText(snapshot);
+    : actionText(snapshot, viewerPlayer);
 
   notice.appendChild(
     el("div", { class: "table-notice__primary" }, primary),

@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { DOMParser } from "jsr:@b-fuze/deno-dom@0.1.56";
 import { renderScoreboard } from "../ui/components/scoreboard.ts";
 import type { StateSnapshot } from "../core/types.ts";
+import type { ConnectionStatus } from "../ui/types.ts";
 
 const doc = new DOMParser().parseFromString(
   `<html><body><div id="app"></div></body></html>`,
@@ -80,6 +81,37 @@ Deno.test("test_renderScoreboard_has_no_operation_tabs_or_duplicate_table_info",
   assertEquals(text.includes("抢主记录"), false);
   assertEquals(text.includes("♥2"), false);
   assertEquals(text.includes("25"), false);
+});
+
+Deno.test("test_renderScoreboard_connection_status_in_top_title_right", () => {
+  const snap = makeSnapshot();
+  const cases: Array<[ConnectionStatus, string]> = [
+    ["connecting", "连接中"],
+    ["connected", "已连接"],
+    ["failed", "连接失败"],
+  ];
+
+  for (const [status, label] of cases) {
+    const el = renderScoreboard(snap, null, status);
+    const title = el.querySelector(".scoreboard > .scoreboard__title");
+    const statusEl = title?.querySelector(".scoreboard__connection");
+    const playerSection = Array.from(
+      el.querySelectorAll(".scoreboard__section"),
+    ).find((section) =>
+      !section.classList.contains("scoreboard__chat")
+    ) ??
+      null;
+
+    assertEquals(title !== null, true);
+    assertEquals(title?.textContent?.includes("玩家"), true);
+    assertEquals(statusEl?.textContent, label);
+    assertEquals(statusEl?.classList.contains(status), true);
+    assertEquals(
+      playerSection?.querySelector(".scoreboard__section-title"),
+      null,
+    );
+    assertEquals(el.querySelector(".info-bar__connection"), null);
+  }
 });
 
 Deno.test("test_renderScoreboard_stirring_status_uses_stirring_phase", () => {

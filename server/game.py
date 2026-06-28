@@ -440,6 +440,10 @@ class Game:
         """Return True if the game is over."""
         return self._game_state.winning_team is not None
 
+    def is_started(self) -> bool:
+        """Return True after the first round has been created."""
+        return self._round_state is not None
+
     def _current_phase(self) -> RoundPhase:
         """Return the current round/player-visible phase.
 

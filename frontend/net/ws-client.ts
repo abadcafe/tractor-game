@@ -1,5 +1,21 @@
 import type { ClientAction, ServerMessage } from "../core/protocol.ts";
-import { WS_PATH } from "../config.ts";
+import {
+  PLAYER_LEFT_WS_CLOSE_CODE,
+  type PlayerIndex,
+  WS_PATH,
+} from "../config.ts";
+
+export interface WsConnectionIdentity {
+  gameId: string;
+  playerIndex: PlayerIndex;
+  userId: string;
+}
+
+export interface WsDisconnectEvent {
+  willReconnect: boolean;
+  code: number;
+  reason: string;
+}
 
 /**
  * WebSocket client that manages a single connection to the game server.
@@ -9,11 +25,13 @@ import { WS_PATH } from "../config.ts";
 export class WsClient {
   private _ws: WebSocket | null = null;
   private _messageHandler: ((msg: ServerMessage) => void) | null = null;
-  private _disconnectHandler: (() => void) | null = null;
+  private _disconnectHandler:
+    | ((event: WsDisconnectEvent) => void)
+    | null = null;
   private _reconnectFailHandler: (() => void) | null = null;
   private _wsHost = "";
   private _reconnectAttempts = 0;
-  private _reconnectGameId = "";
+  private _reconnectTarget: WsConnectionIdentity | null = null;
   private _reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private _disconnecting = false;
   private _reconnecting = false;
@@ -25,7 +43,7 @@ export class WsClient {
   }
 
   /** Register a handler for disconnection events. */
-  onDisconnect(handler: () => void): void {
+  onDisconnect(handler: (event: WsDisconnectEvent) => void): void {
     this._disconnectHandler = handler;
   }
 
@@ -34,8 +52,11 @@ export class WsClient {
     this._reconnectFailHandler = handler;
   }
 
-  /** Connect to the game server. Constructs the WebSocket URL from gameId and wsHost. */
-  connect(gameId: string, wsHost?: string): Promise<void> {
+  /** Connect to the game server using the selected player identity. */
+  connect(
+    target: WsConnectionIdentity,
+    wsHost?: string,
+  ): Promise<void> {
     if (wsHost !== undefined) {
       this._wsHost = wsHost;
     }
@@ -49,11 +70,11 @@ export class WsClient {
     this._connectGeneration++;
     this._cancelReconnectTimer();
     this._disconnecting = false;
-    this._reconnectGameId = gameId;
+    this._reconnectTarget = target;
     this._reconnectAttempts = 0;
 
     return this._doConnect(
-      gameId,
+      target,
       this._wsHost,
       this._connectGeneration,
     );
@@ -101,12 +122,12 @@ export class WsClient {
   }
 
   private _doConnect(
-    gameId: string,
+    target: WsConnectionIdentity,
     wsHost: string,
     generation: number,
   ): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      const url = `${wsHost}${WS_PATH(gameId)}`;
+      const url = `${wsHost}${pathForTarget(target)}`;
       const ws = new WebSocket(url);
       this._ws = ws;
       let settled = false;
@@ -144,7 +165,7 @@ export class WsClient {
         this._messageHandler?.(msg);
       });
 
-      ws.addEventListener("close", () => {
+      ws.addEventListener("close", (event) => {
         const isCurrent = this._isCurrentSocket(ws, generation);
         if (!settled) {
           settled = true;
@@ -154,8 +175,23 @@ export class WsClient {
           return;
         }
         this._ws = null;
+        if (event.code === PLAYER_LEFT_WS_CLOSE_CODE) {
+          this._disconnecting = true;
+          this._reconnecting = false;
+          this._cancelReconnectTimer();
+          this._disconnectHandler?.({
+            willReconnect: false,
+            code: event.code,
+            reason: event.reason,
+          });
+          return;
+        }
         if (!this._disconnecting && opened) {
-          this._disconnectHandler?.();
+          this._disconnectHandler?.({
+            willReconnect: true,
+            code: event.code,
+            reason: event.reason,
+          });
           this._attemptReconnect(generation);
         }
       });
@@ -193,7 +229,10 @@ export class WsClient {
       ) {
         return;
       }
-      this._doConnect(this._reconnectGameId, this._wsHost, generation)
+      if (this._reconnectTarget === null) {
+        return;
+      }
+      this._doConnect(this._reconnectTarget, this._wsHost, generation)
         .catch(() => {
           // Reconnection failure is already handled by the close event
           // listener in _doConnect, which triggers the next reconnect attempt.
@@ -212,4 +251,8 @@ export class WsClient {
   private _isCurrentSocket(ws: WebSocket, generation: number): boolean {
     return generation === this._connectGeneration && this._ws === ws;
   }
+}
+
+function pathForTarget(target: WsConnectionIdentity): string {
+  return WS_PATH(target.gameId, target.playerIndex, target.userId);
 }

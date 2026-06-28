@@ -22,7 +22,7 @@ from anyio import (
 from starlette.testclient import TestClient, WebSocketTestSession
 from starlette.websockets import WebSocketDisconnect
 
-from server.game import Game
+from server.game_room import GameRoom
 from server.player import AIPlayer, HumanPlayer
 from server.server import app
 
@@ -141,6 +141,29 @@ def _game_id_from(resp: httpx.Response) -> str:
     val = data["game_id"]
     assert isinstance(val, str)
     return val
+
+
+def _player_ws_path(
+    game_id: str, *, player: int = 2, user_id: str = "user-2"
+) -> str:
+    return f"/game/{game_id}/player/{player}?user_id={user_id}"
+
+
+def _prepare_ws_game(
+    sync_client: SyncServerClient,
+    game_id: str,
+    *,
+    player: int = 2,
+    user_id: str = "user-2",
+) -> None:
+    attach_resp = sync_client.post(
+        f"/api/game/{game_id}/player/{player}?user_id={user_id}"
+    )
+    assert attach_resp.status_code == 200
+    fill_resp = sync_client.post(
+        f"/api/game/{game_id}/bots?kind=auto&user_id={user_id}"
+    )
+    assert fill_resp.status_code == 200
 
 
 def _as_str(val: object) -> str:
@@ -285,23 +308,54 @@ async def test_create_game_starts_game(
 
 
 @pytest.mark.asyncio
-async def test_create_game_can_use_ai_bot_players(
+async def test_create_game_starts_with_empty_players_by_default(
+    client: AsyncRestClient,
+    clean_registry: None,
+) -> None:
+    response = await client.post("/api/game")
+    game_id = _game_id_from(response)
+
+    from server.server import registry
+
+    room = registry.get(game_id)
+    assert isinstance(room, GameRoom)
+    assert room.game is None
+    for index in (0, 1, 2, 3):
+        assert room.player_at(index) is None
+    assert [player.kind for player in room.players()] == [
+        "empty",
+        "empty",
+        "empty",
+        "empty",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_create_auto_game_can_use_ai_bot_players(
     client: AsyncRestClient,
     clean_registry: None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("TRACTOR_BOT_PLAYER", "ai")
 
-    response = await client.post("/api/game")
+    response = await client.post("/api/game/auto")
     game_id = _game_id_from(response)
 
     from server.server import registry
 
-    game = registry.get(game_id)
-    assert isinstance(game, Game)
+    room = registry.get(game_id)
+    assert isinstance(room, GameRoom)
+    assert room.game is None
     for index in (0, 1, 3):
-        assert isinstance(game.get_player(index), AIPlayer)
-    assert isinstance(game.get_player(2), HumanPlayer)
+        assert isinstance(room.player_at(index), AIPlayer)
+    assert room.player_at(2) is None
+    players = room.players()
+    assert [players[index].kind for index in (0, 1, 3)] == [
+        "ai",
+        "ai",
+        "ai",
+    ]
+    assert players[2].kind == "empty"
 
 
 # ---- REST: List Games ----
@@ -335,7 +389,251 @@ async def test_list_games_with_games(
     assert len(games_raw) == 1
     first_game = games_raw[0]
     assert "game_id" in first_game
+    assert first_game["user_count"] == 0
+    assert first_game["capacity"] == 4
+    assert first_game["user_players"] == []
+    players_raw = first_game["players"]
+    assert _is_list_of_dict(players_raw)
+    assert len(players_raw) == 4
+    for player_raw in players_raw:
+        assert player_raw["occupied"] is False
     assert "phase" not in first_game
+
+
+def test_list_games_counts_attached_user_player(
+    sync_client: SyncServerClient, clean_registry: None
+) -> None:
+    create_resp = sync_client.post("/api/game")
+    game_id = _game_id_from(create_resp)
+    attach_resp = sync_client.post(
+        f"/api/game/{game_id}/player/1?user_id=user-1"
+    )
+    assert attach_resp.status_code == 200
+
+    response = sync_client.get("/api/game?user_id=user-1")
+    assert response.status_code == 200
+    data = response.json()
+    assert _is_dict(data)
+    games_raw = data["games"]
+    assert _is_list_of_dict(games_raw)
+    matching = [
+        game for game in games_raw if game["game_id"] == game_id
+    ]
+    assert len(matching) == 1
+    assert matching[0]["user_count"] == 1
+    assert matching[0]["capacity"] == 4
+    assert matching[0]["user_players"] == [1]
+    players_raw = matching[0]["players"]
+    assert _is_list_of_dict(players_raw)
+    player_one = players_raw[1]
+    assert player_one["index"] == 1
+    assert player_one["occupied"] is True
+    assert player_one["connected"] is False
+    assert player_one["mine"] is True
+    assert player_one["kind"] == "user"
+
+
+# ---- REST: Player Selection ----
+
+
+@pytest.mark.asyncio
+async def test_attach_player_rest_attaches_lobby_player(
+    client: AsyncRestClient, clean_registry: None
+) -> None:
+    create_resp = await client.post("/api/game")
+    game_id = _game_id_from(create_resp)
+
+    attach_resp = await client.post(
+        f"/api/game/{game_id}/player/2?user_id=user-2"
+    )
+    response = await client.get("/api/game?user_id=user-2")
+
+    assert attach_resp.status_code == 200
+    attach_data = attach_resp.json()
+    assert _is_dict(attach_data)
+    assert attach_data["ok"] is True
+    data = response.json()
+    assert _is_dict(data)
+    games_raw = data["games"]
+    assert _is_list_of_dict(games_raw)
+    matching = [
+        game for game in games_raw if game["game_id"] == game_id
+    ]
+    assert len(matching) == 1
+    assert matching[0]["user_count"] == 1
+    assert matching[0]["user_players"] == [2]
+    players_raw = matching[0]["players"]
+    assert _is_list_of_dict(players_raw)
+    player_two = players_raw[2]
+    assert player_two["occupied"] is True
+    assert player_two["connected"] is False
+    assert player_two["mine"] is True
+
+
+@pytest.mark.asyncio
+async def test_attach_player_rest_switches_user_player(
+    client: AsyncRestClient, clean_registry: None
+) -> None:
+    create_resp = await client.post("/api/game")
+    game_id = _game_id_from(create_resp)
+
+    first_resp = await client.post(
+        f"/api/game/{game_id}/player/0?user_id=user-0"
+    )
+    second_resp = await client.post(
+        f"/api/game/{game_id}/player/3?user_id=user-0"
+    )
+    response = await client.get("/api/game?user_id=user-0")
+
+    assert first_resp.status_code == 200
+    assert second_resp.status_code == 200
+    data = response.json()
+    assert _is_dict(data)
+    games_raw = data["games"]
+    assert _is_list_of_dict(games_raw)
+    matching = [
+        game for game in games_raw if game["game_id"] == game_id
+    ]
+    assert len(matching) == 1
+    assert matching[0]["user_players"] == [3]
+    players_raw = matching[0]["players"]
+    assert _is_list_of_dict(players_raw)
+    assert players_raw[0]["occupied"] is False
+    assert players_raw[3]["occupied"] is True
+    assert players_raw[3]["mine"] is True
+
+
+@pytest.mark.asyncio
+async def test_detach_player_rest_detaches_lobby_player(
+    client: AsyncRestClient, clean_registry: None
+) -> None:
+    create_resp = await client.post("/api/game")
+    game_id = _game_id_from(create_resp)
+    attach_resp = await client.post(
+        f"/api/game/{game_id}/player/1?user_id=user-1"
+    )
+
+    detach_resp = await client.delete(
+        f"/api/game/{game_id}/player/1?user_id=user-1"
+    )
+    response = await client.get("/api/game?user_id=user-1")
+
+    assert attach_resp.status_code == 200
+    assert detach_resp.status_code == 200
+    data = response.json()
+    assert _is_dict(data)
+    games_raw = data["games"]
+    assert _is_list_of_dict(games_raw)
+    matching = [
+        game for game in games_raw if game["game_id"] == game_id
+    ]
+    assert len(matching) == 1
+    assert matching[0]["user_count"] == 0
+    assert matching[0]["user_players"] == []
+    players_raw = matching[0]["players"]
+    assert _is_list_of_dict(players_raw)
+    assert players_raw[1]["occupied"] is False
+    assert players_raw[1]["mine"] is False
+
+
+@pytest.mark.asyncio
+async def test_attach_player_rest_rejects_occupied_player(
+    client: AsyncRestClient, clean_registry: None
+) -> None:
+    create_resp = await client.post("/api/game")
+    game_id = _game_id_from(create_resp)
+    first_resp = await client.post(
+        f"/api/game/{game_id}/player/1?user_id=user-1"
+    )
+
+    second_resp = await client.post(
+        f"/api/game/{game_id}/player/1?user_id=user-other"
+    )
+
+    assert first_resp.status_code == 200
+    assert second_resp.status_code == 409
+    data = second_resp.json()
+    assert _is_dict(data)
+    assert data["ok"] is False
+    assert data["error"] == "player occupied"
+
+
+@pytest.mark.asyncio
+async def test_fill_bot_players_rest_fills_remaining_with_auto(
+    client: AsyncRestClient, clean_registry: None
+) -> None:
+    create_resp = await client.post("/api/game")
+    game_id = _game_id_from(create_resp)
+    attach_resp = await client.post(
+        f"/api/game/{game_id}/player/2?user_id=user-2"
+    )
+
+    fill_resp = await client.post(
+        f"/api/game/{game_id}/bots?kind=auto&user_id=user-2"
+    )
+    list_resp = await client.get("/api/game?user_id=user-2")
+
+    assert attach_resp.status_code == 200
+    assert fill_resp.status_code == 200
+    fill_data = fill_resp.json()
+    assert _is_dict(fill_data)
+    assert fill_data["ok"] is True
+    data = list_resp.json()
+    assert _is_dict(data)
+    games_raw = data["games"]
+    assert _is_list_of_dict(games_raw)
+    matching = [
+        game for game in games_raw if game["game_id"] == game_id
+    ]
+    assert len(matching) == 1
+    assert matching[0]["user_count"] == 1
+    assert matching[0]["user_players"] == [2]
+    players_raw = matching[0]["players"]
+    assert _is_list_of_dict(players_raw)
+    assert [player["kind"] for player in players_raw] == [
+        "auto",
+        "auto",
+        "user",
+        "auto",
+    ]
+    assert all(player["occupied"] is True for player in players_raw)
+    assert players_raw[2]["mine"] is True
+
+
+@pytest.mark.asyncio
+async def test_fill_bot_players_rest_requires_attached_user(
+    client: AsyncRestClient, clean_registry: None
+) -> None:
+    create_resp = await client.post("/api/game")
+    game_id = _game_id_from(create_resp)
+
+    fill_resp = await client.post(
+        f"/api/game/{game_id}/bots?kind=auto&user_id=user-x"
+    )
+
+    assert fill_resp.status_code == 409
+    data = fill_resp.json()
+    assert _is_dict(data)
+    assert data["ok"] is False
+    assert data["error"] == "user is not attached to a player"
+
+
+@pytest.mark.asyncio
+async def test_fill_bot_players_rest_rejects_invalid_kind(
+    client: AsyncRestClient, clean_registry: None
+) -> None:
+    create_resp = await client.post("/api/game")
+    game_id = _game_id_from(create_resp)
+
+    fill_resp = await client.post(
+        f"/api/game/{game_id}/bots?kind=random&user_id=user-x"
+    )
+
+    assert fill_resp.status_code == 400
+    data = fill_resp.json()
+    assert _is_dict(data)
+    assert data["ok"] is False
+    assert data["error"] == "invalid bot kind"
 
 
 # ---- REST: Delete Game ----
@@ -376,8 +674,9 @@ def test_delete_game_after_ws_connection(
 
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
+    _prepare_ws_game(sync_client, game_id)
 
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
         # Get initial state via seq=0 (no auto-push on connect)
         ws.send_json({"seq": 0})
         initial = _receive_ws_json(ws)
@@ -390,20 +689,20 @@ def test_delete_game_after_ws_connection(
     assert registry.get(game_id) is None
 
 
-# ---- Human player index ----
+# ---- User player index ----
 
 
-def test_human_player_index_is_2(
+def test_user_player_can_connect_to_requested_player(
     sync_client: SyncServerClient, clean_registry: None
 ) -> None:
-    """The human player is always at index 2 (south seat).
-    Verify by connecting via WebSocket, sending seq=0, and confirming
-    a state message is received.
-    """
+    """A user can enter a specific numbered player via WebSocket."""
     create_resp = sync_client.post("/api/game")
     assert create_resp.status_code == 201
     game_id = _game_id_from(create_resp)
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+    _prepare_ws_game(sync_client, game_id, player=0, user_id="user-0")
+    with sync_client.websocket_connect(
+        _player_ws_path(game_id, player=0, user_id="user-0")
+    ) as ws:
         ws.send_json({"seq": 0})
         data = _receive_ws_json(ws)
         assert _is_dict(data)
@@ -425,7 +724,8 @@ def test_ws_seq_zero_after_connect_receives_state(
     """
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+    _prepare_ws_game(sync_client, game_id)
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
         # Client must send seq=0 to get initial state (no auto-push on
         # connect)
         ws.send_json({"seq": 0})
@@ -440,9 +740,87 @@ def test_ws_connect_nonexistent_rejected(
     """Connecting to a nonexistent game should be rejected."""
     with pytest.raises(_WS_ERRORS):
         with sync_client.websocket_connect(
-            "/game/nonexistent999"
+            _player_ws_path("nonexistent999")
         ) as ws:
             _receive_ws_json(ws)
+
+
+def test_ws_connect_missing_user_id_rejected(
+    sync_client: SyncServerClient, clean_registry: None
+) -> None:
+    create_resp = sync_client.post("/api/game")
+    game_id = _game_id_from(create_resp)
+
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with sync_client.websocket_connect(
+            f"/game/{game_id}/player/1"
+        ) as ws:
+            _receive_ws_json(ws)
+
+    assert exc_info.value.code == 4410
+
+
+def test_ws_connect_invalid_player_rejected(
+    sync_client: SyncServerClient, clean_registry: None
+) -> None:
+    create_resp = sync_client.post("/api/game")
+    game_id = _game_id_from(create_resp)
+
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with sync_client.websocket_connect(
+            f"/game/{game_id}/player/4?user_id=user-4"
+        ) as ws:
+            _receive_ws_json(ws)
+
+    assert exc_info.value.code == 4410
+
+
+def test_ws_connect_rejects_player_stealing(
+    sync_client: SyncServerClient, clean_registry: None
+) -> None:
+    create_resp = sync_client.post("/api/game")
+    game_id = _game_id_from(create_resp)
+    _prepare_ws_game(sync_client, game_id, player=1, user_id="user-1")
+
+    with sync_client.websocket_connect(
+        _player_ws_path(game_id, player=1, user_id="user-1")
+    ) as ws1:
+        ws1.send_json({"seq": 0})
+        data1 = _receive_ws_json(ws1)
+        assert _is_dict(data1)
+        assert data1["type"] == "state"
+
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            with sync_client.websocket_connect(
+                _player_ws_path(game_id, player=1, user_id="user-other")
+            ) as ws2:
+                _receive_ws_json(ws2)
+
+        assert exc_info.value.code == 4409
+
+
+def test_ws_connect_allows_same_user_to_reenter_player(
+    sync_client: SyncServerClient, clean_registry: None
+) -> None:
+    create_resp = sync_client.post("/api/game")
+    game_id = _game_id_from(create_resp)
+    _prepare_ws_game(sync_client, game_id, player=3, user_id="user-3")
+
+    with sync_client.websocket_connect(
+        _player_ws_path(game_id, player=3, user_id="user-3")
+    ) as ws1:
+        ws1.send_json({"seq": 0})
+        data1 = _receive_ws_json(ws1)
+        assert _is_dict(data1)
+        assert data1["type"] == "state"
+
+        with sync_client.websocket_connect(
+            _player_ws_path(game_id, player=3, user_id="user-3")
+        ) as ws2:
+            ws2.send_json({"seq": 0})
+            data2 = _receive_ws_json(ws2)
+            assert _is_dict(data2)
+            assert data2["type"] == "state"
 
 
 def test_ws_connect_game_over_uses_same_state_request_protocol(
@@ -456,11 +834,23 @@ def test_ws_connect_game_over_uses_same_state_request_protocol(
 
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
-    game_raw = registry.get(game_id)
-    assert isinstance(game_raw, Game)
+    _prepare_ws_game(sync_client, game_id)
+    room = registry.get(game_id)
+    assert isinstance(room, GameRoom)
+
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
+        ws.send_json({"seq": 0})
+        data = _receive_ws_json(ws)
+        assert _is_dict(data)
+        assert data["type"] == "state"
+
+    game_raw = room.game
+    assert game_raw is not None
 
     with patch.object(game_raw, "is_over", return_value=True):
-        with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+        with sync_client.websocket_connect(
+            _player_ws_path(game_id)
+        ) as ws:
             ws.send_json({"seq": 0})
             data = _receive_ws_json(ws)
             assert _is_dict(data)
@@ -480,28 +870,31 @@ def test_ws_connect_takeover_closes_old_connection(
 
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
-    game_raw = registry.get(game_id)
-    assert isinstance(game_raw, Game)
-    human_player_raw = game_raw.get_player(2)
-    assert isinstance(human_player_raw, HumanPlayer)
+    _prepare_ws_game(sync_client, game_id)
+    room = registry.get(game_id)
+    assert isinstance(room, GameRoom)
+    user_player_raw = room.player_at(2)
+    assert isinstance(user_player_raw, HumanPlayer)
 
     # First connection
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws1:
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws1:
         ws1.send_json({"seq": 0})
         data1 = _receive_ws_json(ws1)
         assert _is_dict(data1)
         assert data1["type"] == "state"
-        assert human_player_raw.is_connected()
+        assert user_player_raw.is_connected()
 
         # Second connection should take over (old connection closed, new
         # accepted)
-        with sync_client.websocket_connect(f"/game/{game_id}") as ws2:
+        with sync_client.websocket_connect(
+            _player_ws_path(game_id)
+        ) as ws2:
             ws2.send_json({"seq": 0})
             data2 = _receive_ws_json(ws2)
             assert _is_dict(data2)
             assert data2["type"] == "state"
             # New connection is now the active one
-            assert human_player_raw.is_connected()
+            assert user_player_raw.is_connected()
 
 
 # ---- WebSocket: Actions with response verification ----
@@ -520,7 +913,8 @@ def test_ws_bid_action_receives_response(
     """
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+    _prepare_ws_game(sync_client, game_id)
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         initial = _receive_ws_json(ws)
         assert _is_dict(initial)
@@ -540,7 +934,8 @@ def test_ws_play_action_receives_response(
     """Sending a play action via WebSocket should produce a response."""
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+    _prepare_ws_game(sync_client, game_id)
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         initial = _receive_ws_json(ws)
         assert _is_dict(initial)
@@ -558,7 +953,8 @@ def test_ws_next_round_action_receives_response(
     """Sending a next_round action should produce a response."""
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+    _prepare_ws_game(sync_client, game_id)
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         initial = _receive_ws_json(ws)
         assert _is_dict(initial)
@@ -576,7 +972,8 @@ def test_ws_stir_action_receives_response(
     """Sending a stir action should produce a response."""
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+    _prepare_ws_game(sync_client, game_id)
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         initial = _receive_ws_json(ws)
         assert _is_dict(initial)
@@ -596,7 +993,8 @@ def test_ws_discard_action_receives_response(
     """Sending a discard action should produce a response."""
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+    _prepare_ws_game(sync_client, game_id)
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         initial = _receive_ws_json(ws)
         assert _is_dict(initial)
@@ -623,7 +1021,8 @@ def test_ws_invalid_action_returns_error(
     """
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+    _prepare_ws_game(sync_client, game_id)
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
         # Get initial state first
         ws.send_json({"seq": 0})
         initial = _receive_ws_json(ws)
@@ -650,13 +1049,14 @@ def test_reconnect_replaces_ws(
     """Reconnecting to a game should replace the WebSocket reference."""
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
+    _prepare_ws_game(sync_client, game_id)
     # First connection
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         data = _receive_ws_json(ws)
         assert _is_dict(data)
     # Second connection (reconnect)
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         raw = _receive_ws_json(ws)
         assert _is_dict(raw)
@@ -672,7 +1072,8 @@ def test_seq_in_state_message(
     """State messages must include a 'seq' field starting from 1."""
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+    _prepare_ws_game(sync_client, game_id)
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
         # Send action with seq=0 to get initial state
         ws.send_json({"seq": 0})
         data = _receive_ws_json(ws)
@@ -692,7 +1093,8 @@ def test_seq_mismatch_returns_state_without_error(
     """
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+    _prepare_ws_game(sync_client, game_id)
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
         # Get initial state through the explicit seq=0 state request.
         ws.send_json({"seq": 0})
         data = _receive_ws_json(ws)
@@ -726,7 +1128,8 @@ def test_error_merged_into_state(
     """
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+    _prepare_ws_game(sync_client, game_id)
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
         # Get initial state
         ws.send_json({"seq": 0})
         data = _receive_ws_json(ws)
@@ -765,7 +1168,8 @@ def test_bid_pass_parsed_correctly(
     """
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
-    with sync_client.websocket_connect(f"/game/{game_id}") as ws:
+    _prepare_ws_game(sync_client, game_id)
+    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
         # Get initial state
         ws.send_json({"seq": 0})
         data = _receive_ws_json(ws)
@@ -843,6 +1247,7 @@ def test_serve_static_existing_file(
     assert response.status_code == 200
     # config.js exists in static/ from the build output
     assert "javascript" in response.headers.get("content-type", "")
+    assert response.headers.get("cache-control") == "no-store"
 
 
 def test_serve_static_subdirectory_file(
@@ -879,6 +1284,17 @@ def test_serve_static_unknown_path_returns_spa_fallback(
             assert response.status_code == 404
     finally:
         pass
+
+
+def test_serve_static_game_player_path_returns_root_assets(
+    sync_client: SyncServerClient,
+    clean_registry: None,
+) -> None:
+    response = sync_client.get("/game/example/player/1?user_id=user-1")
+
+    assert response.status_code == 200
+    assert '<link rel="stylesheet" href="/style.css">' in response.text
+    assert '<script type="module" src="/main.js?v=' in response.text
 
 
 def test_path_traversal_unencoded_returns_safe_response(

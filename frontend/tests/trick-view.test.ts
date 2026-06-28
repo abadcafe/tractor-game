@@ -195,7 +195,7 @@ Deno.test("test_renderTrickView_failed_throw_preview_shows_attempted_and_forced_
 
   const text = el.textContent ?? "";
   assertEquals(text.includes("甩牌失败，捡小"), false);
-  assertEquals(text.includes("同伴甩牌失败"), true);
+  assertEquals(text.includes("玩家 0甩牌失败"), true);
   assertEquals(text.includes("暴露"), true);
   assertEquals(text.includes("捡小"), true);
   assertEquals(text.includes("上一墩"), false);
