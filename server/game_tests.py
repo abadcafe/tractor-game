@@ -33,6 +33,7 @@ from server.result import Ok, Rejected
 from server.rules.cards import POINTS_MAP, Card, Rank, Suit
 from server.rules.rejections.card import CardNotInHandRejected
 from server.sm import deal_bid_sm, round_sm, stirring_sm, trick_sm
+from server.sm.scoring import RoundResult
 from server.sm.types import BidEvent
 
 type TestAction = (
@@ -101,10 +102,104 @@ def _card(suit: Suit, rank: Rank, deck: Literal[1, 2] = 1) -> Card:
     )
 
 
+def _card_ids(cards: Sequence[Card]) -> list[str]:
+    return [card.id for card in cards]
+
+
 def _game_with_round_state(state: round_sm.RoundState) -> Game:
     game = _create_game_with_auto_players()
     setattr(game, "_round_state", state)
     return game
+
+
+def _empty_hands() -> list[list[Card]]:
+    return [[], [], [], []]
+
+
+def _deal_bid_round_state_with_bottom(
+    bottom_cards: list[Card],
+) -> round_sm.RoundState:
+    return round_sm.RoundState(
+        phase="DEAL_BID",
+        declarer_team=0,
+        declarer_player=None,
+        defender_team=1,
+        trump_suit=None,
+        trump_rank=Rank.TWO,
+        bid_winner=None,
+        players_hand=_empty_hands(),
+        bottom_cards=bottom_cards,
+        defender_points=0,
+        last_completed_trick=None,
+        defender_point_cards=[],
+        deal_bid_state=None,
+        stirring_state=None,
+        trick_state=None,
+        result=None,
+        team0_level=Rank.TWO,
+        team1_level=Rank.TWO,
+        start_player=0,
+        next_declarer_player=None,
+    )
+
+
+def _stirring_round_state_with_bottom(
+    *,
+    bottom_cards: list[Card],
+    bottom_owner_player: int | None,
+    result: RoundResult | None = None,
+) -> round_sm.RoundState:
+    hands = _empty_hands()
+    stirring = stirring_sm.StirringState(
+        phase="WAITING",
+        trump_suit=Suit.HEARTS,
+        trump_rank=Rank.TWO,
+        declarer_player=0,
+        current_player=0,
+        pass_set=frozenset(),
+        actions=(),
+        last_stir_player=None,
+        current_priority=0,
+        bottom_cards=bottom_cards,
+        bottom_owner_player=bottom_owner_player,
+        players_hand=hands,
+    )
+    return round_sm.RoundState(
+        phase="WAITING" if result is not None else "STIRRING",
+        declarer_team=0,
+        declarer_player=0,
+        defender_team=1,
+        trump_suit=Suit.HEARTS,
+        trump_rank=Rank.TWO,
+        bid_winner=None,
+        players_hand=hands,
+        bottom_cards=bottom_cards,
+        defender_points=0,
+        last_completed_trick=None,
+        defender_point_cards=[],
+        deal_bid_state=None,
+        stirring_state=stirring,
+        trick_state=None,
+        result=result,
+        team0_level=Rank.TWO,
+        team1_level=Rank.TWO,
+        start_player=0,
+        next_declarer_player=None,
+    )
+
+
+def _round_result() -> RoundResult:
+    return RoundResult(
+        team0_new_level=Rank.TWO,
+        team1_new_level=Rank.TWO,
+        next_declarer_team=0,
+        next_declarer_player=0,
+        total_defender_points=0,
+        declarer_level_change=0,
+        defender_level_change=0,
+        switch_declarer=False,
+        bottom_card_bonus=0,
+    )
 
 
 def _raw_from_action(action: TestAction) -> dict[str, object]:
@@ -606,6 +701,7 @@ def test_snapshot_stir_action_hints_ordered_from_small_to_large() -> (
         last_stir_player=None,
         current_priority=201,
         bottom_cards=[],
+        bottom_owner_player=None,
         players_hand=players_hand,
     )
     state = round_sm.RoundState(
@@ -678,6 +774,7 @@ def test_snapshot_stir_action_hints_hidden_when_over_bid_hint_limit(
         last_stir_player=None,
         current_priority=201,
         bottom_cards=[],
+        bottom_owner_player=None,
         players_hand=players_hand,
     )
     state = round_sm.RoundState(
@@ -707,6 +804,52 @@ def test_snapshot_stir_action_hints_hidden_when_over_bid_hint_limit(
     snap = game.snapshot(1)
 
     assert snap.action_hints == []
+
+
+def test_snapshot_hides_bottom_cards_before_owner_exists() -> None:
+    bottom_cards = [_card(Suit.DIAMONDS, Rank.THREE)]
+    game = _game_with_round_state(
+        _deal_bid_round_state_with_bottom(bottom_cards)
+    )
+
+    for player in range(4):
+        snap = game.snapshot(player)
+        assert snap.bottom_cards == []
+
+
+def test_snapshot_bottom_cards_visible_only_to_bottom_owner() -> None:
+    bottom_cards = [_card(Suit.DIAMONDS, Rank.THREE)]
+    game = _game_with_round_state(
+        _stirring_round_state_with_bottom(
+            bottom_cards=bottom_cards,
+            bottom_owner_player=2,
+        )
+    )
+
+    for player in (0, 1, 3):
+        snap = game.snapshot(player)
+        assert snap.bottom_cards == []
+    owner_snap = game.snapshot(2)
+    assert _card_ids(owner_snap.bottom_cards) == _card_ids(bottom_cards)
+
+
+def test_snapshot_public_bottom_cards_after_scoring() -> None:
+    bottom_cards = [_card(Suit.DIAMONDS, Rank.THREE)]
+    game = _game_with_round_state(
+        _stirring_round_state_with_bottom(
+            bottom_cards=bottom_cards,
+            bottom_owner_player=2,
+            result=_round_result(),
+        )
+    )
+
+    for player in range(4):
+        snap = game.snapshot(player)
+        assert _card_ids(snap.bottom_cards) == _card_ids(bottom_cards)
+        assert snap.scoring is not None
+        assert _card_ids(snap.scoring.bottom_cards) == _card_ids(
+            bottom_cards
+        )
 
 
 def test_snapshot_play_leading_has_no_action_hints() -> None:

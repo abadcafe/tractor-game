@@ -21,7 +21,7 @@ from server.protocol_snapshot_builder import (
     trick_slot_snapshot,
     trick_snapshot,
 )
-from server.rules.cards import Rank
+from server.rules.cards import Card, Rank
 from server.rules.ordering import sort_by_display_order
 from server.sm import game_sm, round_sm
 from server.sm.types import BidEvent, FailedThrow
@@ -118,7 +118,10 @@ def build_state_snapshot(
         phase=_phase(round_state),
         player_hand=player_hand,
         player_hand_counts=player_hand_counts,
-        bottom_cards=list(round_state.bottom_cards),
+        bottom_cards=_visible_bottom_cards(
+            for_player=for_player,
+            round_state=round_state,
+        ),
         trump_suit=round_state.trump_suit,
         trump_rank=round_state.trump_rank,
         declarer_team=round_state.declarer_team,
@@ -284,3 +287,20 @@ def _scoring_snapshot(
         bottom_card_bonus=state.result.bottom_card_bonus,
         bottom_cards=list(state.bottom_cards),
     )
+
+
+def _visible_bottom_cards(
+    *,
+    for_player: int,
+    round_state: round_sm.RoundState,
+) -> list[Card]:
+    if round_state.result is not None:
+        return list(round_state.bottom_cards)
+    stirring_state = round_state.stirring_state
+    if stirring_state is None:
+        return []
+    if stirring_state.phase == "EXCHANGING":
+        return []
+    if stirring_state.bottom_owner_player == for_player:
+        return list(round_state.bottom_cards)
+    return []

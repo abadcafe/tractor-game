@@ -130,6 +130,7 @@ class TestCreateStirring:
         assert len(state.pass_set) == 0
         assert len(state.actions) == 0
         assert state.exchanging_player == 0
+        assert state.bottom_owner_player is None
 
     def test_create_stirring_has_exchange_state(self) -> None:
         """Initial state has exchange_state set up for declarer."""
@@ -247,6 +248,7 @@ class TestStirDiscard:
         assert new_state.pass_set == frozenset({0})
         assert new_state.exchange_state is None
         assert new_state.exchanging_player is None
+        assert new_state.bottom_owner_player == 0
 
     def test_stir_discard_wrong_player_rejected(self) -> None:
         """Only the exchanging player can discard."""
@@ -330,6 +332,7 @@ class TestStirDiscard:
         # Bottom cards should be the discarded cards
         assert len(new_state.bottom_cards) == 1
         assert new_state.bottom_cards[0].id == discards[0].id
+        assert new_state.bottom_owner_player == 0
 
 
 class TestPassStir:
@@ -456,6 +459,7 @@ class TestStir:
         assert (
             result.value.phase == "EXCHANGING"
         )  # transitions to EXCHANGING
+        assert result.value.bottom_owner_player is None
 
     def test_stir_pair_changes_trump(self) -> None:
         """Stir changes trump suit to the pair's suit."""
@@ -1036,6 +1040,7 @@ class TestStirFullFlow:
         )
         assert isinstance(result2, Ok)
         assert result2.value.phase == "WAITING"
+        assert result2.value.bottom_owner_player == 1
         # Player 1's hand should be updated
         assert (
             len(result2.value.players_hand[state.current_player]) == 2

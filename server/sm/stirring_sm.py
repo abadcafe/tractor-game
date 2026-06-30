@@ -105,6 +105,7 @@ class StirringState(BaseModel):
     last_stir_player: int | None = None
     current_priority: int = 0
     bottom_cards: list[Card]
+    bottom_owner_player: int | None
     players_hand: list[list[Card]]
     exchange_state: exc.ExchangeState | None = None
     exchanging_player: int | None = None
@@ -146,6 +147,7 @@ def create_stirring(input: StirInput) -> StirringState:
         actions=(),
         current_priority=initial_priority,
         bottom_cards=list(input.bottom_cards),
+        bottom_owner_player=None,
         players_hand=[list(h) for h in input.players_hand],
         exchange_state=exchange_state,
         exchanging_player=input.declarer_player,
@@ -184,6 +186,7 @@ def pass_stir(
                 last_stir_player=state.last_stir_player,
                 current_priority=state.current_priority,
                 bottom_cards=state.bottom_cards,
+                bottom_owner_player=state.bottom_owner_player,
                 players_hand=state.players_hand,
             )
         )
@@ -200,6 +203,7 @@ def pass_stir(
             last_stir_player=state.last_stir_player,
             current_priority=state.current_priority,
             bottom_cards=state.bottom_cards,
+            bottom_owner_player=state.bottom_owner_player,
             players_hand=state.players_hand,
         )
     )
@@ -289,6 +293,7 @@ def stir(
             last_stir_player=player,
             current_priority=new_priority,
             bottom_cards=list(state.bottom_cards),
+            bottom_owner_player=None,
             players_hand=[list(h) for h in state.players_hand],
             exchange_state=new_exchange_state,
             exchanging_player=player,
@@ -348,6 +353,7 @@ def stir_discard(
                     last_stir_player=state.last_stir_player,
                     current_priority=state.current_priority,
                     bottom_cards=new_bottom_cards,
+                    bottom_owner_player=exchanging,
                     players_hand=new_hands,
                 )
             )
@@ -367,6 +373,7 @@ def stir_discard(
                 last_stir_player=state.last_stir_player,
                 current_priority=state.current_priority,
                 bottom_cards=new_bottom_cards,
+                bottom_owner_player=exchanging,
                 players_hand=new_hands,
             )
         )
