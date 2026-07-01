@@ -17,8 +17,7 @@ from .snapshot_common import (
     StirringPhase,
 )
 from .stir_history_snapshot import (
-    BottomExchangeEventSnapshot,
-    BottomExchangeTrigger,
+    BottomExchangeSnapshot,
     StirDeclarationEventSnapshot,
     StirEventKind,
 )
@@ -34,8 +33,7 @@ __all__: tuple[str, ...] = (
     "AwaitingAction",
     "BidEventKind",
     "BidEventSnapshot",
-    "BottomExchangeEventSnapshot",
-    "BottomExchangeTrigger",
+    "BottomExchangeSnapshot",
     "CompletedTrickSnapshot",
     "FailedThrowSnapshot",
     "JokerType",

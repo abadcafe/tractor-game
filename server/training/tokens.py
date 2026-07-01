@@ -31,7 +31,6 @@ type ObservationSegment = Literal[
     "visible_bottom",
     "own_exchange_pickup",
     "own_exchange_discard",
-    "own_exchange_resulting_bottom",
     "play_record",
     "trick_result",
     "action_query",
@@ -80,7 +79,6 @@ type RoundEventFieldName = Literal[
     "count",
     "priority",
     "trigger",
-    "stir_event_age",
 ]
 type TrickResultFieldName = Literal["winner", "points"]
 type ActionQueryFieldName = Literal[

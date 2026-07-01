@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from server.protocol import (
     BidEventSnapshot,
-    BottomExchangeEventSnapshot,
+    BottomExchangeSnapshot,
     CompletedTrickSnapshot,
     FailedThrowSnapshot,
     ScoringSnapshot,
@@ -45,6 +45,8 @@ def optional_bid_event_snapshot(
 
 def stir_declaration_event_snapshot(
     event: StirDeclarationEvent,
+    *,
+    own_bottom_exchange: BottomExchangeEvent | None = None,
 ) -> StirDeclarationEventSnapshot:
     return StirDeclarationEventSnapshot(
         player=event.player,
@@ -52,19 +54,18 @@ def stir_declaration_event_snapshot(
         cards=list(event.cards),
         new_suit=event.new_suit,
         priority=event.priority,
+        own_bottom_exchange=None
+        if own_bottom_exchange is None
+        else bottom_exchange_snapshot(own_bottom_exchange),
     )
 
 
-def bottom_exchange_event_snapshot(
+def bottom_exchange_snapshot(
     event: BottomExchangeEvent,
-) -> BottomExchangeEventSnapshot:
-    return BottomExchangeEventSnapshot(
-        player=event.player,
-        trigger=event.trigger,
-        stir_event_index=event.stir_event_index,
+) -> BottomExchangeSnapshot:
+    return BottomExchangeSnapshot(
         picked_up_bottom_cards=list(event.picked_up_bottom_cards),
         discarded_bottom_cards=list(event.discarded_bottom_cards),
-        resulting_bottom_cards=list(event.resulting_bottom_cards),
     )
 
 

@@ -13,7 +13,7 @@ from server.protocol import (
 )
 from server.protocol_snapshot_builder import (
     bid_event_snapshot,
-    bottom_exchange_event_snapshot,
+    bottom_exchange_snapshot,
     optional_bid_event_snapshot,
     optional_completed_trick_snapshot,
     optional_failed_throw_snapshot,
@@ -79,8 +79,8 @@ def build_state_snapshot(
             team1_level=game_state.team1_level,
             bid_events=[],
             bid_winner=None,
+            own_initial_bottom_exchange=None,
             stir_events=[],
-            own_bottom_exchange_events=[],
             stirring_state=None,
             next_round_confirmed=sorted(next_round_confirmed),
         )
@@ -122,6 +122,16 @@ def build_state_snapshot(
         player_index=for_player,
         player_hand=player_hand,
     )
+    own_exchange_events = _own_exchange_events(
+        for_player=for_player,
+        round_state=round_state,
+    )
+    own_stir_exchanges = _own_stir_exchange_by_index(
+        own_exchange_events
+    )
+    own_initial_exchange = _own_initial_bottom_exchange(
+        own_exchange_events
+    )
 
     return StateSnapshot(
         phase=_phase(round_state),
@@ -155,16 +165,15 @@ def build_state_snapshot(
             for event in _bid_events(round_state)
         ],
         bid_winner=optional_bid_event_snapshot(round_state.bid_winner),
+        own_initial_bottom_exchange=None
+        if own_initial_exchange is None
+        else bottom_exchange_snapshot(own_initial_exchange),
         stir_events=[
-            stir_declaration_event_snapshot(event)
-            for event in _stir_events(round_state)
-        ],
-        own_bottom_exchange_events=[
-            bottom_exchange_event_snapshot(event)
-            for event in _own_bottom_exchange_events(
-                for_player=for_player,
-                round_state=round_state,
+            stir_declaration_event_snapshot(
+                event,
+                own_bottom_exchange=own_stir_exchanges.get(index),
             )
+            for index, event in enumerate(_stir_events(round_state))
         ],
         stirring_state=_stirring_snapshot(round_state),
         next_round_confirmed=sorted(next_round_confirmed),
@@ -282,7 +291,7 @@ def _stir_events(
     return list(state.stirring_state.stir_events)
 
 
-def _own_bottom_exchange_events(
+def _own_exchange_events(
     *,
     for_player: int,
     round_state: round_sm.RoundState,
@@ -294,6 +303,31 @@ def _own_bottom_exchange_events(
         for event in round_state.stirring_state.bottom_exchange_events
         if event.player == for_player
     ]
+
+
+def _own_initial_bottom_exchange(
+    events: list[BottomExchangeEvent],
+) -> BottomExchangeEvent | None:
+    result: BottomExchangeEvent | None = None
+    for event in events:
+        if event.trigger != "initial":
+            continue
+        assert result is None
+        result = event
+    return result
+
+
+def _own_stir_exchange_by_index(
+    events: list[BottomExchangeEvent],
+) -> dict[int, BottomExchangeEvent]:
+    result: dict[int, BottomExchangeEvent] = {}
+    for event in events:
+        if event.trigger != "stir":
+            continue
+        assert event.stir_event_index is not None
+        assert event.stir_event_index not in result
+        result[event.stir_event_index] = event
+    return result
 
 
 def _stirring_snapshot(

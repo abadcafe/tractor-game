@@ -37,7 +37,7 @@ INT_OVERFLOW_ID: int = INT_BASE_ID + MAX_SCALAR_INT + 1
 VALUE_STRING_BASE_ID: int = INT_OVERFLOW_ID + 1
 
 TOKEN_TYPE_VOCAB_SIZE: int = 8
-SEGMENT_VOCAB_SIZE: int = 13
+SEGMENT_VOCAB_SIZE: int = 12
 FIELD_VOCAB_SIZE: int = 72
 SUIT_VOCAB_SIZE: int = 7
 RANK_VOCAB_SIZE: int = 17
@@ -58,7 +58,7 @@ TOKEN_TYPE_ROUND_EVENT_FIELD_ID: int = 4
 TOKEN_TYPE_TRICK_RESULT_FIELD_ID: int = 5
 TOKEN_TYPE_ACTION_QUERY_FIELD_ID: int = 6
 
-SEGMENT_ACTION_QUERY_ID: int = 12
+SEGMENT_ACTION_QUERY_ID: int = 11
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,9 +111,8 @@ _SEGMENT_IDS: MappingProxyType[ObservationSegment, int] = (
             "visible_bottom": 6,
             "own_exchange_pickup": 7,
             "own_exchange_discard": 8,
-            "own_exchange_resulting_bottom": 9,
-            "play_record": 10,
-            "trick_result": 11,
+            "play_record": 9,
+            "trick_result": 10,
             "action_query": SEGMENT_ACTION_QUERY_ID,
         }
     )
@@ -202,7 +201,6 @@ _FIELD_IDS: MappingProxyType[str, int] = MappingProxyType(
         "round_event:count": 35,
         "round_event:priority": 36,
         "round_event:trigger": 37,
-        "round_event:stir_event_age": 38,
         "trick_result:winner": 39,
         "trick_result:points": 40,
         "action_query:kind": 41,

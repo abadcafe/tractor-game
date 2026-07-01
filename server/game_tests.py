@@ -901,10 +901,12 @@ def test_snapshot_stir_events_visible_to_all_players() -> None:
         assert len(snap.stir_events) == 2
         assert snap.stir_events[0].player == 2
         assert snap.stir_events[0].cards == [stir_card]
+        assert snap.stir_events[0].own_bottom_exchange is None
         assert snap.stir_events[1].kind == "pass"
+        assert snap.stir_events[1].own_bottom_exchange is None
 
 
-def test_snapshot_bottom_exchange_events_visible_only_to_owner() -> (
+def test_snapshot_initial_bottom_exchange_visible_only_to_owner() -> (
     None
 ):
     picked = [_card(Suit.DIAMONDS, Rank.THREE)]
@@ -927,14 +929,51 @@ def test_snapshot_bottom_exchange_events_visible_only_to_owner() -> (
 
     for player in (0, 1, 3):
         snap = game.snapshot(player)
-        assert snap.own_bottom_exchange_events == []
+        assert snap.own_initial_bottom_exchange is None
     owner_snap = game.snapshot(2)
-    assert len(owner_snap.own_bottom_exchange_events) == 1
-    assert owner_snap.own_bottom_exchange_events[0].player == 2
+    assert owner_snap.own_initial_bottom_exchange is not None
     assert (
-        owner_snap.own_bottom_exchange_events[0].picked_up_bottom_cards
-        == picked
+        owner_snap.own_initial_bottom_exchange.picked_up_bottom_cards
+        == (picked)
     )
+
+
+def test_snapshot_own_stir_exchange_attaches_to_stir_event() -> None:
+    stir_card = _card(Suit.SPADES, Rank.TWO)
+    picked = [_card(Suit.DIAMONDS, Rank.THREE)]
+    discarded = [_card(Suit.CLUBS, Rank.FOUR)]
+    stir_event = StirDeclarationEvent(
+        player=2,
+        kind="stir",
+        cards=[stir_card],
+        new_suit=Suit.SPADES,
+        priority=203,
+    )
+    exchange_event = BottomExchangeEvent(
+        player=2,
+        trigger="stir",
+        stir_event_index=0,
+        picked_up_bottom_cards=picked,
+        discarded_bottom_cards=discarded,
+        resulting_bottom_cards=discarded,
+    )
+    game = _game_with_round_state(
+        _stirring_round_state_with_bottom(
+            bottom_cards=discarded,
+            bottom_owner_player=2,
+            stir_events=(stir_event,),
+            bottom_exchange_events=(exchange_event,),
+        )
+    )
+
+    for player in (0, 1, 3):
+        snap = game.snapshot(player)
+        assert snap.stir_events[0].own_bottom_exchange is None
+    owner_snap = game.snapshot(2)
+    own_exchange = owner_snap.stir_events[0].own_bottom_exchange
+    assert own_exchange is not None
+    assert own_exchange.picked_up_bottom_cards == picked
+    assert own_exchange.discarded_bottom_cards == discarded
 
 
 def test_snapshot_public_bottom_cards_after_scoring() -> None:

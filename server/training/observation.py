@@ -7,7 +7,7 @@ from typing import Literal
 
 from server.protocol import (
     BidEventSnapshot,
-    BottomExchangeEventSnapshot,
+    BottomExchangeSnapshot,
     CompletedTrickSnapshot,
     StateSnapshot,
     StirDeclarationEventSnapshot,
@@ -127,14 +127,16 @@ def build_observation(
         )
     )
     tokens.extend(_bid_event_tokens(player_index, snapshot.bid_events))
+    if snapshot.own_initial_bottom_exchange is not None:
+        tokens.extend(
+            _own_bottom_exchange_tokens(
+                snapshot.own_initial_bottom_exchange,
+                event_age=len(snapshot.stir_events) + 1,
+                trigger="initial",
+            )
+        )
     tokens.extend(
         _stir_event_tokens(player_index, snapshot.stir_events)
-    )
-    tokens.extend(
-        _own_bottom_exchange_tokens(
-            snapshot.own_bottom_exchange_events,
-            stir_event_count=len(snapshot.stir_events),
-        )
     )
     tokens.extend(_visible_bottom_tokens(snapshot))
     tokens.extend(_hand_tokens(snapshot))
@@ -339,58 +341,43 @@ def _stir_event_tokens(
                     event_age=event_age,
                 )
             )
+        if event.own_bottom_exchange is not None:
+            tokens.extend(
+                _own_bottom_exchange_tokens(
+                    event.own_bottom_exchange,
+                    event_age=event_age,
+                    trigger="stir",
+                )
+            )
     return tuple(tokens)
 
 
 def _own_bottom_exchange_tokens(
-    events: list[BottomExchangeEventSnapshot],
+    event: BottomExchangeSnapshot,
     *,
-    stir_event_count: int,
+    event_age: int,
+    trigger: Literal["initial", "stir"],
 ) -> tuple[ObservationToken, ...]:
     tokens: list[ObservationToken] = []
-    total = len(events)
-    for index, event in enumerate(events):
-        event_age = total - index
-        tokens.append(
-            RoundEventFieldToken(
-                "event_kind", "own_exchange", event_age
-            )
+    tokens.append(
+        RoundEventFieldToken("event_kind", "own_exchange", event_age)
+    )
+    tokens.append(RoundEventFieldToken("actor", "self", event_age))
+    tokens.append(RoundEventFieldToken("trigger", trigger, event_age))
+    tokens.extend(
+        _exchange_card_tokens(
+            event.picked_up_bottom_cards,
+            segment="own_exchange_pickup",
+            event_age=event_age,
         )
-        tokens.append(RoundEventFieldToken("actor", "self", event_age))
-        tokens.append(
-            RoundEventFieldToken("trigger", event.trigger, event_age)
+    )
+    tokens.extend(
+        _exchange_card_tokens(
+            event.discarded_bottom_cards,
+            segment="own_exchange_discard",
+            event_age=event_age,
         )
-        stir_event_age = (
-            None
-            if event.stir_event_index is None
-            else stir_event_count - event.stir_event_index
-        )
-        tokens.append(
-            RoundEventFieldToken(
-                "stir_event_age", stir_event_age, event_age
-            )
-        )
-        tokens.extend(
-            _exchange_card_tokens(
-                event.picked_up_bottom_cards,
-                segment="own_exchange_pickup",
-                event_age=event_age,
-            )
-        )
-        tokens.extend(
-            _exchange_card_tokens(
-                event.discarded_bottom_cards,
-                segment="own_exchange_discard",
-                event_age=event_age,
-            )
-        )
-        tokens.extend(
-            _exchange_card_tokens(
-                event.resulting_bottom_cards,
-                segment="own_exchange_resulting_bottom",
-                event_age=event_age,
-            )
-        )
+    )
     return tuple(tokens)
 
 
@@ -400,7 +387,6 @@ def _exchange_card_tokens(
     segment: Literal[
         "own_exchange_pickup",
         "own_exchange_discard",
-        "own_exchange_resulting_bottom",
     ],
     event_age: int,
 ) -> tuple[CardToken, ...]:

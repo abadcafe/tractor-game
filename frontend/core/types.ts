@@ -32,7 +32,6 @@ export type AwaitingAction =
 export type BidEventKind = "trump_rank" | "joker";
 export type JokerType = "big" | "small";
 export type StirEventKind = "stir" | "pass";
-export type BottomExchangeTrigger = "initial" | "stir";
 
 export interface Card {
   id: string;
@@ -77,15 +76,12 @@ export interface StirDeclarationEvent {
   cards: Card[];
   new_suit: Suit | null;
   priority: number | null;
+  own_bottom_exchange: BottomExchange | null;
 }
 
-export interface BottomExchangeEvent {
-  player: number;
-  trigger: BottomExchangeTrigger;
-  stir_event_index: number | null;
+export interface BottomExchange {
   picked_up_bottom_cards: Card[];
   discarded_bottom_cards: Card[];
-  resulting_bottom_cards: Card[];
 }
 
 /** Full game state snapshot pushed by the server.
@@ -125,8 +121,8 @@ export interface StateSnapshot {
 
   bid_events: BidEvent[];
   bid_winner: BidEvent | null;
+  own_initial_bottom_exchange: BottomExchange | null;
   stir_events: StirDeclarationEvent[];
-  own_bottom_exchange_events: BottomExchangeEvent[];
 
   awaiting_action: AwaitingAction | null;
 

@@ -10,7 +10,7 @@ from server.protocol.snapshot_common import (
     SnapshotModel,
 )
 from server.protocol.stir_history_snapshot import (
-    BottomExchangeEventSnapshot,
+    BottomExchangeSnapshot,
     StirDeclarationEventSnapshot,
 )
 from server.protocol.stirring_snapshot import StirringStateSnapshot
@@ -53,7 +53,7 @@ class StateSnapshot(SnapshotModel):
     team1_level: Rank
     bid_events: list[BidEventSnapshot]
     bid_winner: BidEventSnapshot | None
+    own_initial_bottom_exchange: BottomExchangeSnapshot | None
     stir_events: list[StirDeclarationEventSnapshot]
-    own_bottom_exchange_events: list[BottomExchangeEventSnapshot]
     stirring_state: StirringStateSnapshot | None
     next_round_confirmed: list[int]

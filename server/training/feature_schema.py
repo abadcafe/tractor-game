@@ -41,7 +41,6 @@ def _numeric_specs() -> tuple[NumericFeatureSpec, ...]:
         ("round:remaining_cards_right_enemy", float(MAX_PLAY_WIDTH)),
         ("round_event:count", 4.0),
         ("round_event:priority", 205.0),
-        ("round_event:stir_event_age", float(MAX_EVENT_AGE)),
         ("trick_result:points", 200.0),
         ("action_query:min_select", float(MAX_PLAY_WIDTH)),
         ("action_query:max_select", float(MAX_PLAY_WIDTH)),
