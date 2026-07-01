@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from server.training.action_tokens import ActionQuery, GeneratedAction
 from server.training.observation import Observation
+from server.training.selection_actions import (
+    ActionQuery,
+    GeneratedAction,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,7 +23,7 @@ class DecisionStep:
     log_probability: float
     value_estimate: float
     entropy: float
-    token_count: int
+    choice_count: int
 
 
 @dataclass(frozen=True, slots=True)

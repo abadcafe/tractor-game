@@ -34,7 +34,11 @@ from server.rules.cards import POINTS_MAP, Card, Rank, Suit
 from server.rules.rejections.card import CardNotInHandRejected
 from server.sm import deal_bid_sm, round_sm, stirring_sm, trick_sm
 from server.sm.scoring import RoundResult
-from server.sm.types import BidEvent
+from server.sm.types import (
+    BidEvent,
+    BottomExchangeEvent,
+    StirDeclarationEvent,
+)
 
 type TestAction = (
     BidAction
@@ -148,21 +152,34 @@ def _stirring_round_state_with_bottom(
     bottom_cards: list[Card],
     bottom_owner_player: int | None,
     result: RoundResult | None = None,
+    stirring_phase: Literal["WAITING", "EXCHANGING", "COMPLETE"] = (
+        "WAITING"
+    ),
+    exchanging_player: int | None = None,
+    stir_events: tuple[StirDeclarationEvent, ...] = (),
+    bottom_exchange_events: tuple[BottomExchangeEvent, ...] = (),
 ) -> round_sm.RoundState:
     hands = _empty_hands()
     stirring = stirring_sm.StirringState(
-        phase="WAITING",
+        phase=stirring_phase,
         trump_suit=Suit.HEARTS,
         trump_rank=Rank.TWO,
         declarer_player=0,
-        current_player=0,
+        current_player=0
+        if exchanging_player is None
+        else exchanging_player,
         pass_set=frozenset(),
-        actions=(),
+        stir_events=stir_events,
+        bottom_exchange_events=bottom_exchange_events,
         last_stir_player=None,
         current_priority=0,
         bottom_cards=bottom_cards,
         bottom_owner_player=bottom_owner_player,
         players_hand=hands,
+        exchanging_player=exchanging_player,
+        pending_exchange_trigger="initial"
+        if exchanging_player is not None
+        else None,
     )
     return round_sm.RoundState(
         phase="WAITING" if result is not None else "STIRRING",
@@ -697,7 +714,8 @@ def test_snapshot_stir_action_hints_ordered_from_small_to_large() -> (
         declarer_player=0,
         current_player=1,
         pass_set=frozenset(),
-        actions=(),
+        stir_events=(),
+        bottom_exchange_events=(),
         last_stir_player=None,
         current_priority=201,
         bottom_cards=[],
@@ -770,7 +788,8 @@ def test_snapshot_stir_action_hints_hidden_when_over_bid_hint_limit(
         declarer_player=0,
         current_player=1,
         pass_set=frozenset(),
-        actions=(),
+        stir_events=(),
+        bottom_exchange_events=(),
         last_stir_player=None,
         current_priority=201,
         bottom_cards=[],
@@ -831,6 +850,91 @@ def test_snapshot_bottom_cards_visible_only_to_bottom_owner() -> None:
         assert snap.bottom_cards == []
     owner_snap = game.snapshot(2)
     assert _card_ids(owner_snap.bottom_cards) == _card_ids(bottom_cards)
+
+
+def test_snapshot_bottom_cards_visible_to_exchanging_player() -> None:
+    bottom_cards = [_card(Suit.DIAMONDS, Rank.THREE)]
+    game = _game_with_round_state(
+        _stirring_round_state_with_bottom(
+            bottom_cards=bottom_cards,
+            bottom_owner_player=None,
+            stirring_phase="EXCHANGING",
+            exchanging_player=2,
+        )
+    )
+
+    for player in (0, 1, 3):
+        snap = game.snapshot(player)
+        assert snap.bottom_cards == []
+    exchanger_snap = game.snapshot(2)
+    assert _card_ids(exchanger_snap.bottom_cards) == _card_ids(
+        bottom_cards
+    )
+
+
+def test_snapshot_stir_events_visible_to_all_players() -> None:
+    stir_card = _card(Suit.SPADES, Rank.TWO)
+    stir_event = StirDeclarationEvent(
+        player=2,
+        kind="stir",
+        cards=[stir_card],
+        new_suit=Suit.SPADES,
+        priority=203,
+    )
+    pass_event = StirDeclarationEvent(
+        player=3,
+        kind="pass",
+        cards=[],
+        new_suit=None,
+        priority=None,
+    )
+    game = _game_with_round_state(
+        _stirring_round_state_with_bottom(
+            bottom_cards=[],
+            bottom_owner_player=None,
+            stir_events=(stir_event, pass_event),
+        )
+    )
+
+    for player in range(4):
+        snap = game.snapshot(player)
+        assert len(snap.stir_events) == 2
+        assert snap.stir_events[0].player == 2
+        assert snap.stir_events[0].cards == [stir_card]
+        assert snap.stir_events[1].kind == "pass"
+
+
+def test_snapshot_bottom_exchange_events_visible_only_to_owner() -> (
+    None
+):
+    picked = [_card(Suit.DIAMONDS, Rank.THREE)]
+    discarded = [_card(Suit.CLUBS, Rank.FOUR)]
+    exchange_event = BottomExchangeEvent(
+        player=2,
+        trigger="initial",
+        stir_event_index=None,
+        picked_up_bottom_cards=picked,
+        discarded_bottom_cards=discarded,
+        resulting_bottom_cards=discarded,
+    )
+    game = _game_with_round_state(
+        _stirring_round_state_with_bottom(
+            bottom_cards=discarded,
+            bottom_owner_player=2,
+            bottom_exchange_events=(exchange_event,),
+        )
+    )
+
+    for player in (0, 1, 3):
+        snap = game.snapshot(player)
+        assert snap.own_bottom_exchange_events == []
+    owner_snap = game.snapshot(2)
+    assert len(owner_snap.own_bottom_exchange_events) == 1
+    assert owner_snap.own_bottom_exchange_events[0].player == 2
+    assert (
+        owner_snap.own_bottom_exchange_events[0].picked_up_bottom_cards
+        == picked
+    )
 
 
 def test_snapshot_public_bottom_cards_after_scoring() -> None:

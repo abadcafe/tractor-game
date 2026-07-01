@@ -47,7 +47,11 @@ from .rejections.stirring import (
     StirringMissingExchangeStateRejected,
 )
 from .rejections.turn import WrongTurnRejected
-from .types import StirAction, StirringPhase
+from .types import (
+    BottomExchangeEvent,
+    StirDeclarationEvent,
+    StirringPhase,
+)
 
 # ---- Priority Mapping ----
 
@@ -101,7 +105,8 @@ class StirringState(BaseModel):
     declarer_player: int
     current_player: int
     pass_set: frozenset[int]
-    actions: tuple[StirAction, ...]
+    stir_events: tuple[StirDeclarationEvent, ...]
+    bottom_exchange_events: tuple[BottomExchangeEvent, ...]
     last_stir_player: int | None = None
     current_priority: int = 0
     bottom_cards: list[Card]
@@ -109,6 +114,8 @@ class StirringState(BaseModel):
     players_hand: list[list[Card]]
     exchange_state: exc.ExchangeState | None = None
     exchanging_player: int | None = None
+    pending_exchange_trigger: Literal["initial", "stir"] | None = None
+    pending_stir_event_index: int | None = None
 
 
 # ---- Operations ----
@@ -144,13 +151,16 @@ def create_stirring(input: StirInput) -> StirringState:
         declarer_player=input.declarer_player,
         current_player=input.declarer_player,
         pass_set=frozenset(),
-        actions=(),
+        stir_events=(),
+        bottom_exchange_events=(),
         current_priority=initial_priority,
         bottom_cards=list(input.bottom_cards),
         bottom_owner_player=None,
         players_hand=[list(h) for h in input.players_hand],
         exchange_state=exchange_state,
         exchanging_player=input.declarer_player,
+        pending_exchange_trigger="initial",
+        pending_stir_event_index=None,
     )
 
 
@@ -171,7 +181,13 @@ def pass_stir(
         return WrongTurnRejected()
 
     new_pass_set = state.pass_set | {player}
-    new_action = StirAction(player=player, kind="pass", new_suit=None)
+    new_event = StirDeclarationEvent(
+        player=player,
+        kind="pass",
+        cards=[],
+        new_suit=None,
+        priority=None,
+    )
 
     if len(new_pass_set) == 4:
         return Ok(
@@ -182,12 +198,15 @@ def pass_stir(
                 declarer_player=state.declarer_player,
                 current_player=state.current_player,
                 pass_set=new_pass_set,
-                actions=state.actions + (new_action,),
+                stir_events=state.stir_events + (new_event,),
+                bottom_exchange_events=state.bottom_exchange_events,
                 last_stir_player=state.last_stir_player,
                 current_priority=state.current_priority,
                 bottom_cards=state.bottom_cards,
                 bottom_owner_player=state.bottom_owner_player,
                 players_hand=state.players_hand,
+                pending_exchange_trigger=state.pending_exchange_trigger,
+                pending_stir_event_index=state.pending_stir_event_index,
             )
         )
 
@@ -199,12 +218,15 @@ def pass_stir(
             declarer_player=state.declarer_player,
             current_player=next_player_ccw(state.current_player),
             pass_set=new_pass_set,
-            actions=state.actions + (new_action,),
+            stir_events=state.stir_events + (new_event,),
+            bottom_exchange_events=state.bottom_exchange_events,
             last_stir_player=state.last_stir_player,
             current_priority=state.current_priority,
             bottom_cards=state.bottom_cards,
             bottom_owner_player=state.bottom_owner_player,
             players_hand=state.players_hand,
+            pending_exchange_trigger=state.pending_exchange_trigger,
+            pending_stir_event_index=state.pending_stir_event_index,
         )
     )
 
@@ -269,8 +291,13 @@ def stir(
         return StirPriorityTooLowRejected()
 
     # 5. Valid stir: create exchange state for the stirring player
-    new_action = StirAction(
-        player=player, kind="stir", new_suit=new_suit
+    stir_event_index = len(state.stir_events)
+    new_event = StirDeclarationEvent(
+        player=player,
+        kind="stir",
+        cards=list(cards),
+        new_suit=new_suit,
+        priority=new_priority,
     )
 
     stirring_player_hand = list(state.players_hand[player])
@@ -289,7 +316,8 @@ def stir(
             declarer_player=state.declarer_player,
             current_player=player,
             pass_set=frozenset(),
-            actions=state.actions + (new_action,),
+            stir_events=state.stir_events + (new_event,),
+            bottom_exchange_events=state.bottom_exchange_events,
             last_stir_player=player,
             current_priority=new_priority,
             bottom_cards=list(state.bottom_cards),
@@ -297,6 +325,8 @@ def stir(
             players_hand=[list(h) for h in state.players_hand],
             exchange_state=new_exchange_state,
             exchanging_player=player,
+            pending_exchange_trigger="stir",
+            pending_stir_event_index=stir_event_index,
         )
     )
 
@@ -336,6 +366,18 @@ def stir_discard(
         exchanging = state.exchanging_player
         new_hands[exchanging] = list(new_exc.result.new_hand)
         new_bottom_cards = list(new_exc.result.new_bottom_cards)
+        assert state.pending_exchange_trigger is not None
+        exchange_event = BottomExchangeEvent(
+            player=exchanging,
+            trigger=state.pending_exchange_trigger,
+            stir_event_index=state.pending_stir_event_index,
+            picked_up_bottom_cards=list(state.bottom_cards),
+            discarded_bottom_cards=list(cards),
+            resulting_bottom_cards=new_bottom_cards,
+        )
+        bottom_exchange_events = state.bottom_exchange_events + (
+            exchange_event,
+        )
 
         # If current_priority is already the maximum (big joker pair),
         # no higher stir is possible — skip WAITING, go directly to
@@ -349,12 +391,15 @@ def stir_discard(
                     declarer_player=state.declarer_player,
                     current_player=exchanging,
                     pass_set=frozenset(),
-                    actions=state.actions,
+                    stir_events=state.stir_events,
+                    bottom_exchange_events=bottom_exchange_events,
                     last_stir_player=state.last_stir_player,
                     current_priority=state.current_priority,
                     bottom_cards=new_bottom_cards,
                     bottom_owner_player=exchanging,
                     players_hand=new_hands,
+                    pending_exchange_trigger=None,
+                    pending_stir_event_index=None,
                 )
             )
 
@@ -369,12 +414,15 @@ def stir_discard(
                 declarer_player=state.declarer_player,
                 current_player=next_player,
                 pass_set=frozenset({exchanging}),
-                actions=state.actions,
+                stir_events=state.stir_events,
+                bottom_exchange_events=bottom_exchange_events,
                 last_stir_player=state.last_stir_player,
                 current_priority=state.current_priority,
                 bottom_cards=new_bottom_cards,
                 bottom_owner_player=exchanging,
                 players_hand=new_hands,
+                pending_exchange_trigger=None,
+                pending_stir_event_index=None,
             )
         )
 
@@ -389,7 +437,9 @@ def get_stir_result(state: StirringState) -> StirResult:
     Returns the final trump suit, the number of stir actions taken,
     the final bottom cards, and the final player hands.
     """
-    stir_count = sum(1 for a in state.actions if a.kind == "stir")
+    stir_count = sum(
+        1 for event in state.stir_events if event.kind == "stir"
+    )
     return StirResult(
         final_trump_suit=state.trump_suit,
         stir_count=stir_count,

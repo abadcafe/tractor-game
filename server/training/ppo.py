@@ -1,4 +1,4 @@
-"""PPO updates for rewarded action-token decisions."""
+"""PPO updates for rewarded selection decisions."""
 
 from __future__ import annotations
 
@@ -7,16 +7,21 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor, nn
 
-from server.training.action_tokens import (
-    ACTION_TOKEN_VOCAB_SIZE,
-    BEGIN_TOKEN_ID,
-    valid_next_token_ids,
-)
 from server.training.config import ModelConfig, TrainConfig
 from server.training.model import TractorPolicyModel
+from server.training.selection_actions import (
+    SelectionChoice,
+    SelectionState,
+    valid_selection_choices,
+)
+from server.training.selection_torch import (
+    forward_selection_head,
+    logits_for_choices,
+)
 from server.training.tensorize import (
-    tensorize_action_prefix,
+    ObservationTensorBatch,
     tensorize_observation,
+    tensorize_selection_state,
 )
 from server.training.trajectory import RewardedDecisionStep
 
@@ -32,7 +37,7 @@ class PPOUpdateStats:
 
 
 class PPOTrainer:
-    """Small clipped-PPO trainer over action-token sequences."""
+    """Small clipped-PPO trainer over selection traces."""
 
     def __init__(
         self,
@@ -60,9 +65,7 @@ class PPOTrainer:
 
         for rewarded in steps:
             step = rewarded.step
-            sequence = step.action.token_ids
-            assert sequence[0] == BEGIN_TOKEN_ID
-            log_prob, value, entropy = self._sequence_log_prob(rewarded)
+            log_prob, value, entropy = self._trace_log_prob(rewarded)
             old_log_prob = torch.tensor(
                 step.log_probability,
                 dtype=torch.float32,
@@ -108,52 +111,98 @@ class PPOTrainer:
         kind = state.get("kind")
         assert kind == "manual_sgd"
 
-    def _sequence_log_prob(
+    def _trace_log_prob(
         self,
         step: RewardedDecisionStep,
     ) -> tuple[Tensor, Tensor, Tensor]:
-        observation_ids = tensorize_observation(
+        observation_batch = tensorize_observation(
             observation=step.step.observation,
             max_observation_tokens=self.model_config.max_tokens,
             device=self.device,
         )
-        sequence = step.step.action.token_ids
+        state = SelectionState(selected_slots=())
         log_probs: list[Tensor] = []
         entropies: list[Tensor] = []
         value = torch.tensor(
             0.0, dtype=torch.float32, device=self.device
         )
-        prefix = (sequence[0],)
-        for token_id in sequence[1:]:
-            action_prefix_ids = tensorize_action_prefix(
-                prefix=prefix,
-                device=self.device,
+        trace = step.step.action.selection_trace
+        if not trace.choices:
+            value = self._value_for_state(
+                step=step,
+                observation_batch=observation_batch,
+                state=state,
             )
-            logits, values = self.model.forward_action(
-                observation_ids,
-                action_prefix_ids,
+        for choice in trace.choices:
+            log_prob, value, entropy = self._choice_log_prob(
+                step=step,
+                observation_batch=observation_batch,
+                state=state,
+                choice=choice,
             )
-            value = values[0]
-            allowed = valid_next_token_ids(
-                step.step.action_query,
-                prefix,
-            )
-            assert token_id in allowed
-            masked_logits = _masked_logits(
-                logits[0],
-                allowed,
-                device=self.device,
-            )
-            log_probabilities = torch.log_softmax(masked_logits, dim=0)
-            probabilities = torch.softmax(masked_logits, dim=0)
-            log_probs.append(log_probabilities[token_id])
-            entropies.append(-(probabilities * log_probabilities).sum())
-            prefix = (*prefix, token_id)
+            log_probs.append(log_prob)
+            entropies.append(entropy)
+            if choice.kind == "select_card":
+                assert choice.slot is not None
+                state = SelectionState(
+                    selected_slots=(*state.selected_slots, choice.slot)
+                )
         return (
-            torch.stack(log_probs).sum(),
+            _sum_tensors(log_probs, device=self.device),
             value,
-            torch.stack(entropies).sum(),
+            _sum_tensors(entropies, device=self.device),
         )
+
+    def _choice_log_prob(
+        self,
+        *,
+        step: RewardedDecisionStep,
+        observation_batch: ObservationTensorBatch,
+        state: SelectionState,
+        choice: SelectionChoice,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        selection_batch = tensorize_selection_state(
+            query=step.step.action_query,
+            state=state,
+            device=self.device,
+        )
+        output = forward_selection_head(
+            model=self.model,
+            query=step.step.action_query,
+            observation=observation_batch,
+            selection=selection_batch,
+        )
+        allowed = valid_selection_choices(step.step.action_query, state)
+        assert choice in allowed
+        choice_index = allowed.index(choice)
+        logits = logits_for_choices(output, allowed)
+        log_probabilities = torch.log_softmax(logits, dim=0)
+        probabilities = torch.softmax(logits, dim=0)
+        return (
+            log_probabilities[choice_index],
+            output.values[0],
+            -(probabilities * log_probabilities).sum(),
+        )
+
+    def _value_for_state(
+        self,
+        *,
+        step: RewardedDecisionStep,
+        observation_batch: ObservationTensorBatch,
+        state: SelectionState,
+    ) -> Tensor:
+        selection_batch = tensorize_selection_state(
+            query=step.step.action_query,
+            state=state,
+            device=self.device,
+        )
+        output = forward_selection_head(
+            model=self.model,
+            query=step.step.action_query,
+            observation=observation_batch,
+            selection=selection_batch,
+        )
+        return output.values[0]
 
     def _sgd_step(self) -> None:
         with torch.no_grad():
@@ -166,25 +215,12 @@ class PPOTrainer:
                 )
 
 
-def _masked_logits(
-    logits: Tensor,
-    allowed_token_ids: tuple[int, ...],
-    *,
-    device: torch.device,
+def _sum_tensors(
+    values: list[Tensor], *, device: torch.device
 ) -> Tensor:
-    mask = torch.full(
-        (ACTION_TOKEN_VOCAB_SIZE,),
-        float("-inf"),
-        dtype=logits.dtype,
-        device=device,
-    )
-    index = torch.tensor(
-        list(allowed_token_ids),
-        dtype=torch.long,
-        device=device,
-    )
-    mask[index] = logits[index]
-    return mask
+    if not values:
+        return torch.tensor(0.0, dtype=torch.float32, device=device)
+    return torch.stack(values).sum()
 
 
 def _float_tensor(value: Tensor) -> float:

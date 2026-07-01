@@ -13,10 +13,12 @@ from server.protocol import (
 )
 from server.protocol_snapshot_builder import (
     bid_event_snapshot,
+    bottom_exchange_event_snapshot,
     optional_bid_event_snapshot,
     optional_completed_trick_snapshot,
     optional_failed_throw_snapshot,
     scoring_snapshot,
+    stir_declaration_event_snapshot,
     stirring_state_snapshot,
     trick_slot_snapshot,
     trick_snapshot,
@@ -24,7 +26,12 @@ from server.protocol_snapshot_builder import (
 from server.rules.cards import Card, Rank
 from server.rules.ordering import sort_by_display_order
 from server.sm import game_sm, round_sm
-from server.sm.types import BidEvent, FailedThrow
+from server.sm.types import (
+    BidEvent,
+    BottomExchangeEvent,
+    FailedThrow,
+    StirDeclarationEvent,
+)
 
 
 def trump_rank_for_round(state: game_sm.GameState) -> Rank:
@@ -72,6 +79,8 @@ def build_state_snapshot(
             team1_level=game_state.team1_level,
             bid_events=[],
             bid_winner=None,
+            stir_events=[],
+            own_bottom_exchange_events=[],
             stirring_state=None,
             next_round_confirmed=sorted(next_round_confirmed),
         )
@@ -146,6 +155,17 @@ def build_state_snapshot(
             for event in _bid_events(round_state)
         ],
         bid_winner=optional_bid_event_snapshot(round_state.bid_winner),
+        stir_events=[
+            stir_declaration_event_snapshot(event)
+            for event in _stir_events(round_state)
+        ],
+        own_bottom_exchange_events=[
+            bottom_exchange_event_snapshot(event)
+            for event in _own_bottom_exchange_events(
+                for_player=for_player,
+                round_state=round_state,
+            )
+        ],
         stirring_state=_stirring_snapshot(round_state),
         next_round_confirmed=sorted(next_round_confirmed),
     )
@@ -254,6 +274,28 @@ def _bid_events(state: round_sm.RoundState) -> list[BidEvent]:
     return list(state.deal_bid_state.bid_events)
 
 
+def _stir_events(
+    state: round_sm.RoundState,
+) -> list[StirDeclarationEvent]:
+    if state.stirring_state is None:
+        return []
+    return list(state.stirring_state.stir_events)
+
+
+def _own_bottom_exchange_events(
+    *,
+    for_player: int,
+    round_state: round_sm.RoundState,
+) -> list[BottomExchangeEvent]:
+    if round_state.stirring_state is None:
+        return []
+    return [
+        event
+        for event in round_state.stirring_state.bottom_exchange_events
+        if event.player == for_player
+    ]
+
+
 def _stirring_snapshot(
     state: round_sm.RoundState,
 ) -> StirringStateSnapshot | None:
@@ -300,6 +342,8 @@ def _visible_bottom_cards(
     if stirring_state is None:
         return []
     if stirring_state.phase == "EXCHANGING":
+        if stirring_state.exchanging_player == for_player:
+            return list(round_state.bottom_cards)
         return []
     if stirring_state.bottom_owner_player == for_player:
         return list(round_state.bottom_cards)

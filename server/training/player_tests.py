@@ -14,17 +14,15 @@ from server.player.test_helpers import (
 )
 from server.protocol import ScoringSnapshot
 from server.result import Ok
-from server.training.action_tokens import (
-    ACTION_PLAY_TOKEN_ID,
-    BEGIN_TOKEN_ID,
-    FIRST_CARD_TOKEN_ID,
-    STOP_TOKEN_ID,
-    ActionQuery,
-    decode_action_tokens,
-)
 from server.training.observation import Observation
 from server.training.player import TrainingPlayer
 from server.training.policy import PolicyDecision
+from server.training.selection_actions import (
+    ActionQuery,
+    SelectionChoice,
+    SelectionTrace,
+    decode_selection_action,
+)
 from server.training.trajectory import TrajectoryRecorder
 
 
@@ -36,13 +34,13 @@ class FirstCardPlayPolicy:
         observation: Observation,
         query: ActionQuery,
     ) -> PolicyDecision:
-        decoded = decode_action_tokens(
+        decoded = decode_selection_action(
             query,
-            (
-                BEGIN_TOKEN_ID,
-                ACTION_PLAY_TOKEN_ID,
-                FIRST_CARD_TOKEN_ID,
-                STOP_TOKEN_ID,
+            SelectionTrace(
+                choices=(
+                    SelectionChoice("select_card", 0),
+                    SelectionChoice("stop"),
+                )
             ),
         )
         assert isinstance(decoded, Ok)
@@ -51,7 +49,7 @@ class FirstCardPlayPolicy:
             log_probability=0.0,
             value_estimate=0.0,
             entropy=0.0,
-            token_count=len(decoded.value.token_ids),
+            choice_count=len(decoded.value.selection_trace.choices),
         )
 
 
@@ -114,7 +112,7 @@ async def test_training_player_records_action_after_acceptance() -> (
     assert len(steps) == 1
     assert steps[0].player_index == 0
     assert steps[0].action.card_ids == (test_card.id,)
-    assert steps[0].token_count == 4
+    assert steps[0].choice_count == 2
 
 
 @pytest.mark.asyncio

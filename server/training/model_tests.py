@@ -5,20 +5,16 @@ from __future__ import annotations
 import torch
 
 from server.player.test_helpers import card, make_snapshot
-from server.training.action_tokens import (
-    ACTION_PLAY_TOKEN_ID,
-    ACTION_TOKEN_VOCAB_SIZE,
-    BEGIN_TOKEN_ID,
-)
 from server.training.model import TractorPolicyModel
 from server.training.observation import build_observation
+from server.training.selection_actions import SelectionState
 from server.training.tensorize import (
-    tensorize_action_prefix,
     tensorize_observation,
+    tensorize_selection_state,
 )
 
 
-def test_tractor_policy_model_forward_action_shapes() -> None:
+def test_tractor_policy_model_forward_head_shapes() -> None:
     device = torch.device("cpu")
     model = TractorPolicyModel(
         d_model=8,
@@ -40,14 +36,19 @@ def test_tractor_policy_model_forward_action_shapes() -> None:
         max_observation_tokens=64,
         device=device,
     )
-    action_prefix_ids = tensorize_action_prefix(
-        prefix=(BEGIN_TOKEN_ID, ACTION_PLAY_TOKEN_ID),
+    selection_batch = tensorize_selection_state(
+        query=observation.action_query,
+        state=SelectionState(selected_slots=()),
         device=device,
     )
 
-    logits, values = model.forward_action(
-        observation_batch, action_prefix_ids
+    output = model.forward_lead_play(
+        observation_batch,
+        selection_batch,
     )
 
-    assert logits.shape == (1, ACTION_TOKEN_VOCAB_SIZE)
-    assert values.shape == (1,)
+    assert output.card_logits.shape == (1, 33)
+    assert output.pass_logits is None
+    assert output.stop_logits is not None
+    assert output.stop_logits.shape == (1,)
+    assert output.values.shape == (1,)

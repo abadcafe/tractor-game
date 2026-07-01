@@ -3,23 +3,27 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from server.protocol import (
     BidEventSnapshot,
+    BottomExchangeEventSnapshot,
     CompletedTrickSnapshot,
     StateSnapshot,
+    StirDeclarationEventSnapshot,
     TrickSlotSnapshot,
 )
+from server.rules.cards import Card
 from server.sm.constants import BOTTOM_CARD_COUNT, PLAYER_COUNT
-from server.training.action_tokens import (
-    ActionQuery,
-    build_action_query,
-)
 from server.training.progress import (
     DEFAULT_PROGRESS_CONFIG,
     ProgressConfig,
     distance_to_target,
     stage_target,
+)
+from server.training.selection_actions import (
+    ActionQuery,
+    build_action_query,
 )
 from server.training.tokens import (
     ActionQueryFieldToken,
@@ -122,8 +126,15 @@ def build_observation(
             progress_config=progress_config,
         )
     )
+    tokens.extend(_bid_event_tokens(player_index, snapshot.bid_events))
     tokens.extend(
-        _round_event_tokens(player_index, snapshot.bid_events)
+        _stir_event_tokens(player_index, snapshot.stir_events)
+    )
+    tokens.extend(
+        _own_bottom_exchange_tokens(
+            snapshot.own_bottom_exchange_events,
+            stir_event_count=len(snapshot.stir_events),
+        )
     )
     tokens.extend(_visible_bottom_tokens(snapshot))
     tokens.extend(_hand_tokens(snapshot))
@@ -246,7 +257,7 @@ def _round_tokens(
     )
 
 
-def _round_event_tokens(
+def _bid_event_tokens(
     player_index: int,
     bid_events: list[BidEventSnapshot],
 ) -> tuple[ObservationToken, ...]:
@@ -288,6 +299,121 @@ def _round_event_tokens(
                 )
             )
     return tuple(tokens)
+
+
+def _stir_event_tokens(
+    player_index: int,
+    stir_events: list[StirDeclarationEventSnapshot],
+) -> tuple[ObservationToken, ...]:
+    tokens: list[ObservationToken] = []
+    total = len(stir_events)
+    for index, event in enumerate(stir_events):
+        event_age = total - index
+        actor = relative_role(player_index, event.player)
+        tokens.append(
+            RoundEventFieldToken("event_kind", "stir", event_age)
+        )
+        tokens.append(RoundEventFieldToken("actor", actor, event_age))
+        tokens.append(
+            RoundEventFieldToken("stir_kind", event.kind, event_age)
+        )
+        tokens.append(
+            RoundEventFieldToken(
+                "suit",
+                None
+                if event.new_suit is None
+                else event.new_suit.value,
+                event_age,
+            )
+        )
+        tokens.append(
+            RoundEventFieldToken("priority", event.priority, event_age)
+        )
+        for card_order, card in enumerate(event.cards):
+            tokens.append(
+                card_token(
+                    card,
+                    segment="stir_event",
+                    role=actor,
+                    card_order=card_order,
+                    event_age=event_age,
+                )
+            )
+    return tuple(tokens)
+
+
+def _own_bottom_exchange_tokens(
+    events: list[BottomExchangeEventSnapshot],
+    *,
+    stir_event_count: int,
+) -> tuple[ObservationToken, ...]:
+    tokens: list[ObservationToken] = []
+    total = len(events)
+    for index, event in enumerate(events):
+        event_age = total - index
+        tokens.append(
+            RoundEventFieldToken(
+                "event_kind", "own_exchange", event_age
+            )
+        )
+        tokens.append(RoundEventFieldToken("actor", "self", event_age))
+        tokens.append(
+            RoundEventFieldToken("trigger", event.trigger, event_age)
+        )
+        stir_event_age = (
+            None
+            if event.stir_event_index is None
+            else stir_event_count - event.stir_event_index
+        )
+        tokens.append(
+            RoundEventFieldToken(
+                "stir_event_age", stir_event_age, event_age
+            )
+        )
+        tokens.extend(
+            _exchange_card_tokens(
+                event.picked_up_bottom_cards,
+                segment="own_exchange_pickup",
+                event_age=event_age,
+            )
+        )
+        tokens.extend(
+            _exchange_card_tokens(
+                event.discarded_bottom_cards,
+                segment="own_exchange_discard",
+                event_age=event_age,
+            )
+        )
+        tokens.extend(
+            _exchange_card_tokens(
+                event.resulting_bottom_cards,
+                segment="own_exchange_resulting_bottom",
+                event_age=event_age,
+            )
+        )
+    return tuple(tokens)
+
+
+def _exchange_card_tokens(
+    cards: list[Card],
+    *,
+    segment: Literal[
+        "own_exchange_pickup",
+        "own_exchange_discard",
+        "own_exchange_resulting_bottom",
+    ],
+    event_age: int,
+) -> tuple[CardToken, ...]:
+    return tuple(
+        card_token(
+            card,
+            segment=segment,
+            role="self",
+            card_order=index,
+            event_age=event_age,
+        )
+        for index, card in enumerate(cards)
+    )
 
 
 def _hand_tokens(

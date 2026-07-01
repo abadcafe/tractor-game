@@ -8,13 +8,13 @@ from dataclasses import dataclass
 from server.player.base import GameView, Player
 from server.protocol import PlayerMessage, StateMessage
 from server.result import Ok
-from server.training.action_tokens import GeneratedAction
 from server.training.observation import (
     PublicHistoryRecorder,
     build_observation,
 )
 from server.training.policy import TrainingPolicy
 from server.training.rule_repair import repair_action
+from server.training.selection_actions import GeneratedAction
 from server.training.trajectory import DecisionStep, TrajectoryRecorder
 
 MAX_MODEL_RESAMPLES_PER_STATE: int = 1
@@ -29,7 +29,7 @@ class TrainingPlayerStats:
     invalid_action_count: int = 0
     resample_count: int = 0
     forced_action_count: int = 0
-    action_token_count: int = 0
+    action_choice_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,12 +181,12 @@ class TrainingPlayer(Player):
             log_probability=decision.log_probability,
             value_estimate=decision.value_estimate,
             entropy=decision.entropy,
-            token_count=decision.token_count,
+            choice_count=decision.choice_count,
         )
         self._pending = PendingDecision(seq=message.seq, step=step)
         self._stats = _add_generated(
             self._stats,
-            token_count=decision.token_count,
+            choice_count=decision.choice_count,
         )
         self._submit_generated_action(
             game, message.seq, decision.action
@@ -229,7 +229,7 @@ class TrainingPlayer(Player):
 def _add_generated(
     stats: TrainingPlayerStats,
     *,
-    token_count: int,
+    choice_count: int,
 ) -> TrainingPlayerStats:
     return TrainingPlayerStats(
         generated_action_count=stats.generated_action_count + 1,
@@ -237,7 +237,7 @@ def _add_generated(
         invalid_action_count=stats.invalid_action_count,
         resample_count=stats.resample_count,
         forced_action_count=stats.forced_action_count,
-        action_token_count=stats.action_token_count + token_count,
+        action_choice_count=stats.action_choice_count + choice_count,
     )
 
 
@@ -248,7 +248,7 @@ def _add_accepted(stats: TrainingPlayerStats) -> TrainingPlayerStats:
         invalid_action_count=stats.invalid_action_count,
         resample_count=stats.resample_count,
         forced_action_count=stats.forced_action_count,
-        action_token_count=stats.action_token_count,
+        action_choice_count=stats.action_choice_count,
     )
 
 
@@ -259,7 +259,7 @@ def _add_invalid(stats: TrainingPlayerStats) -> TrainingPlayerStats:
         invalid_action_count=stats.invalid_action_count + 1,
         resample_count=stats.resample_count + 1,
         forced_action_count=stats.forced_action_count,
-        action_token_count=stats.action_token_count,
+        action_choice_count=stats.action_choice_count,
     )
 
 
@@ -270,5 +270,5 @@ def _add_forced(stats: TrainingPlayerStats) -> TrainingPlayerStats:
         invalid_action_count=stats.invalid_action_count,
         resample_count=stats.resample_count,
         forced_action_count=stats.forced_action_count + 1,
-        action_token_count=stats.action_token_count,
+        action_choice_count=stats.action_choice_count,
     )

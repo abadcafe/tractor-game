@@ -4,16 +4,24 @@ from __future__ import annotations
 
 from server.protocol import (
     BidEventSnapshot,
+    BottomExchangeEventSnapshot,
     CompletedTrickSnapshot,
     FailedThrowSnapshot,
     ScoringSnapshot,
+    StirDeclarationEventSnapshot,
     StirringPhase,
     StirringStateSnapshot,
     TrickSlotSnapshot,
     TrickSnapshot,
 )
 from server.rules.cards import Card, Suit
-from server.sm.types import BidEvent, CompletedTrick, FailedThrow
+from server.sm.types import (
+    BidEvent,
+    BottomExchangeEvent,
+    CompletedTrick,
+    FailedThrow,
+    StirDeclarationEvent,
+)
 
 
 def bid_event_snapshot(event: BidEvent) -> BidEventSnapshot:
@@ -33,6 +41,31 @@ def optional_bid_event_snapshot(
     if event is None:
         return None
     return bid_event_snapshot(event)
+
+
+def stir_declaration_event_snapshot(
+    event: StirDeclarationEvent,
+) -> StirDeclarationEventSnapshot:
+    return StirDeclarationEventSnapshot(
+        player=event.player,
+        kind=event.kind,
+        cards=list(event.cards),
+        new_suit=event.new_suit,
+        priority=event.priority,
+    )
+
+
+def bottom_exchange_event_snapshot(
+    event: BottomExchangeEvent,
+) -> BottomExchangeEventSnapshot:
+    return BottomExchangeEventSnapshot(
+        player=event.player,
+        trigger=event.trigger,
+        stir_event_index=event.stir_event_index,
+        picked_up_bottom_cards=list(event.picked_up_bottom_cards),
+        discarded_bottom_cards=list(event.discarded_bottom_cards),
+        resulting_bottom_cards=list(event.resulting_bottom_cards),
+    )
 
 
 def failed_throw_snapshot(event: FailedThrow) -> FailedThrowSnapshot:

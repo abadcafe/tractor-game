@@ -37,8 +37,8 @@ INT_OVERFLOW_ID: int = INT_BASE_ID + MAX_SCALAR_INT + 1
 VALUE_STRING_BASE_ID: int = INT_OVERFLOW_ID + 1
 
 TOKEN_TYPE_VOCAB_SIZE: int = 8
-SEGMENT_VOCAB_SIZE: int = 9
-FIELD_VOCAB_SIZE: int = 64
+SEGMENT_VOCAB_SIZE: int = 13
+FIELD_VOCAB_SIZE: int = 72
 SUIT_VOCAB_SIZE: int = 7
 RANK_VOCAB_SIZE: int = 17
 POINTS_VOCAB_SIZE: int = 5
@@ -58,7 +58,7 @@ TOKEN_TYPE_ROUND_EVENT_FIELD_ID: int = 4
 TOKEN_TYPE_TRICK_RESULT_FIELD_ID: int = 5
 TOKEN_TYPE_ACTION_QUERY_FIELD_ID: int = 6
 
-SEGMENT_ACTION_QUERY_ID: int = 8
+SEGMENT_ACTION_QUERY_ID: int = 12
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,10 +106,14 @@ _SEGMENT_IDS: MappingProxyType[ObservationSegment, int] = (
             "global_context": 1,
             "round_context": 2,
             "round_event": 3,
-            "self_hand": 4,
-            "visible_bottom": 5,
-            "play_record": 6,
-            "trick_result": 7,
+            "stir_event": 4,
+            "self_hand": 5,
+            "visible_bottom": 6,
+            "own_exchange_pickup": 7,
+            "own_exchange_discard": 8,
+            "own_exchange_resulting_bottom": 9,
+            "play_record": 10,
+            "trick_result": 11,
             "action_query": SEGMENT_ACTION_QUERY_ID,
         }
     )
@@ -192,25 +196,29 @@ _FIELD_IDS: MappingProxyType[str, int] = MappingProxyType(
         "round_event:event_kind": 29,
         "round_event:actor": 30,
         "round_event:bid_kind": 31,
-        "round_event:suit": 32,
-        "round_event:joker_type": 33,
-        "round_event:count": 34,
-        "trick_result:winner": 35,
-        "trick_result:points": 36,
-        "action_query:kind": 37,
-        "action_query:pass_allowed": 38,
-        "action_query:min_select": 39,
-        "action_query:max_select": 40,
-        "action_query:exact_select": 41,
-        "action_query:selection_source": 42,
-        "action_query:action_play_order": 43,
-        "action_query:current_trick_width": 44,
-        "action_query:lead_actor": 45,
-        "action_query:discard_count": 46,
-        "action_query:trump_suit": 47,
-        "action_query:level_rank": 48,
-        "action_query:current_best_bid_role": 49,
-        "round:enemy_team_required_level": 50,
+        "round_event:stir_kind": 32,
+        "round_event:suit": 33,
+        "round_event:joker_type": 34,
+        "round_event:count": 35,
+        "round_event:priority": 36,
+        "round_event:trigger": 37,
+        "round_event:stir_event_age": 38,
+        "trick_result:winner": 39,
+        "trick_result:points": 40,
+        "action_query:kind": 41,
+        "action_query:pass_allowed": 42,
+        "action_query:min_select": 43,
+        "action_query:max_select": 44,
+        "action_query:exact_select": 45,
+        "action_query:selection_source": 46,
+        "action_query:action_play_order": 47,
+        "action_query:current_trick_width": 48,
+        "action_query:lead_actor": 49,
+        "action_query:discard_count": 50,
+        "action_query:trump_suit": 51,
+        "action_query:level_rank": 52,
+        "action_query:current_best_bid_role": 53,
+        "round:enemy_team_required_level": 54,
     }
 )
 _STRING_VALUE_IDS: MappingProxyType[str, int] = MappingProxyType(
@@ -256,6 +264,11 @@ _STRING_VALUE_IDS: MappingProxyType[str, int] = MappingProxyType(
         "big": VALUE_STRING_BASE_ID + 38,
         "small": VALUE_STRING_BASE_ID + 39,
         "hand": VALUE_STRING_BASE_ID + 40,
+        "lead_play": VALUE_STRING_BASE_ID + 41,
+        "follow_play": VALUE_STRING_BASE_ID + 42,
+        "pass": VALUE_STRING_BASE_ID + 43,
+        "own_exchange": VALUE_STRING_BASE_ID + 44,
+        "initial": VALUE_STRING_BASE_ID + 45,
     }
 )
 FALSE_VALUE_ID: int = VALUE_STRING_BASE_ID + len(_STRING_VALUE_IDS)

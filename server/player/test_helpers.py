@@ -8,12 +8,14 @@ from unittest.mock import AsyncMock, MagicMock
 from server.protocol import (
     AwaitingAction,
     BidEventSnapshot,
+    BottomExchangeEventSnapshot,
     CompletedTrickSnapshot,
     FailedThrowSnapshot,
     RoundPhase,
     ScoringSnapshot,
     StateMessage,
     StateSnapshot,
+    StirDeclarationEventSnapshot,
     StirringStateSnapshot,
     TrickSnapshot,
 )
@@ -79,6 +81,10 @@ def make_snapshot(
     failed_throw: FailedThrowSnapshot | None = None,
     bid_events: list[BidEventSnapshot] | None = None,
     bid_winner: BidEventSnapshot | None = None,
+    stir_events: list[StirDeclarationEventSnapshot] | None = None,
+    own_bottom_exchange_events: (
+        list[BottomExchangeEventSnapshot] | None
+    ) = None,
     stirring_state: StirringStateSnapshot | None = None,
     scoring: ScoringSnapshot | None = None,
     winning_team: int | None = None,
@@ -109,6 +115,10 @@ def make_snapshot(
         failed_throw=failed_throw,
         bid_events=bid_events if bid_events is not None else [],
         bid_winner=bid_winner,
+        stir_events=stir_events if stir_events is not None else [],
+        own_bottom_exchange_events=own_bottom_exchange_events
+        if own_bottom_exchange_events is not None
+        else [],
         stirring_state=stirring_state,
         scoring=scoring,
         winning_team=winning_team,

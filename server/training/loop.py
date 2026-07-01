@@ -119,7 +119,7 @@ async def train_self_play(
                     accepted=round_result.accepted_action_count,
                     invalid=round_result.invalid_action_count,
                 ),
-                average_action_tokens=round_result.average_action_tokens,
+                average_action_choices=round_result.average_action_choices,
                 checkpoint_path=str(checkpoint_path),
             ),
         )

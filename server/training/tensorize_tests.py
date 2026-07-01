@@ -4,16 +4,13 @@ from __future__ import annotations
 
 import torch
 
-from server.player.test_helpers import make_snapshot
-from server.training.action_tokens import (
-    BEGIN_TOKEN_ID,
-    MAX_ACTION_TOKENS,
-)
+from server.player.test_helpers import card, make_snapshot
 from server.training.feature_schema import NUMERIC_FEATURE_COUNT
 from server.training.observation import build_observation
+from server.training.selection_actions import SelectionState
 from server.training.tensorize import (
-    tensorize_action_prefix,
     tensorize_observation,
+    tensorize_selection_state,
 )
 from server.training.tokens import GlobalFieldToken
 
@@ -76,17 +73,48 @@ def test_tensorize_observation_rejects_oversized_observation() -> None:
     assert False
 
 
-def test_tensorize_action_prefix_rejects_oversized_prefix() -> None:
-    oversized_prefix = tuple(
-        BEGIN_TOKEN_ID for _ in range(MAX_ACTION_TOKENS + 1)
+def test_tensorize_observation_tracks_self_hand_slots() -> None:
+    first = card("spades", "A", 1)
+    second = card("hearts", "5", 1)
+    observation = build_observation(
+        player_index=0,
+        snapshot=make_snapshot(player_hand=[first, second]),
+        history=(),
     )
 
-    try:
-        tensorize_action_prefix(
-            prefix=oversized_prefix,
-            device=torch.device("cpu"),
-        )
-    except AssertionError:
-        return
+    batch = tensorize_observation(
+        observation=observation,
+        max_observation_tokens=128,
+        device=torch.device("cpu"),
+    )
 
-    assert False
+    assert batch.hand_token_indices.shape == (1, 33)
+    assert batch.hand_card_masks.shape == (1, 33)
+    assert batch.hand_card_masks[0, 0].item()
+    assert batch.hand_card_masks[0, 1].item()
+    assert not batch.hand_card_masks[0, 2].item()
+
+
+def test_tensorize_selection_state_outputs_masks_and_features() -> None:
+    first = card("spades", "A", 1)
+    second = card("hearts", "5", 1)
+    observation = build_observation(
+        player_index=0,
+        snapshot=make_snapshot(
+            phase="PLAYING",
+            awaiting_action="play",
+            player_hand=[first, second],
+        ),
+        history=(),
+    )
+
+    batch = tensorize_selection_state(
+        query=observation.action_query,
+        state=SelectionState(selected_slots=(1,)),
+        device=torch.device("cpu"),
+    )
+
+    assert batch.selected_slot_masks.shape == (1, 33)
+    assert batch.feature_values.shape == (1, 6)
+    assert batch.selected_slot_masks[0, 1].item() == 1.0
+    assert batch.selected_slot_masks[0, 0].item() == 0.0

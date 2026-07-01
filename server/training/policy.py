@@ -8,16 +8,17 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from server.result import Ok
-from server.training.action_tokens import (
-    BEGIN_TOKEN_ID,
-    MAX_ACTION_TOKENS,
-    STOP_TOKEN_ID,
+from server.training.observation import Observation
+from server.training.selection_actions import (
+    MAX_HAND_CARD_SLOTS,
     ActionQuery,
     GeneratedAction,
-    decode_action_tokens,
-    valid_next_token_ids,
+    SelectionChoice,
+    SelectionState,
+    SelectionTrace,
+    decode_selection_action,
+    valid_selection_choices,
 )
-from server.training.observation import Observation
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,7 +29,7 @@ class PolicyDecision:
     log_probability: float
     value_estimate: float
     entropy: float
-    token_count: int
+    choice_count: int
 
 
 class TrainingPolicy(Protocol):
@@ -42,7 +43,7 @@ class TrainingPolicy(Protocol):
 
 
 class RandomTrainingPolicy:
-    """Verified random token policy for smoke runs."""
+    """Verified random selection policy for smoke runs."""
 
     def __init__(self, seed: int = 0) -> None:
         self._rng = random.Random(seed)
@@ -52,25 +53,35 @@ class RandomTrainingPolicy:
         observation: Observation,
         query: ActionQuery,
     ) -> PolicyDecision:
-        prefix = (BEGIN_TOKEN_ID,)
+        state = SelectionState(selected_slots=())
+        choices: list[SelectionChoice] = []
         log_probability = 0.0
         entropy = 0.0
-        for _ in range(MAX_ACTION_TOKENS - 1):
-            allowed = valid_next_token_ids(query, prefix)
-            assert allowed
-            token_id = self._rng.choice(allowed)
+        for _ in range(MAX_HAND_CARD_SLOTS + 2):
+            allowed = valid_selection_choices(query, state)
+            if not allowed:
+                break
+            choice = self._rng.choice(allowed)
             probability = 1.0 / len(allowed)
             log_probability += math.log(probability)
             entropy += math.log(len(allowed))
-            prefix = (*prefix, token_id)
-            if token_id == STOP_TOKEN_ID:
+            choices.append(choice)
+            if choice.kind in ("pass", "stop"):
                 break
-        decoded = decode_action_tokens(query, prefix)
+            assert choice.kind == "select_card"
+            assert choice.slot is not None
+            state = SelectionState(
+                selected_slots=(*state.selected_slots, choice.slot)
+            )
+        else:
+            assert False
+        trace = SelectionTrace(choices=tuple(choices))
+        decoded = decode_selection_action(query, trace)
         assert isinstance(decoded, Ok)
         return PolicyDecision(
             action=decoded.value,
             log_probability=log_probability,
             value_estimate=0.0,
             entropy=entropy,
-            token_count=len(decoded.value.token_ids),
+            choice_count=len(decoded.value.selection_trace.choices),
         )

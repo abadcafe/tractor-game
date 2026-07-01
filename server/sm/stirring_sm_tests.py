@@ -128,7 +128,7 @@ class TestCreateStirring:
         assert state.phase == "EXCHANGING"
         assert state.current_player == 0  # declarer must exchange first
         assert len(state.pass_set) == 0
-        assert len(state.actions) == 0
+        assert len(state.stir_events) == 0
         assert state.exchanging_player == 0
         assert state.bottom_owner_player is None
 

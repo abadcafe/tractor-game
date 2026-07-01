@@ -35,7 +35,7 @@ class TrainingRoundResult:
     invalid_action_count: int
     resample_count: int
     forced_action_count: int
-    average_action_tokens: float
+    average_action_choices: float
     elapsed_seconds: float
     game_over: bool
 
@@ -106,8 +106,8 @@ class SelfPlaySession:
             player.stats().accepted_action_count
             for player in self._players
         )
-        token_count = sum(
-            player.stats().action_token_count
+        choice_count = sum(
+            player.stats().action_choice_count
             for player in self._players
         )
         return TrainingRoundResult(
@@ -128,9 +128,9 @@ class SelfPlaySession:
                 player.stats().forced_action_count
                 for player in self._players
             ),
-            average_action_tokens=0.0
+            average_action_choices=0.0
             if generated_count == 0
-            else token_count / generated_count,
+            else choice_count / generated_count,
             elapsed_seconds=max(time.monotonic() - start, 0.000001),
             game_over=final_snapshot.winning_team is not None,
         )

@@ -16,6 +16,12 @@ from .snapshot_common import (
     RoundPhase,
     StirringPhase,
 )
+from .stir_history_snapshot import (
+    BottomExchangeEventSnapshot,
+    BottomExchangeTrigger,
+    StirDeclarationEventSnapshot,
+    StirEventKind,
+)
 from .stirring_snapshot import StirringStateSnapshot
 from .trick_snapshot import (
     CompletedTrickSnapshot,
@@ -28,6 +34,8 @@ __all__: tuple[str, ...] = (
     "AwaitingAction",
     "BidEventKind",
     "BidEventSnapshot",
+    "BottomExchangeEventSnapshot",
+    "BottomExchangeTrigger",
     "CompletedTrickSnapshot",
     "FailedThrowSnapshot",
     "JokerType",
@@ -36,6 +44,8 @@ __all__: tuple[str, ...] = (
     "ScoringSnapshot",
     "StateMessage",
     "StateSnapshot",
+    "StirDeclarationEventSnapshot",
+    "StirEventKind",
     "StirringPhase",
     "StirringStateSnapshot",
     "TrickSlotSnapshot",

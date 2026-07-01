@@ -6,27 +6,31 @@ import torch
 from torch import Tensor
 
 from server.result import Ok
-from server.training.action_tokens import (
-    ACTION_TOKEN_VOCAB_SIZE,
-    BEGIN_TOKEN_ID,
-    MAX_ACTION_TOKENS,
-    STOP_TOKEN_ID,
-    ActionQuery,
-    decode_action_tokens,
-    valid_next_token_ids,
-)
 from server.training.config import ModelConfig
 from server.training.model import TractorPolicyModel
 from server.training.observation import Observation
 from server.training.policy import PolicyDecision
+from server.training.selection_actions import (
+    MAX_HAND_CARD_SLOTS,
+    ActionQuery,
+    SelectionChoice,
+    SelectionState,
+    SelectionTrace,
+    decode_selection_action,
+    valid_selection_choices,
+)
+from server.training.selection_torch import (
+    forward_selection_head,
+    logits_for_choices,
+)
 from server.training.tensorize import (
-    tensorize_action_prefix,
     tensorize_observation,
+    tensorize_selection_state,
 )
 
 
 class TorchTrainingPolicy:
-    """Sample action-token sequences from a torch policy/value model."""
+    """Sample selection traces from a torch policy/value model."""
 
     def __init__(
         self,
@@ -49,32 +53,36 @@ class TorchTrainingPolicy:
     ) -> PolicyDecision:
         self.model.eval()
         with torch.no_grad():
-            observation_ids = tensorize_observation(
+            observation_batch = tensorize_observation(
                 observation=observation,
                 max_observation_tokens=self.config.max_tokens,
                 device=self.device,
             )
-            prefix = (BEGIN_TOKEN_ID,)
+            state = SelectionState(selected_slots=())
+            choices: list[SelectionChoice] = []
             log_probability = 0.0
             entropy = 0.0
             value_estimate = 0.0
-            for _ in range(MAX_ACTION_TOKENS - 1):
-                action_prefix_ids = tensorize_action_prefix(
-                    prefix=prefix,
+            for _ in range(MAX_HAND_CARD_SLOTS + 2):
+                selection_batch = tensorize_selection_state(
+                    query=query,
+                    state=state,
                     device=self.device,
                 )
-                logits, values = self.model.forward_action(
-                    observation_ids,
-                    action_prefix_ids,
+                output = forward_selection_head(
+                    model=self.model,
+                    query=query,
+                    observation=observation_batch,
+                    selection=selection_batch,
                 )
-                value_estimate = float(values[0].detach().cpu().item())
-                allowed = valid_next_token_ids(query, prefix)
-                assert allowed
-                masked_logits = _masked_logits(
-                    logits[0] / self.temperature,
-                    allowed,
-                    device=self.device,
+                value_estimate = float(
+                    output.values[0].detach().cpu().item()
                 )
+                allowed = valid_selection_choices(query, state)
+                if not allowed:
+                    break
+                logits = logits_for_choices(output, allowed)
+                masked_logits = logits / self.temperature
                 probabilities = torch.softmax(masked_logits, dim=0)
                 log_probabilities = torch.log_softmax(
                     masked_logits, dim=0
@@ -82,46 +90,35 @@ class TorchTrainingPolicy:
                 sampled = torch.multinomial(
                     probabilities, num_samples=1
                 )
-                token_id = int(sampled[0].detach().cpu().item())
-                log_probability += float(
-                    log_probabilities[token_id].detach().cpu().item()
+                choice_index = int(sampled[0].detach().cpu().item())
+                choice = allowed[choice_index]
+                log_probability += _float_tensor(
+                    log_probabilities[choice_index]
                 )
-                entropy += float(
-                    (-(probabilities * log_probabilities).sum())
-                    .detach()
-                    .cpu()
-                    .item()
+                entropy += _float_tensor(
+                    -(probabilities * log_probabilities).sum()
                 )
-                prefix = (*prefix, token_id)
-                if token_id == STOP_TOKEN_ID:
+                choices.append(choice)
+                if choice.kind in ("pass", "stop"):
                     break
-        decoded = decode_action_tokens(query, prefix)
+                assert choice.kind == "select_card"
+                assert choice.slot is not None
+                state = SelectionState(
+                    selected_slots=(*state.selected_slots, choice.slot)
+                )
+            else:
+                assert False
+        trace = SelectionTrace(choices=tuple(choices))
+        decoded = decode_selection_action(query, trace)
         assert isinstance(decoded, Ok)
         return PolicyDecision(
             action=decoded.value,
             log_probability=log_probability,
             value_estimate=value_estimate,
             entropy=entropy,
-            token_count=len(decoded.value.token_ids),
+            choice_count=len(decoded.value.selection_trace.choices),
         )
 
 
-def _masked_logits(
-    logits: Tensor,
-    allowed_token_ids: tuple[int, ...],
-    *,
-    device: torch.device,
-) -> Tensor:
-    mask = torch.full(
-        (ACTION_TOKEN_VOCAB_SIZE,),
-        float("-inf"),
-        dtype=logits.dtype,
-        device=device,
-    )
-    index = torch.tensor(
-        list(allowed_token_ids),
-        dtype=torch.long,
-        device=device,
-    )
-    mask[index] = logits[index]
-    return mask
+def _float_tensor(value: Tensor) -> float:
+    return float(value.detach().cpu().item())

@@ -30,6 +30,8 @@ function makeSnapshot(
     failed_throw: null,
     bid_events: [],
     bid_winner: null,
+    stir_events: [],
+    own_bottom_exchange_events: [],
     awaiting_action: null,
     stirring_state: null,
     scoring: null,

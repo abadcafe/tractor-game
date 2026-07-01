@@ -45,21 +45,59 @@ class BidEvent(BaseModel):
         return self
 
 
-class StirAction(BaseModel):
+class StirDeclarationEvent(BaseModel):
     """
-    Records a player's stir (change suit) or pass during the stir phase.
+    Public record of a player's stir declaration or pass.
     """
 
     model_config = ConfigDict(frozen=True)
 
     player: int
     kind: Literal["stir", "pass"]
+    cards: list[Card]
     new_suit: Suit | None
+    priority: int | None
 
     @model_validator(mode="after")
     def _validate_suit_kind_consistency(self) -> Self:
         if self.kind == "pass" and self.new_suit is not None:
             raise ValueError("new_suit must be None when kind='pass'")
+        if self.kind == "pass" and self.cards:
+            raise ValueError("cards must be empty when kind='pass'")
+        if self.kind == "pass" and self.priority is not None:
+            raise ValueError("priority must be None when kind='pass'")
+        if self.kind == "stir" and not self.cards:
+            raise ValueError("cards must be set when kind='stir'")
+        if self.kind == "stir" and self.priority is None:
+            raise ValueError("priority must be set when kind='stir'")
+        return self
+
+
+class BottomExchangeEvent(BaseModel):
+    """Private record of cards seen and buried during exchange."""
+
+    model_config = ConfigDict(frozen=True)
+
+    player: int
+    trigger: Literal["initial", "stir"]
+    stir_event_index: int | None
+    picked_up_bottom_cards: list[Card]
+    discarded_bottom_cards: list[Card]
+    resulting_bottom_cards: list[Card]
+
+    @model_validator(mode="after")
+    def _validate_trigger_consistency(self) -> Self:
+        if (
+            self.trigger == "initial"
+            and self.stir_event_index is not None
+        ):
+            raise ValueError(
+                "stir_event_index must be None for initial exchange"
+            )
+        if self.trigger == "stir" and self.stir_event_index is None:
+            raise ValueError(
+                "stir_event_index must be set for stir exchange"
+            )
         return self
 
 

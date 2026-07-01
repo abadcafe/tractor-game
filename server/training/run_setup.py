@@ -41,7 +41,7 @@ def prepare_training_run(
             total_updates=0,
             model_config=model_config.to_json(),
             train_config=train_config.to_json(),
-            token_schema_version="structured-components-numeric-v2",
+            token_schema_version="structured-selection-heads-v3",
             rules_progress_version="required-level-v1",
             model_state={},
             optimizer_state={},
@@ -65,7 +65,7 @@ def prepare_training_run(
             resample_count=0,
             forced_action_count=0,
             legal_action_rate=1.0,
-            average_action_tokens=0.0,
+            average_action_choices=0.0,
             checkpoint_path=str(checkpoint_path),
         ),
     )

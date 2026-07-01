@@ -9,6 +9,10 @@ from server.protocol.snapshot_common import (
     RoundPhase,
     SnapshotModel,
 )
+from server.protocol.stir_history_snapshot import (
+    BottomExchangeEventSnapshot,
+    StirDeclarationEventSnapshot,
+)
 from server.protocol.stirring_snapshot import StirringStateSnapshot
 from server.protocol.trick_snapshot import (
     CompletedTrickSnapshot,
@@ -49,5 +53,7 @@ class StateSnapshot(SnapshotModel):
     team1_level: Rank
     bid_events: list[BidEventSnapshot]
     bid_winner: BidEventSnapshot | None
+    stir_events: list[StirDeclarationEventSnapshot]
+    own_bottom_exchange_events: list[BottomExchangeEventSnapshot]
     stirring_state: StirringStateSnapshot | None
     next_round_confirmed: list[int]

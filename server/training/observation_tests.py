@@ -5,7 +5,9 @@ from __future__ import annotations
 from server.player.test_helpers import card, make_snapshot
 from server.protocol import (
     BidEventSnapshot,
+    BottomExchangeEventSnapshot,
     CompletedTrickSnapshot,
+    StirDeclarationEventSnapshot,
     TrickSlotSnapshot,
     TrickSnapshot,
 )
@@ -242,3 +244,65 @@ def test_round_events_include_event_age_and_revealed_cards() -> None:
     assert [token.card_id for token in event_cards] == [revealed.id]
     assert event_cards[0].event_age == 1
     assert event_cards[0].role == "right_enemy"
+
+
+def test_stir_and_own_exchange_history_are_observed() -> None:
+    stir_card = card("spades", "2", 1)
+    picked = card("diamonds", "3", 1)
+    discarded = card("clubs", "4", 1)
+    resulting = card("hearts", "5", 1)
+    stir_event = StirDeclarationEventSnapshot(
+        player=2,
+        kind="stir",
+        cards=[stir_card],
+        new_suit=stir_card.suit,
+        priority=203,
+    )
+    exchange_event = BottomExchangeEventSnapshot(
+        player=0,
+        trigger="stir",
+        stir_event_index=0,
+        picked_up_bottom_cards=[picked],
+        discarded_bottom_cards=[discarded],
+        resulting_bottom_cards=[resulting],
+    )
+
+    observation = build_observation(
+        player_index=0,
+        snapshot=make_snapshot(
+            stir_events=[stir_event],
+            own_bottom_exchange_events=[exchange_event],
+        ),
+        history=(),
+    )
+
+    assert RoundEventFieldToken("stir_kind", "stir", 1) in (
+        observation.tokens
+    )
+    assert RoundEventFieldToken("trigger", "stir", 1) in (
+        observation.tokens
+    )
+    assert RoundEventFieldToken("stir_event_age", 1, 1) in (
+        observation.tokens
+    )
+    stir_cards = [
+        token
+        for token in card_tokens(observation)
+        if token.segment == "stir_event"
+    ]
+    own_exchange_cards = [
+        token
+        for token in card_tokens(observation)
+        if token.segment
+        in (
+            "own_exchange_pickup",
+            "own_exchange_discard",
+            "own_exchange_resulting_bottom",
+        )
+    ]
+    assert [token.card_id for token in stir_cards] == [stir_card.id]
+    assert [token.card_id for token in own_exchange_cards] == [
+        picked.id,
+        discarded.id,
+        resulting.id,
+    ]

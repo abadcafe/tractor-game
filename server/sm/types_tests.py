@@ -10,10 +10,11 @@ from server.rules.types import SubPlay
 
 from .types import (
     BidEvent,
+    BottomExchangeEvent,
     CompletedTrick,
     CompletedTrickSlot,
     Player,
-    StirAction,
+    StirDeclarationEvent,
 )
 
 
@@ -122,39 +123,148 @@ class TestBidEvent:
             )
 
 
-class TestStirAction:
-    def test_stir_action_creation(self) -> None:
-        """StirAction records a player's stir or pass."""
-        action = StirAction(player=1, kind="stir", new_suit=Suit.SPADES)
-        assert action.player == 1
-        assert action.kind == "stir"
-        assert action.new_suit == Suit.SPADES
+class TestStirDeclarationEvent:
+    def test_stir_declaration_event_creation(self) -> None:
+        """StirDeclarationEvent records a player's stir declaration."""
+        cards = [_card(Suit.SPADES, Rank.TWO)]
+        event = StirDeclarationEvent(
+            player=1,
+            kind="stir",
+            cards=cards,
+            new_suit=Suit.SPADES,
+            priority=101,
+        )
+        assert event.player == 1
+        assert event.kind == "stir"
+        assert event.cards == cards
+        assert event.new_suit == Suit.SPADES
+        assert event.priority == 101
 
-    def test_stir_action_pass(self) -> None:
-        """StirAction for a pass."""
-        action = StirAction(player=0, kind="pass", new_suit=None)
-        assert action.kind == "pass"
-        assert action.new_suit is None
+    def test_stir_declaration_event_pass(self) -> None:
+        """StirDeclarationEvent records a player's pass."""
+        event = StirDeclarationEvent(
+            player=0,
+            kind="pass",
+            cards=[],
+            new_suit=None,
+            priority=None,
+        )
+        assert event.kind == "pass"
+        assert event.cards == []
+        assert event.new_suit is None
+        assert event.priority is None
 
-    def test_stir_action_frozen(self) -> None:
-        """StirAction is immutable (frozen=True)."""
-        action = StirAction(player=1, kind="stir", new_suit=Suit.SPADES)
+    def test_stir_declaration_event_frozen(self) -> None:
+        """StirDeclarationEvent is immutable (frozen=True)."""
+        event = StirDeclarationEvent(
+            player=1,
+            kind="stir",
+            cards=[_card(Suit.SPADES, Rank.TWO)],
+            new_suit=Suit.SPADES,
+            priority=101,
+        )
         with pytest.raises(ValidationError):
-            action.player = 2
+            event.player = 2
 
-    def test_stir_action_stir_with_no_trump(self) -> None:
-        """
-        StirAction.kind='stir' allows new_suit=None for joker pair (no
-        trump).
-        """
-        action = StirAction(player=0, kind="stir", new_suit=None)
-        assert action.kind == "stir"
-        assert action.new_suit is None
+    def test_stir_declaration_event_stir_allows_no_trump(self) -> None:
+        """StirDeclarationEvent.kind='stir' allows joker no-trump."""
+        event = StirDeclarationEvent(
+            player=0,
+            kind="stir",
+            cards=[
+                _card(Suit.JOKER, Rank.BIG_JOKER, 1),
+                _card(Suit.JOKER, Rank.BIG_JOKER, 2),
+            ],
+            new_suit=None,
+            priority=205,
+        )
+        assert event.kind == "stir"
+        assert event.new_suit is None
 
-    def test_stir_action_pass_rejects_suit(self) -> None:
-        """StirAction.kind='pass' requires new_suit=None."""
+    def test_stir_declaration_event_pass_rejects_suit(self) -> None:
+        """StirDeclarationEvent.kind='pass' requires new_suit=None."""
         with pytest.raises(ValidationError):
-            StirAction(player=0, kind="pass", new_suit=Suit.HEARTS)
+            StirDeclarationEvent(
+                player=0,
+                kind="pass",
+                cards=[],
+                new_suit=Suit.HEARTS,
+                priority=None,
+            )
+
+    def test_stir_declaration_event_pass_rejects_cards(self) -> None:
+        """StirDeclarationEvent.kind='pass' cannot carry cards."""
+        with pytest.raises(ValidationError):
+            StirDeclarationEvent(
+                player=0,
+                kind="pass",
+                cards=[_card(Suit.HEARTS, Rank.TWO)],
+                new_suit=None,
+                priority=None,
+            )
+
+
+class TestBottomExchangeEvent:
+    def test_bottom_exchange_event_initial_creation(self) -> None:
+        """BottomExchangeEvent records initial bottom pickup/discard."""
+        picked = [_card(Suit.HEARTS, Rank.ACE)]
+        discarded = [_card(Suit.CLUBS, Rank.THREE)]
+        event = BottomExchangeEvent(
+            player=0,
+            trigger="initial",
+            stir_event_index=None,
+            picked_up_bottom_cards=picked,
+            discarded_bottom_cards=discarded,
+            resulting_bottom_cards=discarded,
+        )
+        assert event.player == 0
+        assert event.trigger == "initial"
+        assert event.stir_event_index is None
+        assert event.picked_up_bottom_cards == picked
+        assert event.discarded_bottom_cards == discarded
+
+    def test_bottom_exchange_event_stir_requires_event_index(
+        self,
+    ) -> None:
+        """Stir-triggered bottom exchanges point to the stir event."""
+        event = BottomExchangeEvent(
+            player=2,
+            trigger="stir",
+            stir_event_index=3,
+            picked_up_bottom_cards=[_card(Suit.HEARTS, Rank.ACE)],
+            discarded_bottom_cards=[_card(Suit.CLUBS, Rank.THREE)],
+            resulting_bottom_cards=[_card(Suit.CLUBS, Rank.THREE)],
+        )
+        assert event.trigger == "stir"
+        assert event.stir_event_index == 3
+
+    def test_bottom_exchange_event_rejects_initial_event_index(
+        self,
+    ) -> None:
+        """Initial exchange is not linked to a stir event."""
+        with pytest.raises(ValidationError):
+            BottomExchangeEvent(
+                player=0,
+                trigger="initial",
+                stir_event_index=0,
+                picked_up_bottom_cards=[],
+                discarded_bottom_cards=[],
+                resulting_bottom_cards=[],
+            )
+
+    def test_bottom_exchange_event_rejects_missing_stir_event_index(
+        self,
+    ) -> None:
+        """Stir exchange must reference the triggering stir event."""
+        with pytest.raises(ValidationError):
+            BottomExchangeEvent(
+                player=0,
+                trigger="stir",
+                stir_event_index=None,
+                picked_up_bottom_cards=[],
+                discarded_bottom_cards=[],
+                resulting_bottom_cards=[],
+            )
 
 
 class TestPlayer:

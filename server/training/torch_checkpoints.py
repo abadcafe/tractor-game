@@ -85,7 +85,7 @@ def save_torch_checkpoint(
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(f"{path.suffix}.tmp")
     payload: dict[str, object] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "model_config": model_config.to_json(),
         "train_config": train_config.to_json(),
         "model_state": model.state_dict(),
@@ -107,7 +107,7 @@ def load_torch_checkpoint(
     """Load trainable state from a torch checkpoint."""
     loaded = _load_checkpoint_payload(path=path, map_location=device)
     schema_version = loaded["schema_version"]
-    assert schema_version == 2
+    assert schema_version == 3
     model = create_model(model_config, device)
     model_state = loaded["model_state"]
     assert _is_tensor_state_dict(model_state)
@@ -138,7 +138,7 @@ def read_torch_checkpoint_metadata(
         map_location=torch.device("cpu"),
     )
     schema_version = loaded["schema_version"]
-    assert schema_version == 2
+    assert schema_version == 3
     model_config = loaded["model_config"]
     train_config = loaded["train_config"]
     assert _is_json_object(model_config)

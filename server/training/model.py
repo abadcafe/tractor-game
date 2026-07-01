@@ -1,17 +1,19 @@
-"""Torch Transformer policy/value model for action-token training."""
+"""Torch Transformer policy/value model for Tractor self-play."""
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 import torch
 from torch import Tensor, nn
 
-from server.training.action_tokens import (
-    ACTION_TOKEN_VOCAB_SIZE,
-    MAX_ACTION_TOKENS,
-    PAD_TOKEN_ID,
-)
 from server.training.feature_schema import NUMERIC_FEATURE_COUNT
-from server.training.tensorize import ObservationTensorBatch
+from server.training.selection_actions import MAX_HAND_CARD_SLOTS
+from server.training.tensorize import (
+    SELECTION_FEATURE_COUNT,
+    ObservationTensorBatch,
+    SelectionStateTensorBatch,
+)
 from server.training.vocab import (
     CARD_ORDER_VOCAB_SIZE,
     COLOR_VOCAB_SIZE,
@@ -35,8 +37,18 @@ from server.training.vocab import (
 OBSERVATION_COMPONENT_COUNT: int = 15
 
 
+@dataclass(frozen=True, slots=True)
+class SelectionHeadOutput:
+    """One decision head's logits plus the shared value estimate."""
+
+    card_logits: Tensor
+    pass_logits: Tensor | None
+    stop_logits: Tensor | None
+    values: Tensor
+
+
 class TractorPolicyModel(nn.Module):
-    """Transformer encoder with autoregressive action-token head."""
+    """Shared observation encoder with selection heads."""
 
     def __init__(
         self,
@@ -88,6 +100,11 @@ class TractorPolicyModel(nn.Module):
             d_model,
             bias=False,
         )
+        self._selection_projection = nn.Linear(
+            MAX_HAND_CARD_SLOTS + SELECTION_FEATURE_COUNT,
+            d_model,
+            bias=False,
+        )
         observation_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=heads,
@@ -101,75 +118,137 @@ class TractorPolicyModel(nn.Module):
             num_layers=layers,
             enable_nested_tensor=False,
         )
-        self._action_embedding = nn.Embedding(
-            ACTION_TOKEN_VOCAB_SIZE,
-            d_model,
-            padding_idx=PAD_TOKEN_ID,
-        )
-        self._action_position_embedding = nn.Embedding(
-            MAX_ACTION_TOKENS,
-            d_model,
-        )
-        action_layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=heads,
-            dim_feedforward=d_model * 4,
-            dropout=dropout,
-            batch_first=True,
-            activation="gelu",
-        )
-        self._action_encoder = nn.TransformerEncoder(
-            action_layer,
-            num_layers=max(1, layers // 2),
-            enable_nested_tensor=False,
-        )
-        self._policy_head = nn.Linear(
-            d_model * 2, ACTION_TOKEN_VOCAB_SIZE
-        )
+        self._bid_card_head = nn.Linear(d_model * 2, 1)
+        self._stir_card_head = nn.Linear(d_model * 2, 1)
+        self._discard_card_head = nn.Linear(d_model * 2, 1)
+        self._lead_play_card_head = nn.Linear(d_model * 2, 1)
+        self._follow_play_card_head = nn.Linear(d_model * 2, 1)
+        self._bid_pass_head = nn.Linear(d_model, 1)
+        self._stir_pass_head = nn.Linear(d_model, 1)
+        self._bid_stop_head = nn.Linear(d_model, 1)
+        self._stir_stop_head = nn.Linear(d_model, 1)
+        self._lead_play_stop_head = nn.Linear(d_model, 1)
         self._value_head = nn.Linear(d_model, 1)
 
-    def forward_action(
+    def forward_bid(
         self,
         observation: ObservationTensorBatch,
-        action_prefix_ids: Tensor,
-    ) -> tuple[Tensor, Tensor]:
-        """
-        Return next-token logits and state values.
-
-        ``observation`` fields shape: [batch, obs_tokens]
-        ``action_prefix_ids`` shape: [batch, action_prefix_tokens]
-        """
-        obs_padding = observation.token_type_ids.eq(OBS_PAD_ID)
-        obs_embedded = self._embed_observation(observation)
-        encoded_observation = self._observation_encoder(
-            obs_embedded,
-            src_key_padding_mask=obs_padding,
+        selection: SelectionStateTensorBatch,
+    ) -> SelectionHeadOutput:
+        """Return logits for a bid selection step."""
+        return self._forward_head(
+            observation,
+            selection,
+            card_head=self._bid_card_head,
+            pass_head=self._bid_pass_head,
+            stop_head=self._bid_stop_head,
         )
+
+    def forward_stir(
+        self,
+        observation: ObservationTensorBatch,
+        selection: SelectionStateTensorBatch,
+    ) -> SelectionHeadOutput:
+        """Return logits for a stir selection step."""
+        return self._forward_head(
+            observation,
+            selection,
+            card_head=self._stir_card_head,
+            pass_head=self._stir_pass_head,
+            stop_head=self._stir_stop_head,
+        )
+
+    def forward_discard(
+        self,
+        observation: ObservationTensorBatch,
+        selection: SelectionStateTensorBatch,
+    ) -> SelectionHeadOutput:
+        """Return logits for a bottom-discard selection step."""
+        return self._forward_head(
+            observation,
+            selection,
+            card_head=self._discard_card_head,
+            pass_head=None,
+            stop_head=None,
+        )
+
+    def forward_lead_play(
+        self,
+        observation: ObservationTensorBatch,
+        selection: SelectionStateTensorBatch,
+    ) -> SelectionHeadOutput:
+        """Return logits for a lead-play selection step."""
+        return self._forward_head(
+            observation,
+            selection,
+            card_head=self._lead_play_card_head,
+            pass_head=None,
+            stop_head=self._lead_play_stop_head,
+        )
+
+    def forward_follow_play(
+        self,
+        observation: ObservationTensorBatch,
+        selection: SelectionStateTensorBatch,
+    ) -> SelectionHeadOutput:
+        """Return logits for a follow-play selection step."""
+        return self._forward_head(
+            observation,
+            selection,
+            card_head=self._follow_play_card_head,
+            pass_head=None,
+            stop_head=None,
+        )
+
+    def _forward_head(
+        self,
+        observation: ObservationTensorBatch,
+        selection: SelectionStateTensorBatch,
+        *,
+        card_head: nn.Linear,
+        pass_head: nn.Linear | None,
+        stop_head: nn.Linear | None,
+    ) -> SelectionHeadOutput:
+        encoded = self._encode_observation(observation)
+        obs_padding = observation.token_type_ids.eq(OBS_PAD_ID)
         query_mask = observation.segment_ids.eq(
             SEGMENT_ACTION_QUERY_ID
         ) & (~obs_padding)
         obs_context = _query_or_all_mean(
-            encoded_observation,
+            encoded,
             padding_mask=obs_padding,
             query_mask=query_mask,
         )
+        selection_context = self._embed_selection(selection)
+        decision_context = obs_context + selection_context
+        hand_contexts = _hand_contexts(encoded, observation)
+        expanded_decision = decision_context.unsqueeze(1).expand(
+            -1, MAX_HAND_CARD_SLOTS, -1
+        )
+        card_logits = card_head(
+            torch.cat((hand_contexts, expanded_decision), dim=-1)
+        ).squeeze(-1)
+        return SelectionHeadOutput(
+            card_logits=card_logits,
+            pass_logits=None
+            if pass_head is None
+            else pass_head(decision_context).squeeze(-1),
+            stop_logits=None
+            if stop_head is None
+            else stop_head(decision_context).squeeze(-1),
+            values=self._value_head(obs_context).squeeze(-1),
+        )
 
-        action_padding = action_prefix_ids.eq(PAD_TOKEN_ID)
-        action_embedded = self._embed_action(action_prefix_ids)
-        encoded_action = self._action_encoder(
-            action_embedded,
-            mask=_causal_mask(
-                action_prefix_ids.shape[1], action_ids=action_prefix_ids
-            ),
-            src_key_padding_mask=action_padding,
+    def _encode_observation(
+        self,
+        observation: ObservationTensorBatch,
+    ) -> Tensor:
+        obs_padding = observation.token_type_ids.eq(OBS_PAD_ID)
+        obs_embedded = self._embed_observation(observation)
+        return self._observation_encoder(
+            obs_embedded,
+            src_key_padding_mask=obs_padding,
         )
-        action_context = _last_non_padding(
-            encoded_action, action_padding
-        )
-        combined = torch.cat((obs_context, action_context), dim=-1)
-        logits = self._policy_head(combined)
-        values = self._value_head(obs_context).squeeze(-1)
-        return logits, values
 
     def _embed_observation(
         self,
@@ -208,19 +287,32 @@ class TractorPolicyModel(nn.Module):
             categorical_input
         ) + self._numeric_projection(numeric_input)
 
-    def _embed_action(self, action_prefix_ids: Tensor) -> Tensor:
-        positions = torch.arange(
-            action_prefix_ids.shape[1],
-            dtype=torch.long,
-            device=action_prefix_ids.device,
-        ).unsqueeze(0)
-        return self._action_embedding(
-            action_prefix_ids
-        ) + self._action_position_embedding(positions)
+    def _embed_selection(
+        self,
+        selection: SelectionStateTensorBatch,
+    ) -> Tensor:
+        selection_input = torch.cat(
+            (
+                selection.selected_slot_masks,
+                selection.feature_values,
+            ),
+            dim=-1,
+        )
+        return self._selection_projection(selection_input)
 
 
 def _embedding(vocab_size: int, d_model: int) -> nn.Embedding:
     return nn.Embedding(vocab_size, d_model, padding_idx=OBS_PAD_ID)
+
+
+def _hand_contexts(
+    encoded_observation: Tensor,
+    observation: ObservationTensorBatch,
+) -> Tensor:
+    gather_index = observation.hand_token_indices.unsqueeze(-1).expand(
+        -1, -1, encoded_observation.shape[-1]
+    )
+    return encoded_observation.gather(dim=1, index=gather_index)
 
 
 def _masked_mean(values: Tensor, padding_mask: Tensor) -> Tensor:
@@ -242,20 +334,3 @@ def _query_or_all_mean(
     query_mean = query_summed / query_counts.clamp_min(1.0)
     all_mean = _masked_mean(values, padding_mask)
     return torch.where(query_counts.gt(0), query_mean, all_mean)
-
-
-def _last_non_padding(values: Tensor, padding_mask: Tensor) -> Tensor:
-    lengths = (~padding_mask).sum(dim=1).clamp_min(1)
-    batch_indices = torch.arange(values.shape[0], device=values.device)
-    return values[batch_indices, lengths - 1]
-
-
-def _causal_mask(size: int, *, action_ids: Tensor) -> Tensor:
-    return torch.triu(
-        torch.ones(
-            (size, size),
-            dtype=torch.bool,
-            device=action_ids.device,
-        ),
-        diagonal=1,
-    )
