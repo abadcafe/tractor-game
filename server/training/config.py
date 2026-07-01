@@ -45,19 +45,15 @@ class TrainConfig:
     """Run configuration that can move between machines."""
 
     device: TrainingDevice = "cpu"
-    batch_games: int = 32
     learning_rate: float = 0.0003
     checkpoint_every_updates: int = 50
-    metrics_every_seconds: int = 10
     max_round_seconds: float = 30.0
 
     def to_json(self) -> JsonObject:
         return {
             "device": self.device,
-            "batch_games": self.batch_games,
             "learning_rate": self.learning_rate,
             "checkpoint_every_updates": self.checkpoint_every_updates,
-            "metrics_every_seconds": self.metrics_every_seconds,
             "max_round_seconds": self.max_round_seconds,
         }
 
@@ -65,13 +61,9 @@ class TrainConfig:
     def from_json(cls, data: JsonObject) -> TrainConfig:
         return cls(
             device=_device_json_field(data, "device"),
-            batch_games=_int_json_field(data, "batch_games"),
             learning_rate=_float_json_field(data, "learning_rate"),
             checkpoint_every_updates=_int_json_field(
                 data, "checkpoint_every_updates"
-            ),
-            metrics_every_seconds=_int_json_field(
-                data, "metrics_every_seconds"
             ),
             max_round_seconds=_float_json_field(
                 data, "max_round_seconds"

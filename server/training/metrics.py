@@ -31,7 +31,6 @@ class TrainingMetric:
     forced_action_count: int
     legal_action_rate: float
     average_action_tokens: float
-    eval_win_rate: float | None
     checkpoint_path: str | None
 
 
@@ -81,7 +80,6 @@ def _to_json(metric: TrainingMetric) -> JsonObject:
         "forced_action_count": metric.forced_action_count,
         "legal_action_rate": metric.legal_action_rate,
         "average_action_tokens": metric.average_action_tokens,
-        "eval_win_rate": metric.eval_win_rate,
         "checkpoint_path": metric.checkpoint_path,
     }
 
@@ -105,7 +103,6 @@ def _from_json(data: dict[object, object]) -> TrainingMetric:
         average_action_tokens=_float_field(
             data, "average_action_tokens"
         ),
-        eval_win_rate=_optional_float_field(data, "eval_win_rate"),
         checkpoint_path=_optional_str_field(data, "checkpoint_path"),
     )
 

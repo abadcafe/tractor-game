@@ -120,7 +120,6 @@ async def train_self_play(
                     invalid=round_result.invalid_action_count,
                 ),
                 average_action_tokens=round_result.average_action_tokens,
-                eval_win_rate=None,
                 checkpoint_path=str(checkpoint_path),
             ),
         )

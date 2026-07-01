@@ -27,7 +27,6 @@ class TrainingCheckpoint:
     model_state: JsonObject
     optimizer_state: JsonObject
     rng_state: JsonObject
-    best_eval_score: float | None
 
 
 def save_checkpoint(path: Path, checkpoint: TrainingCheckpoint) -> None:
@@ -61,7 +60,6 @@ def load_checkpoint(path: Path) -> TrainingCheckpoint:
         model_state=_object_field(data, "model_state"),
         optimizer_state=_object_field(data, "optimizer_state"),
         rng_state=_object_field(data, "rng_state"),
-        best_eval_score=_optional_float_field(data, "best_eval_score"),
     )
 
 
@@ -78,7 +76,6 @@ def _to_json(checkpoint: TrainingCheckpoint) -> JsonObject:
         "model_state": checkpoint.model_state,
         "optimizer_state": checkpoint.optimizer_state,
         "rng_state": checkpoint.rng_state,
-        "best_eval_score": checkpoint.best_eval_score,
     }
 
 
@@ -92,16 +89,6 @@ def _int_field(data: dict[object, object], field: str) -> int:
     value = data[field]
     assert isinstance(value, int)
     return value
-
-
-def _optional_float_field(
-    data: dict[object, object], field: str
-) -> float | None:
-    value = data[field]
-    if value is None:
-        return None
-    assert isinstance(value, int | float)
-    return float(value)
 
 
 def _object_field(data: dict[object, object], field: str) -> JsonObject:

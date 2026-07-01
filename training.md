@@ -865,7 +865,6 @@ loss = policy_loss + value_coef * value_loss + entropy_coef * entropy_loss
 learning_rate = 3e-4
 value_coef = 0.5
 entropy_coef = 0.01
-batch_games = 32
 gamma = 1.0
 ```
 
@@ -1104,7 +1103,7 @@ trajectory 每步包含 obs, action, log_prob, value, entropy, final_reward
 目标：
 
 ```text
-收集 batch_games 局
+收集若干局 self-play trajectory
 计算 policy_loss + value_loss + entropy_loss
 更新模型
 保存 checkpoint

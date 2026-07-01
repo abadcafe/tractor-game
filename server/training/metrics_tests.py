@@ -32,7 +32,6 @@ def test_metrics_append_and_read_round_trip(tmp_path: Path) -> None:
         forced_action_count=0,
         legal_action_rate=0.95,
         average_action_tokens=3.5,
-        eval_win_rate=0.55,
         checkpoint_path="checkpoint.json",
     )
 

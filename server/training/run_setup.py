@@ -46,7 +46,6 @@ def prepare_training_run(
             model_state={},
             optimizer_state={},
             rng_state={},
-            best_eval_score=None,
         ),
     )
     append_metric(
@@ -67,7 +66,6 @@ def prepare_training_run(
             forced_action_count=0,
             legal_action_rate=1.0,
             average_action_tokens=0.0,
-            eval_win_rate=None,
             checkpoint_path=str(checkpoint_path),
         ),
     )

@@ -34,6 +34,12 @@
 - **Frontend**: TypeScript, 原生 DOM（无框架）
 - **Game Logic**: 纯函数状态机（SM），不可变状态模式
 - **Testing**: pytest, pytest-asyncio
+- **Training**: PyTorch（可选依赖 `training` extra，仅训练/全量验证安装）
+
+## 验证命令
+
+- 全量 Python 验证必须包含训练依赖：`uv run --extra dev --extra training pyright`、`uv run --extra dev --extra training pytest`
+- Ruff 验证：`uv run --extra dev ruff check`、`uv run --extra dev ruff format --check`
 
 ## 启动游戏
 

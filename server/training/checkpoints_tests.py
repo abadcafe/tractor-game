@@ -24,7 +24,6 @@ def test_checkpoint_round_trips_json_payload(tmp_path: Path) -> None:
         model_state={"weights": [1.0, 2.0]},
         optimizer_state={"step": 3},
         rng_state={"seed": 9},
-        best_eval_score=0.25,
     )
 
     save_checkpoint(path, checkpoint)
