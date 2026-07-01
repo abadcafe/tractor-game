@@ -10,7 +10,7 @@ from server.training.action_tokens import (
     ACTION_TOKEN_VOCAB_SIZE,
     BEGIN_TOKEN_ID,
 )
-from server.training.model import UpgradePolicyModel
+from server.training.model import TractorPolicyModel
 from server.training.observation import build_observation
 from server.training.tensorize import (
     tensorize_action_prefix,
@@ -18,9 +18,9 @@ from server.training.tensorize import (
 )
 
 
-def test_upgrade_policy_model_forward_action_shapes() -> None:
+def test_tractor_policy_model_forward_action_shapes() -> None:
     device = torch.device("cpu")
-    model = UpgradePolicyModel(
+    model = TractorPolicyModel(
         d_model=8,
         layers=1,
         heads=2,

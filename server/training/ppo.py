@@ -13,7 +13,7 @@ from server.training.action_tokens import (
     valid_next_token_ids,
 )
 from server.training.config import ModelConfig, TrainConfig
-from server.training.model import UpgradePolicyModel
+from server.training.model import TractorPolicyModel
 from server.training.tensorize import (
     tensorize_action_prefix,
     tensorize_observation,
@@ -37,7 +37,7 @@ class PPOTrainer:
     def __init__(
         self,
         *,
-        model: UpgradePolicyModel,
+        model: TractorPolicyModel,
         model_config: ModelConfig,
         train_config: TrainConfig,
         device: torch.device,

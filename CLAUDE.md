@@ -20,6 +20,11 @@
 - 优先使用 `Pydantic` 而不是 `cast`
 - 必须通过 `pyright` **strict 模式**，**0 errors, 0 warnings**
 - 必须通过 `ruff check` 和 `ruff format --check`，**0 errors, 0 warnings**
+- 全量验证必须包含所有依赖：
+  - `uv run --extra dev --extra training pyright`
+  - `uv run --extra dev --extra training pytest`
+  - `uv run --extra dev --extra training ruff check`
+  - `uv run --extra dev --extra training ruff format --check`
 
 ### 3. 错误处理
 
@@ -35,11 +40,6 @@
 - **Game Logic**: 纯函数状态机（SM），不可变状态模式
 - **Testing**: pytest, pytest-asyncio
 - **Training**: PyTorch（可选依赖 `training` extra，仅训练/全量验证安装）
-
-## 验证命令
-
-- 全量 Python 验证必须包含训练依赖：`uv run --extra dev --extra training pyright`、`uv run --extra dev --extra training pytest`
-- Ruff 验证：`uv run --extra dev ruff check`、`uv run --extra dev ruff format --check`
 
 ## 启动游戏
 

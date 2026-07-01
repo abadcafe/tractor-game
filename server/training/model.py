@@ -35,7 +35,7 @@ from server.training.vocab import (
 OBSERVATION_COMPONENT_COUNT: int = 15
 
 
-class UpgradePolicyModel(nn.Module):
+class TractorPolicyModel(nn.Module):
     """Transformer encoder with autoregressive action-token head."""
 
     def __init__(

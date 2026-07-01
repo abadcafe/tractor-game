@@ -12,7 +12,7 @@ from torch import Tensor
 
 from server.training.config import ModelConfig, TrainConfig
 from server.training.json_types import JsonObject, JsonValue
-from server.training.model import UpgradePolicyModel
+from server.training.model import TractorPolicyModel
 from server.training.ppo import PPOTrainer
 
 
@@ -20,7 +20,7 @@ from server.training.ppo import PPOTrainer
 class LoadedTrainingState:
     """Loaded model/trainer state and progress counters."""
 
-    model: UpgradePolicyModel
+    model: TractorPolicyModel
     trainer: PPOTrainer
     total_rounds: int
     total_updates: int
@@ -38,9 +38,9 @@ class TorchCheckpointMetadata:
 
 def create_model(
     config: ModelConfig, device: torch.device
-) -> UpgradePolicyModel:
+) -> TractorPolicyModel:
     """Create a model on the requested device."""
-    model = UpgradePolicyModel(
+    model = TractorPolicyModel(
         d_model=config.d_model,
         layers=config.layers,
         heads=config.heads,
@@ -74,7 +74,7 @@ def create_training_state(
 def save_torch_checkpoint(
     *,
     path: Path,
-    model: UpgradePolicyModel,
+    model: TractorPolicyModel,
     trainer: PPOTrainer,
     model_config: ModelConfig,
     train_config: TrainConfig,

@@ -16,7 +16,7 @@ from server.training.action_tokens import (
     valid_next_token_ids,
 )
 from server.training.config import ModelConfig
-from server.training.model import UpgradePolicyModel
+from server.training.model import TractorPolicyModel
 from server.training.observation import Observation
 from server.training.policy import PolicyDecision
 from server.training.tensorize import (
@@ -31,7 +31,7 @@ class TorchTrainingPolicy:
     def __init__(
         self,
         *,
-        model: UpgradePolicyModel,
+        model: TractorPolicyModel,
         config: ModelConfig,
         device: torch.device,
         temperature: float = 1.0,
