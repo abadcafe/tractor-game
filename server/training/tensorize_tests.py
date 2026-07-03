@@ -12,10 +12,10 @@ from server.rules.card_faces import CardFace, FaceCount
 from server.training.feature_schema import NUMERIC_FEATURE_COUNT
 from server.training.observation import build_observation
 from server.training.semantic_actions import (
-    ARGUMENT_BOS_ID,
     SemanticArgument,
     SemanticArgumentPrefix,
 )
+from server.training.semantic_codec import SEMANTIC_CODEC
 from server.training.tensorize import (
     tensorize_argument_prefix,
     tensorize_observation,
@@ -123,7 +123,12 @@ def test_tensorize_argument_prefix_outputs_bos_and_arguments() -> None:
     )
 
     assert batch.argument_ids.shape[0] == 1
-    assert batch.argument_ids[0, 0].item() == ARGUMENT_BOS_ID
-    assert batch.argument_ids[0, 1].item() > ARGUMENT_BOS_ID
+    assert (
+        batch.argument_ids[0, 0].item()
+        == SEMANTIC_CODEC.argument_bos_id
+    )
+    assert (
+        batch.argument_ids[0, 1].item() > SEMANTIC_CODEC.argument_bos_id
+    )
     assert batch.argument_masks[0, 0].item()
     assert batch.argument_masks[0, 1].item()

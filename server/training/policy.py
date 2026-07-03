@@ -11,12 +11,12 @@ from server.result import Ok
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
 from server.training.semantic_actions import (
-    MAX_ARGUMENT_TOKENS,
     GeneratedAction,
     SemanticArgument,
     SemanticArgumentPrefix,
     SemanticArgumentTrace,
 )
+from server.training.semantic_codec import SEMANTIC_CODEC
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,7 +56,7 @@ class RandomTrainingPolicy:
         log_probability = 0.0
         entropy = 0.0
         choice_count = 0
-        for _ in range(MAX_ARGUMENT_TOKENS):
+        for _ in range(SEMANTIC_CODEC.max_argument_tokens):
             allowed = legal_actions.allowed_next(prefix)
             if not allowed:
                 break

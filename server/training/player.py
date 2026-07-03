@@ -9,7 +9,6 @@ from server.player.base import GameView, Player
 from server.protocol import PlayerMessage, StateMessage
 from server.result import Ok
 from server.rules.cards import Card
-from server.sm.required_progress import RequiredLevelPlan
 from server.training.legal_actions import build_legal_action_index
 from server.training.observation import (
     PublicHistoryRecorder,
@@ -54,13 +53,11 @@ class TrainingPlayer(Player):
         index: int,
         *,
         policy: TrainingPolicy,
-        required_level_plan: RequiredLevelPlan,
         recorder: TrajectoryRecorder | None = None,
         history: PublicHistoryRecorder | None = None,
     ) -> None:
         super().__init__(index)
         self._policy = policy
-        self._required_level_plan = required_level_plan
         self._recorder = recorder or TrajectoryRecorder()
         self._history = history or PublicHistoryRecorder()
         self._pending: PendingDecision | None = None
@@ -166,7 +163,6 @@ class TrainingPlayer(Player):
             player_index=self.index,
             snapshot=message.state,
             history=self._history.tricks(),
-            required_level_plan=self._required_level_plan,
         )
         legal_actions = build_legal_action_index(
             player_index=self.index,

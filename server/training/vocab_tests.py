@@ -7,36 +7,37 @@ from server.training.tokens import (
     RoundFieldToken,
     TrickResultFieldToken,
 )
-from server.training.vocab import NONE_ID, component_ids
+from server.training.vocab import component_ids
+from server.training.vocab_schema import VOCAB_SCHEMA
 
 
 def test_numeric_field_values_do_not_use_value_embedding() -> None:
     assert (
         component_ids(RoundFieldToken("current_score", 65)).value
-        == NONE_ID
+        == VOCAB_SCHEMA.none_id
     )
     assert (
         component_ids(TrickResultFieldToken("points", 35, 1)).value
-        == NONE_ID
+        == VOCAB_SCHEMA.none_id
     )
     assert (
         component_ids(ActionQueryFieldToken("max_select", 4)).value
-        == NONE_ID
+        == VOCAB_SCHEMA.none_id
     )
 
 
 def test_categorical_field_values_keep_value_embedding() -> None:
     assert (
         component_ids(RoundFieldToken("phase", "PLAYING")).value
-        != NONE_ID
+        != VOCAB_SCHEMA.none_id
     )
     assert (
         component_ids(ActionQueryFieldToken("kind", "lead_play")).value
-        != NONE_ID
+        != VOCAB_SCHEMA.none_id
     )
 
 
 def test_categorical_integer_values_keep_value_embedding() -> None:
     assert component_ids(RoundFieldToken("dealer_team", 1)).value != (
-        NONE_ID
+        VOCAB_SCHEMA.none_id
     )

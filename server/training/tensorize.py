@@ -13,16 +13,15 @@ from server.training.numeric_features import (
     numeric_feature_values,
 )
 from server.training.observation import Observation
-from server.training.semantic_actions import (
-    ARGUMENT_BOS_ID,
-    MAX_ARGUMENT_TOKENS,
-    SemanticArgumentPrefix,
+from server.training.semantic_actions import SemanticArgumentPrefix
+from server.training.semantic_codec import (
+    SEMANTIC_CODEC,
     semantic_argument_id,
 )
-from server.training.vocab import (
+from server.training.vocab import component_ids
+from server.training.vocab_schema import (
     PAD_COMPONENT_IDS,
     TokenComponentIds,
-    component_ids,
 )
 
 
@@ -280,13 +279,13 @@ def _observation_rows(
 def _argument_prefix_row(
     prefix: SemanticArgumentPrefix,
 ) -> _ArgumentPrefixRow:
-    argument_ids = [ARGUMENT_BOS_ID]
+    argument_ids = [SEMANTIC_CODEC.argument_bos_id]
     argument_ids.extend(
         semantic_argument_id(argument) for argument in prefix.arguments
     )
-    assert len(argument_ids) <= MAX_ARGUMENT_TOKENS
+    assert len(argument_ids) <= SEMANTIC_CODEC.max_argument_tokens
     masks = [True for _ in argument_ids]
-    while len(argument_ids) < MAX_ARGUMENT_TOKENS:
+    while len(argument_ids) < SEMANTIC_CODEC.max_argument_tokens:
         argument_ids.append(0)
         masks.append(False)
     return _ArgumentPrefixRow(

@@ -5,9 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from server.rules.cards import Rank
-from server.sm.required_progress import (
-    DEFAULT_REQUIRED_LEVEL_PLAN,
-    RequiredLevelPlan,
+from server.rules.required_progress import (
     TerminalProgress,
     progress_target_index,
     stage_target,
@@ -35,9 +33,6 @@ class TeamReward:
 def progress_delta(
     before: TeamProgress,
     after: TeamProgress,
-    required_level_plan: RequiredLevelPlan = (
-        DEFAULT_REQUIRED_LEVEL_PLAN
-    ),
 ) -> int:
     """
     Return this team's stage progress delta for one round.
@@ -48,7 +43,7 @@ def progress_delta(
     but only from a round the team started as declarer.
     """
     assert isinstance(before.level, Rank)
-    target = stage_target(before.level, required_level_plan)
+    target = stage_target(before.level)
     if after.level == TerminalProgress.WIN:
         assert before.is_declarer
         assert after.is_declarer
@@ -70,20 +65,15 @@ def zero_sum_rewards(
     team1_before: TeamProgress,
     team0_after: TeamProgress,
     team1_after: TeamProgress,
-    required_level_plan: RequiredLevelPlan = (
-        DEFAULT_REQUIRED_LEVEL_PLAN
-    ),
 ) -> TeamReward:
     """Return zero-sum rewards from both teams' progress deltas."""
     team0_delta = progress_delta(
         team0_before,
         team0_after,
-        required_level_plan,
     )
     team1_delta = progress_delta(
         team1_before,
         team1_after,
-        required_level_plan,
     )
     reward = float(team0_delta - team1_delta)
     return TeamReward(team0=reward, team1=-reward)

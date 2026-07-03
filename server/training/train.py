@@ -12,9 +12,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from server.rules.cards import Rank
-from server.sm.constants import LEVELS
-from server.sm.required_progress import RequiredLevelPlan
 from server.training.config import (
     ModelConfig,
     TrainConfig,
@@ -29,14 +26,19 @@ from server.training.torch_checkpoints import (
     read_torch_checkpoint_metadata,
 )
 
+DEFAULT_RUN_DIR = Path("training_runs/manual")
+CHECKPOINTS_DIR_NAME = "checkpoints"
+
 
 @dataclass(frozen=True, slots=True)
 class TrainConfigOverrides:
     """Explicit CLI overrides for train config fields."""
 
     device: TrainingDevice | None = None
+    seed: int | None = None
     learning_rate: float | None = None
     checkpoint_every_updates: int | None = None
+    checkpoint_retention_updates: int | None = None
     max_round_seconds: float | None = None
     gamma: float | None = None
     gae_lambda: float | None = None
@@ -50,7 +52,6 @@ class TrainConfigOverrides:
     adam_beta1: float | None = None
     adam_beta2: float | None = None
     weight_decay: float | None = None
-    required_level_plan: RequiredLevelPlan | None = None
 
 
 def resolve_model_config(
@@ -80,12 +81,18 @@ def resolve_train_config(
         device=base.device
         if cli_overrides.device is None
         else cli_overrides.device,
+        seed=base.seed
+        if cli_overrides.seed is None
+        else cli_overrides.seed,
         learning_rate=base.learning_rate
         if cli_overrides.learning_rate is None
         else cli_overrides.learning_rate,
         checkpoint_every_updates=base.checkpoint_every_updates
         if cli_overrides.checkpoint_every_updates is None
         else cli_overrides.checkpoint_every_updates,
+        checkpoint_retention_updates=base.checkpoint_retention_updates
+        if cli_overrides.checkpoint_retention_updates is None
+        else cli_overrides.checkpoint_retention_updates,
         max_round_seconds=base.max_round_seconds
         if cli_overrides.max_round_seconds is None
         else cli_overrides.max_round_seconds,
@@ -125,10 +132,64 @@ def resolve_train_config(
         weight_decay=base.weight_decay
         if cli_overrides.weight_decay is None
         else cli_overrides.weight_decay,
-        required_level_plan=base.required_level_plan
-        if cli_overrides.required_level_plan is None
-        else cli_overrides.required_level_plan,
     )
+
+
+def _validated_run_dir(
+    *,
+    parser: argparse.ArgumentParser,
+    cli_run_dir: Path | None,
+    resume_path: Path | None,
+) -> Path:
+    if resume_path is None:
+        if cli_run_dir is None:
+            return DEFAULT_RUN_DIR
+        return cli_run_dir
+    resume_run_dir = _infer_resume_run_dir(resume_path)
+    if resume_run_dir is None:
+        parser.error(
+            "--resume must point to "
+            "<run-dir>/checkpoints/<checkpoint>.json"
+        )
+        assert False
+    if cli_run_dir is None:
+        return resume_run_dir
+    if _canonical_path(cli_run_dir) != _canonical_path(resume_run_dir):
+        parser.error(
+            "--run-dir must match the run directory that owns --resume"
+        )
+        assert False
+    return cli_run_dir
+
+
+def _validate_resume_seed_override(
+    *,
+    parser: argparse.ArgumentParser,
+    resume_path: Path | None,
+    seed: int | None,
+) -> None:
+    if resume_path is None or seed is None:
+        return
+    checkpoint_seed = read_torch_checkpoint_metadata(
+        resume_path
+    ).train_config.seed
+    if seed != checkpoint_seed:
+        parser.error(
+            "--seed must match the checkpoint seed when using --resume"
+        )
+        assert False
+
+
+def _infer_resume_run_dir(resume_path: Path) -> Path | None:
+    if resume_path.suffix != ".json":
+        return None
+    if resume_path.parent.name != CHECKPOINTS_DIR_NAME:
+        return None
+    return resume_path.parent.parent
+
+
+def _canonical_path(path: Path) -> Path:
+    return path.resolve(strict=False)
 
 
 def _non_negative_int_arg(text: str) -> int:
@@ -187,42 +248,9 @@ def _adam_beta_arg(text: str) -> float:
     return value
 
 
-def _required_levels_arg(text: str) -> RequiredLevelPlan:
-    parts = tuple(item.strip() for item in text.split(","))
-    if not parts or any(part == "" for part in parts):
-        raise argparse.ArgumentTypeError(
-            "must be comma-separated ranks"
-        )
-    levels: list[Rank] = []
-    for part in parts:
-        try:
-            levels.append(Rank(part))
-        except ValueError as exc:
-            raise argparse.ArgumentTypeError(
-                f"unsupported rank {part!r}"
-            ) from exc
-    if not levels or levels[-1] != Rank.ACE:
-        raise argparse.ArgumentTypeError(
-            "must be strictly increasing and end at A"
-        )
-    previous_index = -1
-    for level in levels:
-        if level not in LEVELS:
-            raise argparse.ArgumentTypeError(
-                "must use suited ranks from 2 through A"
-            )
-        level_index = LEVELS.index(level)
-        if level_index <= previous_index:
-            raise argparse.ArgumentTypeError(
-                "must be strictly increasing and end at A"
-            )
-        previous_index = level_index
-    return RequiredLevelPlan(required_levels=tuple(levels))
-
-
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--run-dir", default="training_runs/manual")
+    parser.add_argument("--run-dir", default=None)
     parser.add_argument("--init-only", action="store_true")
     parser.add_argument("--resume", default=None)
     parser.add_argument(
@@ -237,10 +265,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--layers", type=_positive_int_arg, default=3)
     parser.add_argument("--heads", type=_positive_int_arg, default=4)
     parser.add_argument(
-        "--dropout", type=_unit_interval_float_arg, default=0.1
+        "--max-tokens", type=_positive_int_arg, default=768
     )
     parser.add_argument(
-        "--max-tokens", type=_positive_int_arg, default=768
+        "--seed", type=_non_negative_int_arg, default=None
     )
     parser.add_argument(
         "--learning-rate", type=_positive_float_arg, default=None
@@ -248,6 +276,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument(
         "--checkpoint-every-updates",
         type=_positive_int_arg,
+        default=None,
+    )
+    parser.add_argument(
+        "--checkpoint-retention-updates",
+        type=_non_negative_int_arg,
         default=None,
     )
     parser.add_argument(
@@ -289,24 +322,32 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument(
         "--weight-decay", type=_non_negative_float_arg, default=None
     )
-    parser.add_argument(
-        "--required-levels",
-        type=_required_levels_arg,
-        default=None,
-    )
     args = parser.parse_args(argv)
-    run_dir = Path(args.run_dir)
-    resume_path = None if args.resume is None else Path(args.resume)
+    run_dir_arg: object = args.run_dir
+    assert run_dir_arg is None or isinstance(run_dir_arg, str)
+    resume_arg: object = args.resume
+    assert resume_arg is None or isinstance(resume_arg, str)
+    cli_run_dir = None if run_dir_arg is None else Path(run_dir_arg)
+    resume_path = None if resume_arg is None else Path(resume_arg)
+    run_dir = _validated_run_dir(
+        parser=parser,
+        cli_run_dir=cli_run_dir,
+        resume_path=resume_path,
+    )
     if args.init_only and resume_path is not None:
         parser.error("--init-only cannot be combined with --resume")
     if resume_path is None and args.d_model % args.heads != 0:
         parser.error("--d-model must be divisible by --heads")
+    _validate_resume_seed_override(
+        parser=parser,
+        resume_path=resume_path,
+        seed=args.seed,
+    )
     cli_model_config = (
         ModelConfig(
             d_model=args.d_model,
             layers=args.layers,
             heads=args.heads,
-            dropout=args.dropout,
             max_tokens=args.max_tokens,
         )
         if resume_path is None
@@ -319,8 +360,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     train_config = resolve_train_config(
         cli_overrides=TrainConfigOverrides(
             device=args.device,
+            seed=args.seed,
             learning_rate=args.learning_rate,
             checkpoint_every_updates=args.checkpoint_every_updates,
+            checkpoint_retention_updates=(
+                args.checkpoint_retention_updates
+            ),
             max_round_seconds=args.max_round_seconds,
             gamma=args.gamma,
             gae_lambda=args.gae_lambda,
@@ -334,7 +379,6 @@ def main(argv: Sequence[str] | None = None) -> None:
             adam_beta1=args.adam_beta1,
             adam_beta2=args.adam_beta2,
             weight_decay=args.weight_decay,
-            required_level_plan=args.required_levels,
         ),
         resume_path=resume_path,
     )

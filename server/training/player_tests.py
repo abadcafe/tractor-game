@@ -15,11 +15,6 @@ from server.player.test_helpers import (
 from server.protocol import ScoringSnapshot
 from server.result import Ok
 from server.rules.card_faces import CardFace, FaceCount
-from server.rules.cards import Rank
-from server.sm.required_progress import (
-    DEFAULT_REQUIRED_LEVEL_PLAN,
-    RequiredLevelPlan,
-)
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
 from server.training.player import TrainingPlayer
@@ -93,7 +88,6 @@ async def test_training_player_submits_action_without_hints() -> None:
     player = TrainingPlayer(
         index=0,
         policy=FirstCardPlayPolicy(),
-        required_level_plan=DEFAULT_REQUIRED_LEVEL_PLAN,
         recorder=recorder,
     )
 
@@ -126,7 +120,6 @@ async def test_training_player_records_action_after_acceptance() -> (
     player = TrainingPlayer(
         index=0,
         policy=FirstCardPlayPolicy(),
-        required_level_plan=DEFAULT_REQUIRED_LEVEL_PLAN,
         recorder=recorder,
     )
 
@@ -146,6 +139,41 @@ async def test_training_player_records_action_after_acceptance() -> (
 
 
 @pytest.mark.asyncio
+async def test_acceptance_contract_requires_seq_advance() -> None:
+    test_card = card("spades", "A", 1)
+    snapshot = make_snapshot(
+        phase="PLAYING",
+        awaiting_action="play",
+        player_hand=[test_card],
+    )
+    accepted_snapshot = make_snapshot(
+        phase="PLAYING",
+        awaiting_action=None,
+        player_hand=[],
+    )
+    game = make_game(snapshot)
+    recorder = TrajectoryRecorder()
+    player = TrainingPlayer(
+        index=0,
+        policy=FirstCardPlayPolicy(),
+        recorder=recorder,
+    )
+
+    await player.on_state(game, make_state_message(snapshot, seq=7))
+    await asyncio.sleep(0.05)
+    await player.on_state(
+        game, make_state_message(accepted_snapshot, seq=7)
+    )
+    assert recorder.steps() == ()
+
+    await player.on_state(
+        game, make_state_message(accepted_snapshot, seq=8)
+    )
+
+    assert len(recorder.steps()) == 1
+
+
+@pytest.mark.asyncio
 async def test_training_player_submits_initial_next_round() -> None:
     snapshot = make_snapshot(
         phase="WAITING", awaiting_action="next_round"
@@ -154,7 +182,6 @@ async def test_training_player_submits_initial_next_round() -> None:
     player = TrainingPlayer(
         index=2,
         policy=FirstCardPlayPolicy(),
-        required_level_plan=DEFAULT_REQUIRED_LEVEL_PLAN,
     )
 
     await player.on_state(game, make_state_message(snapshot))
@@ -182,7 +209,6 @@ async def test_training_player_holds_scoring_next_round() -> None:
     player = TrainingPlayer(
         index=2,
         policy=FirstCardPlayPolicy(),
-        required_level_plan=DEFAULT_REQUIRED_LEVEL_PLAN,
     )
 
     await player.on_state(game, make_state_message(snapshot, seq=9))
@@ -198,7 +224,7 @@ async def test_training_player_holds_scoring_next_round() -> None:
 
 
 @pytest.mark.asyncio
-async def test_training_player_observation_uses_custom_plan() -> None:
+async def test_training_player_observation_uses_rules_plan() -> None:
     test_card = card("spades", "A", 1)
     snapshot = make_snapshot(
         phase="PLAYING",
@@ -212,9 +238,6 @@ async def test_training_player_observation_uses_custom_plan() -> None:
     player = TrainingPlayer(
         index=0,
         policy=policy,
-        required_level_plan=RequiredLevelPlan(
-            required_levels=(Rank.JACK, Rank.ACE)
-        ),
     )
 
     await player.on_state(game, make_state_message(snapshot, seq=1))
@@ -222,9 +245,8 @@ async def test_training_player_observation_uses_custom_plan() -> None:
 
     observation = policy.observation
     assert observation is not None
-    assert GlobalFieldToken("required_level", "J") in observation.tokens
     assert GlobalFieldToken("required_level", "A") in observation.tokens
     assert (
-        RoundFieldToken("self_team_required_level", "J")
+        RoundFieldToken("self_team_required_level", "A")
         in observation.tokens
     )

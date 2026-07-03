@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import torch
+
 from server.player.test_helpers import card, make_snapshot
 from server.protocol import (
     BidEventSnapshot,
@@ -12,11 +14,15 @@ from server.protocol import (
     TrickSlotSnapshot,
     TrickSnapshot,
 )
+from server.rules.cards import Card, create_decks
+from server.training.config import ModelConfig
 from server.training.observation import (
+    HistoryTrick,
     PublicHistoryRecorder,
     build_observation,
     face_count_tokens,
 )
+from server.training.tensorize import tensorize_observation
 from server.training.tokens import (
     ActionQueryFieldToken,
     FaceCountToken,
@@ -470,4 +476,177 @@ def test_stir_and_own_exchange_history_are_observed() -> None:
     ] == [
         (picked.suit, picked.rank, 1),
         (discarded.suit, discarded.rank, 1),
+    ]
+
+
+def test_observation_worst_case_fits_default_token_budget() -> None:
+    deck = tuple(create_decks())
+    history = tuple(
+        HistoryTrick(
+            lead_player=index % 4,
+            slots=_single_card_slots(deck, start=index * 4),
+            winner=(index + 1) % 4,
+            points=index % 40,
+            failed_throw=FailedThrowSnapshot(
+                player=index % 4,
+                attempted_cards=_cycle_cards(deck, index * 4 + 40, 2),
+                forced_cards=_cycle_cards(deck, index * 4 + 41, 1),
+            ),
+        )
+        for index in range(25)
+    )
+    bid_events = _bid_events()
+    stir_events = _stir_events(deck)
+    snapshot = make_snapshot(
+        phase="PLAYING",
+        awaiting_action="play",
+        trump_rank="2",
+        trump_suit="spades",
+        player_hand=list(deck[:25]),
+        player_hand_counts=[25, 25, 25, 25],
+        bottom_cards=list(deck[100:108]),
+        bid_events=bid_events,
+        bid_winner=bid_events[-1],
+        own_initial_bottom_exchange=BottomExchangeSnapshot(
+            picked_up_bottom_cards=list(deck[92:100]),
+            discarded_bottom_cards=list(deck[84:92]),
+        ),
+        stir_events=stir_events,
+        trick=TrickSnapshot(
+            lead_player=3,
+            current_player=0,
+            slots=[
+                TrickSlotSnapshot(player=0, cards=[]),
+                TrickSlotSnapshot(player=1, cards=[]),
+                TrickSlotSnapshot(player=2, cards=[]),
+                TrickSlotSnapshot(player=3, cards=list(deck[80:84])),
+            ],
+            failed_throw=FailedThrowSnapshot(
+                player=3,
+                attempted_cards=list(deck[72:80]),
+                forced_cards=list(deck[72:74]),
+            ),
+        ),
+    )
+    config = ModelConfig()
+
+    observation = build_observation(
+        player_index=0,
+        snapshot=snapshot,
+        history=history,
+    )
+    tensorized = tensorize_observation(
+        observation=observation,
+        max_observation_tokens=config.max_tokens,
+        device=torch.device("cpu"),
+    )
+
+    assert len(observation.tokens) <= config.max_tokens
+    assert len(observation.tokens) > 250
+    assert tensorized.token_type_ids.shape == (1, config.max_tokens)
+
+
+def _single_card_slots(
+    deck: tuple[Card, ...], *, start: int
+) -> tuple[TrickSlotSnapshot, ...]:
+    return tuple(
+        TrickSlotSnapshot(
+            player=player,
+            cards=_cycle_cards(deck, start + player, 1),
+        )
+        for player in range(4)
+    )
+
+
+def _cycle_cards(
+    deck: tuple[Card, ...], start: int, count: int
+) -> list[Card]:
+    return [
+        deck[(start + offset) % len(deck)] for offset in range(count)
+    ]
+
+
+def _bid_events() -> list[BidEventSnapshot]:
+    heart_two = card("hearts", "2", 1)
+    spade_two = card("spades", "2", 1)
+    diamond_pair = [card("diamonds", "2", 1), card("diamonds", "2", 2)]
+    spade_pair = [card("spades", "2", 1), card("spades", "2", 2)]
+    return [
+        BidEventSnapshot(
+            player=0,
+            cards=[heart_two],
+            kind="trump_rank",
+            suit=heart_two.suit,
+            joker_type=None,
+            count=1,
+        ),
+        BidEventSnapshot(
+            player=1,
+            cards=[spade_two],
+            kind="trump_rank",
+            suit=spade_two.suit,
+            joker_type=None,
+            count=1,
+        ),
+        BidEventSnapshot(
+            player=2,
+            cards=diamond_pair,
+            kind="trump_rank",
+            suit=diamond_pair[0].suit,
+            joker_type=None,
+            count=2,
+        ),
+        BidEventSnapshot(
+            player=3,
+            cards=spade_pair,
+            kind="trump_rank",
+            suit=spade_pair[0].suit,
+            joker_type=None,
+            count=2,
+        ),
+    ]
+
+
+def _stir_events(
+    deck: tuple[Card, ...],
+) -> list[StirDeclarationEventSnapshot]:
+    club_pair = [card("clubs", "2", 1), card("clubs", "2", 2)]
+    small_joker_pair = [card("joker", "SJ", 1), card("joker", "SJ", 2)]
+    big_joker_pair = [card("joker", "BJ", 1), card("joker", "BJ", 2)]
+    return [
+        StirDeclarationEventSnapshot(
+            player=1,
+            kind="stir",
+            cards=club_pair,
+            new_suit=club_pair[0].suit,
+            priority=202,
+            own_bottom_exchange=None,
+        ),
+        StirDeclarationEventSnapshot(
+            player=2,
+            kind="pass",
+            cards=[],
+            new_suit=None,
+            priority=None,
+            own_bottom_exchange=None,
+        ),
+        StirDeclarationEventSnapshot(
+            player=3,
+            kind="stir",
+            cards=small_joker_pair,
+            new_suit=None,
+            priority=204,
+            own_bottom_exchange=None,
+        ),
+        StirDeclarationEventSnapshot(
+            player=0,
+            kind="stir",
+            cards=big_joker_pair,
+            new_suit=None,
+            priority=205,
+            own_bottom_exchange=BottomExchangeSnapshot(
+                picked_up_bottom_cards=list(deck[60:68]),
+                discarded_bottom_cards=list(deck[52:60]),
+            ),
+        ),
     ]

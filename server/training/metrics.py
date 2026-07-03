@@ -19,16 +19,19 @@ class TrainingMetric:
     run_id: str
     total_games: int
     total_updates: int
-    games_per_second: float
-    decisions_per_second: float
-    average_reward: float
-    average_level_delta: float
+    process_games_per_second: float
+    last_round_decisions_per_second: float
+    last_team0_reward: float
+    last_team1_reward: float
+    last_generated_action_count: int
+    last_accepted_action_count: int
+    last_decision_count: int
+    last_average_action_choices: float
     policy_loss: float | None
     value_loss: float | None
     entropy: float | None
     approx_kl: float | None
     clip_fraction: float | None
-    average_action_choices: float
     checkpoint_path: str | None
 
 
@@ -66,16 +69,27 @@ def _to_json(metric: TrainingMetric) -> JsonObject:
         "run_id": metric.run_id,
         "total_games": metric.total_games,
         "total_updates": metric.total_updates,
-        "games_per_second": metric.games_per_second,
-        "decisions_per_second": metric.decisions_per_second,
-        "average_reward": metric.average_reward,
-        "average_level_delta": metric.average_level_delta,
+        "process_games_per_second": metric.process_games_per_second,
+        "last_round_decisions_per_second": (
+            metric.last_round_decisions_per_second
+        ),
+        "last_team0_reward": metric.last_team0_reward,
+        "last_team1_reward": metric.last_team1_reward,
+        "last_generated_action_count": (
+            metric.last_generated_action_count
+        ),
+        "last_accepted_action_count": (
+            metric.last_accepted_action_count
+        ),
+        "last_decision_count": metric.last_decision_count,
+        "last_average_action_choices": (
+            metric.last_average_action_choices
+        ),
         "policy_loss": metric.policy_loss,
         "value_loss": metric.value_loss,
         "entropy": metric.entropy,
         "approx_kl": metric.approx_kl,
         "clip_fraction": metric.clip_fraction,
-        "average_action_choices": metric.average_action_choices,
         "checkpoint_path": metric.checkpoint_path,
     }
 
@@ -85,18 +99,29 @@ def _from_json(data: dict[object, object]) -> TrainingMetric:
         run_id=_str_field(data, "run_id"),
         total_games=_int_field(data, "total_games"),
         total_updates=_int_field(data, "total_updates"),
-        games_per_second=_float_field(data, "games_per_second"),
-        decisions_per_second=_float_field(data, "decisions_per_second"),
-        average_reward=_float_field(data, "average_reward"),
-        average_level_delta=_float_field(data, "average_level_delta"),
+        process_games_per_second=_float_field(
+            data, "process_games_per_second"
+        ),
+        last_round_decisions_per_second=_float_field(
+            data, "last_round_decisions_per_second"
+        ),
+        last_team0_reward=_float_field(data, "last_team0_reward"),
+        last_team1_reward=_float_field(data, "last_team1_reward"),
+        last_generated_action_count=_int_field(
+            data, "last_generated_action_count"
+        ),
+        last_accepted_action_count=_int_field(
+            data, "last_accepted_action_count"
+        ),
+        last_decision_count=_int_field(data, "last_decision_count"),
+        last_average_action_choices=_float_field(
+            data, "last_average_action_choices"
+        ),
         policy_loss=_optional_float_field(data, "policy_loss"),
         value_loss=_optional_float_field(data, "value_loss"),
         entropy=_optional_float_field(data, "entropy"),
         approx_kl=_optional_float_field(data, "approx_kl"),
         clip_fraction=_optional_float_field(data, "clip_fraction"),
-        average_action_choices=_float_field(
-            data, "average_action_choices"
-        ),
         checkpoint_path=_optional_str_field(data, "checkpoint_path"),
     )
 

@@ -8,7 +8,6 @@ from typing import Literal
 from server.protocol import StateSnapshot
 from server.result import Ok, Rejected
 from server.rules.card_faces import (
-    MAX_FACE_COUNT,
     CardFace,
     FaceCount,
     canonical_face_counts,
@@ -24,14 +23,20 @@ type DecisionKind = Literal[
 ]
 type SemanticArgumentKind = Literal["pass", "stop", "select_face_count"]
 
-MAX_ARGUMENT_TOKENS: int = 36
-ARGUMENT_BOS_ID: int = 1
-ARGUMENT_PASS_ID: int = 2
-ARGUMENT_STOP_ID: int = 3
-ARGUMENT_SELECT_BASE_ID: int = 4
-SEMANTIC_FACE_COUNT_COUNT: int = 54 * MAX_FACE_COUNT
-ARGUMENT_VOCAB_SIZE: int = (
-    ARGUMENT_SELECT_BASE_ID + SEMANTIC_FACE_COUNT_COUNT
+__all__ = (
+    "ActionQuery",
+    "BoundAction",
+    "DecisionKind",
+    "GeneratedAction",
+    "InvalidSemanticActionRejected",
+    "PlayerActionKind",
+    "SemanticArgument",
+    "SemanticArgumentKind",
+    "SemanticArgumentPrefix",
+    "SemanticArgumentTrace",
+    "bind_generated_action",
+    "build_action_query",
+    "semantic_prefix_state",
 )
 
 
@@ -195,58 +200,6 @@ def bind_generated_action(
     )
 
 
-def semantic_argument_name(argument: SemanticArgument) -> str:
-    """Return a stable human-readable argument name."""
-    if argument.kind == "pass":
-        return "PASS"
-    if argument.kind == "stop":
-        return "STOP"
-    assert argument.face_count is not None
-    face = argument.face_count.face
-    return (
-        f"SELECT_{face.suit.value}_{face.rank.value}_"
-        f"X{argument.face_count.count}"
-    )
-
-
-def semantic_argument_id(argument: SemanticArgument) -> int:
-    """Return the model vocab id for a semantic argument."""
-    if argument.kind == "pass":
-        return ARGUMENT_PASS_ID
-    if argument.kind == "stop":
-        return ARGUMENT_STOP_ID
-    assert argument.face_count is not None
-    return ARGUMENT_SELECT_BASE_ID + _face_count_choice_index(
-        argument.face_count
-    )
-
-
-def semantic_argument_from_id(
-    argument_id: int,
-) -> Ok[SemanticArgument] | Rejected:
-    """Return the semantic argument represented by a vocab id."""
-    if argument_id == ARGUMENT_PASS_ID:
-        return Ok(value=SemanticArgument("pass"))
-    if argument_id == ARGUMENT_STOP_ID:
-        return Ok(value=SemanticArgument("stop"))
-    if argument_id < ARGUMENT_SELECT_BASE_ID:
-        return InvalidSemanticActionRejected("不能生成 BOS/PAD")
-    index = argument_id - ARGUMENT_SELECT_BASE_ID
-    if index < 0 or index >= SEMANTIC_FACE_COUNT_COUNT:
-        return InvalidSemanticActionRejected("语义参数 id 超出词表")
-    face_index = index // MAX_FACE_COUNT
-    count = index % MAX_FACE_COUNT + 1
-    face_result = _face_from_index(face_index)
-    if isinstance(face_result, Rejected):
-        return face_result
-    return Ok(
-        value=SemanticArgument(
-            "select_face_count",
-            FaceCount(face=face_result.value, count=count),
-        )
-    )
-
-
 def _card_ids_for_face_counts(
     face_counts: tuple[FaceCount, ...],
     hand_cards: list[Card] | tuple[Card, ...],
@@ -358,64 +311,3 @@ def _face_already_selected(
     face: CardFace,
 ) -> bool:
     return any(item.face == face for item in selected)
-
-
-def _face_count_choice_index(face_count: FaceCount) -> int:
-    face_index = _face_index(face_count.face)
-    return face_index * MAX_FACE_COUNT + face_count.count - 1
-
-
-def _face_index(face: CardFace) -> int:
-    suited_count = 4 * 13
-    if face.suit == Suit.JOKER:
-        if face.rank == Rank.SMALL_JOKER:
-            return suited_count
-        if face.rank == Rank.BIG_JOKER:
-            return suited_count + 1
-        assert False
-    suit_index = (
-        (Suit.HEARTS, Suit.SPADES, Suit.DIAMONDS, Suit.CLUBS)
-    ).index(face.suit)
-    rank_index = (
-        Rank.TWO,
-        Rank.THREE,
-        Rank.FOUR,
-        Rank.FIVE,
-        Rank.SIX,
-        Rank.SEVEN,
-        Rank.EIGHT,
-        Rank.NINE,
-        Rank.TEN,
-        Rank.JACK,
-        Rank.QUEEN,
-        Rank.KING,
-        Rank.ACE,
-    ).index(face.rank)
-    return suit_index * 13 + rank_index
-
-
-def _face_from_index(index: int) -> Ok[CardFace] | Rejected:
-    suited_count = 4 * 13
-    if index == suited_count:
-        return Ok(value=CardFace(Suit.JOKER, Rank.SMALL_JOKER))
-    if index == suited_count + 1:
-        return Ok(value=CardFace(Suit.JOKER, Rank.BIG_JOKER))
-    if index < 0 or index >= suited_count:
-        return InvalidSemanticActionRejected("牌面 id 超出范围")
-    suits = (Suit.HEARTS, Suit.SPADES, Suit.DIAMONDS, Suit.CLUBS)
-    ranks = (
-        Rank.TWO,
-        Rank.THREE,
-        Rank.FOUR,
-        Rank.FIVE,
-        Rank.SIX,
-        Rank.SEVEN,
-        Rank.EIGHT,
-        Rank.NINE,
-        Rank.TEN,
-        Rank.JACK,
-        Rank.QUEEN,
-        Rank.KING,
-        Rank.ACE,
-    )
-    return Ok(value=CardFace(suits[index // 13], ranks[index % 13]))

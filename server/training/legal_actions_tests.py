@@ -5,6 +5,7 @@ from __future__ import annotations
 from server.player.test_helpers import card, make_snapshot
 from server.protocol import (
     BidEventSnapshot,
+    StirDeclarationEventSnapshot,
     StirringStateSnapshot,
     TrickSlotSnapshot,
     TrickSnapshot,
@@ -209,6 +210,67 @@ def test_stir_mask_uses_current_priority() -> None:
     assert SemanticArgument("pass") in allowed
     assert _select(spade_first, 2) in allowed
     assert _select(diamond_first, 2) not in allowed
+
+
+def test_stir_mask_uses_stir_event_priority_over_bid_winner() -> None:
+    diamond_first = card("diamonds", "2", 1)
+    diamond_second = card("diamonds", "2", 2)
+    spade_first = card("spades", "2", 1)
+    spade_second = card("spades", "2", 2)
+    heart_first = card("hearts", "2", 1)
+    heart_second = card("hearts", "2", 2)
+    small_joker_first = card("joker", "SJ", 1)
+    small_joker_second = card("joker", "SJ", 2)
+    snapshot = make_snapshot(
+        phase="STIRRING",
+        awaiting_action="stir",
+        trump_rank="2",
+        trump_suit="spades",
+        player_hand=[
+            heart_first,
+            heart_second,
+            small_joker_first,
+            small_joker_second,
+        ],
+        bid_winner=BidEventSnapshot(
+            player=0,
+            cards=[diamond_first, diamond_second],
+            kind="trump_rank",
+            suit=diamond_first.suit,
+            joker_type=None,
+            count=2,
+        ),
+        stir_events=[
+            StirDeclarationEventSnapshot(
+                player=1,
+                kind="stir",
+                cards=[spade_first, spade_second],
+                new_suit=spade_first.suit,
+                priority=203,
+                own_bottom_exchange=None,
+            )
+        ],
+        stirring_state=StirringStateSnapshot(
+            phase="WAITING",
+            trump_suit=spade_first.suit,
+            current_player=2,
+            declarer_player=0,
+            exchanging_player=None,
+            exchange_count=None,
+        ),
+    )
+
+    legal_actions = build_legal_action_index(
+        player_index=2,
+        snapshot=snapshot,
+    )
+    allowed = legal_actions.allowed_next(
+        SemanticArgumentPrefix(arguments=())
+    )
+
+    assert SemanticArgument("pass") in allowed
+    assert _select(heart_first, 2) not in allowed
+    assert _select(small_joker_first, 2) in allowed
 
 
 def _trick(

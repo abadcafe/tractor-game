@@ -20,7 +20,6 @@ def test_tractor_policy_model_forward_argument_shapes() -> None:
         d_model=8,
         layers=1,
         heads=2,
-        dropout=0.0,
     )
     observation = build_observation(
         player_index=0,

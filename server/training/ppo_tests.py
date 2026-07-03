@@ -35,21 +35,21 @@ class CountingTractorPolicyModel(TractorPolicyModel):
         d_model: int,
         layers: int,
         heads: int,
-        dropout: float,
     ) -> None:
         super().__init__(
             d_model=d_model,
             layers=layers,
             heads=heads,
-            dropout=dropout,
         )
         self.batch_sizes: list[int] = []
+        self.training_modes: list[bool] = []
 
     def forward_argument(
         self,
         observation: ObservationTensorBatch,
         prefix: ArgumentPrefixTensorBatch,
     ) -> ArgumentHeadOutput:
+        self.training_modes.append(self.training)
         self.batch_sizes.append(
             int(observation.token_type_ids.shape[0])
         )
@@ -62,7 +62,6 @@ def test_update_returns_stats_and_adamw_state() -> None:
         d_model=8,
         layers=1,
         heads=2,
-        dropout=0.0,
         max_tokens=64,
     )
     train_config = TrainConfig(
@@ -75,7 +74,6 @@ def test_update_returns_stats_and_adamw_state() -> None:
         d_model=model_config.d_model,
         layers=model_config.layers,
         heads=model_config.heads,
-        dropout=model_config.dropout,
     ).to(device)
     trainer = PPOTrainer(
         model=model,
@@ -143,7 +141,6 @@ def test_update_batches_minibatch_model_forwards() -> None:
         d_model=8,
         layers=1,
         heads=2,
-        dropout=0.0,
         max_tokens=64,
     )
     train_config = TrainConfig(
@@ -156,8 +153,8 @@ def test_update_batches_minibatch_model_forwards() -> None:
         d_model=model_config.d_model,
         layers=model_config.layers,
         heads=model_config.heads,
-        dropout=model_config.dropout,
     ).to(device)
+    model.eval()
     trainer = PPOTrainer(
         model=model,
         model_config=model_config,
@@ -173,6 +170,9 @@ def test_update_batches_minibatch_model_forwards() -> None:
     )
 
     assert max(model.batch_sizes) == 4
+    assert model.training_modes
+    assert all(training is True for training in model.training_modes)
+    assert model.training is True
 
 
 def _single_card_rewarded_step(

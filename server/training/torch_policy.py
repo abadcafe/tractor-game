@@ -6,20 +6,20 @@ import torch
 from torch import Tensor
 
 from server.result import Rejected
+from server.training.argument_distribution import argument_distribution
 from server.training.config import ModelConfig
 from server.training.legal_actions import LegalActionIndex
 from server.training.model import TractorPolicyModel
 from server.training.observation import Observation
 from server.training.policy import PolicyDecision
 from server.training.semantic_actions import (
-    MAX_ARGUMENT_TOKENS,
     SemanticArgument,
     SemanticArgumentPrefix,
     SemanticArgumentTrace,
 )
+from server.training.semantic_codec import SEMANTIC_CODEC
 from server.training.semantic_torch import (
     forward_argument_head,
-    logits_for_arguments,
 )
 from server.training.tensorize import (
     tensorize_argument_prefix,
@@ -36,13 +36,10 @@ class TorchTrainingPolicy:
         model: TractorPolicyModel,
         config: ModelConfig,
         device: torch.device,
-        temperature: float = 1.0,
     ) -> None:
-        assert temperature > 0.0
         self.model = model
         self.config = config
         self.device = device
-        self.temperature = temperature
 
     def decide(
         self,
@@ -62,7 +59,7 @@ class TorchTrainingPolicy:
             entropy = 0.0
             value_estimate = 0.0
             choice_count = 0
-            for _ in range(MAX_ARGUMENT_TOKENS):
+            for _ in range(SEMANTIC_CODEC.max_argument_tokens):
                 prefix_batch = tensorize_argument_prefix(
                     prefix=prefix,
                     device=self.device,
@@ -79,23 +76,19 @@ class TorchTrainingPolicy:
                 if not allowed:
                     break
                 choice_count += len(allowed)
-                logits = logits_for_arguments(output, allowed)
-                masked_logits = logits / self.temperature
-                probabilities = torch.softmax(masked_logits, dim=0)
-                log_probabilities = torch.log_softmax(
-                    masked_logits, dim=0
+                distribution = argument_distribution(
+                    argument_logits=output.argument_logits[0],
+                    choices=allowed,
                 )
                 sampled = torch.multinomial(
-                    probabilities, num_samples=1
+                    distribution.probabilities, num_samples=1
                 )
                 argument_index = int(sampled[0].detach().cpu().item())
                 argument = allowed[argument_index]
                 log_probability += _float_tensor(
-                    log_probabilities[argument_index]
+                    distribution.log_probabilities[argument_index]
                 )
-                entropy += _float_tensor(
-                    -(probabilities * log_probabilities).sum()
-                )
+                entropy += _float_tensor(distribution.entropy)
                 arguments.append(argument)
                 if argument.kind in ("pass", "stop"):
                     break

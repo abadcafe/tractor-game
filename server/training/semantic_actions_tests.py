@@ -13,10 +13,12 @@ from server.training.semantic_actions import (
     SemanticArgumentTrace,
     bind_generated_action,
     build_action_query,
+    semantic_prefix_state,
+)
+from server.training.semantic_codec import (
     semantic_argument_from_id,
     semantic_argument_id,
     semantic_argument_name,
-    semantic_prefix_state,
 )
 
 

@@ -6,7 +6,6 @@ from itertools import combinations
 
 from server.result import Ok, Rejected
 from server.rules.cards import Rank
-from server.sm.required_progress import RequiredLevelPlan
 
 from .game_sm import (
     create_game,
@@ -227,13 +226,11 @@ class TestProcessRoundResult:
 
     def test_process_round_result_clips_at_required_level(self) -> None:
         """Raw gains cannot skip over the next required level."""
-        state = create_game(
-            RequiredLevelPlan(required_levels=(Rank.JACK, Rank.ACE))
-        )
+        state = create_game()
         result = start_game(state)
         assert isinstance(result, Ok)
         state = result.value.model_copy(
-            update={"team0_level": Rank.TEN}
+            update={"team0_level": Rank.KING}
         )
         rr = RoundResult(
             declarer_team=0,
@@ -249,7 +246,7 @@ class TestProcessRoundResult:
         result = process_round_result(state, rr)
 
         assert isinstance(result, Ok)
-        assert result.value.team0_level == Rank.JACK
+        assert result.value.team0_level == Rank.ACE
         assert result.value.winning_team is None
 
 

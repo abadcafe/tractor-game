@@ -1,4 +1,4 @@
-"""Required-level progress rules shared by game and training."""
+"""Required-level progress rules."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from server.rules.cards import Rank
-from server.sm.constants import LEVELS
+from server.rules.level_progression import LEVELS
 
 
 class TerminalProgress(str, Enum):
@@ -18,20 +18,7 @@ class TerminalProgress(str, Enum):
 type ProgressTarget = Rank | TerminalProgress
 
 
-@dataclass(frozen=True, slots=True)
-class RequiredLevelPlan:
-    """Ordered mandatory levels before the virtual WIN target."""
-
-    required_levels: tuple[Rank, ...]
-
-    def __post_init__(self) -> None:
-        assert self.required_levels
-        assert self.required_levels[-1] == Rank.ACE
-        previous_index = -1
-        for level in self.required_levels:
-            level_index = _rank_index(level)
-            assert level_index > previous_index
-            previous_index = level_index
+MANDATORY_LEVELS: tuple[Rank, ...] = (Rank.ACE,)
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,12 +29,10 @@ class TeamAdvance:
     won_game: bool
 
 
-def stage_target(
-    level: Rank, plan: RequiredLevelPlan
-) -> ProgressTarget:
+def stage_target(level: Rank) -> ProgressTarget:
     """Return the next mandatory target from a team's current level."""
     level_index = _rank_index(level)
-    for required_level in plan.required_levels:
+    for required_level in MANDATORY_LEVELS:
         if _rank_index(required_level) > level_index:
             return required_level
     return TerminalProgress.WIN
@@ -63,14 +48,13 @@ def advance_team_progress(
     level: Rank,
     raw_gain: int,
     was_declarer: bool,
-    plan: RequiredLevelPlan,
 ) -> TeamAdvance:
     """Advance one team through mandatory levels for one round."""
     assert raw_gain >= 0
     if raw_gain == 0:
         return TeamAdvance(level=level, won_game=False)
 
-    target = stage_target(level, plan)
+    target = stage_target(level)
     if target == TerminalProgress.WIN:
         return TeamAdvance(level=level, won_game=was_declarer)
 
@@ -101,6 +85,14 @@ def _target_index(target: ProgressTarget) -> int:
     return _rank_index(target)
 
 
-DEFAULT_REQUIRED_LEVEL_PLAN = RequiredLevelPlan(
-    required_levels=(Rank.ACE,)
-)
+def _assert_mandatory_levels() -> None:
+    assert MANDATORY_LEVELS
+    assert MANDATORY_LEVELS[-1] == Rank.ACE
+    previous_index = -1
+    for level in MANDATORY_LEVELS:
+        level_index = _rank_index(level)
+        assert level_index > previous_index
+        previous_index = level_index
+
+
+_assert_mandatory_levels()

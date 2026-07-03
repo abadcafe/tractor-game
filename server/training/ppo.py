@@ -7,15 +7,20 @@ from dataclasses import dataclass
 from typing import TypeGuard, cast
 
 import torch
-from torch import Tensor, nn
+from torch import Tensor
 
 from server.sm.constants import get_team_index
+from server.training.argument_distribution import argument_distribution
 from server.training.config import ModelConfig, TrainConfig
 from server.training.model import TractorPolicyModel
+from server.training.ppo_math import (
+    PPOObjectiveConfig,
+    ValueStep,
+    clipped_ppo_objective,
+    generalized_advantage_targets,
+)
 from server.training.semantic_actions import (
-    SemanticArgument,
     SemanticArgumentPrefix,
-    semantic_argument_id,
 )
 from server.training.semantic_torch import forward_argument_head
 from server.training.tensorize import (
@@ -258,32 +263,23 @@ class PPOTrainer:
     ) -> tuple[RolloutSample, ...]:
         if not steps:
             return ()
-        rewards = [0.0 for _ in steps]
-        rewards[-1] = steps[-1].reward
-        values = [step.step.value_estimate for step in steps]
-        advantages = [0.0 for _ in steps]
-        gae = 0.0
-        for index in range(len(steps) - 1, -1, -1):
-            next_value = (
-                0.0 if index == len(steps) - 1 else values[index + 1]
+        value_steps = tuple(
+            ValueStep(
+                reward=step.reward if index == len(steps) - 1 else 0.0,
+                value_estimate=step.step.value_estimate,
             )
-            delta = (
-                rewards[index]
-                + self.train_config.gamma * next_value
-                - values[index]
-            )
-            gae = (
-                delta
-                + self.train_config.gamma
-                * self.train_config.gae_lambda
-                * gae
-            )
-            advantages[index] = gae
+            for index, step in enumerate(steps)
+        )
+        targets = generalized_advantage_targets(
+            steps=value_steps,
+            gamma=self.train_config.gamma,
+            gae_lambda=self.train_config.gae_lambda,
+        )
         return tuple(
             RolloutSample(
                 step=step,
-                advantage=advantages[index],
-                return_value=advantages[index] + values[index],
+                advantage=targets[index].advantage,
+                return_value=targets[index].return_value,
                 old_log_probability=step.step.log_probability,
                 old_value_estimate=step.step.value_estimate,
             )
@@ -311,55 +307,28 @@ class PPOTrainer:
             tuple(sample.return_value for sample in samples),
             device=self.device,
         )
-        ratio = torch.exp(
-            evaluated.log_probabilities - old_log_probabilities
-        )
-        clipped_ratio = torch.clamp(
-            ratio,
-            1.0 - self.train_config.ppo_clip,
-            1.0 + self.train_config.ppo_clip,
-        )
-        policy_loss = -torch.minimum(
-            ratio * advantages,
-            clipped_ratio * advantages,
-        ).mean()
-        value_clipped = old_values + torch.clamp(
-            evaluated.values - old_values,
-            -self.train_config.value_clip,
-            self.train_config.value_clip,
-        )
-        value_loss = torch.maximum(
-            nn.functional.mse_loss(
-                evaluated.values,
-                return_values,
-                reduction="none",
+        objective = clipped_ppo_objective(
+            old_log_probabilities=old_log_probabilities,
+            new_log_probabilities=evaluated.log_probabilities,
+            advantages=advantages,
+            old_values=old_values,
+            new_values=evaluated.values,
+            return_values=return_values,
+            entropies=evaluated.entropies,
+            config=PPOObjectiveConfig(
+                ppo_clip=self.train_config.ppo_clip,
+                value_clip=self.train_config.value_clip,
+                value_coef=self.train_config.value_coef,
+                entropy_coef=self.train_config.entropy_coef,
             ),
-            nn.functional.mse_loss(
-                value_clipped,
-                return_values,
-                reduction="none",
-            ),
-        ).mean()
-        entropy = evaluated.entropies.mean()
-        approx_kl = old_log_probabilities - evaluated.log_probabilities
-        clip_fraction = (
-            ratio.sub(1.0)
-            .abs()
-            .gt(self.train_config.ppo_clip)
-            .to(dtype=torch.float32)
-        )
-        total_loss = (
-            policy_loss
-            + self.train_config.value_coef * value_loss
-            - self.train_config.entropy_coef * entropy
         )
         return MinibatchLoss(
-            policy_loss=policy_loss,
-            value_loss=value_loss,
-            entropy=entropy,
-            total_loss=total_loss,
-            approx_kl=approx_kl.mean(),
-            clip_fraction=clip_fraction.mean(),
+            policy_loss=objective.policy_loss,
+            value_loss=objective.value_loss,
+            entropy=objective.entropy,
+            total_loss=objective.total_loss,
+            approx_kl=objective.approx_kl,
+            clip_fraction=objective.clip_fraction,
         )
 
     def _trace_batch_eval(
@@ -495,18 +464,14 @@ class PPOTrainer:
             )
             assert argument in allowed
             selected_argument_index = allowed.index(argument)
-            logits = _logits_for_argument_row(
-                output.argument_logits[row_index],
-                allowed,
+            distribution = argument_distribution(
+                argument_logits=output.argument_logits[row_index],
+                choices=allowed,
             )
-            row_log_probabilities = torch.log_softmax(logits, dim=0)
-            probabilities = torch.softmax(logits, dim=0)
             log_probabilities.append(
-                row_log_probabilities[selected_argument_index]
+                distribution.log_probabilities[selected_argument_index]
             )
-            entropies.append(
-                -(probabilities * row_log_probabilities).sum()
-            )
+            entropies.append(distribution.entropy)
         return TraceBatchEval(
             log_probabilities=torch.stack(log_probabilities),
             values=output.values,
@@ -650,20 +615,6 @@ def _select_observations(
         numeric_values=batch.numeric_values.index_select(0, index),
         numeric_masks=batch.numeric_masks.index_select(0, index),
     )
-
-
-def _logits_for_argument_row(
-    argument_logits: Tensor,
-    choices: tuple[SemanticArgument, ...],
-) -> Tensor:
-    assert choices
-    ids = tuple(semantic_argument_id(argument) for argument in choices)
-    index = torch.tensor(
-        ids,
-        dtype=torch.long,
-        device=argument_logits.device,
-    )
-    return argument_logits.index_select(dim=0, index=index)
 
 
 def _float_tensor(value: Tensor) -> float:

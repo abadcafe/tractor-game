@@ -8,12 +8,8 @@ from dataclasses import dataclass
 
 from server.game import Game
 from server.protocol import StateSnapshot
+from server.rules.required_progress import TerminalProgress
 from server.sm.constants import get_team_index
-from server.sm.required_progress import (
-    DEFAULT_REQUIRED_LEVEL_PLAN,
-    RequiredLevelPlan,
-    TerminalProgress,
-)
 from server.training.player import TrainingPlayer
 from server.training.policy import TrainingPolicy
 from server.training.progress import (
@@ -47,25 +43,17 @@ class SelfPlaySession:
         self,
         *,
         policy: TrainingPolicy,
-        required_level_plan: RequiredLevelPlan = (
-            DEFAULT_REQUIRED_LEVEL_PLAN
-        ),
     ) -> None:
         self._recorder = TrajectoryRecorder()
         self._players = [
             TrainingPlayer(
                 index=index,
                 policy=policy,
-                required_level_plan=required_level_plan,
                 recorder=self._recorder,
             )
             for index in range(4)
         ]
-        self._game = Game(
-            players=self._players,
-            required_level_plan=required_level_plan,
-        )
-        self._required_level_plan = required_level_plan
+        self._game = Game(players=self._players)
         self._started = False
 
     async def play_round(
@@ -94,7 +82,6 @@ class SelfPlaySession:
         reward0, reward1 = round_rewards(
             before=before,
             after=final_snapshot,
-            required_level_plan=self._required_level_plan,
         )
         rewarded_steps = tuple(
             RewardedDecisionStep(
@@ -139,15 +126,9 @@ async def play_training_round(
     *,
     policy: TrainingPolicy,
     max_seconds: float,
-    required_level_plan: RequiredLevelPlan = (
-        DEFAULT_REQUIRED_LEVEL_PLAN
-    ),
 ) -> TrainingRoundResult:
     """Run one self-play round in a fresh session."""
-    session = SelfPlaySession(
-        policy=policy,
-        required_level_plan=required_level_plan,
-    )
+    session = SelfPlaySession(policy=policy)
     return await session.play_round(max_seconds=max_seconds)
 
 
@@ -172,7 +153,6 @@ def round_rewards(
     *,
     before: StateSnapshot,
     after: StateSnapshot,
-    required_level_plan: RequiredLevelPlan,
 ) -> tuple[float, float]:
     """Return zero-sum team rewards for one completed round."""
     round_winning_team = _round_winning_team(after)
@@ -201,7 +181,6 @@ def round_rewards(
         team1_before=team1_before,
         team0_after=team0_after,
         team1_after=team1_after,
-        required_level_plan=required_level_plan,
     )
     return reward.team0, reward.team1
 

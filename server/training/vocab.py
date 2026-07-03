@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from types import MappingProxyType
 
 from server.rules.card_faces import CardColor
 from server.rules.cards import Rank, Suit
+from server.training import vocab_schema as _schema
 from server.training.feature_schema import (
     MAX_EVENT_AGE,
     MAX_FACE_COUNT,
@@ -29,76 +29,10 @@ from server.training.tokens import (
     TrickResultFieldToken,
 )
 
-OBS_PAD_ID: int = 0
-NONE_ID: int = 1
-INT_BASE_ID: int = 2
-MAX_SCALAR_INT: int = 256
-INT_OVERFLOW_ID: int = INT_BASE_ID + MAX_SCALAR_INT + 1
-VALUE_STRING_BASE_ID: int = INT_OVERFLOW_ID + 1
+__all__ = ("component_ids",)
 
-TOKEN_TYPE_VOCAB_SIZE: int = 8
-SEGMENT_VOCAB_SIZE: int = 14
-FIELD_VOCAB_SIZE: int = 72
-SUIT_VOCAB_SIZE: int = 7
-RANK_VOCAB_SIZE: int = 17
-POINTS_VOCAB_SIZE: int = 5
-COLOR_VOCAB_SIZE: int = 5
-ROLE_VOCAB_SIZE: int = 6
-TRICK_AGE_VOCAB_SIZE: int = MAX_TRICK_AGE + 3
-TRICK_STATE_VOCAB_SIZE: int = 4
-PLAY_ORDER_VOCAB_SIZE: int = MAX_PLAY_ORDER + 3
-COUNT_VOCAB_SIZE: int = MAX_FACE_COUNT + 3
-PLAY_WIDTH_VOCAB_SIZE: int = MAX_PLAY_WIDTH + 3
-EVENT_AGE_VOCAB_SIZE: int = MAX_EVENT_AGE + 3
-
-TOKEN_TYPE_FACE_COUNT_ID: int = 1
-TOKEN_TYPE_GLOBAL_FIELD_ID: int = 2
-TOKEN_TYPE_ROUND_FIELD_ID: int = 3
-TOKEN_TYPE_ROUND_EVENT_FIELD_ID: int = 4
-TOKEN_TYPE_TRICK_RESULT_FIELD_ID: int = 5
-TOKEN_TYPE_ACTION_QUERY_FIELD_ID: int = 6
-
-SEGMENT_ACTION_QUERY_ID: int = 13
-
-
-@dataclass(frozen=True, slots=True)
-class TokenComponentIds:
-    """Embedding component ids for one observation token."""
-
-    token_type: int
-    segment: int
-    field: int
-    value: int
-    suit: int
-    rank: int
-    points: int
-    color: int
-    role: int
-    trick_age: int
-    trick_state: int
-    play_order: int
-    count: int
-    play_width: int
-    event_age: int
-
-
-PAD_COMPONENT_IDS = TokenComponentIds(
-    token_type=OBS_PAD_ID,
-    segment=OBS_PAD_ID,
-    field=OBS_PAD_ID,
-    value=OBS_PAD_ID,
-    suit=OBS_PAD_ID,
-    rank=OBS_PAD_ID,
-    points=OBS_PAD_ID,
-    color=OBS_PAD_ID,
-    role=OBS_PAD_ID,
-    trick_age=OBS_PAD_ID,
-    trick_state=OBS_PAD_ID,
-    play_order=OBS_PAD_ID,
-    count=OBS_PAD_ID,
-    play_width=OBS_PAD_ID,
-    event_age=OBS_PAD_ID,
-)
+_VOCAB_SCHEMA = _schema.VOCAB_SCHEMA
+_STRING_VALUE_BASE = _VOCAB_SCHEMA.value_string_base_id
 
 _SEGMENT_IDS: MappingProxyType[ObservationSegment, int] = (
     MappingProxyType(
@@ -115,7 +49,7 @@ _SEGMENT_IDS: MappingProxyType[ObservationSegment, int] = (
             "failed_throw_attempted": 10,
             "failed_throw_forced": 11,
             "trick_result": 12,
-            "action_query": SEGMENT_ACTION_QUERY_ID,
+            "action_query": _VOCAB_SCHEMA.segment_action_query_id,
         }
     )
 )
@@ -224,79 +158,79 @@ _FIELD_IDS: MappingProxyType[str, int] = MappingProxyType(
 )
 _STRING_VALUE_IDS: MappingProxyType[str, int] = MappingProxyType(
     {
-        "fixed_partner_opposite": VALUE_STRING_BASE_ID,
-        "left_enemy": VALUE_STRING_BASE_ID + 1,
-        "right_enemy": VALUE_STRING_BASE_ID + 2,
-        "partner": VALUE_STRING_BASE_ID + 3,
-        "self": VALUE_STRING_BASE_ID + 4,
-        "required-levels": VALUE_STRING_BASE_ID + 5,
-        "WIN": VALUE_STRING_BASE_ID + 6,
-        "DEAL_BID": VALUE_STRING_BASE_ID + 7,
-        "STIRRING": VALUE_STRING_BASE_ID + 8,
-        "PLAYING": VALUE_STRING_BASE_ID + 9,
-        "SCORING": VALUE_STRING_BASE_ID + 10,
-        "WAITING": VALUE_STRING_BASE_ID + 11,
-        "bid": VALUE_STRING_BASE_ID + 12,
-        "stir": VALUE_STRING_BASE_ID + 13,
-        "discard": VALUE_STRING_BASE_ID + 14,
-        "play": VALUE_STRING_BASE_ID + 15,
-        "next_round": VALUE_STRING_BASE_ID + 16,
-        "hearts": VALUE_STRING_BASE_ID + 17,
-        "spades": VALUE_STRING_BASE_ID + 18,
-        "diamonds": VALUE_STRING_BASE_ID + 19,
-        "clubs": VALUE_STRING_BASE_ID + 20,
-        "joker": VALUE_STRING_BASE_ID + 21,
-        "2": VALUE_STRING_BASE_ID + 22,
-        "3": VALUE_STRING_BASE_ID + 23,
-        "4": VALUE_STRING_BASE_ID + 24,
-        "5": VALUE_STRING_BASE_ID + 25,
-        "6": VALUE_STRING_BASE_ID + 26,
-        "7": VALUE_STRING_BASE_ID + 27,
-        "8": VALUE_STRING_BASE_ID + 28,
-        "9": VALUE_STRING_BASE_ID + 29,
-        "10": VALUE_STRING_BASE_ID + 30,
-        "J": VALUE_STRING_BASE_ID + 31,
-        "Q": VALUE_STRING_BASE_ID + 32,
-        "K": VALUE_STRING_BASE_ID + 33,
-        "A": VALUE_STRING_BASE_ID + 34,
-        "SJ": VALUE_STRING_BASE_ID + 35,
-        "BJ": VALUE_STRING_BASE_ID + 36,
-        "trump_rank": VALUE_STRING_BASE_ID + 37,
-        "big": VALUE_STRING_BASE_ID + 38,
-        "small": VALUE_STRING_BASE_ID + 39,
-        "lead_play": VALUE_STRING_BASE_ID + 40,
-        "follow_play": VALUE_STRING_BASE_ID + 41,
-        "pass": VALUE_STRING_BASE_ID + 42,
-        "own_exchange": VALUE_STRING_BASE_ID + 43,
-        "initial": VALUE_STRING_BASE_ID + 44,
+        "fixed_partner_opposite": _STRING_VALUE_BASE,
+        "left_enemy": _STRING_VALUE_BASE + 1,
+        "right_enemy": _STRING_VALUE_BASE + 2,
+        "partner": _STRING_VALUE_BASE + 3,
+        "self": _STRING_VALUE_BASE + 4,
+        "rules-required-progress": _STRING_VALUE_BASE + 5,
+        "WIN": _STRING_VALUE_BASE + 6,
+        "DEAL_BID": _STRING_VALUE_BASE + 7,
+        "STIRRING": _STRING_VALUE_BASE + 8,
+        "PLAYING": _STRING_VALUE_BASE + 9,
+        "SCORING": _STRING_VALUE_BASE + 10,
+        "WAITING": _STRING_VALUE_BASE + 11,
+        "bid": _STRING_VALUE_BASE + 12,
+        "stir": _STRING_VALUE_BASE + 13,
+        "discard": _STRING_VALUE_BASE + 14,
+        "play": _STRING_VALUE_BASE + 15,
+        "next_round": _STRING_VALUE_BASE + 16,
+        "hearts": _STRING_VALUE_BASE + 17,
+        "spades": _STRING_VALUE_BASE + 18,
+        "diamonds": _STRING_VALUE_BASE + 19,
+        "clubs": _STRING_VALUE_BASE + 20,
+        "joker": _STRING_VALUE_BASE + 21,
+        "2": _STRING_VALUE_BASE + 22,
+        "3": _STRING_VALUE_BASE + 23,
+        "4": _STRING_VALUE_BASE + 24,
+        "5": _STRING_VALUE_BASE + 25,
+        "6": _STRING_VALUE_BASE + 26,
+        "7": _STRING_VALUE_BASE + 27,
+        "8": _STRING_VALUE_BASE + 28,
+        "9": _STRING_VALUE_BASE + 29,
+        "10": _STRING_VALUE_BASE + 30,
+        "J": _STRING_VALUE_BASE + 31,
+        "Q": _STRING_VALUE_BASE + 32,
+        "K": _STRING_VALUE_BASE + 33,
+        "A": _STRING_VALUE_BASE + 34,
+        "SJ": _STRING_VALUE_BASE + 35,
+        "BJ": _STRING_VALUE_BASE + 36,
+        "trump_rank": _STRING_VALUE_BASE + 37,
+        "big": _STRING_VALUE_BASE + 38,
+        "small": _STRING_VALUE_BASE + 39,
+        "lead_play": _STRING_VALUE_BASE + 40,
+        "follow_play": _STRING_VALUE_BASE + 41,
+        "pass": _STRING_VALUE_BASE + 42,
+        "own_exchange": _STRING_VALUE_BASE + 43,
+        "initial": _STRING_VALUE_BASE + 44,
     }
 )
-FALSE_VALUE_ID: int = VALUE_STRING_BASE_ID + len(_STRING_VALUE_IDS)
-TRUE_VALUE_ID: int = FALSE_VALUE_ID + 1
-VALUE_VOCAB_SIZE: int = TRUE_VALUE_ID + 1
+assert len(_STRING_VALUE_IDS) == (
+    _VOCAB_SCHEMA.false_value_id - _VOCAB_SCHEMA.value_string_base_id
+)
 
 
-def component_ids(token: ObservationToken) -> TokenComponentIds:
+def component_ids(token: ObservationToken) -> _schema.TokenComponentIds:
     """Return explicit embedding component ids for one token."""
     if isinstance(token, FaceCountToken):
         return _face_count_component_ids(token)
     if isinstance(token, GlobalFieldToken):
         return _field_component_ids(
-            token_type=TOKEN_TYPE_GLOBAL_FIELD_ID,
+            token_type=_VOCAB_SCHEMA.token_type_global_field_id,
             segment="global_context",
             field_key=f"global:{token.field}",
             value=token.value,
         )
     if isinstance(token, RoundFieldToken):
         return _field_component_ids(
-            token_type=TOKEN_TYPE_ROUND_FIELD_ID,
+            token_type=_VOCAB_SCHEMA.token_type_round_field_id,
             segment="round_context",
             field_key=f"round:{token.field}",
             value=token.value,
         )
     if isinstance(token, RoundEventFieldToken):
         return _field_component_ids(
-            token_type=TOKEN_TYPE_ROUND_EVENT_FIELD_ID,
+            token_type=_VOCAB_SCHEMA.token_type_round_event_field_id,
             segment="round_event",
             field_key=f"round_event:{token.field}",
             value=token.value,
@@ -304,14 +238,14 @@ def component_ids(token: ObservationToken) -> TokenComponentIds:
         )
     if isinstance(token, TrickResultFieldToken):
         return _field_component_ids(
-            token_type=TOKEN_TYPE_TRICK_RESULT_FIELD_ID,
+            token_type=_VOCAB_SCHEMA.token_type_trick_result_field_id,
             segment="trick_result",
             field_key=f"trick_result:{token.field}",
             value=token.value,
             trick_age=token.trick_age,
         )
     return _field_component_ids(
-        token_type=TOKEN_TYPE_ACTION_QUERY_FIELD_ID,
+        token_type=_VOCAB_SCHEMA.token_type_action_query_field_id,
         segment="action_query",
         field_key=f"action_query:{token.field}",
         value=token.value,
@@ -320,12 +254,12 @@ def component_ids(token: ObservationToken) -> TokenComponentIds:
 
 def _face_count_component_ids(
     token: FaceCountToken,
-) -> TokenComponentIds:
-    return TokenComponentIds(
-        token_type=TOKEN_TYPE_FACE_COUNT_ID,
+) -> _schema.TokenComponentIds:
+    return _schema.TokenComponentIds(
+        token_type=_VOCAB_SCHEMA.token_type_face_count_id,
         segment=_SEGMENT_IDS[token.segment],
-        field=NONE_ID,
-        value=NONE_ID,
+        field=_VOCAB_SCHEMA.none_id,
+        value=_VOCAB_SCHEMA.none_id,
         suit=_SUIT_IDS[token.suit],
         rank=_RANK_IDS[token.rank],
         points=_POINT_IDS[token.points],
@@ -352,63 +286,67 @@ def _field_component_ids(
     value: TokenScalar,
     trick_age: int | None = None,
     event_age: int | None = None,
-) -> TokenComponentIds:
-    return TokenComponentIds(
+) -> _schema.TokenComponentIds:
+    return _schema.TokenComponentIds(
         token_type=token_type,
         segment=_SEGMENT_IDS[segment],
         field=_FIELD_IDS[field_key],
         value=_field_value_id(field_key, value),
-        suit=NONE_ID,
-        rank=NONE_ID,
-        points=NONE_ID,
-        color=NONE_ID,
-        role=NONE_ID,
+        suit=_VOCAB_SCHEMA.none_id,
+        rank=_VOCAB_SCHEMA.none_id,
+        points=_VOCAB_SCHEMA.none_id,
+        color=_VOCAB_SCHEMA.none_id,
+        role=_VOCAB_SCHEMA.none_id,
         trick_age=_bounded_optional_id(trick_age, MAX_TRICK_AGE),
-        trick_state=NONE_ID,
-        play_order=NONE_ID,
-        count=NONE_ID,
-        play_width=NONE_ID,
+        trick_state=_VOCAB_SCHEMA.none_id,
+        play_order=_VOCAB_SCHEMA.none_id,
+        count=_VOCAB_SCHEMA.none_id,
+        play_width=_VOCAB_SCHEMA.none_id,
         event_age=_bounded_optional_id(event_age, MAX_EVENT_AGE),
     )
 
 
 def _field_value_id(field_key: str, value: TokenScalar) -> int:
     if is_numeric_field_key(field_key):
-        return NONE_ID
+        return _VOCAB_SCHEMA.none_id
     return _categorical_value_id(field_key, value)
 
 
 def _categorical_value_id(field_key: str, value: TokenScalar) -> int:
     if value is None:
-        return NONE_ID
+        return _VOCAB_SCHEMA.none_id
     if isinstance(value, bool):
-        return TRUE_VALUE_ID if value else FALSE_VALUE_ID
+        return (
+            _VOCAB_SCHEMA.true_value_id
+            if value
+            else _VOCAB_SCHEMA.false_value_id
+        )
     if type(value) is int:
         assert is_categorical_int_field_key(field_key)
         if value < 0:
-            return INT_OVERFLOW_ID
-        if value > MAX_SCALAR_INT:
-            return INT_OVERFLOW_ID
-        return INT_BASE_ID + value
+            return _VOCAB_SCHEMA.int_overflow_id
+        if value > _VOCAB_SCHEMA.max_scalar_int:
+            return _VOCAB_SCHEMA.int_overflow_id
+        return _VOCAB_SCHEMA.int_base_id + value
     assert isinstance(value, str)
     return _STRING_VALUE_IDS[value]
 
 
 def _role_id(role: RelativeRole | None) -> int:
     if role is None:
-        return NONE_ID
+        return _VOCAB_SCHEMA.none_id
     return _ROLE_IDS[role]
 
 
 def _trick_state_id(state: TrickRecordState | None) -> int:
     if state is None:
-        return NONE_ID
+        return _VOCAB_SCHEMA.none_id
     return _TRICK_STATE_IDS[state]
 
 
 def _bounded_optional_id(value: int | None, max_value: int) -> int:
     if value is None:
-        return NONE_ID
+        return _VOCAB_SCHEMA.none_id
     if value < 0:
         return max_value + 2
     if value > max_value:

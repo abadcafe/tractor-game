@@ -2,19 +2,15 @@
 
 from types import MappingProxyType
 
-from server.rules.cards import Rank
-
 from .constants import (
     BOTTOM_CARD_COUNT,
     CCW_NEXT,
-    LEVELS,
     PLAYER_COUNT,
     SCORE_THRESHOLDS,
     TEAM_0,
     TEAM_1,
     TOTAL_CARDS,
     TOTAL_POINTS,
-    advance_level,
     get_partner_index,
     get_team_index,
     next_player_ccw,
@@ -68,30 +64,6 @@ class TestTeamUtils:
         assert get_partner_index(3) == 1
 
 
-class TestLevelProgression:
-    def test_levels_order(self) -> None:
-        """Levels go 2→3→4→...→A."""
-        assert LEVELS[0] == Rank.TWO
-        assert LEVELS[-1] == Rank.ACE
-        assert len(LEVELS) == 13
-
-    def test_advance_level_forward(self) -> None:
-        """Advance TWO by 3 = FIVE."""
-        assert advance_level(Rank.TWO, 3) == Rank.FIVE
-
-    def test_advance_level_backward(self) -> None:
-        """Advance FIVE by -2 = THREE."""
-        assert advance_level(Rank.FIVE, -2) == Rank.THREE
-
-    def test_advance_level_clamp_lower(self) -> None:
-        """Cannot go below TWO."""
-        assert advance_level(Rank.TWO, -1) == Rank.TWO
-
-    def test_advance_level_clamp_upper(self) -> None:
-        """Cannot go above ACE."""
-        assert advance_level(Rank.ACE, 1) == Rank.ACE
-
-
 class TestScoringConstants:
     def test_bottom_card_count(self) -> None:
         assert BOTTOM_CARD_COUNT == 8
@@ -118,9 +90,6 @@ class TestImmutability:
 
     def test_team1_is_tuple(self) -> None:
         assert isinstance(TEAM_1, tuple)
-
-    def test_levels_is_tuple(self) -> None:
-        assert isinstance(LEVELS, tuple)
 
     def test_ccw_next_is_frozen(self) -> None:
         assert isinstance(CCW_NEXT, MappingProxyType)

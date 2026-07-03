@@ -62,10 +62,6 @@ from server.sm.rejections.turn import (
     PlayerActionNotAllowedInRoundPhaseRejected,
     WrongBidTurnRejected,
 )
-from server.sm.required_progress import (
-    DEFAULT_REQUIRED_LEVEL_PLAN,
-    RequiredLevelPlan,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -80,14 +76,8 @@ class Game:
     the public API for the server layer.
     """
 
-    def __init__(
-        self,
-        players: Sequence[Player],
-        required_level_plan: RequiredLevelPlan = (
-            DEFAULT_REQUIRED_LEVEL_PLAN
-        ),
-    ) -> None:
-        self._game_state = game_sm.create_game(required_level_plan)
+    def __init__(self, players: Sequence[Player]) -> None:
+        self._game_state = game_sm.create_game()
         self._round_state: round_sm.RoundState | None = None
         self._publisher = GameStatePublisher(
             players=players,

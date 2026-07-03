@@ -6,11 +6,6 @@ import math
 from dataclasses import dataclass
 from typing import Literal
 
-from server.rules.cards import Rank
-from server.sm.required_progress import (
-    DEFAULT_REQUIRED_LEVEL_PLAN,
-    RequiredLevelPlan,
-)
 from server.training.json_types import JsonObject
 
 type TrainingDevice = Literal["cpu", "cuda"]
@@ -23,7 +18,6 @@ class ModelConfig:
     d_model: int = 128
     layers: int = 3
     heads: int = 4
-    dropout: float = 0.1
     max_tokens: int = 768
 
     def __post_init__(self) -> None:
@@ -31,8 +25,6 @@ class ModelConfig:
         assert self.layers > 0
         assert self.heads > 0
         assert self.d_model % self.heads == 0
-        assert _is_finite(self.dropout)
-        assert 0.0 <= self.dropout <= 1.0
         assert self.max_tokens > 0
 
     def to_json(self) -> JsonObject:
@@ -40,7 +32,6 @@ class ModelConfig:
             "d_model": self.d_model,
             "layers": self.layers,
             "heads": self.heads,
-            "dropout": self.dropout,
             "max_tokens": self.max_tokens,
         }
 
@@ -50,7 +41,6 @@ class ModelConfig:
             d_model=_int_json_field(data, "d_model"),
             layers=_int_json_field(data, "layers"),
             heads=_int_json_field(data, "heads"),
-            dropout=_float_json_field(data, "dropout"),
             max_tokens=_int_json_field(data, "max_tokens"),
         )
 
@@ -60,8 +50,10 @@ class TrainConfig:
     """Run configuration that can move between machines."""
 
     device: TrainingDevice = "cpu"
+    seed: int = 0
     learning_rate: float = 0.0003
     checkpoint_every_updates: int = 50
+    checkpoint_retention_updates: int = 5
     max_round_seconds: float = 120.0
     gamma: float = 0.99
     gae_lambda: float = 0.95
@@ -75,12 +67,13 @@ class TrainConfig:
     adam_beta1: float = 0.9
     adam_beta2: float = 0.999
     weight_decay: float = 0.0
-    required_level_plan: RequiredLevelPlan = DEFAULT_REQUIRED_LEVEL_PLAN
 
     def __post_init__(self) -> None:
+        assert self.seed >= 0
         assert _is_finite(self.learning_rate)
         assert self.learning_rate > 0.0
         assert self.checkpoint_every_updates > 0
+        assert self.checkpoint_retention_updates >= 0
         assert _is_finite(self.max_round_seconds)
         assert self.max_round_seconds > 0.0
         assert _is_finite(self.gamma)
@@ -109,8 +102,12 @@ class TrainConfig:
     def to_json(self) -> JsonObject:
         return {
             "device": self.device,
+            "seed": self.seed,
             "learning_rate": self.learning_rate,
             "checkpoint_every_updates": self.checkpoint_every_updates,
+            "checkpoint_retention_updates": (
+                self.checkpoint_retention_updates
+            ),
             "max_round_seconds": self.max_round_seconds,
             "gamma": self.gamma,
             "gae_lambda": self.gae_lambda,
@@ -124,19 +121,19 @@ class TrainConfig:
             "adam_beta1": self.adam_beta1,
             "adam_beta2": self.adam_beta2,
             "weight_decay": self.weight_decay,
-            "required_levels": [
-                level.value
-                for level in self.required_level_plan.required_levels
-            ],
         }
 
     @classmethod
     def from_json(cls, data: JsonObject) -> TrainConfig:
         return cls(
             device=_device_json_field(data, "device"),
+            seed=_int_json_field(data, "seed"),
             learning_rate=_float_json_field(data, "learning_rate"),
             checkpoint_every_updates=_int_json_field(
                 data, "checkpoint_every_updates"
+            ),
+            checkpoint_retention_updates=_int_json_field(
+                data, "checkpoint_retention_updates"
             ),
             max_round_seconds=_float_json_field(
                 data, "max_round_seconds"
@@ -153,10 +150,6 @@ class TrainConfig:
             adam_beta1=_float_json_field(data, "adam_beta1"),
             adam_beta2=_float_json_field(data, "adam_beta2"),
             weight_decay=_float_json_field(data, "weight_decay"),
-            required_level_plan=_required_level_plan_json_field(
-                data,
-                "required_levels",
-            ),
         )
 
 
@@ -179,19 +172,6 @@ def _device_json_field(data: JsonObject, field: str) -> TrainingDevice:
     if value == "cuda":
         return "cuda"
     assert False
-
-
-def _required_level_plan_json_field(
-    data: JsonObject,
-    field: str,
-) -> RequiredLevelPlan:
-    value = data[field]
-    assert isinstance(value, list)
-    levels: list[Rank] = []
-    for item in value:
-        assert isinstance(item, str)
-        levels.append(Rank(item))
-    return RequiredLevelPlan(required_levels=tuple(levels))
 
 
 def _is_finite(value: float) -> bool:

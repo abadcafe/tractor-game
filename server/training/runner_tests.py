@@ -14,11 +14,6 @@ from server.protocol import (
     StateMessage,
     StateSnapshot,
 )
-from server.rules.cards import Rank
-from server.sm.required_progress import (
-    DEFAULT_REQUIRED_LEVEL_PLAN,
-    RequiredLevelPlan,
-)
 from server.training import runner
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
@@ -33,9 +28,6 @@ class _ScriptedBoundaryGame:
     def __init__(
         self,
         players: Sequence[Player],
-        required_level_plan: RequiredLevelPlan = (
-            DEFAULT_REQUIRED_LEVEL_PLAN
-        ),
     ) -> None:
         self._players = tuple(players)
         self._confirmations = 0
@@ -85,7 +77,6 @@ class _ScriptedBoundaryGame:
             team0_level="A",
             team1_level="A",
         )
-        assert required_level_plan == DEFAULT_REQUIRED_LEVEL_PLAN
 
     async def receive(
         self,
@@ -207,7 +198,6 @@ def test_round_rewards_uses_scoring_round_winning_team() -> None:
     team0_reward, team1_reward = round_rewards(
         before=before,
         after=after,
-        required_level_plan=DEFAULT_REQUIRED_LEVEL_PLAN,
     )
 
     assert team0_reward == 1.0
@@ -240,9 +230,6 @@ def test_round_rewards_counts_defender_taking_stage_control() -> None:
     team0_reward, team1_reward = round_rewards(
         before=before,
         after=after,
-        required_level_plan=RequiredLevelPlan(
-            required_levels=(Rank.JACK, Rank.ACE)
-        ),
     )
 
     assert team0_reward == -2.0
@@ -276,7 +263,6 @@ def test_round_rewards_maps_winning_team_to_terminal_progress() -> None:
     team0_reward, team1_reward = round_rewards(
         before=before,
         after=after,
-        required_level_plan=DEFAULT_REQUIRED_LEVEL_PLAN,
     )
 
     assert team0_reward == 1.0
@@ -310,7 +296,6 @@ def test_round_rewards_counts_team1_terminal_win() -> None:
     team0_reward, team1_reward = round_rewards(
         before=before,
         after=after,
-        required_level_plan=DEFAULT_REQUIRED_LEVEL_PLAN,
     )
 
     assert team0_reward == -1.0

@@ -58,10 +58,13 @@ def render_dashboard_html(*, title: str) -> str:
       document.getElementById('latest').textContent =
         JSON.stringify(latest, null, 2);
       const keys = [
-        'total_games', 'total_updates', 'games_per_second',
-        'decisions_per_second', 'average_reward', 'average_level_delta',
+        'total_games', 'total_updates', 'process_games_per_second',
+        'last_round_decisions_per_second', 'last_team0_reward',
+        'last_team1_reward', 'last_generated_action_count',
+        'last_accepted_action_count', 'last_decision_count',
+        'last_average_action_choices',
         'policy_loss', 'value_loss', 'entropy', 'approx_kl',
-        'clip_fraction', 'average_action_choices'
+        'clip_fraction'
       ];
       document.getElementById('grid').innerHTML = keys.map((key) => `
         <div class="metric">

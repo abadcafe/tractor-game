@@ -10,9 +10,7 @@ from pydantic import BaseModel, ConfigDict
 
 from server.result import Ok, Rejected
 from server.rules.cards import Rank
-from server.sm.required_progress import (
-    DEFAULT_REQUIRED_LEVEL_PLAN,
-    RequiredLevelPlan,
+from server.rules.required_progress import (
     TeamAdvance,
     advance_team_progress,
 )
@@ -44,14 +42,9 @@ class GameState(BaseModel):
     next_declarer_player: int | None
     winning_team: int | None
     round_number: int
-    required_level_plan: RequiredLevelPlan
 
 
-def create_game(
-    required_level_plan: RequiredLevelPlan = (
-        DEFAULT_REQUIRED_LEVEL_PLAN
-    ),
-) -> GameState:
+def create_game() -> GameState:
     """Create a new game waiting for the first round to start."""
     return GameState(
         team0_level=Rank.TWO,
@@ -60,7 +53,6 @@ def create_game(
         next_declarer_player=None,
         winning_team=None,
         round_number=0,
-        required_level_plan=required_level_plan,
     )
 
 
@@ -91,7 +83,7 @@ def process_round_result(
 ) -> Ok[GameState] | Rejected:
     """Process a round result and update game state.
 
-    Applies raw scoring gains through the configured required-level
+    Applies raw scoring gains through the rules-level required progress
     plan. Only the team that started the round as declarer can pass the
     virtual WIN target.
 
@@ -113,13 +105,11 @@ def process_round_result(
         level=state.team0_level,
         raw_gain=team0_gain,
         was_declarer=result.declarer_team == 0,
-        plan=state.required_level_plan,
     )
     team1_advance = advance_team_progress(
         level=state.team1_level,
         raw_gain=team1_gain,
         was_declarer=result.declarer_team == 1,
-        plan=state.required_level_plan,
     )
     winning = _winning_team(team0_advance, team1_advance)
 

@@ -8,33 +8,12 @@ import torch
 from torch import Tensor, nn
 
 from server.training.feature_schema import NUMERIC_FEATURE_COUNT
-from server.training.semantic_actions import (
-    ARGUMENT_VOCAB_SIZE,
-    MAX_ARGUMENT_TOKENS,
-)
+from server.training.semantic_codec import SEMANTIC_CODEC
 from server.training.tensorize import (
     ArgumentPrefixTensorBatch,
     ObservationTensorBatch,
 )
-from server.training.vocab import (
-    COLOR_VOCAB_SIZE,
-    COUNT_VOCAB_SIZE,
-    EVENT_AGE_VOCAB_SIZE,
-    FIELD_VOCAB_SIZE,
-    OBS_PAD_ID,
-    PLAY_ORDER_VOCAB_SIZE,
-    PLAY_WIDTH_VOCAB_SIZE,
-    POINTS_VOCAB_SIZE,
-    RANK_VOCAB_SIZE,
-    ROLE_VOCAB_SIZE,
-    SEGMENT_ACTION_QUERY_ID,
-    SEGMENT_VOCAB_SIZE,
-    SUIT_VOCAB_SIZE,
-    TOKEN_TYPE_VOCAB_SIZE,
-    TRICK_AGE_VOCAB_SIZE,
-    TRICK_STATE_VOCAB_SIZE,
-    VALUE_VOCAB_SIZE,
-)
+from server.training.vocab_schema import VOCAB_SCHEMA
 
 OBSERVATION_COMPONENT_COUNT: int = 15
 
@@ -56,37 +35,52 @@ class TractorPolicyModel(nn.Module):
         d_model: int,
         layers: int,
         heads: int,
-        dropout: float,
     ) -> None:
         super().__init__()
         self._token_type_embedding = _embedding(
-            TOKEN_TYPE_VOCAB_SIZE, d_model
+            VOCAB_SCHEMA.token_type_vocab_size, d_model
         )
         self._segment_embedding = _embedding(
-            SEGMENT_VOCAB_SIZE, d_model
+            VOCAB_SCHEMA.segment_vocab_size, d_model
         )
-        self._field_embedding = _embedding(FIELD_VOCAB_SIZE, d_model)
-        self._value_embedding = _embedding(VALUE_VOCAB_SIZE, d_model)
-        self._suit_embedding = _embedding(SUIT_VOCAB_SIZE, d_model)
-        self._rank_embedding = _embedding(RANK_VOCAB_SIZE, d_model)
-        self._points_embedding = _embedding(POINTS_VOCAB_SIZE, d_model)
-        self._color_embedding = _embedding(COLOR_VOCAB_SIZE, d_model)
-        self._role_embedding = _embedding(ROLE_VOCAB_SIZE, d_model)
+        self._field_embedding = _embedding(
+            VOCAB_SCHEMA.field_vocab_size, d_model
+        )
+        self._value_embedding = _embedding(
+            VOCAB_SCHEMA.value_vocab_size, d_model
+        )
+        self._suit_embedding = _embedding(
+            VOCAB_SCHEMA.suit_vocab_size, d_model
+        )
+        self._rank_embedding = _embedding(
+            VOCAB_SCHEMA.rank_vocab_size, d_model
+        )
+        self._points_embedding = _embedding(
+            VOCAB_SCHEMA.points_vocab_size, d_model
+        )
+        self._color_embedding = _embedding(
+            VOCAB_SCHEMA.color_vocab_size, d_model
+        )
+        self._role_embedding = _embedding(
+            VOCAB_SCHEMA.role_vocab_size, d_model
+        )
         self._trick_age_embedding = _embedding(
-            TRICK_AGE_VOCAB_SIZE, d_model
+            VOCAB_SCHEMA.trick_age_vocab_size, d_model
         )
         self._trick_state_embedding = _embedding(
-            TRICK_STATE_VOCAB_SIZE, d_model
+            VOCAB_SCHEMA.trick_state_vocab_size, d_model
         )
         self._play_order_embedding = _embedding(
-            PLAY_ORDER_VOCAB_SIZE, d_model
+            VOCAB_SCHEMA.play_order_vocab_size, d_model
         )
-        self._count_embedding = _embedding(COUNT_VOCAB_SIZE, d_model)
+        self._count_embedding = _embedding(
+            VOCAB_SCHEMA.count_vocab_size, d_model
+        )
         self._play_width_embedding = _embedding(
-            PLAY_WIDTH_VOCAB_SIZE, d_model
+            VOCAB_SCHEMA.play_width_vocab_size, d_model
         )
         self._event_age_embedding = _embedding(
-            EVENT_AGE_VOCAB_SIZE, d_model
+            VOCAB_SCHEMA.event_age_vocab_size, d_model
         )
         self._categorical_projection = nn.Linear(
             OBSERVATION_COMPONENT_COUNT * d_model,
@@ -102,7 +96,7 @@ class TractorPolicyModel(nn.Module):
             d_model=d_model,
             nhead=heads,
             dim_feedforward=d_model * 4,
-            dropout=dropout,
+            dropout=0.0,
             batch_first=True,
             activation="gelu",
         )
@@ -112,16 +106,16 @@ class TractorPolicyModel(nn.Module):
             enable_nested_tensor=False,
         )
         self._argument_embedding = _embedding(
-            ARGUMENT_VOCAB_SIZE, d_model
+            SEMANTIC_CODEC.argument_vocab_size, d_model
         )
         self._argument_position_embedding = nn.Embedding(
-            MAX_ARGUMENT_TOKENS, d_model
+            SEMANTIC_CODEC.max_argument_tokens, d_model
         )
         argument_layer = nn.TransformerDecoderLayer(
             d_model=d_model,
             nhead=heads,
             dim_feedforward=d_model * 4,
-            dropout=dropout,
+            dropout=0.0,
             batch_first=True,
             activation="gelu",
         )
@@ -130,7 +124,9 @@ class TractorPolicyModel(nn.Module):
             num_layers=1,
         )
         self._decision_projection = nn.Linear(d_model * 2, d_model)
-        self._argument_head = nn.Linear(d_model, ARGUMENT_VOCAB_SIZE)
+        self._argument_head = nn.Linear(
+            d_model, SEMANTIC_CODEC.argument_vocab_size
+        )
         self._value_head = nn.Linear(d_model, 1)
 
     def forward_argument(
@@ -140,9 +136,11 @@ class TractorPolicyModel(nn.Module):
     ) -> ArgumentHeadOutput:
         """Return next semantic-argument logits for a prefix."""
         encoded = self._encode_observation(observation)
-        obs_padding = observation.token_type_ids.eq(OBS_PAD_ID)
+        obs_padding = observation.token_type_ids.eq(
+            VOCAB_SCHEMA.obs_pad_id
+        )
         query_mask = observation.segment_ids.eq(
-            SEGMENT_ACTION_QUERY_ID
+            VOCAB_SCHEMA.segment_action_query_id
         ) & (~obs_padding)
         obs_context = _query_or_all_mean(
             encoded,
@@ -168,7 +166,9 @@ class TractorPolicyModel(nn.Module):
         self,
         observation: ObservationTensorBatch,
     ) -> Tensor:
-        obs_padding = observation.token_type_ids.eq(OBS_PAD_ID)
+        obs_padding = observation.token_type_ids.eq(
+            VOCAB_SCHEMA.obs_pad_id
+        )
         obs_embedded = self._embed_observation(observation)
         return self._observation_encoder(
             obs_embedded,
@@ -243,7 +243,9 @@ class TractorPolicyModel(nn.Module):
 
 
 def _embedding(vocab_size: int, d_model: int) -> nn.Embedding:
-    return nn.Embedding(vocab_size, d_model, padding_idx=OBS_PAD_ID)
+    return nn.Embedding(
+        vocab_size, d_model, padding_idx=VOCAB_SCHEMA.obs_pad_id
+    )
 
 
 def _masked_mean(values: Tensor, padding_mask: Tensor) -> Tensor:

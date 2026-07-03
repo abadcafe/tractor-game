@@ -1,15 +1,13 @@
 """Game constants for 升级 (Shengji/Tractor) state machines.
 
 Defines player positioning, team mapping, counterclockwise rotation,
-level progression, and scoring thresholds.
+card counts, and scoring thresholds.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from types import MappingProxyType
-
-from server.rules.cards import Rank
 
 # ---- Player Positioning ----
 
@@ -63,35 +61,6 @@ def get_partner_index(player: int) -> int:
 BOTTOM_CARD_COUNT: int = 8
 TOTAL_CARDS: int = 108  # 2 decks × 54
 TOTAL_POINTS: int = 200  # 2 decks × (4 suits × (5+10+10))
-
-# ---- Level Progression ----
-
-LEVELS: tuple[Rank, ...] = (
-    Rank.TWO,
-    Rank.THREE,
-    Rank.FOUR,
-    Rank.FIVE,
-    Rank.SIX,
-    Rank.SEVEN,
-    Rank.EIGHT,
-    Rank.NINE,
-    Rank.TEN,
-    Rank.JACK,
-    Rank.QUEEN,
-    Rank.KING,
-    Rank.ACE,
-)
-
-
-def advance_level(level: Rank, change: int) -> Rank:
-    """Advance a level by *change* steps, clamped to [TWO, ACE].
-
-    Positive *change* moves toward ACE; negative moves toward TWO.
-    """
-    idx = LEVELS.index(level)
-    new_idx = max(0, min(len(LEVELS) - 1, idx + change))
-    return LEVELS[new_idx]
-
 
 # ---- Scoring Thresholds ----
 

@@ -20,14 +20,13 @@ from server.rules.card_faces import (
     face_count_signature,
 )
 from server.rules.cards import Card
-from server.sm.constants import BOTTOM_CARD_COUNT, PLAYER_COUNT
-from server.sm.required_progress import (
-    DEFAULT_REQUIRED_LEVEL_PLAN,
-    RequiredLevelPlan,
+from server.rules.required_progress import (
+    MANDATORY_LEVELS,
     distance_to_target,
     progress_target_value,
     stage_target,
 )
+from server.sm.constants import BOTTOM_CARD_COUNT, PLAYER_COUNT
 from server.training.semantic_actions import (
     ActionQuery,
     build_action_query,
@@ -154,9 +153,6 @@ def build_observation(
     player_index: int,
     snapshot: StateSnapshot,
     history: tuple[HistoryTrick, ...],
-    required_level_plan: RequiredLevelPlan = (
-        DEFAULT_REQUIRED_LEVEL_PLAN
-    ),
 ) -> Observation:
     """Build one training observation from player-visible data only."""
     action_query = build_action_query(
@@ -164,12 +160,11 @@ def build_observation(
         snapshot=snapshot,
     )
     tokens: list[ObservationToken] = []
-    tokens.extend(_global_tokens(required_level_plan))
+    tokens.extend(_global_tokens())
     tokens.extend(
         _round_tokens(
             player_index=player_index,
             snapshot=snapshot,
-            required_level_plan=required_level_plan,
         )
     )
     tokens.extend(_bid_event_tokens(player_index, snapshot.bid_events))
@@ -213,9 +208,7 @@ def face_count_tokens(
     )
 
 
-def _global_tokens(
-    required_level_plan: RequiredLevelPlan,
-) -> tuple[GlobalFieldToken, ...]:
+def _global_tokens() -> tuple[GlobalFieldToken, ...]:
     tokens: list[GlobalFieldToken] = [
         GlobalFieldToken("team_layout", "fixed_partner_opposite"),
         GlobalFieldToken("left_player_role", "left_enemy"),
@@ -224,9 +217,9 @@ def _global_tokens(
         GlobalFieldToken("deck_count", 2),
         GlobalFieldToken("player_count", PLAYER_COUNT),
         GlobalFieldToken("bottom_card_count", BOTTOM_CARD_COUNT),
-        GlobalFieldToken("rules_version", "required-levels"),
+        GlobalFieldToken("rules_version", "rules-required-progress"),
     ]
-    for level in required_level_plan.required_levels:
+    for level in MANDATORY_LEVELS:
         tokens.append(GlobalFieldToken("required_level", level.value))
     tokens.append(GlobalFieldToken("final_target", "WIN"))
     return tuple(tokens)
@@ -236,7 +229,6 @@ def _round_tokens(
     *,
     player_index: int,
     snapshot: StateSnapshot,
-    required_level_plan: RequiredLevelPlan,
 ) -> tuple[RoundFieldToken, ...]:
     self_team = player_index % 2
     enemy_team = 1 - self_team
@@ -246,8 +238,8 @@ def _round_tokens(
     enemy_level = (
         snapshot.team1_level if self_team == 0 else snapshot.team0_level
     )
-    self_target = stage_target(self_level, required_level_plan)
-    enemy_target = stage_target(enemy_level, required_level_plan)
+    self_target = stage_target(self_level)
+    enemy_target = stage_target(enemy_level)
     dealer_role = (
         None
         if snapshot.declarer_player is None
