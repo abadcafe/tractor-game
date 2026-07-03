@@ -10,7 +10,6 @@ from server.protocol import (
     BidEventSnapshot,
     BottomExchangeSnapshot,
     CompletedTrickSnapshot,
-    FailedThrowSnapshot,
     RoundPhase,
     ScoringSnapshot,
     StateMessage,
@@ -78,7 +77,6 @@ def make_snapshot(
     trick: TrickSnapshot | None = None,
     last_completed_trick: CompletedTrickSnapshot | None = None,
     defender_point_cards: list[Card] | None = None,
-    failed_throw: FailedThrowSnapshot | None = None,
     bid_events: list[BidEventSnapshot] | None = None,
     bid_winner: BidEventSnapshot | None = None,
     own_initial_bottom_exchange: BottomExchangeSnapshot | None = None,
@@ -110,7 +108,6 @@ def make_snapshot(
         defender_point_cards=defender_point_cards
         if defender_point_cards is not None
         else [],
-        failed_throw=failed_throw,
         bid_events=bid_events if bid_events is not None else [],
         bid_winner=bid_winner,
         own_initial_bottom_exchange=own_initial_bottom_exchange,

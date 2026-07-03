@@ -31,7 +31,7 @@ def test_categorical_field_values_keep_value_embedding() -> None:
         != NONE_ID
     )
     assert (
-        component_ids(ActionQueryFieldToken("kind", "play")).value
+        component_ids(ActionQueryFieldToken("kind", "lead_play")).value
         != NONE_ID
     )
 

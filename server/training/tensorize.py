@@ -12,15 +12,13 @@ from server.training.numeric_features import (
     numeric_feature_values,
 )
 from server.training.observation import Observation
-from server.training.selection_actions import (
-    MAX_HAND_CARD_SLOTS,
-    ActionQuery,
-    SelectionState,
+from server.training.semantic_actions import (
+    ARGUMENT_BOS_ID,
+    MAX_ARGUMENT_TOKENS,
+    SemanticArgumentPrefix,
+    semantic_argument_id,
 )
-from server.training.tokens import CardToken
 from server.training.vocab import PAD_COMPONENT_IDS, component_ids
-
-SELECTION_FEATURE_COUNT: int = 6
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,21 +37,19 @@ class ObservationTensorBatch:
     trick_age_ids: Tensor
     trick_state_ids: Tensor
     play_order_ids: Tensor
-    card_order_ids: Tensor
+    count_ids: Tensor
     play_width_ids: Tensor
     event_age_ids: Tensor
     numeric_values: Tensor
     numeric_masks: Tensor
-    hand_token_indices: Tensor
-    hand_card_masks: Tensor
 
 
 @dataclass(frozen=True, slots=True)
-class SelectionStateTensorBatch:
-    """Batch-size-one selection state tensors."""
+class ArgumentPrefixTensorBatch:
+    """Batch-size-one semantic argument prefix tensors."""
 
-    selected_slot_masks: Tensor
-    feature_values: Tensor
+    argument_ids: Tensor
+    argument_masks: Tensor
 
 
 def tensorize_observation(
@@ -65,11 +61,9 @@ def tensorize_observation(
     """Tensorize one observation as batch size 1."""
     assert max_observation_tokens > 0
     assert len(observation.tokens) <= max_observation_tokens
-    tokens = list(observation.tokens)
-    hand_token_positions = _hand_token_positions(observation)
-    ids = [component_ids(token) for token in tokens]
+    ids = [component_ids(token) for token in observation.tokens]
     numeric_features = [
-        numeric_feature_values(token) for token in tokens
+        numeric_feature_values(token) for token in observation.tokens
     ]
     if not ids:
         ids.append(PAD_COMPONENT_IDS)
@@ -100,9 +94,7 @@ def tensorize_observation(
         play_order_ids=_long_tensor(
             [item.play_order for item in ids], device
         ),
-        card_order_ids=_long_tensor(
-            [item.card_order for item in ids], device
-        ),
+        count_ids=_long_tensor([item.count for item in ids], device),
         play_width_ids=_long_tensor(
             [item.play_width for item in ids], device
         ),
@@ -115,53 +107,27 @@ def tensorize_observation(
         numeric_masks=_numeric_tensor(
             [item.masks for item in numeric_features], device
         ),
-        hand_token_indices=_long_tensor(
-            _padded_hand_token_indices(hand_token_positions), device
-        ),
-        hand_card_masks=_bool_tensor(
-            _padded_hand_card_masks(len(hand_token_positions)), device
-        ),
     )
 
 
-def tensorize_selection_state(
+def tensorize_argument_prefix(
     *,
-    query: ActionQuery,
-    state: SelectionState,
+    prefix: SemanticArgumentPrefix,
     device: torch.device,
-) -> SelectionStateTensorBatch:
-    """Tensorize one incremental selection state as batch size 1."""
-    assert len(state.selected_slots) <= MAX_HAND_CARD_SLOTS
-    assert not _has_duplicate_slots(state.selected_slots)
-    selected_slot_masks = [0.0 for _ in range(MAX_HAND_CARD_SLOTS)]
-    for slot in state.selected_slots:
-        assert 0 <= slot < MAX_HAND_CARD_SLOTS
-        assert slot < len(query.hand_card_ids)
-        selected_slot_masks[slot] = 1.0
-    hand_size = min(len(query.hand_card_ids), MAX_HAND_CARD_SLOTS)
-    exact_select = (
-        0 if query.exact_select is None else query.exact_select
+) -> ArgumentPrefixTensorBatch:
+    """Tensorize one semantic argument prefix as batch size 1."""
+    argument_ids = [ARGUMENT_BOS_ID]
+    argument_ids.extend(
+        semantic_argument_id(argument) for argument in prefix.arguments
     )
-    return SelectionStateTensorBatch(
-        selected_slot_masks=torch.tensor(
-            [selected_slot_masks],
-            dtype=torch.float32,
-            device=device,
-        ),
-        feature_values=torch.tensor(
-            [
-                [
-                    len(state.selected_slots) / MAX_HAND_CARD_SLOTS,
-                    query.min_select / MAX_HAND_CARD_SLOTS,
-                    query.max_select / MAX_HAND_CARD_SLOTS,
-                    exact_select / MAX_HAND_CARD_SLOTS,
-                    hand_size / MAX_HAND_CARD_SLOTS,
-                    1.0 if query.pass_allowed else 0.0,
-                ]
-            ],
-            dtype=torch.float32,
-            device=device,
-        ),
+    assert len(argument_ids) <= MAX_ARGUMENT_TOKENS
+    masks = [True for _ in argument_ids]
+    while len(argument_ids) < MAX_ARGUMENT_TOKENS:
+        argument_ids.append(0)
+        masks.append(False)
+    return ArgumentPrefixTensorBatch(
+        argument_ids=_long_tensor(argument_ids, device),
+        argument_masks=_bool_tensor(masks, device),
     )
 
 
@@ -178,30 +144,3 @@ def _numeric_tensor(
 
 def _bool_tensor(values: list[bool], device: torch.device) -> Tensor:
     return torch.tensor([values], dtype=torch.bool, device=device)
-
-
-def _hand_token_positions(observation: Observation) -> list[int]:
-    positions = [
-        index
-        for index, token in enumerate(observation.tokens)
-        if isinstance(token, CardToken) and token.segment == "self_hand"
-    ]
-    assert len(positions) <= MAX_HAND_CARD_SLOTS
-    assert len(positions) == len(observation.hand_card_ids)
-    return positions
-
-
-def _padded_hand_token_indices(positions: list[int]) -> list[int]:
-    values = list(positions)
-    while len(values) < MAX_HAND_CARD_SLOTS:
-        values.append(0)
-    return values
-
-
-def _padded_hand_card_masks(count: int) -> list[bool]:
-    values = [index < count for index in range(MAX_HAND_CARD_SLOTS)]
-    return values
-
-
-def _has_duplicate_slots(slots: tuple[int, ...]) -> bool:
-    return len(slots) != len(set(slots))

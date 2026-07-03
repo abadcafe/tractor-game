@@ -5,12 +5,17 @@ from __future__ import annotations
 import torch
 
 from server.player.test_helpers import card, make_snapshot
+from server.rules.card_faces import CardFace, FaceCount
 from server.training.feature_schema import NUMERIC_FEATURE_COUNT
 from server.training.observation import build_observation
-from server.training.selection_actions import SelectionState
+from server.training.semantic_actions import (
+    ARGUMENT_BOS_ID,
+    SemanticArgument,
+    SemanticArgumentPrefix,
+)
 from server.training.tensorize import (
+    tensorize_argument_prefix,
     tensorize_observation,
-    tensorize_selection_state,
 )
 from server.training.tokens import GlobalFieldToken
 
@@ -57,7 +62,7 @@ def test_tensorize_observation_rejects_oversized_observation() -> None:
             GlobalFieldToken("rules_version", "base-A"),
             GlobalFieldToken("final_target", "WIN"),
         ),
-        hand_card_ids=observation.hand_card_ids,
+        hand_faces=observation.hand_faces,
         action_query=observation.action_query,
     )
 
@@ -73,9 +78,9 @@ def test_tensorize_observation_rejects_oversized_observation() -> None:
     assert False
 
 
-def test_tensorize_observation_tracks_self_hand_slots() -> None:
+def test_tensorize_observation_exposes_face_count_component() -> None:
     first = card("spades", "A", 1)
-    second = card("hearts", "5", 1)
+    second = card("spades", "A", 2)
     observation = build_observation(
         player_index=0,
         snapshot=make_snapshot(player_hand=[first, second]),
@@ -88,33 +93,28 @@ def test_tensorize_observation_tracks_self_hand_slots() -> None:
         device=torch.device("cpu"),
     )
 
-    assert batch.hand_token_indices.shape == (1, 33)
-    assert batch.hand_card_masks.shape == (1, 33)
-    assert batch.hand_card_masks[0, 0].item()
-    assert batch.hand_card_masks[0, 1].item()
-    assert not batch.hand_card_masks[0, 2].item()
+    assert batch.count_ids.shape == (1, 128)
+    assert batch.count_ids.max().item() > 0
 
 
-def test_tensorize_selection_state_outputs_masks_and_features() -> None:
-    first = card("spades", "A", 1)
-    second = card("hearts", "5", 1)
-    observation = build_observation(
-        player_index=0,
-        snapshot=make_snapshot(
-            phase="PLAYING",
-            awaiting_action="play",
-            player_hand=[first, second],
-        ),
-        history=(),
+def test_tensorize_argument_prefix_outputs_bos_and_arguments() -> None:
+    test_card = card("clubs", "3", 1)
+    prefix = SemanticArgumentPrefix(
+        arguments=(
+            SemanticArgument(
+                "select_face_count",
+                FaceCount(CardFace(test_card.suit, test_card.rank), 1),
+            ),
+        )
     )
 
-    batch = tensorize_selection_state(
-        query=observation.action_query,
-        state=SelectionState(selected_slots=(1,)),
+    batch = tensorize_argument_prefix(
+        prefix=prefix,
         device=torch.device("cpu"),
     )
 
-    assert batch.selected_slot_masks.shape == (1, 33)
-    assert batch.feature_values.shape == (1, 6)
-    assert batch.selected_slot_masks[0, 1].item() == 1.0
-    assert batch.selected_slot_masks[0, 0].item() == 0.0
+    assert batch.argument_ids.shape[0] == 1
+    assert batch.argument_ids[0, 0].item() == ARGUMENT_BOS_ID
+    assert batch.argument_ids[0, 1].item() > ARGUMENT_BOS_ID
+    assert batch.argument_masks[0, 0].item()
+    assert batch.argument_masks[0, 1].item()

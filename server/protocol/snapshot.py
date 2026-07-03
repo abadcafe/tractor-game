@@ -16,7 +16,6 @@ from server.protocol.stir_history_snapshot import (
 from server.protocol.stirring_snapshot import StirringStateSnapshot
 from server.protocol.trick_snapshot import (
     CompletedTrickSnapshot,
-    FailedThrowSnapshot,
     TrickSnapshot,
 )
 from server.rules.cards import Card, Rank, Suit
@@ -44,7 +43,6 @@ class StateSnapshot(SnapshotModel):
     trick: TrickSnapshot | None
     last_completed_trick: CompletedTrickSnapshot | None
     defender_point_cards: list[Card]
-    failed_throw: FailedThrowSnapshot | None
     action_hints: list[list[Card]]
     awaiting_action: AwaitingAction | None
     scoring: ScoringSnapshot | None

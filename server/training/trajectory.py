@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
-from server.training.selection_actions import (
+from server.training.semantic_actions import (
     ActionQuery,
     GeneratedAction,
 )
@@ -19,6 +20,7 @@ class DecisionStep:
     seq: int
     observation: Observation
     action_query: ActionQuery
+    legal_actions: LegalActionIndex
     action: GeneratedAction
     log_probability: float
     value_estimate: float

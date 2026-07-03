@@ -5,10 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from types import MappingProxyType
 
+from server.rules.card_faces import CardColor
 from server.rules.cards import Rank, Suit
 from server.training.feature_schema import (
-    MAX_CARD_ORDER,
     MAX_EVENT_AGE,
+    MAX_FACE_COUNT,
     MAX_PLAY_ORDER,
     MAX_PLAY_WIDTH,
     MAX_TRICK_AGE,
@@ -16,8 +17,7 @@ from server.training.feature_schema import (
     is_numeric_field_key,
 )
 from server.training.tokens import (
-    CardColor,
-    CardToken,
+    FaceCountToken,
     GlobalFieldToken,
     ObservationSegment,
     ObservationToken,
@@ -37,7 +37,7 @@ INT_OVERFLOW_ID: int = INT_BASE_ID + MAX_SCALAR_INT + 1
 VALUE_STRING_BASE_ID: int = INT_OVERFLOW_ID + 1
 
 TOKEN_TYPE_VOCAB_SIZE: int = 8
-SEGMENT_VOCAB_SIZE: int = 12
+SEGMENT_VOCAB_SIZE: int = 14
 FIELD_VOCAB_SIZE: int = 72
 SUIT_VOCAB_SIZE: int = 7
 RANK_VOCAB_SIZE: int = 17
@@ -47,18 +47,18 @@ ROLE_VOCAB_SIZE: int = 6
 TRICK_AGE_VOCAB_SIZE: int = MAX_TRICK_AGE + 3
 TRICK_STATE_VOCAB_SIZE: int = 4
 PLAY_ORDER_VOCAB_SIZE: int = MAX_PLAY_ORDER + 3
-CARD_ORDER_VOCAB_SIZE: int = MAX_CARD_ORDER + 3
+COUNT_VOCAB_SIZE: int = MAX_FACE_COUNT + 3
 PLAY_WIDTH_VOCAB_SIZE: int = MAX_PLAY_WIDTH + 3
 EVENT_AGE_VOCAB_SIZE: int = MAX_EVENT_AGE + 3
 
-TOKEN_TYPE_CARD_ID: int = 1
+TOKEN_TYPE_FACE_COUNT_ID: int = 1
 TOKEN_TYPE_GLOBAL_FIELD_ID: int = 2
 TOKEN_TYPE_ROUND_FIELD_ID: int = 3
 TOKEN_TYPE_ROUND_EVENT_FIELD_ID: int = 4
 TOKEN_TYPE_TRICK_RESULT_FIELD_ID: int = 5
 TOKEN_TYPE_ACTION_QUERY_FIELD_ID: int = 6
 
-SEGMENT_ACTION_QUERY_ID: int = 11
+SEGMENT_ACTION_QUERY_ID: int = 13
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +77,7 @@ class TokenComponentIds:
     trick_age: int
     trick_state: int
     play_order: int
-    card_order: int
+    count: int
     play_width: int
     event_age: int
 
@@ -95,7 +95,7 @@ PAD_COMPONENT_IDS = TokenComponentIds(
     trick_age=OBS_PAD_ID,
     trick_state=OBS_PAD_ID,
     play_order=OBS_PAD_ID,
-    card_order=OBS_PAD_ID,
+    count=OBS_PAD_ID,
     play_width=OBS_PAD_ID,
     event_age=OBS_PAD_ID,
 )
@@ -112,7 +112,9 @@ _SEGMENT_IDS: MappingProxyType[ObservationSegment, int] = (
             "own_exchange_pickup": 7,
             "own_exchange_discard": 8,
             "play_record": 9,
-            "trick_result": 10,
+            "failed_throw_attempted": 10,
+            "failed_throw_forced": 11,
+            "trick_result": 12,
             "action_query": SEGMENT_ACTION_QUERY_ID,
         }
     )
@@ -208,15 +210,14 @@ _FIELD_IDS: MappingProxyType[str, int] = MappingProxyType(
         "action_query:min_select": 43,
         "action_query:max_select": 44,
         "action_query:exact_select": 45,
-        "action_query:selection_source": 46,
-        "action_query:action_play_order": 47,
-        "action_query:current_trick_width": 48,
-        "action_query:lead_actor": 49,
-        "action_query:discard_count": 50,
-        "action_query:trump_suit": 51,
-        "action_query:level_rank": 52,
-        "action_query:current_best_bid_role": 53,
-        "round:enemy_team_required_level": 54,
+        "action_query:action_play_order": 46,
+        "action_query:current_trick_width": 47,
+        "action_query:lead_actor": 48,
+        "action_query:discard_count": 49,
+        "action_query:trump_suit": 50,
+        "action_query:level_rank": 51,
+        "action_query:current_best_bid_role": 52,
+        "round:enemy_team_required_level": 53,
     }
 )
 _STRING_VALUE_IDS: MappingProxyType[str, int] = MappingProxyType(
@@ -261,12 +262,11 @@ _STRING_VALUE_IDS: MappingProxyType[str, int] = MappingProxyType(
         "trump_rank": VALUE_STRING_BASE_ID + 37,
         "big": VALUE_STRING_BASE_ID + 38,
         "small": VALUE_STRING_BASE_ID + 39,
-        "hand": VALUE_STRING_BASE_ID + 40,
-        "lead_play": VALUE_STRING_BASE_ID + 41,
-        "follow_play": VALUE_STRING_BASE_ID + 42,
-        "pass": VALUE_STRING_BASE_ID + 43,
-        "own_exchange": VALUE_STRING_BASE_ID + 44,
-        "initial": VALUE_STRING_BASE_ID + 45,
+        "lead_play": VALUE_STRING_BASE_ID + 40,
+        "follow_play": VALUE_STRING_BASE_ID + 41,
+        "pass": VALUE_STRING_BASE_ID + 42,
+        "own_exchange": VALUE_STRING_BASE_ID + 43,
+        "initial": VALUE_STRING_BASE_ID + 44,
     }
 )
 FALSE_VALUE_ID: int = VALUE_STRING_BASE_ID + len(_STRING_VALUE_IDS)
@@ -276,8 +276,8 @@ VALUE_VOCAB_SIZE: int = TRUE_VALUE_ID + 1
 
 def component_ids(token: ObservationToken) -> TokenComponentIds:
     """Return explicit embedding component ids for one token."""
-    if isinstance(token, CardToken):
-        return _card_component_ids(token)
+    if isinstance(token, FaceCountToken):
+        return _face_count_component_ids(token)
     if isinstance(token, GlobalFieldToken):
         return _field_component_ids(
             token_type=TOKEN_TYPE_GLOBAL_FIELD_ID,
@@ -316,9 +316,11 @@ def component_ids(token: ObservationToken) -> TokenComponentIds:
     )
 
 
-def _card_component_ids(token: CardToken) -> TokenComponentIds:
+def _face_count_component_ids(
+    token: FaceCountToken,
+) -> TokenComponentIds:
     return TokenComponentIds(
-        token_type=TOKEN_TYPE_CARD_ID,
+        token_type=TOKEN_TYPE_FACE_COUNT_ID,
         segment=_SEGMENT_IDS[token.segment],
         field=NONE_ID,
         value=NONE_ID,
@@ -332,9 +334,7 @@ def _card_component_ids(token: CardToken) -> TokenComponentIds:
         play_order=_bounded_optional_id(
             token.play_order, MAX_PLAY_ORDER
         ),
-        card_order=_bounded_optional_id(
-            token.card_order, MAX_CARD_ORDER
-        ),
+        count=_bounded_optional_id(token.count, MAX_FACE_COUNT),
         play_width=_bounded_optional_id(
             token.play_width, MAX_PLAY_WIDTH
         ),
@@ -364,7 +364,7 @@ def _field_component_ids(
         trick_age=_bounded_optional_id(trick_age, MAX_TRICK_AGE),
         trick_state=NONE_ID,
         play_order=NONE_ID,
-        card_order=NONE_ID,
+        count=NONE_ID,
         play_width=NONE_ID,
         event_age=_bounded_optional_id(event_age, MAX_EVENT_AGE),
     )

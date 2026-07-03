@@ -199,9 +199,12 @@ StateSnapshot 里所有可见牌都使用同一个结构：
 | ---------------------- | ----------------------------------- |
 | `trick`                | 当前墩进行中的出牌                  |
 | `last_completed_trick` | 最近完成的一墩，未完成过则为 `null` |
-| `failed_throw`         | 甩牌失败后的公开惩罚信息            |
 | `defender_points`      | 防守方当前捡分                      |
 | `defender_point_cards` | 防守方按捡分顺序累计拿到的分牌      |
+
+`trick.failed_throw` 表示当前墩内的甩牌失败公开事件。\
+`last_completed_trick.failed_throw` 表示最近完成的一墩内的甩牌失败公开事件。\
+甩牌失败属于具体一墩，不是 `StateSnapshot` 顶层字段。
 
 ### 其他信息
 
@@ -343,8 +346,9 @@ awaiting_action == "play"
 
 如果甩牌失败：
 
-- server 记录 `failed_throw`
+- server 在当前 `trick.failed_throw` 记录事件
 - 实际打出的牌变成被“捡小”的那组牌
+- 本墩完成后，事件随 `last_completed_trick.failed_throw` 保留给观察方累积历史
 - 状态仍然推进
 
 ### GAME_OVER

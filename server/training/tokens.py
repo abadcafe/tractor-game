@@ -1,9 +1,8 @@
-"""Structured observation token records for training policies.
+"""Structured observation records for training policies.
 
-The schema keeps one business item as one model token.  Card face
-identity is represented by card components, while public context such as
-segment, actor, event age, trick age, and play order is represented by
-separate token components.
+The schema keeps model input semantic: card identity is represented by
+face plus count, while public structure such as segment, actor, event
+age, trick age, and play order is represented by separate components.
 """
 
 from __future__ import annotations
@@ -11,7 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from server.rules.cards import Card, Rank, Suit
+from server.rules.card_faces import CardColor, FaceCount
+from server.rules.cards import Rank, Suit
 from server.sm.constants import PLAYER_COUNT
 
 type RelativeRole = Literal[
@@ -20,7 +20,6 @@ type RelativeRole = Literal[
     "left_enemy",
     "right_enemy",
 ]
-type CardColor = Literal["red", "black", "none"]
 type TokenScalar = str | int | bool | None
 type ObservationSegment = Literal[
     "global_context",
@@ -32,6 +31,8 @@ type ObservationSegment = Literal[
     "own_exchange_pickup",
     "own_exchange_discard",
     "play_record",
+    "failed_throw_attempted",
+    "failed_throw_forced",
     "trick_result",
     "action_query",
 ]
@@ -87,7 +88,6 @@ type ActionQueryFieldName = Literal[
     "min_select",
     "max_select",
     "exact_select",
-    "selection_source",
     "action_play_order",
     "current_trick_width",
     "lead_actor",
@@ -99,20 +99,19 @@ type ActionQueryFieldName = Literal[
 
 
 @dataclass(frozen=True, slots=True)
-class CardToken:
-    """A visible physical card plus explicit public structure."""
+class FaceCountToken:
+    """A visible semantic card-face multiplicity plus context."""
 
-    card_id: str
     suit: Suit
     rank: Rank
     points: int
     color: CardColor
+    count: int
     segment: ObservationSegment
     role: RelativeRole | None = None
     trick_age: int | None = None
     trick_state: TrickRecordState | None = None
     play_order: int | None = None
-    card_order: int | None = None
     play_width: int | None = None
     event_age: int | None = None
 
@@ -160,7 +159,7 @@ class ActionQueryFieldToken:
 
 
 type ObservationToken = (
-    CardToken
+    FaceCountToken
     | GlobalFieldToken
     | RoundFieldToken
     | RoundEventFieldToken
@@ -182,8 +181,8 @@ def relative_role(viewer: int, actor: int) -> RelativeRole:
 
 def token_name(token: ObservationToken) -> str:
     """Return a stable short name for tests, metrics, and debugging."""
-    if isinstance(token, CardToken):
-        return "CARD"
+    if isinstance(token, FaceCountToken):
+        return "FACE_COUNT"
     if isinstance(token, GlobalFieldToken):
         return "GLOBAL_FIELD"
     if isinstance(token, RoundFieldToken):
@@ -195,39 +194,30 @@ def token_name(token: ObservationToken) -> str:
     return "ACTION_QUERY_FIELD"
 
 
-def card_token(
-    card: Card,
+def face_count_token(
+    face_count: FaceCount,
     *,
     segment: ObservationSegment,
     role: RelativeRole | None = None,
     trick_age: int | None = None,
     trick_state: TrickRecordState | None = None,
     play_order: int | None = None,
-    card_order: int | None = None,
     play_width: int | None = None,
     event_age: int | None = None,
-) -> CardToken:
-    """Create one model token for a visible physical card."""
-    return CardToken(
-        card_id=card.id,
-        suit=card.suit,
-        rank=card.rank,
-        points=card.points,
-        color=_card_color(card),
+) -> FaceCountToken:
+    """Create one model token for a visible semantic card group."""
+    face = face_count.face
+    return FaceCountToken(
+        suit=face.suit,
+        rank=face.rank,
+        points=face.points,
+        color=face.color,
+        count=face_count.count,
         segment=segment,
         role=role,
         trick_age=trick_age,
         trick_state=trick_state,
         play_order=play_order,
-        card_order=card_order,
         play_width=play_width,
         event_age=event_age,
     )
-
-
-def _card_color(card: Card) -> CardColor:
-    if card.suit in (Suit.HEARTS, Suit.DIAMONDS):
-        return "red"
-    if card.suit in (Suit.SPADES, Suit.CLUBS):
-        return "black"
-    return "none"

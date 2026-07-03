@@ -31,10 +31,10 @@ function makeSnapshot(
         cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }],
       }],
       current_player: 1,
+      failed_throw: null,
     },
     last_completed_trick: null,
     defender_point_cards: [],
-    failed_throw: null,
     bid_events: [],
     bid_winner: null,
     stir_events: [],
@@ -155,6 +155,7 @@ Deno.test("test_render_complete_phase_keeps_last_trick_on_table", () => {
       lead_player: 0,
       winner: 1,
       points: 25,
+      failed_throw: null,
       slots: [
         {
           player: 0,

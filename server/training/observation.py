@@ -9,9 +9,15 @@ from server.protocol import (
     BidEventSnapshot,
     BottomExchangeSnapshot,
     CompletedTrickSnapshot,
+    FailedThrowSnapshot,
     StateSnapshot,
     StirDeclarationEventSnapshot,
     TrickSlotSnapshot,
+)
+from server.rules.card_faces import (
+    FaceCount,
+    canonical_face_counts,
+    face_count_signature,
 )
 from server.rules.cards import Card
 from server.sm.constants import BOTTOM_CARD_COUNT, PLAYER_COUNT
@@ -21,13 +27,13 @@ from server.training.progress import (
     distance_to_target,
     stage_target,
 )
-from server.training.selection_actions import (
+from server.training.semantic_actions import (
     ActionQuery,
     build_action_query,
 )
 from server.training.tokens import (
     ActionQueryFieldToken,
-    CardToken,
+    FaceCountToken,
     GlobalFieldToken,
     ObservationToken,
     RelativeRole,
@@ -35,7 +41,7 @@ from server.training.tokens import (
     RoundFieldToken,
     TrickRecordState,
     TrickResultFieldToken,
-    card_token,
+    face_count_token,
     relative_role,
 )
 
@@ -48,6 +54,7 @@ class HistoryTrick:
     slots: tuple[TrickSlotSnapshot, ...]
     winner: int
     points: int
+    failed_throw: FailedThrowSnapshot | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,7 +63,7 @@ class Observation:
 
     player_index: int
     tokens: tuple[ObservationToken, ...]
-    hand_card_ids: tuple[str, ...]
+    hand_faces: tuple[FaceCount, ...]
     action_query: ActionQuery
 
 
@@ -92,6 +99,7 @@ class PublicHistoryRecorder:
                 slots=tuple(completed.slots),
                 winner=completed.winner,
                 points=completed.points,
+                failed_throw=completed.failed_throw,
             )
         )
 
@@ -151,17 +159,19 @@ def build_observation(
     return Observation(
         player_index=player_index,
         tokens=tuple(tokens),
-        hand_card_ids=tuple(card.id for card in snapshot.player_hand),
+        hand_faces=canonical_face_counts(snapshot.player_hand),
         action_query=action_query,
     )
 
 
-def card_tokens(observation: Observation) -> tuple[CardToken, ...]:
-    """Return all card tokens in sequence order."""
+def face_count_tokens(
+    observation: Observation,
+) -> tuple[FaceCountToken, ...]:
+    """Return all face-count tokens in sequence order."""
     return tuple(
         token
         for token in observation.tokens
-        if isinstance(token, CardToken)
+        if isinstance(token, FaceCountToken)
     )
 
 
@@ -290,13 +300,12 @@ def _bid_event_tokens(
         tokens.append(
             RoundEventFieldToken("count", event.count, event_age)
         )
-        for card_order, card in enumerate(event.cards):
+        for face_count in canonical_face_counts(event.cards):
             tokens.append(
-                card_token(
-                    card,
+                face_count_token(
+                    face_count,
                     segment="round_event",
                     role=actor,
-                    card_order=card_order,
                     event_age=event_age,
                 )
             )
@@ -331,13 +340,12 @@ def _stir_event_tokens(
         tokens.append(
             RoundEventFieldToken("priority", event.priority, event_age)
         )
-        for card_order, card in enumerate(event.cards):
+        for face_count in canonical_face_counts(event.cards):
             tokens.append(
-                card_token(
-                    card,
+                face_count_token(
+                    face_count,
                     segment="stir_event",
                     role=actor,
-                    card_order=card_order,
                     event_age=event_age,
                 )
             )
@@ -365,14 +373,14 @@ def _own_bottom_exchange_tokens(
     tokens.append(RoundEventFieldToken("actor", "self", event_age))
     tokens.append(RoundEventFieldToken("trigger", trigger, event_age))
     tokens.extend(
-        _exchange_card_tokens(
+        _exchange_face_count_tokens(
             event.picked_up_bottom_cards,
             segment="own_exchange_pickup",
             event_age=event_age,
         )
     )
     tokens.extend(
-        _exchange_card_tokens(
+        _exchange_face_count_tokens(
             event.discarded_bottom_cards,
             segment="own_exchange_discard",
             event_age=event_age,
@@ -381,7 +389,7 @@ def _own_bottom_exchange_tokens(
     return tuple(tokens)
 
 
-def _exchange_card_tokens(
+def _exchange_face_count_tokens(
     cards: list[Card],
     *,
     segment: Literal[
@@ -389,16 +397,15 @@ def _exchange_card_tokens(
         "own_exchange_discard",
     ],
     event_age: int,
-) -> tuple[CardToken, ...]:
+) -> tuple[FaceCountToken, ...]:
     return tuple(
-        card_token(
-            card,
+        face_count_token(
+            face_count,
             segment=segment,
             role="self",
-            card_order=index,
             event_age=event_age,
         )
-        for index, card in enumerate(cards)
+        for face_count in canonical_face_counts(cards)
     )
 
 
@@ -406,13 +413,12 @@ def _hand_tokens(
     snapshot: StateSnapshot,
 ) -> tuple[ObservationToken, ...]:
     return tuple(
-        card_token(
-            card,
+        face_count_token(
+            face_count,
             segment="self_hand",
             role="self",
-            card_order=index,
         )
-        for index, card in enumerate(snapshot.player_hand)
+        for face_count in canonical_face_counts(snapshot.player_hand)
     )
 
 
@@ -420,12 +426,11 @@ def _visible_bottom_tokens(
     snapshot: StateSnapshot,
 ) -> tuple[ObservationToken, ...]:
     return tuple(
-        card_token(
-            card,
+        face_count_token(
+            face_count,
             segment="visible_bottom",
-            card_order=index,
         )
-        for index, card in enumerate(snapshot.bottom_cards)
+        for face_count in canonical_face_counts(snapshot.bottom_cards)
     )
 
 
@@ -457,12 +462,26 @@ def _play_record_tokens(
         tokens.append(
             TrickResultFieldToken("points", trick.points, trick_age)
         )
+        _append_failed_throw_tokens(
+            tokens=tokens,
+            player_index=player_index,
+            failed_throw=trick.failed_throw,
+            trick_age=trick_age,
+            trick_state="completed",
+        )
     if snapshot.trick is not None:
         _append_play_record_tokens(
             tokens=tokens,
             player_index=player_index,
             lead_player=snapshot.trick.lead_player,
             slots=tuple(snapshot.trick.slots),
+            trick_age=0,
+            trick_state="open",
+        )
+        _append_failed_throw_tokens(
+            tokens=tokens,
+            player_index=player_index,
+            failed_throw=snapshot.trick.failed_throw,
             trick_age=0,
             trick_state="open",
         )
@@ -492,19 +511,53 @@ def _append_play_record_tokens(
         )
         actor = relative_role(player_index, slot.player)
         play_width = len(slot.cards)
-        for card_order, card in enumerate(slot.cards):
+        for face_count in canonical_face_counts(slot.cards):
             tokens.append(
-                card_token(
-                    card,
+                face_count_token(
+                    face_count,
                     segment="play_record",
                     role=actor,
                     trick_age=trick_age,
                     trick_state=trick_state,
                     play_order=play_order,
-                    card_order=card_order,
                     play_width=play_width,
                 )
             )
+
+
+def _append_failed_throw_tokens(
+    *,
+    tokens: list[ObservationToken],
+    player_index: int,
+    failed_throw: FailedThrowSnapshot | None,
+    trick_age: int,
+    trick_state: TrickRecordState,
+) -> None:
+    if failed_throw is None:
+        return
+    actor = relative_role(player_index, failed_throw.player)
+    for face_count in canonical_face_counts(
+        failed_throw.attempted_cards
+    ):
+        tokens.append(
+            face_count_token(
+                face_count,
+                segment="failed_throw_attempted",
+                role=actor,
+                trick_age=trick_age,
+                trick_state=trick_state,
+            )
+        )
+    for face_count in canonical_face_counts(failed_throw.forced_cards):
+        tokens.append(
+            face_count_token(
+                face_count,
+                segment="failed_throw_forced",
+                role=actor,
+                trick_age=trick_age,
+                trick_state=trick_state,
+            )
+        )
 
 
 def _action_query_tokens(
@@ -516,9 +569,6 @@ def _action_query_tokens(
         ActionQueryFieldToken("min_select", query.min_select),
         ActionQueryFieldToken("max_select", query.max_select),
         ActionQueryFieldToken("exact_select", query.exact_select),
-        ActionQueryFieldToken(
-            "selection_source", query.selection_source
-        ),
         ActionQueryFieldToken(
             "action_play_order", query.action_play_order
         ),
@@ -567,10 +617,28 @@ def _completed_trick_signature(
     slot_parts: list[object] = []
     for slot in completed.slots:
         slot_parts.append(slot.player)
-        slot_parts.extend(card.id for card in slot.cards)
+        slot_parts.append(
+            face_count_signature(canonical_face_counts(slot.cards))
+        )
+    failed_throw_signature: tuple[object, ...] | None = None
+    if completed.failed_throw is not None:
+        failed_throw_signature = (
+            completed.failed_throw.player,
+            face_count_signature(
+                canonical_face_counts(
+                    completed.failed_throw.attempted_cards
+                )
+            ),
+            face_count_signature(
+                canonical_face_counts(
+                    completed.failed_throw.forced_cards
+                )
+            ),
+        )
     return (
         completed.lead_player,
         completed.winner,
         completed.points,
         tuple(slot_parts),
+        failed_throw_signature,
     )

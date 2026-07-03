@@ -28,6 +28,8 @@ from server.protocol import (
     ScoringSnapshot,
     StateMessage,
     StirringStateSnapshot,
+    TrickSlotSnapshot,
+    TrickSnapshot,
 )
 from server.result import Ok, Rejected
 from server.rules.cards import POINTS_MAP, Card, Rank, Suit
@@ -1361,25 +1363,36 @@ async def test_snapshot_card_format() -> None:
 
 @pytest.mark.asyncio
 async def test_snapshot_failed_throw_format() -> None:
-    """StateSnapshot failed_throw is a public card dict event."""
+    """TrickSnapshot failed_throw is a public card dict event."""
     game = await _start_game(_make_players())
+    failed_throw = FailedThrowSnapshot(
+        player=0,
+        attempted_cards=[
+            _card(Suit.SPADES, Rank.KING, 1),
+            _card(Suit.SPADES, Rank.QUEEN, 1),
+        ],
+        forced_cards=[
+            _card(Suit.SPADES, Rank.QUEEN, 1),
+        ],
+    )
     snapshot = game.snapshot(for_player=0).model_copy(
         update={
-            "failed_throw": FailedThrowSnapshot(
-                player=0,
-                attempted_cards=[
-                    _card(Suit.SPADES, Rank.KING, 1),
-                    _card(Suit.SPADES, Rank.QUEEN, 1),
+            "trick": TrickSnapshot(
+                lead_player=0,
+                current_player=1,
+                slots=[
+                    TrickSlotSnapshot(
+                        player=0, cards=failed_throw.forced_cards
+                    )
                 ],
-                forced_cards=[
-                    _card(Suit.SPADES, Rank.QUEEN, 1),
-                ],
+                failed_throw=failed_throw,
             )
         }
     )
     result = snapshot.model_dump(mode="json")
 
-    assert result["failed_throw"] == {
+    assert isinstance(result["trick"], dict)
+    assert result["trick"]["failed_throw"] == {
         "player": 0,
         "attempted_cards": [
             {
@@ -1547,7 +1560,6 @@ async def test_snapshot_contains_all_required_fields() -> None:
         "trick",
         "last_completed_trick",
         "defender_point_cards",
-        "failed_throw",
         "action_hints",
         "awaiting_action",
         "scoring",

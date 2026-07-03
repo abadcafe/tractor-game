@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from server.player.test_helpers import card
+from server.rules.card_faces import (
+    CardFace,
+    FaceCount,
+)
 from server.training.feature_schema import (
     NUMERIC_FEATURE_COUNT,
     numeric_feature_spec,
 )
 from server.training.numeric_features import numeric_feature_values
-from server.training.tokens import RoundFieldToken, card_token
+from server.training.tokens import RoundFieldToken, face_count_token
 
 
 def test_numeric_feature_distinguishes_zero_from_missing() -> None:
@@ -41,21 +45,21 @@ def test_numeric_feature_normalizes_score_fields() -> None:
     assert features.masks[spec.index] == 1.0
 
 
-def test_card_numeric_features_include_points_and_structure() -> None:
-    point_spec = numeric_feature_spec("card:points")
-    order_spec = numeric_feature_spec("card:card_order")
+def test_face_count_numeric_features_include_points_and_count() -> None:
+    point_spec = numeric_feature_spec("face_count:points")
+    count_spec = numeric_feature_spec("face_count:count")
     assert point_spec is not None
-    assert order_spec is not None
+    assert count_spec is not None
 
-    token = card_token(
-        card("hearts", "5", 1),
+    test_card = card("hearts", "5", 1)
+    token = face_count_token(
+        FaceCount(CardFace(test_card.suit, test_card.rank), 2),
         segment="self_hand",
         role="self",
-        card_order=16,
     )
     features = numeric_feature_values(token)
 
     assert features.values[point_spec.index] == 0.5
     assert features.masks[point_spec.index] == 1.0
-    assert features.values[order_spec.index] == 0.5
-    assert features.masks[order_spec.index] == 1.0
+    assert features.values[count_spec.index] == 1.0
+    assert features.masks[count_spec.index] == 1.0

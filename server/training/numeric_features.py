@@ -10,7 +10,7 @@ from server.training.feature_schema import (
     numeric_feature_spec,
 )
 from server.training.tokens import (
-    CardToken,
+    FaceCountToken,
     GlobalFieldToken,
     ObservationToken,
     RoundEventFieldToken,
@@ -40,22 +40,20 @@ def numeric_feature_values(
     """Return normalized numeric features for one observation token."""
     values = [0.0 for _ in range(NUMERIC_FEATURE_COUNT)]
     masks = [0.0 for _ in range(NUMERIC_FEATURE_COUNT)]
-    if isinstance(token, CardToken):
-        _set_numeric(values, masks, "card:points", token.points)
+    if isinstance(token, FaceCountToken):
+        _set_numeric(values, masks, "face_count:points", token.points)
+        _set_numeric(values, masks, "face_count:count", token.count)
         _set_optional_numeric(
-            values, masks, "card:trick_age", token.trick_age
+            values, masks, "face_count:trick_age", token.trick_age
         )
         _set_optional_numeric(
-            values, masks, "card:play_order", token.play_order
+            values, masks, "face_count:play_order", token.play_order
         )
         _set_optional_numeric(
-            values, masks, "card:card_order", token.card_order
+            values, masks, "face_count:play_width", token.play_width
         )
         _set_optional_numeric(
-            values, masks, "card:play_width", token.play_width
-        )
-        _set_optional_numeric(
-            values, masks, "card:event_age", token.event_age
+            values, masks, "face_count:event_age", token.event_age
         )
     elif isinstance(token, GlobalFieldToken):
         _set_scalar(values, masks, f"global:{token.field}", token.value)

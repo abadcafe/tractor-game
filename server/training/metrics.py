@@ -26,10 +26,8 @@ class TrainingMetric:
     policy_loss: float | None
     value_loss: float | None
     entropy: float | None
-    invalid_action_count: int
-    resample_count: int
-    forced_action_count: int
-    legal_action_rate: float
+    approx_kl: float | None
+    clip_fraction: float | None
     average_action_choices: float
     checkpoint_path: str | None
 
@@ -75,10 +73,8 @@ def _to_json(metric: TrainingMetric) -> JsonObject:
         "policy_loss": metric.policy_loss,
         "value_loss": metric.value_loss,
         "entropy": metric.entropy,
-        "invalid_action_count": metric.invalid_action_count,
-        "resample_count": metric.resample_count,
-        "forced_action_count": metric.forced_action_count,
-        "legal_action_rate": metric.legal_action_rate,
+        "approx_kl": metric.approx_kl,
+        "clip_fraction": metric.clip_fraction,
         "average_action_choices": metric.average_action_choices,
         "checkpoint_path": metric.checkpoint_path,
     }
@@ -96,10 +92,8 @@ def _from_json(data: dict[object, object]) -> TrainingMetric:
         policy_loss=_optional_float_field(data, "policy_loss"),
         value_loss=_optional_float_field(data, "value_loss"),
         entropy=_optional_float_field(data, "entropy"),
-        invalid_action_count=_int_field(data, "invalid_action_count"),
-        resample_count=_int_field(data, "resample_count"),
-        forced_action_count=_int_field(data, "forced_action_count"),
-        legal_action_rate=_float_field(data, "legal_action_rate"),
+        approx_kl=_optional_float_field(data, "approx_kl"),
+        clip_fraction=_optional_float_field(data, "clip_fraction"),
         average_action_choices=_float_field(
             data, "average_action_choices"
         ),

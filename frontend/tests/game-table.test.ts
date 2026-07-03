@@ -27,7 +27,6 @@ function makeSnapshot(
     trick: null,
     last_completed_trick: null,
     defender_point_cards: [],
-    failed_throw: null,
     bid_events: [],
     bid_winner: null,
     stir_events: [],
@@ -116,7 +115,12 @@ Deno.test("test_renderGameTable_deal_bid_can_show_fixed_declarer_separate_from_b
 Deno.test("test_renderGameTable_current_player_highlight", () => {
   const snap = makeSnapshot({
     awaiting_action: "play",
-    trick: { lead_player: 0, slots: [], current_player: 1 },
+    trick: {
+      lead_player: 0,
+      slots: [],
+      current_player: 1,
+      failed_throw: null,
+    },
   });
   const el = renderGameTable(snap);
   const current = el.querySelectorAll(".player-area.current");
@@ -200,7 +204,12 @@ Deno.test("test_renderGameTable_status_notice_in_top_right_not_bottom_bar", () =
   const snap = makeSnapshot({
     awaiting_action: "play",
     defender_points: 25,
-    trick: { lead_player: 0, slots: [], current_player: 2 },
+    trick: {
+      lead_player: 0,
+      slots: [],
+      current_player: 2,
+      failed_throw: null,
+    },
   });
   const el = renderGameTable(snap);
   const notice = el.querySelector(".table-notice");
@@ -219,6 +228,7 @@ Deno.test("test_renderGameTable_previous_trick_label_in_top_right_notice", () =>
     lead_player: 0,
     winner: 2,
     points: 5,
+    failed_throw: null,
     slots: [
       {
         player: 0,

@@ -19,6 +19,7 @@ class TrickSnapshot(SnapshotModel):
     lead_player: int
     slots: list[TrickSlotSnapshot]
     current_player: int
+    failed_throw: FailedThrowSnapshot | None = None
 
 
 class CompletedTrickSnapshot(SnapshotModel):
@@ -28,6 +29,7 @@ class CompletedTrickSnapshot(SnapshotModel):
     slots: list[TrickSlotSnapshot]
     winner: int
     points: int
+    failed_throw: FailedThrowSnapshot | None = None
 
 
 class FailedThrowSnapshot(SnapshotModel):

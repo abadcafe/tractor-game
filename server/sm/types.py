@@ -146,3 +146,4 @@ class CompletedTrick(BaseModel):
     slots: list[CompletedTrickSlot]
     winner: int
     points: int
+    failed_throw: FailedThrow | None = None

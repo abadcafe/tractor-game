@@ -82,7 +82,7 @@ export class TrickPreviewController {
       return;
     }
 
-    const event = snapshot.failed_throw;
+    const event = snapshot.trick?.failed_throw ?? null;
     if (event === null) {
       return;
     }
@@ -141,6 +141,7 @@ function completedTrickKey(
     trick.lead_player,
     trick.winner,
     trick.points,
+    failedThrowKeyPart(trick.failed_throw),
     ...slotParts,
   ].join("|");
 }
@@ -160,4 +161,14 @@ function failedThrowKey(
     attemptedIds,
     forcedIds,
   ].join("|");
+}
+
+function failedThrowKeyPart(event: FailedThrow | null): string {
+  if (event === null) {
+    return "none";
+  }
+  const attemptedIds = event.attempted_cards.map((card) => card.id)
+    .join(",");
+  const forcedIds = event.forced_cards.map((card) => card.id).join(",");
+  return [event.player, attemptedIds, forcedIds].join(":");
 }

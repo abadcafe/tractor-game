@@ -14,34 +14,39 @@ from server.player.test_helpers import (
 )
 from server.protocol import ScoringSnapshot
 from server.result import Ok
+from server.rules.card_faces import CardFace, FaceCount
+from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
 from server.training.player import TrainingPlayer
 from server.training.policy import PolicyDecision
-from server.training.selection_actions import (
-    ActionQuery,
-    SelectionChoice,
-    SelectionTrace,
-    decode_selection_action,
+from server.training.semantic_actions import (
+    SemanticArgument,
+    SemanticArgumentPrefix,
+    SemanticArgumentTrace,
 )
 from server.training.trajectory import TrajectoryRecorder
 
 
 class FirstCardPlayPolicy:
-    """Deterministic test policy that plays the first hand slot."""
+    """Deterministic test policy that plays the first hand face."""
 
     def decide(
         self,
         observation: Observation,
-        query: ActionQuery,
+        legal_actions: LegalActionIndex,
     ) -> PolicyDecision:
-        decoded = decode_selection_action(
-            query,
-            SelectionTrace(
-                choices=(
-                    SelectionChoice("select_card", 0),
-                    SelectionChoice("stop"),
-                )
-            ),
+        first_choices = legal_actions.allowed_next(
+            SemanticArgumentPrefix(arguments=())
+        )
+        assert first_choices
+        first_argument = first_choices[0]
+        prefix = SemanticArgumentPrefix(arguments=(first_argument,))
+        trace_args: list[SemanticArgument] = [first_argument]
+        second_choices = legal_actions.allowed_next(prefix)
+        if second_choices:
+            trace_args.append(second_choices[0])
+        decoded = legal_actions.decode(
+            SemanticArgumentTrace(arguments=tuple(trace_args))
         )
         assert isinstance(decoded, Ok)
         return PolicyDecision(
@@ -49,7 +54,7 @@ class FirstCardPlayPolicy:
             log_probability=0.0,
             value_estimate=0.0,
             entropy=0.0,
-            choice_count=len(decoded.value.selection_trace.choices),
+            choice_count=len(decoded.value.semantic_trace.arguments),
         )
 
 
@@ -111,7 +116,9 @@ async def test_training_player_records_action_after_acceptance() -> (
     steps = recorder.steps()
     assert len(steps) == 1
     assert steps[0].player_index == 0
-    assert steps[0].action.card_ids == (test_card.id,)
+    assert steps[0].action.face_counts == (
+        FaceCount(CardFace(test_card.suit, test_card.rank), 1),
+    )
     assert steps[0].choice_count == 2
 
 

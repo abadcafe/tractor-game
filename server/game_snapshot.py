@@ -16,7 +16,6 @@ from server.protocol_snapshot_builder import (
     bottom_exchange_snapshot,
     optional_bid_event_snapshot,
     optional_completed_trick_snapshot,
-    optional_failed_throw_snapshot,
     scoring_snapshot,
     stir_declaration_event_snapshot,
     stirring_state_snapshot,
@@ -29,7 +28,6 @@ from server.sm import game_sm, round_sm
 from server.sm.types import (
     BidEvent,
     BottomExchangeEvent,
-    FailedThrow,
     StirDeclarationEvent,
 )
 
@@ -70,7 +68,6 @@ def build_state_snapshot(
             trick=None,
             last_completed_trick=None,
             defender_point_cards=[],
-            failed_throw=None,
             action_hints=[],
             awaiting_action=awaiting_action,
             scoring=None,
@@ -151,9 +148,6 @@ def build_state_snapshot(
             round_state.last_completed_trick
         ),
         defender_point_cards=list(round_state.defender_point_cards),
-        failed_throw=optional_failed_throw_snapshot(
-            _current_failed_throw(round_state)
-        ),
         action_hints=action_hints,
         awaiting_action=awaiting_action,
         scoring=_scoring_snapshot(round_state),
@@ -266,15 +260,8 @@ def _current_trick_snapshot(
             for slot in trick_state.slots
         ],
         current_player=trick_state.cur,
+        failed_throw=trick_state.failed_throw,
     )
-
-
-def _current_failed_throw(
-    state: round_sm.RoundState,
-) -> FailedThrow | None:
-    if state.phase == "PLAYING" and state.trick_state is not None:
-        return state.trick_state.failed_throw
-    return None
 
 
 def _bid_events(state: round_sm.RoundState) -> list[BidEvent]:

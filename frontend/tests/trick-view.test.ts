@@ -33,10 +33,10 @@ function makeSnapshot(
         cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }],
       }],
       current_player: 1,
+      failed_throw: null,
     },
     last_completed_trick: null,
     defender_point_cards: [],
-    failed_throw: null,
     bid_events: [],
     bid_winner: null,
     stir_events: [],
@@ -86,6 +86,7 @@ Deno.test("test_renderTrickView_waiting_scoring_keeps_last_trick", () => {
       lead_player: 1,
       winner: 3,
       points: 20,
+      failed_throw: null,
       slots: [
         {
           player: 0,
@@ -131,6 +132,7 @@ Deno.test("test_renderTrickView_previous_trick_preview_shows_four_players", () =
     lead_player: 0,
     winner: 2,
     points: 15,
+    failed_throw: null,
     slots: [
       {
         player: 0,
@@ -171,6 +173,7 @@ Deno.test("test_renderTrickView_failed_throw_preview_shows_attempted_and_forced_
     lead_player: 0,
     winner: 0,
     points: 0,
+    failed_throw: null,
     slots: [
       {
         player: 0,
@@ -253,6 +256,7 @@ Deno.test("test_renderTrickView_multiple_slots", () => {
         },
       ],
       current_player: 3,
+      failed_throw: null,
     },
   });
   const el = renderTrickView(snap);
@@ -305,6 +309,7 @@ Deno.test("test_renderTrickView_sorts_current_trick_cards_like_hand", () => {
         },
       ],
       current_player: 1,
+      failed_throw: null,
     },
   });
 
@@ -337,6 +342,7 @@ Deno.test("test_renderTrickView_sorts_previous_trick_cards_like_hand", () => {
     lead_player: 3,
     winner: 3,
     points: 25,
+    failed_throw: null,
     slots: [
       {
         player: 0,
@@ -399,6 +405,7 @@ Deno.test("test_renderTrickView_slot_with_empty_cards", () => {
         { player: 0, cards: [] },
       ],
       current_player: 0,
+      failed_throw: null,
     },
   });
   const el = renderTrickView(snap);
@@ -426,6 +433,7 @@ Deno.test("test_renderTrickView_current_player_highlight", () => {
         },
       ],
       current_player: 1,
+      failed_throw: null,
     },
   });
   const el = renderTrickView(snap);

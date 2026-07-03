@@ -10,6 +10,7 @@ from .decompose import (
     non_trump_rank_order,
     rank_order_in_trump_group,
 )
+from .follow_analysis import analyze_follow
 from .ordering import effective_suit
 from .rejections.card import CardNotInHandRejected
 from .rejections.play import (
@@ -78,55 +79,15 @@ def is_legal_follow(
     3. Suit-following rules
     4. Sub-play priority rules (spec 6.2 steps 7a/7b/7c)
     """
-    # Step 1: count must match
-    if len(played_cards) != len(lead_cards):
-        return False
-
-    if not played_cards:
-        return False
-
-    # Step 2: all played cards must be in hand
-    hand_ids = {c.id for c in hand}
-    for c in played_cards:
-        if c.id not in hand_ids:
-            return False
-
-    # Step 3: compute lead effective suit
-    lead_eff = effective_suit(lead_cards[0], trump_suit, trump_rank)
-
-    # Step 4: separate hand into same effective suit vs other
-    suit_in_hand = [
-        c
-        for c in hand
-        if effective_suit(c, trump_suit, trump_rank) == lead_eff
-    ]
-
-    # Step 5: separate played into same effective suit vs other
-    suit_in_played = [
-        c
-        for c in played_cards
-        if effective_suit(c, trump_suit, trump_rank) == lead_eff
-    ]
-
-    # Step 6: suit-following check
-    if len(suit_in_hand) >= len(lead_cards):
-        # Must play exactly lead_count cards of the lead suit
-        if len(suit_in_played) != len(lead_cards):
-            return False
-    else:
-        # Don't have enough lead-suit cards: must play ALL of them
-        if len(suit_in_played) < len(suit_in_hand):
-            return False
-
-    # Step 7: sub-play priority verification
-    return _verify_follow_sub_play_priority(
-        suit_in_hand,
-        suit_in_played,
-        lead_cards,
-        lead_eff,
-        trump_suit,
-        trump_rank,
+    analysis_result = analyze_follow(
+        hand=hand,
+        lead_cards=lead_cards,
+        trump_suit=trump_suit,
+        trump_rank=trump_rank,
     )
+    if isinstance(analysis_result, Rejected):
+        return False
+    return analysis_result.value.validate_cards(played_cards)
 
 
 def illegal_follow_rejection(

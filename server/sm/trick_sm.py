@@ -129,7 +129,7 @@ def play(
         return CardsNotInHandRejected()
 
     actual_cards = list(cards)
-    failed_throw: FailedThrow | None = None
+    failed_throw: FailedThrow | None = state.failed_throw
 
     # Validate lead legality
     if state.phase == "LEADING":
@@ -343,6 +343,7 @@ def _resolve(state: TrickState) -> TrickState:
         slots=list(state.slots),
         winner=winner,
         points=total_points,
+        failed_throw=state.failed_throw,
     )
 
     result = TrickResult(

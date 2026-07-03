@@ -32,9 +32,6 @@ class TrainingRoundResult:
     team1_reward: float
     generated_action_count: int
     accepted_action_count: int
-    invalid_action_count: int
-    resample_count: int
-    forced_action_count: int
     average_action_choices: float
     elapsed_seconds: float
     game_over: bool
@@ -116,18 +113,6 @@ class SelfPlaySession:
             team1_reward=reward1,
             generated_action_count=generated_count,
             accepted_action_count=accepted_count,
-            invalid_action_count=sum(
-                player.stats().invalid_action_count
-                for player in self._players
-            ),
-            resample_count=sum(
-                player.stats().resample_count
-                for player in self._players
-            ),
-            forced_action_count=sum(
-                player.stats().forced_action_count
-                for player in self._players
-            ),
             average_action_choices=0.0
             if generated_count == 0
             else choice_count / generated_count,

@@ -27,10 +27,8 @@ def test_metrics_append_and_read_round_trip(tmp_path: Path) -> None:
         policy_loss=0.1,
         value_loss=0.2,
         entropy=0.3,
-        invalid_action_count=0,
-        resample_count=1,
-        forced_action_count=0,
-        legal_action_rate=0.95,
+        approx_kl=0.01,
+        clip_fraction=0.25,
         average_action_choices=3.5,
         checkpoint_path="checkpoint.json",
     )

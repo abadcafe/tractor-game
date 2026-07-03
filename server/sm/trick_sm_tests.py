@@ -191,6 +191,48 @@ class TestPlayLead:
         assert state.failed_throw.attempted_cards == hands[0]
         assert state.failed_throw.forced_cards == [hands[0][1]]
 
+    def test_play_failed_throw_is_kept_on_completed_trick(self) -> None:
+        """Completed trick keeps the failed throw event."""
+        hands = [
+            [
+                _card(Suit.SPADES, Rank.KING),
+                _card(Suit.SPADES, Rank.QUEEN),
+            ],
+            [_card(Suit.SPADES, Rank.ACE)],
+            [_card(Suit.HEARTS, Rank.THREE)],
+            [_card(Suit.CLUBS, Rank.THREE)],
+        ]
+        state = create_trick(
+            TrickInput(
+                lead_player=0,
+                hands=hands,
+                trump_suit=Suit.HEARTS,
+                trump_rank=Rank.TWO,
+                defender_points=0,
+                declarer_team=0,
+            )
+        )
+
+        result = play(state, player=0, cards=hands[0])
+        assert isinstance(result, Ok)
+        state = result.value
+        result = play(state, player=1, cards=hands[1])
+        assert isinstance(result, Ok)
+        state = result.value
+        result = play(state, player=2, cards=hands[2])
+        assert isinstance(result, Ok)
+        state = result.value
+        result = play(state, player=3, cards=hands[3])
+        assert isinstance(result, Ok)
+        state = result.value
+
+        assert state.result is not None
+        failed_throw = state.result.completed_trick.failed_throw
+        assert failed_throw is not None
+        assert failed_throw.player == 0
+        assert failed_throw.attempted_cards == hands[0]
+        assert failed_throw.forced_cards == [hands[0][1]]
+
 
 class TestPlayFollow:
     def test_play_follow_single(self) -> None:

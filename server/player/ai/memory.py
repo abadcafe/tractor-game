@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from server.player.ai.formatting import card_text
-from server.protocol import CompletedTrickSnapshot, StateSnapshot
+from server.protocol import (
+    CompletedTrickSnapshot,
+    FailedThrowSnapshot,
+    StateSnapshot,
+)
 from server.rules.cards import Suit
 
 _SUIT_TEXT: dict[Suit, str] = {
@@ -17,7 +21,11 @@ _SUIT_TEXT: dict[Suit, str] = {
 }
 
 type AITrickKey = tuple[
-    int, int, int, tuple[tuple[int, tuple[str, ...]], ...]
+    int,
+    int,
+    int,
+    tuple[tuple[int, tuple[str, ...]], ...],
+    tuple[int, tuple[str, ...], tuple[str, ...]] | None,
 ]
 
 
@@ -102,20 +110,15 @@ class AIMemory:
                         snapshot.last_completed_trick,
                     )
                 )
-        if snapshot.failed_throw is not None:
-            record = AIFailedThrowRecord(
-                player=snapshot.failed_throw.player,
-                attempted_cards=tuple(
-                    card_text(card)
-                    for card in snapshot.failed_throw.attempted_cards
-                ),
-                forced_cards=tuple(
-                    card_text(card)
-                    for card in snapshot.failed_throw.forced_cards
-                ),
+            _append_failed_throw(
+                self.failed_throws,
+                snapshot.last_completed_trick.failed_throw,
             )
-            if record not in self.failed_throws:
-                self.failed_throws.append(record)
+        if snapshot.trick is not None:
+            _append_failed_throw(
+                self.failed_throws,
+                snapshot.trick.failed_throw,
+            )
 
     def summary(self) -> str:
         lines = ["已知牌局记录:"]
@@ -155,6 +158,17 @@ class AIMemory:
 
 
 def _trick_key(trick: CompletedTrickSnapshot) -> AITrickKey:
+    failed_throw_key: (
+        tuple[int, tuple[str, ...], tuple[str, ...]] | None
+    ) = None
+    if trick.failed_throw is not None:
+        failed_throw_key = (
+            trick.failed_throw.player,
+            tuple(
+                card.id for card in trick.failed_throw.attempted_cards
+            ),
+            tuple(card.id for card in trick.failed_throw.forced_cards),
+        )
     return (
         trick.lead_player,
         trick.winner,
@@ -163,7 +177,27 @@ def _trick_key(trick: CompletedTrickSnapshot) -> AITrickKey:
             (slot.player, tuple(card.id for card in slot.cards))
             for slot in trick.slots
         ),
+        failed_throw_key,
     )
+
+
+def _append_failed_throw(
+    failed_throws: list[AIFailedThrowRecord],
+    event: FailedThrowSnapshot | None,
+) -> None:
+    if event is None:
+        return
+    record = AIFailedThrowRecord(
+        player=event.player,
+        attempted_cards=tuple(
+            card_text(card) for card in event.attempted_cards
+        ),
+        forced_cards=tuple(
+            card_text(card) for card in event.forced_cards
+        ),
+    )
+    if record not in failed_throws:
+        failed_throws.append(record)
 
 
 def _trick_record(

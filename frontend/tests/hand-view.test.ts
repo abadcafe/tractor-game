@@ -33,7 +33,6 @@ function makeSnapshot(
     trick: null,
     last_completed_trick: null,
     defender_point_cards: [],
-    failed_throw: null,
     bid_events: [],
     bid_winner: null,
     stir_events: [],
@@ -102,6 +101,7 @@ Deno.test("test_renderHandView_previous_trick_button_above_hand", () => {
       lead_player: 0,
       winner: 3,
       points: 10,
+      failed_throw: null,
       slots: [
         {
           player: 0,

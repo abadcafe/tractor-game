@@ -7,14 +7,14 @@ import torch
 from server.player.test_helpers import card, make_snapshot
 from server.training.model import TractorPolicyModel
 from server.training.observation import build_observation
-from server.training.selection_actions import SelectionState
+from server.training.semantic_actions import SemanticArgumentPrefix
 from server.training.tensorize import (
+    tensorize_argument_prefix,
     tensorize_observation,
-    tensorize_selection_state,
 )
 
 
-def test_tractor_policy_model_forward_head_shapes() -> None:
+def test_tractor_policy_model_forward_argument_shapes() -> None:
     device = torch.device("cpu")
     model = TractorPolicyModel(
         d_model=8,
@@ -36,19 +36,15 @@ def test_tractor_policy_model_forward_head_shapes() -> None:
         max_observation_tokens=64,
         device=device,
     )
-    selection_batch = tensorize_selection_state(
-        query=observation.action_query,
-        state=SelectionState(selected_slots=()),
+    prefix_batch = tensorize_argument_prefix(
+        prefix=SemanticArgumentPrefix(arguments=()),
         device=device,
     )
 
-    output = model.forward_lead_play(
+    output = model.forward_argument(
         observation_batch,
-        selection_batch,
+        prefix_batch,
     )
 
-    assert output.card_logits.shape == (1, 33)
-    assert output.pass_logits is None
-    assert output.stop_logits is not None
-    assert output.stop_logits.shape == (1,)
+    assert output.argument_logits.shape[0] == 1
     assert output.values.shape == (1,)

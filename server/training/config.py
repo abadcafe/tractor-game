@@ -47,7 +47,19 @@ class TrainConfig:
     device: TrainingDevice = "cpu"
     learning_rate: float = 0.0003
     checkpoint_every_updates: int = 50
-    max_round_seconds: float = 30.0
+    max_round_seconds: float = 120.0
+    gamma: float = 0.99
+    gae_lambda: float = 0.95
+    ppo_clip: float = 0.2
+    value_clip: float = 0.2
+    entropy_coef: float = 0.01
+    value_coef: float = 0.5
+    max_grad_norm: float = 0.5
+    ppo_epochs: int = 4
+    minibatch_size: int = 64
+    adam_beta1: float = 0.9
+    adam_beta2: float = 0.999
+    weight_decay: float = 0.0
 
     def to_json(self) -> JsonObject:
         return {
@@ -55,6 +67,18 @@ class TrainConfig:
             "learning_rate": self.learning_rate,
             "checkpoint_every_updates": self.checkpoint_every_updates,
             "max_round_seconds": self.max_round_seconds,
+            "gamma": self.gamma,
+            "gae_lambda": self.gae_lambda,
+            "ppo_clip": self.ppo_clip,
+            "value_clip": self.value_clip,
+            "entropy_coef": self.entropy_coef,
+            "value_coef": self.value_coef,
+            "max_grad_norm": self.max_grad_norm,
+            "ppo_epochs": self.ppo_epochs,
+            "minibatch_size": self.minibatch_size,
+            "adam_beta1": self.adam_beta1,
+            "adam_beta2": self.adam_beta2,
+            "weight_decay": self.weight_decay,
         }
 
     @classmethod
@@ -68,6 +92,18 @@ class TrainConfig:
             max_round_seconds=_float_json_field(
                 data, "max_round_seconds"
             ),
+            gamma=_float_json_field(data, "gamma"),
+            gae_lambda=_float_json_field(data, "gae_lambda"),
+            ppo_clip=_float_json_field(data, "ppo_clip"),
+            value_clip=_float_json_field(data, "value_clip"),
+            entropy_coef=_float_json_field(data, "entropy_coef"),
+            value_coef=_float_json_field(data, "value_coef"),
+            max_grad_norm=_float_json_field(data, "max_grad_norm"),
+            ppo_epochs=_int_json_field(data, "ppo_epochs"),
+            minibatch_size=_int_json_field(data, "minibatch_size"),
+            adam_beta1=_float_json_field(data, "adam_beta1"),
+            adam_beta2=_float_json_field(data, "adam_beta2"),
+            weight_decay=_float_json_field(data, "weight_decay"),
         )
 
 

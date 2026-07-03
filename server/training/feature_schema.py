@@ -7,9 +7,9 @@ from types import MappingProxyType
 
 MAX_TRICK_AGE: int = 33
 MAX_PLAY_ORDER: int = 3
-MAX_CARD_ORDER: int = 32
 MAX_PLAY_WIDTH: int = 33
 MAX_EVENT_AGE: int = 32
+MAX_FACE_COUNT: int = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,15 +23,15 @@ class NumericFeatureSpec:
 
 def _numeric_specs() -> tuple[NumericFeatureSpec, ...]:
     items: tuple[tuple[str, float], ...] = (
-        ("card:points", 10.0),
-        ("card:trick_age", float(MAX_TRICK_AGE)),
-        ("card:play_order", float(MAX_PLAY_ORDER)),
-        ("card:card_order", float(MAX_CARD_ORDER)),
-        ("card:play_width", float(MAX_PLAY_WIDTH)),
-        ("card:event_age", float(MAX_EVENT_AGE)),
+        ("face_count:points", 10.0),
+        ("face_count:count", float(MAX_FACE_COUNT)),
+        ("face_count:trick_age", float(MAX_TRICK_AGE)),
+        ("face_count:play_order", float(MAX_PLAY_ORDER)),
+        ("face_count:play_width", float(MAX_PLAY_WIDTH)),
+        ("face_count:event_age", float(MAX_EVENT_AGE)),
         ("global:deck_count", 4.0),
         ("global:player_count", 4.0),
-        ("global:bottom_card_count", float(MAX_CARD_ORDER)),
+        ("global:bottom_card_count", float(MAX_PLAY_WIDTH)),
         ("round:self_team_distance_to_required_level", 13.0),
         ("round:enemy_team_distance_to_required_level", 13.0),
         ("round:current_score", 200.0),

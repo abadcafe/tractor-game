@@ -19,7 +19,6 @@ function makeSnapshot(phase: RoundPhase): StateSnapshot {
     trick: null,
     last_completed_trick: null,
     defender_point_cards: [],
-    failed_throw: null,
     bid_events: [],
     bid_winner: null,
     stir_events: [],

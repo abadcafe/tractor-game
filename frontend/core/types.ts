@@ -51,6 +51,7 @@ export interface CompletedTrick {
   slots: TrickSlot[];
   winner: number;
   points: number;
+  failed_throw: FailedThrow | null;
 }
 
 /** Public event emitted when a throw attempt is forced to a smaller sub-play. */
@@ -113,11 +114,11 @@ export interface StateSnapshot {
     lead_player: number;
     slots: TrickSlot[];
     current_player: number;
+    failed_throw: FailedThrow | null;
   } | null;
 
   last_completed_trick: CompletedTrick | null;
   defender_point_cards: Card[];
-  failed_throw: FailedThrow | null;
 
   bid_events: BidEvent[];
   bid_winner: BidEvent | null;

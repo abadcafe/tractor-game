@@ -112,13 +112,10 @@ async def train_self_play(
                 else stats.policy_loss,
                 value_loss=None if stats is None else stats.value_loss,
                 entropy=None if stats is None else stats.entropy,
-                invalid_action_count=round_result.invalid_action_count,
-                resample_count=round_result.resample_count,
-                forced_action_count=round_result.forced_action_count,
-                legal_action_rate=_legal_action_rate(
-                    accepted=round_result.accepted_action_count,
-                    invalid=round_result.invalid_action_count,
-                ),
+                approx_kl=None if stats is None else stats.approx_kl,
+                clip_fraction=None
+                if stats is None
+                else stats.clip_fraction,
                 average_action_choices=round_result.average_action_choices,
                 checkpoint_path=str(checkpoint_path),
             ),
@@ -140,13 +137,6 @@ async def train_self_play(
         total_updates=total_updates,
         checkpoint_path=latest_checkpoint,
     )
-
-
-def _legal_action_rate(*, accepted: int, invalid: int) -> float:
-    total = accepted + invalid
-    if total == 0:
-        return 1.0
-    return accepted / total
 
 
 def _load_or_create_state(

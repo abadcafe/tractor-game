@@ -8,16 +8,18 @@ from dataclasses import dataclass
 from server.player.base import GameView, Player
 from server.protocol import PlayerMessage, StateMessage
 from server.result import Ok
+from server.rules.cards import Card
+from server.training.legal_actions import build_legal_action_index
 from server.training.observation import (
     PublicHistoryRecorder,
     build_observation,
 )
 from server.training.policy import TrainingPolicy
-from server.training.rule_repair import repair_action
-from server.training.selection_actions import GeneratedAction
+from server.training.semantic_actions import (
+    GeneratedAction,
+    bind_generated_action,
+)
 from server.training.trajectory import DecisionStep, TrajectoryRecorder
-
-MAX_MODEL_RESAMPLES_PER_STATE: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,9 +28,6 @@ class TrainingPlayerStats:
 
     generated_action_count: int = 0
     accepted_action_count: int = 0
-    invalid_action_count: int = 0
-    resample_count: int = 0
-    forced_action_count: int = 0
     action_choice_count: int = 0
 
 
@@ -63,7 +62,6 @@ class TrainingPlayer(Player):
         self._history = history or PublicHistoryRecorder()
         self._pending: PendingDecision | None = None
         self._held_scoring_message: StateMessage | None = None
-        self._resamples_for_seq: int = 0
         self._action_tasks: set[asyncio.Task[None]] = set()
         self._stats = TrainingPlayerStats()
 
@@ -83,9 +81,6 @@ class TrainingPlayer(Player):
             return
         if message.state.awaiting_action == "next_round":
             self._handle_next_round_state(game, message)
-            return
-        if self._resamples_for_seq >= MAX_MODEL_RESAMPLES_PER_STATE:
-            self._submit_forced_action(game, message)
             return
         self._submit_model_action(game, message)
 
@@ -109,7 +104,6 @@ class TrainingPlayer(Player):
         self.raise_background_errors()
         self._history.clear()
         self._pending = None
-        self._resamples_for_seq = 0
         self._stats = TrainingPlayerStats()
 
     async def confirm_held_scoring_next_round(
@@ -131,15 +125,16 @@ class TrainingPlayer(Player):
         if pending is None:
             return False
         if message.error is not None and message.seq == pending.seq:
-            self._stats = _add_invalid(self._stats)
             self._pending = None
-            self._resamples_for_seq += 1
-            return False
+            raise AssertionError(
+                "training legal action was rejected: "
+                f"player={self.index}, seq={message.seq}, "
+                f"error={message.error}, action={pending.step.action!r}"
+            )
         if message.error is None and message.seq != pending.seq:
             self._recorder.append(pending.step)
             self._stats = _add_accepted(self._stats)
             self._pending = None
-            self._resamples_for_seq = 0
             return False
         return True
 
@@ -168,15 +163,21 @@ class TrainingPlayer(Player):
             snapshot=message.state,
             history=self._history.tricks(),
         )
+        legal_actions = build_legal_action_index(
+            player_index=self.index,
+            snapshot=message.state,
+            query=observation.action_query,
+        )
         decision = self._policy.decide(
             observation,
-            observation.action_query,
+            legal_actions,
         )
         step = DecisionStep(
             player_index=self.index,
             seq=message.seq,
             observation=observation,
             action_query=observation.action_query,
+            legal_actions=legal_actions,
             action=decision.action,
             log_probability=decision.log_probability,
             value_estimate=decision.value_estimate,
@@ -189,30 +190,22 @@ class TrainingPlayer(Player):
             choice_count=decision.choice_count,
         )
         self._submit_generated_action(
-            game, message.seq, decision.action
+            game,
+            message.seq,
+            decision.action,
+            message.state.player_hand,
         )
-
-    def _submit_forced_action(
-        self,
-        game: GameView,
-        message: StateMessage,
-    ) -> None:
-        repaired = repair_action(
-            player_index=self.index,
-            snapshot=message.state,
-        )
-        assert isinstance(repaired, Ok)
-        self._resamples_for_seq = 0
-        self._stats = _add_forced(self._stats)
-        self._submit_generated_action(game, message.seq, repaired.value)
 
     def _submit_generated_action(
         self,
         game: GameView,
         seq: int,
         action: GeneratedAction,
+        hand_cards: list[Card],
     ) -> None:
-        self._submit_raw_action(game, seq, action.raw)
+        bound = bind_generated_action(action, hand_cards)
+        assert isinstance(bound, Ok)
+        self._submit_raw_action(game, seq, bound.value.raw)
 
     def _submit_raw_action(
         self,
@@ -234,9 +227,6 @@ def _add_generated(
     return TrainingPlayerStats(
         generated_action_count=stats.generated_action_count + 1,
         accepted_action_count=stats.accepted_action_count,
-        invalid_action_count=stats.invalid_action_count,
-        resample_count=stats.resample_count,
-        forced_action_count=stats.forced_action_count,
         action_choice_count=stats.action_choice_count + choice_count,
     )
 
@@ -245,30 +235,5 @@ def _add_accepted(stats: TrainingPlayerStats) -> TrainingPlayerStats:
     return TrainingPlayerStats(
         generated_action_count=stats.generated_action_count,
         accepted_action_count=stats.accepted_action_count + 1,
-        invalid_action_count=stats.invalid_action_count,
-        resample_count=stats.resample_count,
-        forced_action_count=stats.forced_action_count,
-        action_choice_count=stats.action_choice_count,
-    )
-
-
-def _add_invalid(stats: TrainingPlayerStats) -> TrainingPlayerStats:
-    return TrainingPlayerStats(
-        generated_action_count=stats.generated_action_count,
-        accepted_action_count=stats.accepted_action_count,
-        invalid_action_count=stats.invalid_action_count + 1,
-        resample_count=stats.resample_count + 1,
-        forced_action_count=stats.forced_action_count,
-        action_choice_count=stats.action_choice_count,
-    )
-
-
-def _add_forced(stats: TrainingPlayerStats) -> TrainingPlayerStats:
-    return TrainingPlayerStats(
-        generated_action_count=stats.generated_action_count,
-        accepted_action_count=stats.accepted_action_count,
-        invalid_action_count=stats.invalid_action_count,
-        resample_count=stats.resample_count,
-        forced_action_count=stats.forced_action_count + 1,
         action_choice_count=stats.action_choice_count,
     )

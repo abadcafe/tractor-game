@@ -5,32 +5,30 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
-from server.result import Ok
+from server.result import Rejected
 from server.training.config import ModelConfig
+from server.training.legal_actions import LegalActionIndex
 from server.training.model import TractorPolicyModel
 from server.training.observation import Observation
 from server.training.policy import PolicyDecision
-from server.training.selection_actions import (
-    MAX_HAND_CARD_SLOTS,
-    ActionQuery,
-    SelectionChoice,
-    SelectionState,
-    SelectionTrace,
-    decode_selection_action,
-    valid_selection_choices,
+from server.training.semantic_actions import (
+    MAX_ARGUMENT_TOKENS,
+    SemanticArgument,
+    SemanticArgumentPrefix,
+    SemanticArgumentTrace,
 )
-from server.training.selection_torch import (
-    forward_selection_head,
-    logits_for_choices,
+from server.training.semantic_torch import (
+    forward_argument_head,
+    logits_for_arguments,
 )
 from server.training.tensorize import (
+    tensorize_argument_prefix,
     tensorize_observation,
-    tensorize_selection_state,
 )
 
 
 class TorchTrainingPolicy:
-    """Sample selection traces from a torch policy/value model."""
+    """Sample semantic argument traces from a torch model."""
 
     def __init__(
         self,
@@ -49,7 +47,7 @@ class TorchTrainingPolicy:
     def decide(
         self,
         observation: Observation,
-        query: ActionQuery,
+        legal_actions: LegalActionIndex,
     ) -> PolicyDecision:
         self.model.eval()
         with torch.no_grad():
@@ -58,30 +56,30 @@ class TorchTrainingPolicy:
                 max_observation_tokens=self.config.max_tokens,
                 device=self.device,
             )
-            state = SelectionState(selected_slots=())
-            choices: list[SelectionChoice] = []
+            prefix = SemanticArgumentPrefix(arguments=())
+            arguments: list[SemanticArgument] = []
             log_probability = 0.0
             entropy = 0.0
             value_estimate = 0.0
-            for _ in range(MAX_HAND_CARD_SLOTS + 2):
-                selection_batch = tensorize_selection_state(
-                    query=query,
-                    state=state,
+            choice_count = 0
+            for _ in range(MAX_ARGUMENT_TOKENS):
+                prefix_batch = tensorize_argument_prefix(
+                    prefix=prefix,
                     device=self.device,
                 )
-                output = forward_selection_head(
+                output = forward_argument_head(
                     model=self.model,
-                    query=query,
                     observation=observation_batch,
-                    selection=selection_batch,
+                    prefix=prefix_batch,
                 )
                 value_estimate = float(
                     output.values[0].detach().cpu().item()
                 )
-                allowed = valid_selection_choices(query, state)
+                allowed = legal_actions.allowed_next(prefix)
                 if not allowed:
                     break
-                logits = logits_for_choices(output, allowed)
+                choice_count += len(allowed)
+                logits = logits_for_arguments(output, allowed)
                 masked_logits = logits / self.temperature
                 probabilities = torch.softmax(masked_logits, dim=0)
                 log_probabilities = torch.log_softmax(
@@ -90,33 +88,37 @@ class TorchTrainingPolicy:
                 sampled = torch.multinomial(
                     probabilities, num_samples=1
                 )
-                choice_index = int(sampled[0].detach().cpu().item())
-                choice = allowed[choice_index]
+                argument_index = int(sampled[0].detach().cpu().item())
+                argument = allowed[argument_index]
                 log_probability += _float_tensor(
-                    log_probabilities[choice_index]
+                    log_probabilities[argument_index]
                 )
                 entropy += _float_tensor(
                     -(probabilities * log_probabilities).sum()
                 )
-                choices.append(choice)
-                if choice.kind in ("pass", "stop"):
+                arguments.append(argument)
+                if argument.kind in ("pass", "stop"):
                     break
-                assert choice.kind == "select_card"
-                assert choice.slot is not None
-                state = SelectionState(
-                    selected_slots=(*state.selected_slots, choice.slot)
+                assert argument.kind == "select_face_count"
+                prefix = SemanticArgumentPrefix(
+                    arguments=(*prefix.arguments, argument)
                 )
             else:
                 assert False
-        trace = SelectionTrace(choices=tuple(choices))
-        decoded = decode_selection_action(query, trace)
-        assert isinstance(decoded, Ok)
+        trace = SemanticArgumentTrace(arguments=tuple(arguments))
+        decoded = legal_actions.decode(trace)
+        if isinstance(decoded, Rejected):
+            raise AssertionError(
+                "invalid semantic trace: "
+                f"query={legal_actions.query!r}, "
+                f"trace={trace!r}, reason={decoded.reason}"
+            )
         return PolicyDecision(
             action=decoded.value,
             log_probability=log_probability,
             value_estimate=value_estimate,
             entropy=entropy,
-            choice_count=len(decoded.value.selection_trace.choices),
+            choice_count=choice_count,
         )
 
 

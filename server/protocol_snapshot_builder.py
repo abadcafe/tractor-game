@@ -96,6 +96,7 @@ def completed_trick_snapshot(
         ],
         winner=trick.winner,
         points=trick.points,
+        failed_throw=optional_failed_throw_snapshot(trick.failed_throw),
     )
 
 
@@ -118,11 +119,13 @@ def trick_snapshot(
     lead_player: int,
     slots: list[TrickSlotSnapshot],
     current_player: int,
+    failed_throw: FailedThrow | None,
 ) -> TrickSnapshot:
     return TrickSnapshot(
         lead_player=lead_player,
         slots=slots,
         current_player=current_player,
+        failed_throw=optional_failed_throw_snapshot(failed_throw),
     )
 
 

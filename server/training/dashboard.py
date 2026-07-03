@@ -60,9 +60,8 @@ def render_dashboard_html(*, title: str) -> str:
       const keys = [
         'total_games', 'total_updates', 'games_per_second',
         'decisions_per_second', 'average_reward', 'average_level_delta',
-        'invalid_action_count', 'legal_action_rate',
-        'resample_count', 'forced_action_count',
-        'average_action_choices'
+        'policy_loss', 'value_loss', 'entropy', 'approx_kl',
+        'clip_fraction', 'average_action_choices'
       ];
       document.getElementById('grid').innerHTML = keys.map((key) => `
         <div class="metric">
