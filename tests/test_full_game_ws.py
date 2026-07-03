@@ -2181,13 +2181,16 @@ def _play_waiting(
     assert scoring_raw is not None
     scoring = _as_dict(scoring_raw)
     assert "total_defender_points" in scoring
-    assert "declarer_team" in scoring
+    assert "round_winning_team" in scoring
+    assert "declarer_team" not in scoring
     assert isinstance(state["next_round_confirmed"], list)
 
     scoring_tdp = scoring["total_defender_points"]
     assert isinstance(scoring_tdp, int)
-    scoring_dt = scoring["declarer_team"]
-    assert isinstance(scoring_dt, int)
+    round_winning_team = scoring["round_winning_team"]
+    assert isinstance(round_winning_team, int)
+    round_declarer_team = state["declarer_team"]
+    assert isinstance(round_declarer_team, int)
 
     # Compute expected levels from scoring data. process_round_result
     # runs
@@ -2207,7 +2210,7 @@ def _play_waiting(
     )
     expected_t0, expected_t1 = _compute_expected_levels(
         scoring_tdp,
-        scoring_dt,
+        round_declarer_team,
         t0_for_calc,
         t1_for_calc,
     )
@@ -2217,18 +2220,19 @@ def _play_waiting(
             f"team0_level mismatch: expected {expected_t0}, got"
             f"{state['team0_level']}"
             f"(prev={prev_team0_level}, tdp={scoring_tdp},"
-            f"dt={scoring_dt})"
+            f"declarer_team={round_declarer_team})"
         )
         assert _as_str(state["team1_level"]) == expected_t1, (
             f"team1_level mismatch: expected {expected_t1}, got"
             f"{state['team1_level']}"
             f"(prev={prev_team1_level}, tdp={scoring_tdp},"
-            f"dt={scoring_dt})"
+            f"declarer_team={round_declarer_team})"
         )
     print(
         f"  [R{round_count}:WAITING] defender_pts={scoring_tdp} "
-        f"declarer_team={scoring_dt} levels: t0={expected_t0}"
-        f"t1={expected_t1}",
+        f"declarer_team={round_declarer_team} "
+        f"round_winning_team={round_winning_team} "
+        f"levels: t0={expected_t0} t1={expected_t1}",
         flush=True,
     )
 
@@ -2477,14 +2481,14 @@ def test_full_game(sync_client: SyncServerClient) -> None:
                 )
                 if scoring is not None:
                     scoring_tdp = scoring.get("total_defender_points")
-                    scoring_dt = scoring.get("declarer_team")
+                    round_declarer_team = state.get("declarer_team")
                     if isinstance(scoring_tdp, int) and isinstance(
-                        scoring_dt, int
+                        round_declarer_team, int
                     ):
                         expected_t0, expected_t1 = (
                             _compute_expected_levels(
                                 scoring_tdp,
-                                scoring_dt,
+                                round_declarer_team,
                                 prev_t0,
                                 prev_t1,
                             )

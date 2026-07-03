@@ -1,7 +1,7 @@
 """Scoring module: pure calculation from inputs to RoundResult.
 
 Computes bottom card points, ambush multiplier, total defender points,
-level changes, and declarer rotation per spec section 9.
+raw level gains, and declarer rotation per spec section 9.
 
 This is NOT a state machine -- it is a pure function.
 """
@@ -13,7 +13,6 @@ from server.rules.decompose import decompose
 
 from .constants import (
     SCORE_THRESHOLDS,
-    advance_level,
     get_partner_index,
     get_team_index,
     next_player_ccw,
@@ -26,15 +25,39 @@ class RoundResult(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    team0_new_level: Rank
-    team1_new_level: Rank
-    next_declarer_team: int
+    declarer_team: int
+    round_winning_team: int
     next_declarer_player: int
     total_defender_points: int
-    declarer_level_change: int
-    defender_level_change: int = 0
+    declarer_level_gain: int
+    defender_level_gain: int = 0
     switch_declarer: bool
     bottom_card_bonus: int
+
+    def model_post_init(self, __context: object) -> None:
+        """Assert cross-field invariants after field parsing."""
+        assert_round_result_invariants(self)
+
+
+def assert_round_result_invariants(result: RoundResult) -> None:
+    """Assert RoundResult cross-field invariants."""
+    assert result.declarer_team in (0, 1)
+    assert result.round_winning_team in (0, 1)
+    assert result.total_defender_points >= 0
+    assert result.declarer_level_gain >= 0
+    assert result.defender_level_gain >= 0
+    assert result.bottom_card_bonus >= 0
+    assert result.switch_declarer == (
+        result.round_winning_team != result.declarer_team
+    )
+    assert (
+        get_team_index(result.next_declarer_player)
+        == result.round_winning_team
+    )
+    if result.switch_declarer:
+        assert result.declarer_level_gain == 0
+    else:
+        assert result.defender_level_gain == 0
 
 
 def _compute_ambush_multiplier(
@@ -98,7 +121,7 @@ def _find_lead_cards(last_trick: CompletedTrick) -> list[Card]:
 
 def _determine_level_change(total_points: int) -> tuple[int, bool, int]:
     """
-    Return (declarer_level_change, switch_declarer,
+    Return (declarer_level_gain, switch_declarer,
     defender_level_gain).
 
     Levels never retreat. When defenders score >= 80, the declarer team
@@ -127,8 +150,6 @@ def calculate_score(
     last_trick: CompletedTrick,
     declarer_team: int,
     declarer_player: int,
-    team0_level: Rank,
-    team1_level: Rank,
     trump_suit: Suit | None,
     trump_rank: Rank,
 ) -> RoundResult:
@@ -161,29 +182,6 @@ def calculate_score(
         total_defender_points
     )
 
-    # Compute new levels (levels never retreat)
-    if switch:
-        # Declarer team: 0 change; defender team (new declarer):
-        # +defender_gain
-        if declarer_team == 0:
-            team0_new_level = advance_level(team0_level, 0)
-            team1_new_level = advance_level(team1_level, defender_gain)
-        else:
-            team0_new_level = advance_level(team0_level, defender_gain)
-            team1_new_level = advance_level(team1_level, 0)
-    else:
-        # Declarer team: +declarer_change; defender team: 0 change
-        if declarer_team == 0:
-            team0_new_level = advance_level(
-                team0_level, declarer_change
-            )
-            team1_new_level = advance_level(team1_level, 0)
-        else:
-            team0_new_level = advance_level(team0_level, 0)
-            team1_new_level = advance_level(
-                team1_level, declarer_change
-            )
-
     # Determine next declarer
     if switch:
         next_team = defender_team
@@ -193,13 +191,12 @@ def calculate_score(
         next_player = get_partner_index(declarer_player)
 
     return RoundResult(
-        team0_new_level=team0_new_level,
-        team1_new_level=team1_new_level,
-        next_declarer_team=next_team,
+        declarer_team=declarer_team,
+        round_winning_team=next_team,
         next_declarer_player=next_player,
         total_defender_points=total_defender_points,
-        declarer_level_change=declarer_change,
-        defender_level_change=defender_gain if switch else 0,
+        declarer_level_gain=declarer_change,
+        defender_level_gain=defender_gain if switch else 0,
         switch_declarer=switch,
         bottom_card_bonus=bottom_card_bonus,
     )

@@ -6,6 +6,11 @@ import math
 from dataclasses import dataclass
 from typing import Literal
 
+from server.rules.cards import Rank
+from server.sm.required_progress import (
+    DEFAULT_REQUIRED_LEVEL_PLAN,
+    RequiredLevelPlan,
+)
 from server.training.json_types import JsonObject
 
 type TrainingDevice = Literal["cpu", "cuda"]
@@ -70,6 +75,7 @@ class TrainConfig:
     adam_beta1: float = 0.9
     adam_beta2: float = 0.999
     weight_decay: float = 0.0
+    required_level_plan: RequiredLevelPlan = DEFAULT_REQUIRED_LEVEL_PLAN
 
     def __post_init__(self) -> None:
         assert _is_finite(self.learning_rate)
@@ -118,6 +124,10 @@ class TrainConfig:
             "adam_beta1": self.adam_beta1,
             "adam_beta2": self.adam_beta2,
             "weight_decay": self.weight_decay,
+            "required_levels": [
+                level.value
+                for level in self.required_level_plan.required_levels
+            ],
         }
 
     @classmethod
@@ -143,6 +153,10 @@ class TrainConfig:
             adam_beta1=_float_json_field(data, "adam_beta1"),
             adam_beta2=_float_json_field(data, "adam_beta2"),
             weight_decay=_float_json_field(data, "weight_decay"),
+            required_level_plan=_required_level_plan_json_field(
+                data,
+                "required_levels",
+            ),
         )
 
 
@@ -165,6 +179,19 @@ def _device_json_field(data: JsonObject, field: str) -> TrainingDevice:
     if value == "cuda":
         return "cuda"
     assert False
+
+
+def _required_level_plan_json_field(
+    data: JsonObject,
+    field: str,
+) -> RequiredLevelPlan:
+    value = data[field]
+    assert isinstance(value, list)
+    levels: list[Rank] = []
+    for item in value:
+        assert isinstance(item, str)
+        levels.append(Rank(item))
+    return RequiredLevelPlan(required_levels=tuple(levels))
 
 
 def _is_finite(value: float) -> bool:

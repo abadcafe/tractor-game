@@ -209,13 +209,12 @@ def _stirring_round_state_with_bottom(
 
 def _round_result() -> RoundResult:
     return RoundResult(
-        team0_new_level=Rank.TWO,
-        team1_new_level=Rank.TWO,
-        next_declarer_team=0,
+        declarer_team=0,
+        round_winning_team=0,
         next_declarer_player=0,
         total_defender_points=0,
-        declarer_level_change=0,
-        defender_level_change=0,
+        declarer_level_gain=0,
+        defender_level_gain=0,
         switch_declarer=False,
         bottom_card_bonus=0,
     )
@@ -995,6 +994,32 @@ def test_snapshot_public_bottom_cards_after_scoring() -> None:
         assert _card_ids(snap.scoring.bottom_cards) == _card_ids(
             bottom_cards
         )
+
+
+def test_snapshot_scoring_exposes_round_winning_team() -> None:
+    round_result = RoundResult(
+        declarer_team=0,
+        round_winning_team=1,
+        next_declarer_player=1,
+        total_defender_points=80,
+        declarer_level_gain=0,
+        defender_level_gain=0,
+        switch_declarer=True,
+        bottom_card_bonus=0,
+    )
+    game = _game_with_round_state(
+        _stirring_round_state_with_bottom(
+            bottom_cards=[],
+            bottom_owner_player=2,
+            result=round_result,
+        )
+    )
+
+    snap = game.snapshot(0)
+
+    assert snap.declarer_team == 0
+    assert snap.scoring is not None
+    assert snap.scoring.round_winning_team == 1
 
 
 def test_snapshot_play_leading_has_no_action_hints() -> None:

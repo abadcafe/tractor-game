@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from server.rules.cards import Rank
+from server.sm.required_progress import RequiredLevelPlan
 from server.training.config import ModelConfig, TrainConfig
 from server.training.metrics import read_metrics
 from server.training.run_setup import initialize_training_run
@@ -19,7 +21,7 @@ def test_init_only_prints_resumable_torch_checkpoint(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    checkpoint_path = tmp_path / "checkpoints" / "latest.pt"
+    checkpoint_path = tmp_path / "checkpoints" / "latest.json"
 
     main(
         (
@@ -36,6 +38,8 @@ def test_init_only_prints_resumable_torch_checkpoint(
             "0.0",
             "--max-tokens",
             "64",
+            "--required-levels",
+            "J,A",
         )
     )
 
@@ -48,6 +52,9 @@ def test_init_only_prints_resumable_torch_checkpoint(
         heads=1,
         dropout=0.0,
         max_tokens=64,
+    )
+    assert metadata.train_config.required_level_plan == (
+        RequiredLevelPlan(required_levels=(Rank.JACK, Rank.ACE))
     )
     assert metadata.total_rounds == 0
     assert metadata.total_updates == 0

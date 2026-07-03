@@ -40,7 +40,7 @@ def test_initialize_training_run_writes_torch_checkpoint_and_metrics(
     assert prepared.checkpoint_path.exists()
     assert (
         prepared.checkpoint_path
-        == tmp_path / "checkpoints" / "latest.pt"
+        == tmp_path / "checkpoints" / "latest.json"
     )
     metadata = read_torch_checkpoint_metadata(prepared.checkpoint_path)
     assert metadata.model_config == ModelConfig(d_model=128)

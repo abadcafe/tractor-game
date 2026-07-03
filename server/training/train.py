@@ -12,6 +12,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from server.rules.cards import Rank
+from server.sm.constants import LEVELS
+from server.sm.required_progress import RequiredLevelPlan
 from server.training.config import (
     ModelConfig,
     TrainConfig,
@@ -47,6 +50,7 @@ class TrainConfigOverrides:
     adam_beta1: float | None = None
     adam_beta2: float | None = None
     weight_decay: float | None = None
+    required_level_plan: RequiredLevelPlan | None = None
 
 
 def resolve_model_config(
@@ -121,6 +125,9 @@ def resolve_train_config(
         weight_decay=base.weight_decay
         if cli_overrides.weight_decay is None
         else cli_overrides.weight_decay,
+        required_level_plan=base.required_level_plan
+        if cli_overrides.required_level_plan is None
+        else cli_overrides.required_level_plan,
     )
 
 
@@ -178,6 +185,39 @@ def _adam_beta_arg(text: str) -> float:
     if value < 0.0 or value >= 1.0:
         raise argparse.ArgumentTypeError("must be >= 0 and < 1")
     return value
+
+
+def _required_levels_arg(text: str) -> RequiredLevelPlan:
+    parts = tuple(item.strip() for item in text.split(","))
+    if not parts or any(part == "" for part in parts):
+        raise argparse.ArgumentTypeError(
+            "must be comma-separated ranks"
+        )
+    levels: list[Rank] = []
+    for part in parts:
+        try:
+            levels.append(Rank(part))
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(
+                f"unsupported rank {part!r}"
+            ) from exc
+    if not levels or levels[-1] != Rank.ACE:
+        raise argparse.ArgumentTypeError(
+            "must be strictly increasing and end at A"
+        )
+    previous_index = -1
+    for level in levels:
+        if level not in LEVELS:
+            raise argparse.ArgumentTypeError(
+                "must use suited ranks from 2 through A"
+            )
+        level_index = LEVELS.index(level)
+        if level_index <= previous_index:
+            raise argparse.ArgumentTypeError(
+                "must be strictly increasing and end at A"
+            )
+        previous_index = level_index
+    return RequiredLevelPlan(required_levels=tuple(levels))
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -249,6 +289,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument(
         "--weight-decay", type=_non_negative_float_arg, default=None
     )
+    parser.add_argument(
+        "--required-levels",
+        type=_required_levels_arg,
+        default=None,
+    )
     args = parser.parse_args(argv)
     run_dir = Path(args.run_dir)
     resume_path = None if args.resume is None else Path(args.resume)
@@ -289,6 +334,7 @@ def main(argv: Sequence[str] | None = None) -> None:
             adam_beta1=args.adam_beta1,
             adam_beta2=args.adam_beta2,
             weight_decay=args.weight_decay,
+            required_level_plan=args.required_levels,
         ),
         resume_path=resume_path,
     )

@@ -21,10 +21,11 @@ from server.rules.card_faces import (
 )
 from server.rules.cards import Card
 from server.sm.constants import BOTTOM_CARD_COUNT, PLAYER_COUNT
-from server.training.progress import (
-    DEFAULT_PROGRESS_CONFIG,
-    ProgressConfig,
+from server.sm.required_progress import (
+    DEFAULT_REQUIRED_LEVEL_PLAN,
+    RequiredLevelPlan,
     distance_to_target,
+    progress_target_value,
     stage_target,
 )
 from server.training.semantic_actions import (
@@ -153,7 +154,9 @@ def build_observation(
     player_index: int,
     snapshot: StateSnapshot,
     history: tuple[HistoryTrick, ...],
-    progress_config: ProgressConfig = DEFAULT_PROGRESS_CONFIG,
+    required_level_plan: RequiredLevelPlan = (
+        DEFAULT_REQUIRED_LEVEL_PLAN
+    ),
 ) -> Observation:
     """Build one training observation from player-visible data only."""
     action_query = build_action_query(
@@ -161,12 +164,12 @@ def build_observation(
         snapshot=snapshot,
     )
     tokens: list[ObservationToken] = []
-    tokens.extend(_global_tokens(progress_config))
+    tokens.extend(_global_tokens(required_level_plan))
     tokens.extend(
         _round_tokens(
             player_index=player_index,
             snapshot=snapshot,
-            progress_config=progress_config,
+            required_level_plan=required_level_plan,
         )
     )
     tokens.extend(_bid_event_tokens(player_index, snapshot.bid_events))
@@ -211,7 +214,7 @@ def face_count_tokens(
 
 
 def _global_tokens(
-    progress_config: ProgressConfig,
+    required_level_plan: RequiredLevelPlan,
 ) -> tuple[GlobalFieldToken, ...]:
     tokens: list[GlobalFieldToken] = [
         GlobalFieldToken("team_layout", "fixed_partner_opposite"),
@@ -221,9 +224,9 @@ def _global_tokens(
         GlobalFieldToken("deck_count", 2),
         GlobalFieldToken("player_count", PLAYER_COUNT),
         GlobalFieldToken("bottom_card_count", BOTTOM_CARD_COUNT),
-        GlobalFieldToken("rules_version", "base-A"),
+        GlobalFieldToken("rules_version", "required-levels"),
     ]
-    for level in progress_config.required_levels:
+    for level in required_level_plan.required_levels:
         tokens.append(GlobalFieldToken("required_level", level.value))
     tokens.append(GlobalFieldToken("final_target", "WIN"))
     return tuple(tokens)
@@ -233,17 +236,18 @@ def _round_tokens(
     *,
     player_index: int,
     snapshot: StateSnapshot,
-    progress_config: ProgressConfig,
+    required_level_plan: RequiredLevelPlan,
 ) -> tuple[RoundFieldToken, ...]:
     self_team = player_index % 2
+    enemy_team = 1 - self_team
     self_level = (
         snapshot.team0_level if self_team == 0 else snapshot.team1_level
     )
     enemy_level = (
         snapshot.team1_level if self_team == 0 else snapshot.team0_level
     )
-    self_target = stage_target(self_level, progress_config)
-    enemy_target = stage_target(enemy_level, progress_config)
+    self_target = stage_target(self_level, required_level_plan)
+    enemy_target = stage_target(enemy_level, required_level_plan)
     dealer_role = (
         None
         if snapshot.declarer_player is None
@@ -255,17 +259,23 @@ def _round_tokens(
         RoundFieldToken("awaiting_action", snapshot.awaiting_action),
         RoundFieldToken("dealer_role", dealer_role),
         RoundFieldToken("dealer_team", snapshot.declarer_team),
+        RoundFieldToken(
+            "self_team_is_declarer",
+            snapshot.declarer_team == self_team,
+        ),
+        RoundFieldToken(
+            "enemy_team_is_declarer",
+            snapshot.declarer_team == enemy_team,
+        ),
         RoundFieldToken("self_team_level", self_level.value),
         RoundFieldToken("enemy_team_level", enemy_level.value),
         RoundFieldToken(
             "self_team_required_level",
-            self_target if self_target == "WIN" else self_target.value,
+            progress_target_value(self_target),
         ),
         RoundFieldToken(
             "enemy_team_required_level",
-            enemy_target
-            if enemy_target == "WIN"
-            else enemy_target.value,
+            progress_target_value(enemy_target),
         ),
         RoundFieldToken(
             "self_team_distance_to_required_level",

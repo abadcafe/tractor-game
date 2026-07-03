@@ -78,6 +78,7 @@ def test_build_observation_records_current_score_in_round_context() -> (
     None
 ):
     snapshot = make_snapshot(
+        declarer_team=0,
         defender_points=65,
         team0_level="10",
         team1_level="K",
@@ -90,6 +91,14 @@ def test_build_observation_records_current_score_in_round_context() -> (
     )
 
     assert RoundFieldToken("current_score", 65) in observation.tokens
+    assert (
+        RoundFieldToken("self_team_is_declarer", True)
+        in observation.tokens
+    )
+    assert (
+        RoundFieldToken("enemy_team_is_declarer", False)
+        in observation.tokens
+    )
     assert (
         RoundFieldToken("self_team_required_level", "A")
         in observation.tokens

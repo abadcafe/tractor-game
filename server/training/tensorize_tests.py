@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
+
 import torch
 
 from server.player.test_helpers import card, make_snapshot
@@ -17,7 +20,6 @@ from server.training.tensorize import (
     tensorize_argument_prefix,
     tensorize_observation,
 )
-from server.training.tokens import GlobalFieldToken
 
 
 def test_tensorize_observation_outputs_numeric_tensors() -> None:
@@ -50,32 +52,39 @@ def test_tensorize_observation_outputs_numeric_tensors() -> None:
     assert batch.numeric_masks[0, -1].sum().item() == 0.0
 
 
-def test_tensorize_observation_rejects_oversized_observation() -> None:
-    observation = build_observation(
-        player_index=0,
-        snapshot=make_snapshot(),
-        history=(),
-    )
-    oversized = type(observation)(
-        player_index=observation.player_index,
-        tokens=(
-            GlobalFieldToken("rules_version", "base-A"),
-            GlobalFieldToken("final_target", "WIN"),
-        ),
-        hand_faces=observation.hand_faces,
-        action_query=observation.action_query,
+def test_tensorize_observation_crashes_on_oversized_observation() -> (
+    None
+):
+    completed: subprocess.CompletedProcess[str] = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import torch\n"
+                "from server.player.test_helpers import make_snapshot\n"
+                "from server.training.observation import "
+                "build_observation\n"
+                "from server.training.tensorize import "
+                "tensorize_observation\n"
+                "observation = build_observation(\n"
+                "    player_index=0,\n"
+                "    snapshot=make_snapshot(),\n"
+                "    history=(),\n"
+                ")\n"
+                "tensorize_observation(\n"
+                "    observation=observation,\n"
+                "    max_observation_tokens=1,\n"
+                "    device=torch.device('cpu'),\n"
+                ")\n"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
     )
 
-    try:
-        tensorize_observation(
-            observation=oversized,
-            max_observation_tokens=1,
-            device=torch.device("cpu"),
-        )
-    except AssertionError:
-        return
-
-    assert False
+    assert completed.returncode != 0
+    assert "AssertionError" in completed.stderr
 
 
 def test_tensorize_observation_exposes_face_count_component() -> None:

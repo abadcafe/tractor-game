@@ -9,7 +9,7 @@ from server.rules.cards import Card
 class ScoringSnapshot(SnapshotModel):
     """Round scoring information."""
 
-    declarer_team: int | None
+    round_winning_team: int
     defender_points: int
     total_defender_points: int
     bottom_card_bonus: int

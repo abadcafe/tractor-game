@@ -107,7 +107,7 @@ Deno.test("test_renderTrickView_waiting_scoring_keeps_last_trick", () => {
       ],
     },
     scoring: {
-      declarer_team: 0,
+      round_winning_team: 0,
       defender_points: 80,
       total_defender_points: 100,
       bottom_card_bonus: 20,

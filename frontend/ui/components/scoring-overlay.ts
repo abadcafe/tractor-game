@@ -71,9 +71,10 @@ function renderScoringSummary(
     return summary;
   }
 
-  const declarerLabel = scoring.declarer_team !== null
-    ? teamLabelForViewer(scoring.declarer_team, viewerPlayer)
-    : "—";
+  const roundWinnerLabel = teamLabelForViewer(
+    scoring.round_winning_team,
+    viewerPlayer,
+  );
   summary.appendChild(
     el(
       "div",
@@ -92,12 +93,12 @@ function renderScoringSummary(
     el(
       "div",
       { class: "scoring-overlay__meta" },
-      `庄家 ${declarerLabel}`,
+      `本轮胜者 ${roundWinnerLabel}`,
     ),
   );
 
   const resultText = scoringResultText(
-    scoring.declarer_team,
+    snapshot.declarer_team,
     levelChange,
     viewerPlayer,
   );

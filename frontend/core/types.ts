@@ -137,7 +137,7 @@ export interface StateSnapshot {
   } | null;
 
   scoring: {
-    declarer_team: number | null;
+    round_winning_team: number;
     defender_points: number;
     total_defender_points: number;
     bottom_card_bonus: number;

@@ -344,7 +344,7 @@ def _scoring_snapshot(
     if state.result is None:
         return None
     return scoring_snapshot(
-        declarer_team=state.declarer_team,
+        round_winning_team=state.result.round_winning_team,
         defender_points=state.defender_points,
         total_defender_points=state.result.total_defender_points,
         bottom_card_bonus=state.result.bottom_card_bonus,

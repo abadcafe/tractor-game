@@ -15,6 +15,11 @@ from server.player.test_helpers import (
 from server.protocol import ScoringSnapshot
 from server.result import Ok
 from server.rules.card_faces import CardFace, FaceCount
+from server.rules.cards import Rank
+from server.sm.required_progress import (
+    DEFAULT_REQUIRED_LEVEL_PLAN,
+    RequiredLevelPlan,
+)
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
 from server.training.player import TrainingPlayer
@@ -24,6 +29,7 @@ from server.training.semantic_actions import (
     SemanticArgumentPrefix,
     SemanticArgumentTrace,
 )
+from server.training.tokens import GlobalFieldToken, RoundFieldToken
 from server.training.trajectory import TrajectoryRecorder
 
 
@@ -58,6 +64,21 @@ class FirstCardPlayPolicy:
         )
 
 
+class CapturingFirstCardPlayPolicy(FirstCardPlayPolicy):
+    """Test policy that stores the observation it receives."""
+
+    def __init__(self) -> None:
+        self.observation: Observation | None = None
+
+    def decide(
+        self,
+        observation: Observation,
+        legal_actions: LegalActionIndex,
+    ) -> PolicyDecision:
+        self.observation = observation
+        return super().decide(observation, legal_actions)
+
+
 @pytest.mark.asyncio
 async def test_training_player_submits_action_without_hints() -> None:
     test_card = card("spades", "A", 1)
@@ -72,6 +93,7 @@ async def test_training_player_submits_action_without_hints() -> None:
     player = TrainingPlayer(
         index=0,
         policy=FirstCardPlayPolicy(),
+        required_level_plan=DEFAULT_REQUIRED_LEVEL_PLAN,
         recorder=recorder,
     )
 
@@ -104,6 +126,7 @@ async def test_training_player_records_action_after_acceptance() -> (
     player = TrainingPlayer(
         index=0,
         policy=FirstCardPlayPolicy(),
+        required_level_plan=DEFAULT_REQUIRED_LEVEL_PLAN,
         recorder=recorder,
     )
 
@@ -128,7 +151,11 @@ async def test_training_player_submits_initial_next_round() -> None:
         phase="WAITING", awaiting_action="next_round"
     )
     game = make_game(snapshot)
-    player = TrainingPlayer(index=2, policy=FirstCardPlayPolicy())
+    player = TrainingPlayer(
+        index=2,
+        policy=FirstCardPlayPolicy(),
+        required_level_plan=DEFAULT_REQUIRED_LEVEL_PLAN,
+    )
 
     await player.on_state(game, make_state_message(snapshot))
     await asyncio.sleep(0.05)
@@ -144,7 +171,7 @@ async def test_training_player_holds_scoring_next_round() -> None:
         phase="WAITING",
         awaiting_action="next_round",
         scoring=ScoringSnapshot(
-            declarer_team=0,
+            round_winning_team=1,
             defender_points=80,
             total_defender_points=80,
             bottom_card_bonus=0,
@@ -152,7 +179,11 @@ async def test_training_player_holds_scoring_next_round() -> None:
         ),
     )
     game = make_game(snapshot)
-    player = TrainingPlayer(index=2, policy=FirstCardPlayPolicy())
+    player = TrainingPlayer(
+        index=2,
+        policy=FirstCardPlayPolicy(),
+        required_level_plan=DEFAULT_REQUIRED_LEVEL_PLAN,
+    )
 
     await player.on_state(game, make_state_message(snapshot, seq=9))
     game.receive.assert_not_awaited()
@@ -164,3 +195,36 @@ async def test_training_player_holds_scoring_next_round() -> None:
     message = game.receive.call_args[0][1]
     assert message.raw == {"type": "next_round"}
     assert message.seq == 9
+
+
+@pytest.mark.asyncio
+async def test_training_player_observation_uses_custom_plan() -> None:
+    test_card = card("spades", "A", 1)
+    snapshot = make_snapshot(
+        phase="PLAYING",
+        awaiting_action="play",
+        player_hand=[test_card],
+        team0_level="2",
+        team1_level="2",
+    )
+    game = make_game(snapshot)
+    policy = CapturingFirstCardPlayPolicy()
+    player = TrainingPlayer(
+        index=0,
+        policy=policy,
+        required_level_plan=RequiredLevelPlan(
+            required_levels=(Rank.JACK, Rank.ACE)
+        ),
+    )
+
+    await player.on_state(game, make_state_message(snapshot, seq=1))
+    await asyncio.sleep(0.05)
+
+    observation = policy.observation
+    assert observation is not None
+    assert GlobalFieldToken("required_level", "J") in observation.tokens
+    assert GlobalFieldToken("required_level", "A") in observation.tokens
+    assert (
+        RoundFieldToken("self_team_required_level", "J")
+        in observation.tokens
+    )

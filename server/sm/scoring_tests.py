@@ -1,5 +1,7 @@
 """Tests for sm.scoring module."""
 
+import subprocess
+import sys
 from typing import Literal
 
 import pytest
@@ -127,7 +129,131 @@ def _completed_trick(
     )
 
 
+def _assert_round_result_constructor_crashes(arguments: str) -> None:
+    completed: subprocess.CompletedProcess[str] = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "from server.sm.scoring import RoundResult\n"
+                "RoundResult(\n"
+                f"{arguments}"
+                ")\n"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "assertion_error" in completed.stderr
+
+
 class TestCalculateScore:
+    def test_assert_round_result_invariants_crashes_after_model_copy(
+        self,
+    ) -> None:
+        completed: subprocess.CompletedProcess[str] = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "from server.sm.scoring import (\n"
+                    "    RoundResult,\n"
+                    "    assert_round_result_invariants,\n"
+                    ")\n"
+                    "round_result = RoundResult(\n"
+                    "    declarer_team=0,\n"
+                    "    round_winning_team=0,\n"
+                    "    next_declarer_player=2,\n"
+                    "    total_defender_points=40,\n"
+                    "    declarer_level_gain=1,\n"
+                    "    defender_level_gain=0,\n"
+                    "    switch_declarer=False,\n"
+                    "    bottom_card_bonus=0,\n"
+                    ")\n"
+                    "invalid = round_result.model_copy(\n"
+                    "    update={\n"
+                    "        'switch_declarer': True,\n"
+                    "        'defender_level_gain': 1,\n"
+                    "    }\n"
+                    ")\n"
+                    "assert_round_result_invariants(invalid)\n"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert completed.returncode != 0
+        assert "AssertionError" in completed.stderr
+
+    def test_round_result_crashes_when_switch_disagrees_with_winner(
+        self,
+    ) -> None:
+        _assert_round_result_constructor_crashes(
+            """
+            declarer_team=0,
+            round_winning_team=0,
+            next_declarer_player=2,
+            total_defender_points=80,
+            declarer_level_gain=0,
+            defender_level_gain=0,
+            switch_declarer=True,
+            bottom_card_bonus=0,
+            """
+        )
+
+    def test_round_result_crashes_when_next_declarer_team_mismatches(
+        self,
+    ) -> None:
+        _assert_round_result_constructor_crashes(
+            """
+            declarer_team=0,
+            round_winning_team=1,
+            next_declarer_player=0,
+            total_defender_points=80,
+            declarer_level_gain=0,
+            defender_level_gain=0,
+            switch_declarer=True,
+            bottom_card_bonus=0,
+            """
+        )
+
+    def test_round_result_crashes_when_switch_gives_declarer_gain(
+        self,
+    ) -> None:
+        _assert_round_result_constructor_crashes(
+            """
+            declarer_team=0,
+            round_winning_team=1,
+            next_declarer_player=1,
+            total_defender_points=120,
+            declarer_level_gain=1,
+            defender_level_gain=1,
+            switch_declarer=True,
+            bottom_card_bonus=0,
+            """
+        )
+
+    def test_round_result_crashes_when_stay_gives_defender_gain(
+        self,
+    ) -> None:
+        _assert_round_result_constructor_crashes(
+            """
+            declarer_team=0,
+            round_winning_team=0,
+            next_declarer_player=2,
+            total_defender_points=40,
+            declarer_level_gain=1,
+            defender_level_gain=1,
+            switch_declarer=False,
+            bottom_card_bonus=0,
+            """
+        )
+
     def test_calculate_score_big_light(self) -> None:
         """Defender 0 points -> declarer +3, no switch."""
         result = calculate_score(
@@ -136,17 +262,13 @@ class TestCalculateScore:
             last_trick=_completed_trick(1, winner=0),
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
-        assert result.declarer_level_change == 3
+        assert result.declarer_level_gain == 3
         assert result.switch_declarer is False
-        assert result.next_declarer_team == 0
+        assert result.round_winning_team == 0
         assert result.next_declarer_player == 2  # partner of player 0
-        assert result.team0_new_level == Rank.FIVE  # TWO + 3 = FIVE
-        assert result.team1_new_level == Rank.TWO  # unchanged
 
     def test_calculate_score_small_light(self) -> None:
         """Defender 1-39 points -> declarer +2."""
@@ -156,14 +278,10 @@ class TestCalculateScore:
             last_trick=_completed_trick(1, winner=0),
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
-        assert result.declarer_level_change == 2
-        assert result.team0_new_level == Rank.FOUR  # TWO + 2 = FOUR
-        assert result.team1_new_level == Rank.TWO  # unchanged
+        assert result.declarer_level_gain == 2
 
     def test_calculate_score_plus1(self) -> None:
         """Defender 40-79 -> declarer +1."""
@@ -173,14 +291,10 @@ class TestCalculateScore:
             last_trick=_completed_trick(1, winner=0),
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
-        assert result.declarer_level_change == 1
-        assert result.team0_new_level == Rank.THREE  # TWO + 1 = THREE
-        assert result.team1_new_level == Rank.TWO  # unchanged
+        assert result.declarer_level_gain == 1
 
     def test_calculate_score_switch(self) -> None:
         """
@@ -192,21 +306,13 @@ class TestCalculateScore:
             last_trick=_completed_trick(1, winner=1),
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
-        assert result.declarer_level_change == 0
-        assert result.defender_level_change == 0
+        assert result.declarer_level_gain == 0
+        assert result.defender_level_gain == 0
         assert result.switch_declarer is True
-        assert result.next_declarer_team == 1
-        assert (
-            result.team0_new_level == Rank.TWO
-        )  # no change (levels never retreat)
-        assert (
-            result.team1_new_level == Rank.TWO
-        )  # defender gets 0 advance
+        assert result.round_winning_team == 1
 
     def test_calculate_score_defender_plus1(self) -> None:
         """Defender 120-159 -> switch, defender (new declarer) +1."""
@@ -216,18 +322,12 @@ class TestCalculateScore:
             last_trick=_completed_trick(1, winner=1),
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.FIVE,
-            team1_level=Rank.THREE,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
-        assert result.declarer_level_change == 0
-        assert result.defender_level_change == 1
+        assert result.declarer_level_gain == 0
+        assert result.defender_level_gain == 1
         assert result.switch_declarer is True
-        assert (
-            result.team0_new_level == Rank.FIVE
-        )  # no change (levels never retreat)
-        assert result.team1_new_level == Rank.FOUR  # THREE + 1 = FOUR
 
     def test_calculate_score_defender_plus2(self) -> None:
         """Defender 160-199 -> switch, defender (new declarer) +2."""
@@ -237,18 +337,12 @@ class TestCalculateScore:
             last_trick=_completed_trick(1, winner=1),
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.FIVE,
-            team1_level=Rank.THREE,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
-        assert result.declarer_level_change == 0
-        assert result.defender_level_change == 2
+        assert result.declarer_level_gain == 0
+        assert result.defender_level_gain == 2
         assert result.switch_declarer is True
-        assert (
-            result.team0_new_level == Rank.FIVE
-        )  # no change (levels never retreat)
-        assert result.team1_new_level == Rank.FIVE  # THREE + 2 = FIVE
 
     def test_calculate_score_defender_plus3(self) -> None:
         """Defender 200 -> switch, defender (new declarer) +3."""
@@ -258,18 +352,12 @@ class TestCalculateScore:
             last_trick=_completed_trick(1, winner=1),
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.FIVE,
-            team1_level=Rank.THREE,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
-        assert result.declarer_level_change == 0
-        assert result.defender_level_change == 3
+        assert result.declarer_level_gain == 0
+        assert result.defender_level_gain == 3
         assert result.switch_declarer is True
-        assert (
-            result.team0_new_level == Rank.FIVE
-        )  # no change (levels never retreat)
-        assert result.team1_new_level == Rank.SIX  # THREE + 3 = SIX
 
 
 class TestAmbushMultiplier:
@@ -287,8 +375,6 @@ class TestAmbushMultiplier:
             ),
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
@@ -331,8 +417,6 @@ class TestAmbushMultiplier:
             last_trick=last_trick,
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=Suit.SPADES,
             trump_rank=Rank.FIVE,
         )
@@ -354,8 +438,6 @@ class TestAmbushMultiplier:
             ),
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
@@ -379,8 +461,6 @@ class TestAmbushMultiplier:
             ),
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
@@ -407,8 +487,6 @@ class TestAmbushMultiplier:
             ),
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
@@ -438,8 +516,6 @@ class TestAmbushMultiplier:
             ),
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
@@ -463,8 +539,6 @@ class TestAmbushMultiplier:
             ),
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
@@ -486,8 +560,6 @@ class TestAmbushMultiplier:
             ),
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
@@ -509,8 +581,6 @@ class TestAmbushMultiplier:
             ),
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
@@ -532,8 +602,6 @@ class TestAmbushMultiplier:
             ),
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
@@ -550,15 +618,11 @@ class TestDeclarerRotation:
             last_trick=_completed_trick(1, winner=0),
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
-        assert result.next_declarer_team == 0
+        assert result.round_winning_team == 0
         assert result.next_declarer_player == 2  # partner of 0
-        assert result.team0_new_level == Rank.FIVE  # TWO + 3 = FIVE
-        assert result.team1_new_level == Rank.TWO  # unchanged
 
     def test_calculate_score_next_declarer_switches(self) -> None:
         """
@@ -571,17 +635,11 @@ class TestDeclarerRotation:
             last_trick=_completed_trick(1, winner=1),
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
-        assert result.next_declarer_team == 1
+        assert result.round_winning_team == 1
         assert result.next_declarer_player == 1  # CCW next of 0
-        assert result.team0_new_level == Rank.TWO  # TWO + 0 = TWO
-        assert (
-            result.team1_new_level == Rank.TWO
-        )  # defender gets abs(0) = 0 advance
 
 
 class TestBoundaryValues:
@@ -615,13 +673,11 @@ class TestBoundaryValues:
             last_trick=_completed_trick(1, winner=0),
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
-        assert result.declarer_level_change == expected_declarer_change
-        assert result.defender_level_change == expected_defender_change
+        assert result.declarer_level_gain == expected_declarer_change
+        assert result.defender_level_gain == expected_defender_change
         assert result.switch_declarer == expected_switch
 
 
@@ -634,17 +690,13 @@ class TestDeclarerTeam1:
             last_trick=_completed_trick(1, winner=1),
             declarer_team=1,
             declarer_player=1,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
-        assert result.declarer_level_change == 3
+        assert result.declarer_level_gain == 3
         assert result.switch_declarer is False
-        assert result.next_declarer_team == 1
+        assert result.round_winning_team == 1
         assert result.next_declarer_player == 3  # partner of player 1
-        assert result.team1_new_level == Rank.FIVE  # TWO + 3 = FIVE
-        assert result.team0_new_level == Rank.TWO  # unchanged
 
     def test_declarer_team1_switch(self) -> None:
         """Declarer team=1, defender 100 points -> switch to team 0."""
@@ -654,22 +706,14 @@ class TestDeclarerTeam1:
             last_trick=_completed_trick(1, winner=0),
             declarer_team=1,
             declarer_player=1,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
-        assert result.declarer_level_change == 0
-        assert result.defender_level_change == 0
+        assert result.declarer_level_gain == 0
+        assert result.defender_level_gain == 0
         assert result.switch_declarer is True
-        assert result.next_declarer_team == 0
+        assert result.round_winning_team == 0
         assert result.next_declarer_player == 2  # CCW next of 1 is 2
-        assert (
-            result.team1_new_level == Rank.TWO
-        )  # declarer team unchanged (levels never retreat)
-        assert (
-            result.team0_new_level == Rank.TWO
-        )  # defender gets 0 advance
 
 
 class TestOver200:
@@ -696,22 +740,14 @@ class TestOver200:
             ),
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
         # total = 50 + 3200 = 3250 -> formula: (3250 - 80) // 40 = 79
-        assert result.declarer_level_change == 0
-        assert result.defender_level_change == 79
+        assert result.declarer_level_gain == 0
+        assert result.defender_level_gain == 79
         assert result.switch_declarer is True
         assert result.total_defender_points == 3250
-        assert (
-            result.team0_new_level == Rank.TWO
-        )  # no change (levels never retreat)
-        assert (
-            result.team1_new_level == Rank.ACE
-        )  # TWO + 79 clamped at ACE
 
     def test_defender_points_exactly_200(self) -> None:
         """Defender points exactly 200 -> formula: (200-80)//40 = 3."""
@@ -721,13 +757,11 @@ class TestOver200:
             last_trick=_completed_trick(1, winner=1),
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
-        assert result.declarer_level_change == 0
-        assert result.defender_level_change == 3
+        assert result.declarer_level_gain == 0
+        assert result.defender_level_gain == 3
         assert result.switch_declarer is True
         assert result.total_defender_points == 200
 
@@ -773,8 +807,6 @@ class TestAmbushMultiplierDecompose:
             last_trick=trick,
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
@@ -824,8 +856,6 @@ class TestAmbushMultiplierDecompose:
             last_trick=trick,
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
@@ -883,8 +913,6 @@ class TestAmbushMultiplierDecompose:
             last_trick=trick,
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )
@@ -950,8 +978,6 @@ class TestAmbushMultiplierDecompose:
             last_trick=trick,
             declarer_team=0,
             declarer_player=0,
-            team0_level=Rank.TWO,
-            team1_level=Rank.TWO,
             trump_suit=_TRUMP_SUIT,
             trump_rank=_TRUMP_RANK,
         )

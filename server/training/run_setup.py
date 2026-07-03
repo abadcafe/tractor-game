@@ -54,7 +54,7 @@ def initialize_training_run(
 ) -> InitializedTrainingRun:
     """Create dashboard, initial metric, and torch checkpoint."""
     prepared = prepare_training_run(run_dir=run_dir)
-    checkpoint_path = run_dir / "checkpoints" / "latest.pt"
+    checkpoint_path = run_dir / "checkpoints" / "latest.json"
     device = torch.device(train_config.device)
     state = create_training_state(
         model_config=model_config,

@@ -1254,7 +1254,7 @@ class TestRoundFullFlow:
             assert is_round_complete(state) is True
             result = get_round_result(state)
             assert result is not None
-            assert result.next_declarer_team in (0, 1)
+            assert result.round_winning_team in (0, 1)
             assert result.next_declarer_player in (0, 1, 2, 3)
 
 

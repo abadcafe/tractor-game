@@ -36,7 +36,7 @@ function makeSnapshot(
     awaiting_action: "next_round",
     stirring_state: null,
     scoring: {
-      declarer_team: 0,
+      round_winning_team: 0,
       defender_points: 30,
       total_defender_points: 30,
       bottom_card_bonus: 0,
@@ -73,7 +73,7 @@ Deno.test("test_renderScoringOverlay_next_round_button", () => {
 Deno.test("test_renderScoringOverlay_bottom_cards_are_prominent_cards", () => {
   const snap = makeSnapshot({
     scoring: {
-      declarer_team: 0,
+      round_winning_team: 0,
       defender_points: 30,
       total_defender_points: 70,
       bottom_card_bonus: 40,
@@ -102,7 +102,7 @@ Deno.test("test_renderScoringOverlay_eight_bottom_cards_use_centered_layout", ()
   }));
   const snap = makeSnapshot({
     scoring: {
-      declarer_team: 0,
+      round_winning_team: 0,
       defender_points: 120,
       total_defender_points: 240,
       bottom_card_bonus: 120,

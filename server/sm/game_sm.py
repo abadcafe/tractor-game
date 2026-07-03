@@ -10,12 +10,18 @@ from pydantic import BaseModel, ConfigDict
 
 from server.result import Ok, Rejected
 from server.rules.cards import Rank
+from server.sm.required_progress import (
+    DEFAULT_REQUIRED_LEVEL_PLAN,
+    RequiredLevelPlan,
+    TeamAdvance,
+    advance_team_progress,
+)
 
 from .rejections.game import (
     CannotProcessRoundResultRejected,
     CannotStartGameRejected,
 )
-from .scoring import RoundResult
+from .scoring import RoundResult, assert_round_result_invariants
 
 
 class GameOverResult(BaseModel):
@@ -38,9 +44,14 @@ class GameState(BaseModel):
     next_declarer_player: int | None
     winning_team: int | None
     round_number: int
+    required_level_plan: RequiredLevelPlan
 
 
-def create_game() -> GameState:
+def create_game(
+    required_level_plan: RequiredLevelPlan = (
+        DEFAULT_REQUIRED_LEVEL_PLAN
+    ),
+) -> GameState:
     """Create a new game waiting for the first round to start."""
     return GameState(
         team0_level=Rank.TWO,
@@ -49,6 +60,7 @@ def create_game() -> GameState:
         next_declarer_player=None,
         winning_team=None,
         round_number=0,
+        required_level_plan=required_level_plan,
     )
 
 
@@ -79,9 +91,9 @@ def process_round_result(
 ) -> Ok[GameState] | Rejected:
     """Process a round result and update game state.
 
-    Updates team levels from the result. If either team reaches ACE,
-    records winning_team. Otherwise updates declarer info and increments
-    round_number.
+    Applies raw scoring gains through the configured required-level
+    plan. Only the team that started the round as declarer can pass the
+    virtual WIN target.
 
     Returns Ok(new_state) on success, Rejected(reason) if the game has
     not
@@ -89,25 +101,34 @@ def process_round_result(
     """
     if state.round_number <= 0 or state.winning_team is not None:
         return CannotProcessRoundResultRejected()
-
-    new_team0 = result.team0_new_level
-    new_team1 = result.team1_new_level
+    assert_round_result_invariants(result)
+    assert (
+        state.declarer_team is None
+        or state.declarer_team == result.declarer_team
+    )
 
     team0_gain = _level_gain_for_team(result, 0)
     team1_gain = _level_gain_for_team(result, 1)
+    team0_advance = advance_team_progress(
+        level=state.team0_level,
+        raw_gain=team0_gain,
+        was_declarer=result.declarer_team == 0,
+        plan=state.required_level_plan,
+    )
+    team1_advance = advance_team_progress(
+        level=state.team1_level,
+        raw_gain=team1_gain,
+        was_declarer=result.declarer_team == 1,
+        plan=state.required_level_plan,
+    )
+    winning = _winning_team(team0_advance, team1_advance)
 
-    # Check game over: a team must already be playing ACE and then gain
-    # again.
-    # Reaching ACE only schedules an ACE round; it is not a win yet.
-    team0_passed_ace = state.team0_level == Rank.ACE and team0_gain > 0
-    team1_passed_ace = state.team1_level == Rank.ACE and team1_gain > 0
-    if team0_passed_ace or team1_passed_ace:
-        winning = 0 if team0_passed_ace else 1
+    if winning is not None:
         return Ok(
             state.model_copy(
                 update={
-                    "team0_level": new_team0,
-                    "team1_level": new_team1,
+                    "team0_level": team0_advance.level,
+                    "team1_level": team1_advance.level,
                     "winning_team": winning,
                     "declarer_team": None,
                     "next_declarer_player": None,
@@ -119,9 +140,9 @@ def process_round_result(
     return Ok(
         state.model_copy(
             update={
-                "team0_level": new_team0,
-                "team1_level": new_team1,
-                "declarer_team": result.next_declarer_team,
+                "team0_level": team0_advance.level,
+                "team1_level": team1_advance.level,
+                "declarer_team": result.round_winning_team,
                 "next_declarer_player": result.next_declarer_player,
                 "round_number": state.round_number + 1,
             }
@@ -133,8 +154,20 @@ def _level_gain_for_team(result: RoundResult, team: int) -> int:
     """
     Return the positive level gain awarded to *team* by a round result.
     """
-    if result.next_declarer_team != team:
+    if result.round_winning_team != team:
         return 0
     if result.switch_declarer:
-        return result.defender_level_change
-    return result.declarer_level_change
+        return result.defender_level_gain
+    return result.declarer_level_gain
+
+
+def _winning_team(
+    team0_advance: TeamAdvance,
+    team1_advance: TeamAdvance,
+) -> int | None:
+    if team0_advance.won_game:
+        assert not team1_advance.won_game
+        return 0
+    if team1_advance.won_game:
+        return 1
+    return None

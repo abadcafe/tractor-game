@@ -148,8 +148,8 @@ class AdamWState:
         return {
             "kind": "typed_adamw",
             "step_count": self._step_count,
-            "exp_avgs": tuple(self._exp_avgs),
-            "exp_avg_sqs": tuple(self._exp_avg_sqs),
+            "exp_avgs": list(self._exp_avgs),
+            "exp_avg_sqs": list(self._exp_avg_sqs),
         }
 
     def load_state_dict(self, state: dict[str, object]) -> None:
@@ -160,13 +160,23 @@ class AdamWState:
         assert isinstance(step_count, int)
         exp_avgs = state["exp_avgs"]
         exp_avg_sqs = state["exp_avg_sqs"]
-        assert _is_optional_tensor_tuple(exp_avgs)
-        assert _is_optional_tensor_tuple(exp_avg_sqs)
+        assert _is_optional_tensor_list(exp_avgs)
+        assert _is_optional_tensor_list(exp_avg_sqs)
         assert len(exp_avgs) == len(self._parameters)
         assert len(exp_avg_sqs) == len(self._parameters)
         self._step_count = step_count
-        self._exp_avgs = list(exp_avgs)
-        self._exp_avg_sqs = list(exp_avg_sqs)
+        self._exp_avgs = [
+            _optimizer_tensor_on_parameter_device(
+                value, self._parameters[index]
+            )
+            for index, value in enumerate(exp_avgs)
+        ]
+        self._exp_avg_sqs = [
+            _optimizer_tensor_on_parameter_device(
+                value, self._parameters[index]
+            )
+            for index, value in enumerate(exp_avg_sqs)
+        ]
 
 
 class PPOTrainer:
@@ -684,12 +694,22 @@ def _clip_grad_norm(
             gradient.mul_(clip_coef)
 
 
-def _is_optional_tensor_tuple(
+def _optimizer_tensor_on_parameter_device(
+    value: Tensor | None,
+    parameter: Tensor,
+) -> Tensor | None:
+    if value is None:
+        return None
+    assert value.shape == parameter.shape
+    return value.to(device=parameter.device)
+
+
+def _is_optional_tensor_list(
     value: object,
-) -> TypeGuard[tuple[Tensor | None, ...]]:
-    if not isinstance(value, tuple):
+) -> TypeGuard[list[Tensor | None]]:
+    if not isinstance(value, list):
         return False
-    items = cast(tuple[object, ...], value)
+    items = cast(list[object], value)
     for item in items:
         if not _is_optional_tensor(item):
             return False

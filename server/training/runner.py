@@ -9,11 +9,14 @@ from dataclasses import dataclass
 from server.game import Game
 from server.protocol import StateSnapshot
 from server.sm.constants import get_team_index
+from server.sm.required_progress import (
+    DEFAULT_REQUIRED_LEVEL_PLAN,
+    RequiredLevelPlan,
+    TerminalProgress,
+)
 from server.training.player import TrainingPlayer
 from server.training.policy import TrainingPolicy
 from server.training.progress import (
-    DEFAULT_PROGRESS_CONFIG,
-    ProgressConfig,
     TeamProgress,
     zero_sum_rewards,
 )
@@ -44,33 +47,40 @@ class SelfPlaySession:
         self,
         *,
         policy: TrainingPolicy,
-        progress_config: ProgressConfig = DEFAULT_PROGRESS_CONFIG,
+        required_level_plan: RequiredLevelPlan = (
+            DEFAULT_REQUIRED_LEVEL_PLAN
+        ),
     ) -> None:
         self._recorder = TrajectoryRecorder()
         self._players = [
             TrainingPlayer(
                 index=index,
                 policy=policy,
+                required_level_plan=required_level_plan,
                 recorder=self._recorder,
             )
             for index in range(4)
         ]
-        self._game = Game(players=self._players)
-        self._progress_config = progress_config
+        self._game = Game(
+            players=self._players,
+            required_level_plan=required_level_plan,
+        )
+        self._required_level_plan = required_level_plan
         self._started = False
 
     async def play_round(
         self, *, max_seconds: float
     ) -> TrainingRoundResult:
         """Play exactly one full round from the current Game state."""
-        before = self._game.snapshot(for_player=0)
         self._recorder.clear()
         for player in self._players:
             player.reset_round_tracking()
         start = time.monotonic()
         if self._started:
             await self._confirm_next_round()
+            before = self._game.snapshot(for_player=0)
         else:
+            before = self._game.snapshot(for_player=0)
             self._started = True
             await asyncio.gather(
                 *(player.run(self._game) for player in self._players)
@@ -81,10 +91,10 @@ class SelfPlaySession:
             start=start,
             max_seconds=max_seconds,
         )
-        reward0, reward1 = _round_rewards(
+        reward0, reward1 = round_rewards(
             before=before,
             after=final_snapshot,
-            progress_config=self._progress_config,
+            required_level_plan=self._required_level_plan,
         )
         rewarded_steps = tuple(
             RewardedDecisionStep(
@@ -129,12 +139,14 @@ async def play_training_round(
     *,
     policy: TrainingPolicy,
     max_seconds: float,
-    progress_config: ProgressConfig = DEFAULT_PROGRESS_CONFIG,
+    required_level_plan: RequiredLevelPlan = (
+        DEFAULT_REQUIRED_LEVEL_PLAN
+    ),
 ) -> TrainingRoundResult:
     """Run one self-play round in a fresh session."""
     session = SelfPlaySession(
         policy=policy,
-        progress_config=progress_config,
+        required_level_plan=required_level_plan,
     )
     return await session.play_round(max_seconds=max_seconds)
 
@@ -156,12 +168,14 @@ async def _wait_for_round_scoring(
     raise AssertionError("training round timed out")
 
 
-def _round_rewards(
+def round_rewards(
     *,
     before: StateSnapshot,
     after: StateSnapshot,
-    progress_config: ProgressConfig,
+    required_level_plan: RequiredLevelPlan,
 ) -> tuple[float, float]:
+    """Return zero-sum team rewards for one completed round."""
+    round_winning_team = _round_winning_team(after)
     team0_before = TeamProgress(
         level=before.team0_level,
         is_declarer=before.declarer_team == 0,
@@ -171,18 +185,29 @@ def _round_rewards(
         is_declarer=before.declarer_team == 1,
     )
     team0_after = TeamProgress(
-        level=after.team0_level,
-        is_declarer=after.declarer_team == 0,
+        level=TerminalProgress.WIN
+        if after.winning_team == 0
+        else after.team0_level,
+        is_declarer=round_winning_team == 0,
     )
     team1_after = TeamProgress(
-        level=after.team1_level,
-        is_declarer=after.declarer_team == 1,
+        level=TerminalProgress.WIN
+        if after.winning_team == 1
+        else after.team1_level,
+        is_declarer=round_winning_team == 1,
     )
     reward = zero_sum_rewards(
         team0_before=team0_before,
         team1_before=team1_before,
         team0_after=team0_after,
         team1_after=team1_after,
-        config=progress_config,
+        required_level_plan=required_level_plan,
     )
     return reward.team0, reward.team1
+
+
+def _round_winning_team(snapshot: StateSnapshot) -> int | None:
+    scoring = snapshot.scoring
+    if scoring is not None:
+        return scoring.round_winning_team
+    return snapshot.declarer_team

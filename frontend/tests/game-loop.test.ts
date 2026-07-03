@@ -209,7 +209,7 @@ Deno.test("test_handleMessage_waiting_next_round", () => {
     phase: "WAITING",
     awaiting_action: "next_round",
     scoring: {
-      declarer_team: 0,
+      round_winning_team: 0,
       defender_points: 30,
       total_defender_points: 30,
       bottom_card_bonus: 0,

@@ -56,8 +56,11 @@ async def train_self_play(
     start = time.monotonic()
     total_rounds = state.total_rounds
     total_updates = state.total_updates
-    latest_checkpoint = run_dir / "checkpoints" / "latest.pt"
-    session = SelfPlaySession(policy=policy)
+    latest_checkpoint = run_dir / "checkpoints" / "latest.json"
+    session = SelfPlaySession(
+        policy=policy,
+        required_level_plan=train_config.required_level_plan,
+    )
 
     for _ in range(max_rounds):
         round_result = await session.play_round(
@@ -121,7 +124,10 @@ async def train_self_play(
             ),
         )
         if round_result.game_over:
-            session = SelfPlaySession(policy=policy)
+            session = SelfPlaySession(
+                policy=policy,
+                required_level_plan=train_config.required_level_plan,
+            )
     if max_rounds == 0:
         save_torch_checkpoint(
             path=latest_checkpoint,
@@ -171,7 +177,7 @@ def _checkpoint_path(
         total_updates > 0
         and total_updates % train_config.checkpoint_every_updates == 0
     ):
-        return run_dir / "checkpoints" / f"update-{total_updates}.pt"
+        return run_dir / "checkpoints" / f"update-{total_updates}.json"
     return latest_checkpoint
 
 

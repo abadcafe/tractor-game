@@ -1,28 +1,26 @@
-"""Required-level progress and zero-sum training reward."""
+"""Zero-sum training reward from required-level progress."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
 
 from server.rules.cards import Rank
-from server.sm.constants import LEVELS
+from server.sm.required_progress import (
+    DEFAULT_REQUIRED_LEVEL_PLAN,
+    RequiredLevelPlan,
+    TerminalProgress,
+    progress_target_index,
+    stage_target,
+)
 
-type LevelTarget = Rank | Literal["WIN"]
-
-
-@dataclass(frozen=True, slots=True)
-class ProgressConfig:
-    """Ordered mandatory levels followed by virtual WIN target."""
-
-    required_levels: tuple[Rank, ...]
+type ProgressLevel = Rank | TerminalProgress
 
 
 @dataclass(frozen=True, slots=True)
 class TeamProgress:
     """One team's public game progress at a round boundary."""
 
-    level: Rank
+    level: ProgressLevel
     is_declarer: bool
 
 
@@ -34,38 +32,32 @@ class TeamReward:
     team1: float
 
 
-DEFAULT_PROGRESS_CONFIG = ProgressConfig(required_levels=(Rank.ACE,))
-
-
-def stage_target(level: Rank, config: ProgressConfig) -> LevelTarget:
-    """Return the next mandatory target from the current level."""
-    level_index = _level_index(level)
-    for required_level in config.required_levels:
-        if _level_index(required_level) > level_index:
-            return required_level
-    return "WIN"
-
-
-def distance_to_target(level: Rank, target: LevelTarget) -> int:
-    """Return non-negative level steps from level to target."""
-    return max(0, _target_index(target) - _level_index(level))
-
-
 def progress_delta(
     before: TeamProgress,
     after: TeamProgress,
-    config: ProgressConfig = DEFAULT_PROGRESS_CONFIG,
+    required_level_plan: RequiredLevelPlan = (
+        DEFAULT_REQUIRED_LEVEL_PLAN
+    ),
 ) -> int:
     """
     Return this team's stage progress delta for one round.
 
     A team that was off-stage and becomes declarer gets one control
-    step.  Level movement is clipped to the stage target determined at
-    the beginning of the round.
+    step. Level movement is clipped to the stage target determined at
+    the beginning of the round. WIN is a valid terminal progress level,
+    but only from a round the team started as declarer.
     """
-    target = stage_target(before.level, config)
-    before_index = _level_index(before.level)
-    after_index = min(_level_index(after.level), _target_index(target))
+    assert isinstance(before.level, Rank)
+    target = stage_target(before.level, required_level_plan)
+    if after.level == TerminalProgress.WIN:
+        assert before.is_declarer
+        assert after.is_declarer
+        assert target == TerminalProgress.WIN
+    before_index = progress_target_index(before.level)
+    after_index = min(
+        progress_target_index(after.level),
+        progress_target_index(target),
+    )
     control_delta = (
         1 if not before.is_declarer and after.is_declarer else 0
     )
@@ -78,20 +70,20 @@ def zero_sum_rewards(
     team1_before: TeamProgress,
     team0_after: TeamProgress,
     team1_after: TeamProgress,
-    config: ProgressConfig = DEFAULT_PROGRESS_CONFIG,
+    required_level_plan: RequiredLevelPlan = (
+        DEFAULT_REQUIRED_LEVEL_PLAN
+    ),
 ) -> TeamReward:
     """Return zero-sum rewards from both teams' progress deltas."""
-    team0_delta = progress_delta(team0_before, team0_after, config)
-    team1_delta = progress_delta(team1_before, team1_after, config)
+    team0_delta = progress_delta(
+        team0_before,
+        team0_after,
+        required_level_plan,
+    )
+    team1_delta = progress_delta(
+        team1_before,
+        team1_after,
+        required_level_plan,
+    )
     reward = float(team0_delta - team1_delta)
     return TeamReward(team0=reward, team1=-reward)
-
-
-def _level_index(level: Rank) -> int:
-    return LEVELS.index(level)
-
-
-def _target_index(target: LevelTarget) -> int:
-    if target == "WIN":
-        return len(LEVELS)
-    return _level_index(target)

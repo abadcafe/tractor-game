@@ -54,6 +54,8 @@ type RoundFieldName = Literal[
     "awaiting_action",
     "dealer_role",
     "dealer_team",
+    "self_team_is_declarer",
+    "enemy_team_is_declarer",
     "self_team_level",
     "enemy_team_level",
     "self_team_required_level",

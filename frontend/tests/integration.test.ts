@@ -458,7 +458,7 @@ Deno.test("test_integration_callback_triggers_send", () => {
     awaiting_action: "next_round",
     trick: null,
     scoring: {
-      declarer_team: 0,
+      round_winning_team: 0,
       defender_points: 30,
       total_defender_points: 30,
       bottom_card_bonus: 0,

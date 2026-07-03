@@ -1,9 +1,12 @@
 """Tests for sm.game_sm module."""
 
+import subprocess
+import sys
 from itertools import combinations
 
 from server.result import Ok, Rejected
 from server.rules.cards import Rank
+from server.sm.required_progress import RequiredLevelPlan
 
 from .game_sm import (
     create_game,
@@ -74,21 +77,20 @@ class TestProcessRoundResult:
         assert isinstance(result, Ok)
         state = result.value
         rr = RoundResult(
-            team0_new_level=Rank.FIVE,
-            team1_new_level=Rank.THREE,
-            next_declarer_team=0,
+            declarer_team=0,
+            round_winning_team=0,
             next_declarer_player=2,
             total_defender_points=20,
-            declarer_level_change=2,
-            defender_level_change=0,
+            declarer_level_gain=2,
+            defender_level_gain=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
         result = process_round_result(state, rr)
         assert isinstance(result, Ok)
         state = result.value
-        assert state.team0_level == Rank.FIVE
-        assert state.team1_level == Rank.THREE
+        assert state.team0_level == Rank.FOUR
+        assert state.team1_level == Rank.TWO
 
     def test_process_round_result_declarer_stays(self) -> None:
         """When declarer stays, next round uses partner as declarer."""
@@ -97,13 +99,12 @@ class TestProcessRoundResult:
         assert isinstance(result, Ok)
         state = result.value
         rr = RoundResult(
-            team0_new_level=Rank.FOUR,
-            team1_new_level=Rank.TWO,
-            next_declarer_team=0,
+            declarer_team=0,
+            round_winning_team=0,
             next_declarer_player=2,
             total_defender_points=50,
-            declarer_level_change=1,
-            defender_level_change=0,
+            declarer_level_gain=1,
+            defender_level_gain=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
@@ -120,13 +121,12 @@ class TestProcessRoundResult:
         assert isinstance(result, Ok)
         state = result.value
         rr = RoundResult(
-            team0_new_level=Rank.TWO,
-            team1_new_level=Rank.THREE,
-            next_declarer_team=1,
+            declarer_team=0,
+            round_winning_team=1,
             next_declarer_player=1,
             total_defender_points=100,
-            declarer_level_change=0,
-            defender_level_change=0,
+            declarer_level_gain=0,
+            defender_level_gain=0,
             switch_declarer=True,
             bottom_card_bonus=0,
         )
@@ -135,6 +135,122 @@ class TestProcessRoundResult:
         state = result.value
         assert state.declarer_team == 1
         assert state.next_declarer_player == 1
+
+    def test_process_round_result_crashes_on_declarer_mismatch(
+        self,
+    ) -> None:
+        """RoundResult declarer must match a known game declarer."""
+        completed: subprocess.CompletedProcess[str] = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "from server.result import Ok\n"
+                    "from server.sm.game_sm import (\n"
+                    "    create_game,\n"
+                    "    process_round_result,\n"
+                    "    start_game,\n"
+                    ")\n"
+                    "from server.sm.scoring import RoundResult\n"
+                    "started = start_game(create_game())\n"
+                    "assert isinstance(started, Ok)\n"
+                    "state = started.value.model_copy(\n"
+                    "    update={'declarer_team': 0}\n"
+                    ")\n"
+                    "process_round_result(\n"
+                    "    state,\n"
+                    "    RoundResult(\n"
+                    "        declarer_team=1,\n"
+                    "        round_winning_team=0,\n"
+                    "        next_declarer_player=0,\n"
+                    "        total_defender_points=80,\n"
+                    "        declarer_level_gain=0,\n"
+                    "        defender_level_gain=0,\n"
+                    "        switch_declarer=True,\n"
+                    "        bottom_card_bonus=0,\n"
+                    "    ),\n"
+                    ")\n"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert completed.returncode != 0
+        assert "AssertionError" in completed.stderr
+
+    def test_process_round_result_crashes_on_copied_round_result(
+        self,
+    ) -> None:
+        """model_copy cannot bypass RoundResult invariants."""
+        completed: subprocess.CompletedProcess[str] = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "from server.result import Ok\n"
+                    "from server.sm.game_sm import (\n"
+                    "    create_game,\n"
+                    "    process_round_result,\n"
+                    "    start_game,\n"
+                    ")\n"
+                    "from server.sm.scoring import RoundResult\n"
+                    "started = start_game(create_game())\n"
+                    "assert isinstance(started, Ok)\n"
+                    "round_result = RoundResult(\n"
+                    "    declarer_team=0,\n"
+                    "    round_winning_team=0,\n"
+                    "    next_declarer_player=2,\n"
+                    "    total_defender_points=40,\n"
+                    "    declarer_level_gain=1,\n"
+                    "    defender_level_gain=0,\n"
+                    "    switch_declarer=False,\n"
+                    "    bottom_card_bonus=0,\n"
+                    ")\n"
+                    "invalid = round_result.model_copy(\n"
+                    "    update={\n"
+                    "        'switch_declarer': True,\n"
+                    "        'defender_level_gain': 1,\n"
+                    "    }\n"
+                    ")\n"
+                    "process_round_result(started.value, invalid)\n"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert completed.returncode != 0
+        assert "AssertionError" in completed.stderr
+
+    def test_process_round_result_clips_at_required_level(self) -> None:
+        """Raw gains cannot skip over the next required level."""
+        state = create_game(
+            RequiredLevelPlan(required_levels=(Rank.JACK, Rank.ACE))
+        )
+        result = start_game(state)
+        assert isinstance(result, Ok)
+        state = result.value.model_copy(
+            update={"team0_level": Rank.TEN}
+        )
+        rr = RoundResult(
+            declarer_team=0,
+            round_winning_team=0,
+            next_declarer_player=2,
+            total_defender_points=0,
+            declarer_level_gain=3,
+            defender_level_gain=0,
+            switch_declarer=False,
+            bottom_card_bonus=0,
+        )
+
+        result = process_round_result(state, rr)
+
+        assert isinstance(result, Ok)
+        assert result.value.team0_level == Rank.JACK
+        assert result.value.winning_team is None
 
 
 class TestGameOver:
@@ -149,13 +265,12 @@ class TestGameOver:
             update={"team0_level": Rank.KING}
         )
         rr = RoundResult(
-            team0_new_level=Rank.ACE,
-            team1_new_level=Rank.TEN,
-            next_declarer_team=0,
+            declarer_team=0,
+            round_winning_team=0,
             next_declarer_player=2,
             total_defender_points=0,
-            declarer_level_change=3,
-            defender_level_change=0,
+            declarer_level_gain=3,
+            defender_level_gain=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
@@ -176,13 +291,12 @@ class TestGameOver:
             update={"team0_level": Rank.QUEEN}
         )
         rr = RoundResult(
-            team0_new_level=Rank.ACE,
-            team1_new_level=Rank.TEN,
-            next_declarer_team=0,
+            declarer_team=0,
+            round_winning_team=0,
             next_declarer_player=2,
             total_defender_points=0,
-            declarer_level_change=3,
-            defender_level_change=0,
+            declarer_level_gain=3,
+            defender_level_gain=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
@@ -203,13 +317,12 @@ class TestGameOver:
             update={"team1_level": Rank.KING}
         )
         rr = RoundResult(
-            team0_new_level=Rank.QUEEN,
-            team1_new_level=Rank.ACE,
-            next_declarer_team=1,
+            declarer_team=0,
+            round_winning_team=1,
             next_declarer_player=3,
             total_defender_points=150,
-            declarer_level_change=0,
-            defender_level_change=2,
+            declarer_level_gain=0,
+            defender_level_gain=2,
             switch_declarer=True,
             bottom_card_bonus=0,
         )
@@ -228,13 +341,12 @@ class TestGameOver:
             update={"team0_level": Rank.ACE}
         )
         rr = RoundResult(
-            team0_new_level=Rank.ACE,
-            team1_new_level=Rank.TEN,
-            next_declarer_team=0,
+            declarer_team=0,
+            round_winning_team=0,
             next_declarer_player=2,
             total_defender_points=0,
-            declarer_level_change=3,
-            defender_level_change=0,
+            declarer_level_gain=3,
+            defender_level_gain=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
@@ -243,8 +355,8 @@ class TestGameOver:
         state = result.value
         assert state.winning_team == 0
 
-    def test_game_over_team1_after_passing_ace(self) -> None:
-        """Game over when team 1 is already at ACE and gains again."""
+    def test_non_declarer_ace_gain_does_not_win(self) -> None:
+        """A team at ACE must be declarer to pass the WIN target."""
         state = create_game()
         result = start_game(state)
         assert isinstance(result, Ok)
@@ -252,14 +364,38 @@ class TestGameOver:
             update={"team1_level": Rank.ACE}
         )
         rr = RoundResult(
-            team0_new_level=Rank.QUEEN,
-            team1_new_level=Rank.ACE,
-            next_declarer_team=1,
+            declarer_team=0,
+            round_winning_team=1,
             next_declarer_player=3,
             total_defender_points=150,
-            declarer_level_change=0,
-            defender_level_change=2,
+            declarer_level_gain=0,
+            defender_level_gain=2,
             switch_declarer=True,
+            bottom_card_bonus=0,
+        )
+        result = process_round_result(state, rr)
+        assert isinstance(result, Ok)
+        state = result.value
+        assert state.winning_team is None
+        assert state.team1_level == Rank.ACE
+        assert state.declarer_team == 1
+
+    def test_game_over_team1_after_passing_ace(self) -> None:
+        """Game over when team 1 is declarer at ACE and gains again."""
+        state = create_game()
+        result = start_game(state)
+        assert isinstance(result, Ok)
+        state = result.value.model_copy(
+            update={"team1_level": Rank.ACE}
+        )
+        rr = RoundResult(
+            declarer_team=1,
+            round_winning_team=1,
+            next_declarer_player=3,
+            total_defender_points=0,
+            declarer_level_gain=2,
+            defender_level_gain=0,
+            switch_declarer=False,
             bottom_card_bonus=0,
         )
         result = process_round_result(state, rr)
@@ -278,13 +414,12 @@ class TestGameOver:
             update={"team1_level": Rank.ACE}
         )
         rr = RoundResult(
-            team0_new_level=Rank.TWO,
-            team1_new_level=Rank.ACE,
-            next_declarer_team=1,
+            declarer_team=0,
+            round_winning_team=1,
             next_declarer_player=1,
             total_defender_points=80,
-            declarer_level_change=0,
-            defender_level_change=0,
+            declarer_level_gain=0,
+            defender_level_gain=0,
             switch_declarer=True,
             bottom_card_bonus=0,
         )
@@ -299,13 +434,12 @@ class TestGameOver:
         assert isinstance(result, Ok)
         state = result.value
         rr = RoundResult(
-            team0_new_level=Rank.FIVE,
-            team1_new_level=Rank.THREE,
-            next_declarer_team=0,
+            declarer_team=0,
+            round_winning_team=0,
             next_declarer_player=2,
             total_defender_points=30,
-            declarer_level_change=2,
-            defender_level_change=0,
+            declarer_level_gain=2,
+            defender_level_gain=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
@@ -321,29 +455,27 @@ class TestGameOver:
         state = result.value
         # Round 1: team 0 wins big
         r1 = RoundResult(
-            team0_new_level=Rank.FIVE,
-            team1_new_level=Rank.TWO,
-            next_declarer_team=0,
+            declarer_team=0,
+            round_winning_team=0,
             next_declarer_player=2,
             total_defender_points=20,
-            declarer_level_change=2,
-            defender_level_change=0,
+            declarer_level_gain=2,
+            defender_level_gain=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
         result = process_round_result(state, r1)
         assert isinstance(result, Ok)
         state = result.value
-        assert state.team0_level == Rank.FIVE
+        assert state.team0_level == Rank.FOUR
         # Round 2: team 1 wins
         r2 = RoundResult(
-            team0_new_level=Rank.FIVE,
-            team1_new_level=Rank.FIVE,
-            next_declarer_team=1,
+            declarer_team=0,
+            round_winning_team=1,
             next_declarer_player=1,
             total_defender_points=120,
-            declarer_level_change=0,
-            defender_level_change=1,
+            declarer_level_gain=0,
+            defender_level_gain=1,
             switch_declarer=True,
             bottom_card_bonus=0,
         )
@@ -351,7 +483,7 @@ class TestGameOver:
         assert isinstance(result, Ok)
         state = result.value
         assert state.winning_team is None
-        assert state.team1_level == Rank.FIVE
+        assert state.team1_level == Rank.THREE
 
 
 class TestInvalidTransitions:
@@ -373,13 +505,12 @@ class TestInvalidTransitions:
             update={"team0_level": Rank.ACE}
         )
         rr = RoundResult(
-            team0_new_level=Rank.ACE,
-            team1_new_level=Rank.TWO,
-            next_declarer_team=0,
+            declarer_team=0,
+            round_winning_team=0,
             next_declarer_player=0,
             total_defender_points=0,
-            declarer_level_change=3,
-            defender_level_change=0,
+            declarer_level_gain=3,
+            defender_level_gain=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
@@ -393,13 +524,12 @@ class TestInvalidTransitions:
         """Cannot process round result when game is idle."""
         state = create_game()
         rr = RoundResult(
-            team0_new_level=Rank.FIVE,
-            team1_new_level=Rank.TWO,
-            next_declarer_team=0,
+            declarer_team=0,
+            round_winning_team=0,
             next_declarer_player=0,
             total_defender_points=0,
-            declarer_level_change=2,
-            defender_level_change=0,
+            declarer_level_gain=2,
+            defender_level_gain=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
@@ -415,13 +545,12 @@ class TestInvalidTransitions:
             update={"team0_level": Rank.ACE}
         )
         rr = RoundResult(
-            team0_new_level=Rank.ACE,
-            team1_new_level=Rank.TWO,
-            next_declarer_team=0,
+            declarer_team=0,
+            round_winning_team=0,
             next_declarer_player=0,
             total_defender_points=0,
-            declarer_level_change=3,
-            defender_level_change=0,
+            declarer_level_gain=3,
+            defender_level_gain=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
@@ -430,13 +559,12 @@ class TestInvalidTransitions:
         state = result.value
         assert state.winning_team == 0
         rr2 = RoundResult(
-            team0_new_level=Rank.ACE,
-            team1_new_level=Rank.TWO,
-            next_declarer_team=0,
+            declarer_team=0,
+            round_winning_team=0,
             next_declarer_player=0,
             total_defender_points=0,
-            declarer_level_change=3,
-            defender_level_change=0,
+            declarer_level_gain=3,
+            defender_level_gain=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
@@ -445,23 +573,27 @@ class TestInvalidTransitions:
 
 
 class TestEdgeCases:
-    def test_both_teams_reaching_ace_does_not_end_game(self) -> None:
+    def test_non_declarer_ace_steal_from_ace_declarer_does_not_win(
+        self,
+    ) -> None:
         """
-        If neither team has passed ACE, both teams at ACE can continue.
+        A defender at ACE can take the stage from an ACE declarer, but
+        does not pass WIN until it wins an ACE round as declarer.
         """
         state = create_game()
         result = start_game(state)
         assert isinstance(result, Ok)
-        state = result.value
+        state = result.value.model_copy(
+            update={"team0_level": Rank.ACE, "team1_level": Rank.ACE}
+        )
         rr = RoundResult(
-            team0_new_level=Rank.ACE,
-            team1_new_level=Rank.ACE,
-            next_declarer_team=0,
-            next_declarer_player=0,
-            total_defender_points=0,
-            declarer_level_change=3,
-            defender_level_change=0,
-            switch_declarer=False,
+            declarer_team=0,
+            round_winning_team=1,
+            next_declarer_player=1,
+            total_defender_points=120,
+            declarer_level_gain=0,
+            defender_level_gain=1,
+            switch_declarer=True,
             bottom_card_bonus=0,
         )
         result = process_round_result(state, rr)
@@ -470,6 +602,7 @@ class TestEdgeCases:
         assert state.winning_team is None
         assert state.team0_level == Rank.ACE
         assert state.team1_level == Rank.ACE
+        assert state.declarer_team == 1
 
     def test_game_over_resets_declarer_fields(self) -> None:
         """
@@ -482,13 +615,12 @@ class TestEdgeCases:
         state = result.value
         # First round to set declarer fields
         r1 = RoundResult(
-            team0_new_level=Rank.FOUR,
-            team1_new_level=Rank.TWO,
-            next_declarer_team=0,
+            declarer_team=0,
+            round_winning_team=0,
             next_declarer_player=2,
             total_defender_points=20,
-            declarer_level_change=1,
-            defender_level_change=0,
+            declarer_level_gain=1,
+            defender_level_gain=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )
@@ -501,13 +633,12 @@ class TestEdgeCases:
         assert state.next_declarer_player == 2
         # Second round passes ACE and ends the game
         r2 = RoundResult(
-            team0_new_level=Rank.ACE,
-            team1_new_level=Rank.TWO,
-            next_declarer_team=0,
+            declarer_team=0,
+            round_winning_team=0,
             next_declarer_player=2,
             total_defender_points=0,
-            declarer_level_change=3,
-            defender_level_change=0,
+            declarer_level_gain=3,
+            defender_level_gain=0,
             switch_declarer=False,
             bottom_card_bonus=0,
         )

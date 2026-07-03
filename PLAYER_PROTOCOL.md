@@ -185,7 +185,7 @@ StateSnapshot 里所有可见牌都使用同一个结构：
 | ----------------- | --------------------------- |
 | `trump_rank`      | 当前级牌                    |
 | `trump_suit`      | 当前主花色，`null` 表示无主 |
-| `declarer_team`   | 庄家队                      |
+| `declarer_team`   | 当前轮/刚结束轮庄家队       |
 | `declarer_player` | 庄家 player                 |
 | `bid_events`      | 抢主阶段的历史              |
 | `bid_winner`      | 当前有效的主牌声明          |
@@ -217,6 +217,21 @@ StateSnapshot 里所有可见牌都使用同一个结构：
 | `team0_level`          | 0 队等级                    |
 | `team1_level`          | 1 队等级                    |
 | `next_round_confirmed` | 已确认下一轮的 player       |
+
+### 结算信息
+
+`scoring` 只在一轮结束后的 `WAITING` 阶段有值；其他阶段为 `null`。
+
+| 字段                    | 含义                           |
+| ----------------------- | ------------------------------ |
+| `round_winning_team`    | 本轮结算胜者，也就是下轮庄家队 |
+| `defender_points`       | 防守方出牌阶段捡分             |
+| `total_defender_points` | 防守方总分，包含抠底加分       |
+| `bottom_card_bonus`     | 抠底加分                       |
+| `bottom_cards`          | 结算时公开的底牌               |
+
+`StateSnapshot.declarer_team` 表示当前轮/刚结束轮的庄家队。\
+`StateSnapshot.scoring.round_winning_team` 表示本轮结算后的胜者，即下轮庄家队。
 
 ## action_hints
 

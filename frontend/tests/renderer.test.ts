@@ -133,7 +133,7 @@ Deno.test("test_render_complete_phase", () => {
     awaiting_action: "next_round",
     trick: null,
     scoring: {
-      declarer_team: 0,
+      round_winning_team: 0,
       defender_points: 30,
       total_defender_points: 30,
       bottom_card_bonus: 0,
@@ -176,7 +176,7 @@ Deno.test("test_render_complete_phase_keeps_last_trick_on_table", () => {
       ],
     },
     scoring: {
-      declarer_team: 0,
+      round_winning_team: 0,
       defender_points: 75,
       total_defender_points: 100,
       bottom_card_bonus: 25,
@@ -388,7 +388,7 @@ Deno.test("test_render_scoring_overlay_receives_callback", () => {
     awaiting_action: "next_round",
     trick: null,
     scoring: {
-      declarer_team: 0,
+      round_winning_team: 0,
       defender_points: 30,
       total_defender_points: 30,
       bottom_card_bonus: 0,
@@ -427,7 +427,7 @@ Deno.test("test_render_waiting_has_single_next_round_button", () => {
     awaiting_action: "next_round",
     trick: null,
     scoring: {
-      declarer_team: 0,
+      round_winning_team: 0,
       defender_points: 30,
       total_defender_points: 30,
       bottom_card_bonus: 0,
@@ -534,7 +534,7 @@ Deno.test("test_render_primary_actions_are_not_duplicated", () => {
       awaiting_action: "next_round",
       trick: null,
       scoring: {
-        declarer_team: 0,
+        round_winning_team: 0,
         defender_points: 30,
         total_defender_points: 30,
         bottom_card_bonus: 0,

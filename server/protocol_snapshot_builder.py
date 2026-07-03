@@ -131,14 +131,14 @@ def trick_snapshot(
 
 def scoring_snapshot(
     *,
-    declarer_team: int | None,
+    round_winning_team: int,
     defender_points: int,
     total_defender_points: int,
     bottom_card_bonus: int,
     bottom_cards: list[Card],
 ) -> ScoringSnapshot:
     return ScoringSnapshot(
-        declarer_team=declarer_team,
+        round_winning_team=round_winning_team,
         defender_points=defender_points,
         total_defender_points=total_defender_points,
         bottom_card_bonus=bottom_card_bonus,
