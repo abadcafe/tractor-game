@@ -5,18 +5,28 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from server.training.checkpoints import (
-    TrainingCheckpoint,
-    save_checkpoint,
-)
+import torch
+
 from server.training.config import ModelConfig, TrainConfig
 from server.training.dashboard import write_dashboard
 from server.training.metrics import TrainingMetric, append_metric
+from server.training.torch_checkpoints import (
+    create_training_state,
+    save_torch_checkpoint,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class PreparedTrainingRun:
-    """Files created for a training run."""
+    """Files prepared for a training run."""
+
+    run_dir: Path
+    dashboard_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class InitializedTrainingRun:
+    """Files and initial checkpoint created for a new training run."""
 
     run_dir: Path
     dashboard_path: Path
@@ -26,27 +36,39 @@ class PreparedTrainingRun:
 def prepare_training_run(
     *,
     run_dir: Path,
+) -> PreparedTrainingRun:
+    """Create dashboard files without changing training progress."""
+    dashboard_path = write_dashboard(run_dir, title="Tractor Training")
+    return PreparedTrainingRun(
+        run_dir=run_dir,
+        dashboard_path=dashboard_path,
+    )
+
+
+def initialize_training_run(
+    *,
+    run_dir: Path,
     run_id: str,
     model_config: ModelConfig,
     train_config: TrainConfig,
-) -> PreparedTrainingRun:
-    """Create dashboard, initial metrics, and an initial checkpoint."""
-    dashboard_path = write_dashboard(run_dir, title="Tractor Training")
-    checkpoint_path = run_dir / "checkpoints" / "initial.json"
-    save_checkpoint(
-        checkpoint_path,
-        TrainingCheckpoint(
-            run_id=run_id,
-            total_games=0,
-            total_updates=0,
-            model_config=model_config.to_json(),
-            train_config=train_config.to_json(),
-            token_schema_version="semantic-legal-actions-v8",
-            rules_progress_version="required-level-v1",
-            model_state={},
-            optimizer_state={},
-            rng_state={},
-        ),
+) -> InitializedTrainingRun:
+    """Create dashboard, initial metric, and torch checkpoint."""
+    prepared = prepare_training_run(run_dir=run_dir)
+    checkpoint_path = run_dir / "checkpoints" / "latest.pt"
+    device = torch.device(train_config.device)
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        device=device,
+    )
+    save_torch_checkpoint(
+        path=checkpoint_path,
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=0,
+        total_updates=0,
     )
     append_metric(
         run_dir,
@@ -67,8 +89,8 @@ def prepare_training_run(
             checkpoint_path=str(checkpoint_path),
         ),
     )
-    return PreparedTrainingRun(
-        run_dir=run_dir,
-        dashboard_path=dashboard_path,
+    return InitializedTrainingRun(
+        run_dir=prepared.run_dir,
+        dashboard_path=prepared.dashboard_path,
         checkpoint_path=checkpoint_path,
     )

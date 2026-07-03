@@ -7,6 +7,8 @@ only started when the user explicitly invokes this module.
 from __future__ import annotations
 
 import argparse
+import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,7 +18,10 @@ from server.training.config import (
     TrainingDevice,
 )
 from server.training.loop import run_training_loop
-from server.training.run_setup import prepare_training_run
+from server.training.run_setup import (
+    initialize_training_run,
+    prepare_training_run,
+)
 from server.training.torch_checkpoints import (
     read_torch_checkpoint_metadata,
 )
@@ -46,11 +51,12 @@ class TrainConfigOverrides:
 
 def resolve_model_config(
     *,
-    cli_model_config: ModelConfig,
+    cli_model_config: ModelConfig | None,
     resume_path: Path | None,
 ) -> ModelConfig:
     """Use checkpoint model shape when resuming a run."""
     if resume_path is None:
+        assert cli_model_config is not None
         return cli_model_config
     return read_torch_checkpoint_metadata(resume_path).model_config
 
@@ -118,7 +124,63 @@ def resolve_train_config(
     )
 
 
-def main() -> None:
+def _non_negative_int_arg(text: str) -> int:
+    value = int(text)
+    if value < 0:
+        raise argparse.ArgumentTypeError("must be >= 0")
+    return value
+
+
+def _positive_int_arg(text: str) -> int:
+    value = int(text)
+    if value <= 0:
+        raise argparse.ArgumentTypeError("must be > 0")
+    return value
+
+
+def _finite_float_arg(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):
+        raise argparse.ArgumentTypeError("must be finite")
+    return value
+
+
+def _positive_float_arg(text: str) -> float:
+    value = _finite_float_arg(text)
+    if value <= 0.0:
+        raise argparse.ArgumentTypeError("must be > 0")
+    return value
+
+
+def _non_negative_float_arg(text: str) -> float:
+    value = _finite_float_arg(text)
+    if value < 0.0:
+        raise argparse.ArgumentTypeError("must be >= 0")
+    return value
+
+
+def _unit_interval_float_arg(text: str) -> float:
+    value = _finite_float_arg(text)
+    if value < 0.0 or value > 1.0:
+        raise argparse.ArgumentTypeError("must be between 0 and 1")
+    return value
+
+
+def _positive_unit_float_arg(text: str) -> float:
+    value = _finite_float_arg(text)
+    if value <= 0.0 or value > 1.0:
+        raise argparse.ArgumentTypeError("must be > 0 and <= 1")
+    return value
+
+
+def _adam_beta_arg(text: str) -> float:
+    value = _finite_float_arg(text)
+    if value < 0.0 or value >= 1.0:
+        raise argparse.ArgumentTypeError("must be >= 0 and < 1")
+    return value
+
+
+def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", default="training_runs/manual")
     parser.add_argument("--init-only", action="store_true")
@@ -126,38 +188,84 @@ def main() -> None:
     parser.add_argument(
         "--device", choices=("cpu", "cuda"), default=None
     )
-    parser.add_argument("--max-rounds", type=int, default=0)
-    parser.add_argument("--d-model", type=int, default=128)
-    parser.add_argument("--layers", type=int, default=3)
-    parser.add_argument("--heads", type=int, default=4)
-    parser.add_argument("--dropout", type=float, default=0.1)
-    parser.add_argument("--max-tokens", type=int, default=768)
-    parser.add_argument("--learning-rate", type=float, default=None)
     parser.add_argument(
-        "--checkpoint-every-updates", type=int, default=None
+        "--max-rounds", type=_non_negative_int_arg, default=0
     )
-    parser.add_argument("--max-round-seconds", type=float, default=None)
-    parser.add_argument("--gamma", type=float, default=None)
-    parser.add_argument("--gae-lambda", type=float, default=None)
-    parser.add_argument("--ppo-clip", type=float, default=None)
-    parser.add_argument("--value-clip", type=float, default=None)
-    parser.add_argument("--entropy-coef", type=float, default=None)
-    parser.add_argument("--value-coef", type=float, default=None)
-    parser.add_argument("--max-grad-norm", type=float, default=None)
-    parser.add_argument("--ppo-epochs", type=int, default=None)
-    parser.add_argument("--minibatch-size", type=int, default=None)
-    parser.add_argument("--adam-beta1", type=float, default=None)
-    parser.add_argument("--adam-beta2", type=float, default=None)
-    parser.add_argument("--weight-decay", type=float, default=None)
-    args = parser.parse_args()
+    parser.add_argument(
+        "--d-model", type=_positive_int_arg, default=128
+    )
+    parser.add_argument("--layers", type=_positive_int_arg, default=3)
+    parser.add_argument("--heads", type=_positive_int_arg, default=4)
+    parser.add_argument(
+        "--dropout", type=_unit_interval_float_arg, default=0.1
+    )
+    parser.add_argument(
+        "--max-tokens", type=_positive_int_arg, default=768
+    )
+    parser.add_argument(
+        "--learning-rate", type=_positive_float_arg, default=None
+    )
+    parser.add_argument(
+        "--checkpoint-every-updates",
+        type=_positive_int_arg,
+        default=None,
+    )
+    parser.add_argument(
+        "--max-round-seconds", type=_positive_float_arg, default=None
+    )
+    parser.add_argument(
+        "--gamma", type=_unit_interval_float_arg, default=None
+    )
+    parser.add_argument(
+        "--gae-lambda", type=_unit_interval_float_arg, default=None
+    )
+    parser.add_argument(
+        "--ppo-clip", type=_positive_unit_float_arg, default=None
+    )
+    parser.add_argument(
+        "--value-clip", type=_positive_float_arg, default=None
+    )
+    parser.add_argument(
+        "--entropy-coef", type=_non_negative_float_arg, default=None
+    )
+    parser.add_argument(
+        "--value-coef", type=_non_negative_float_arg, default=None
+    )
+    parser.add_argument(
+        "--max-grad-norm", type=_non_negative_float_arg, default=None
+    )
+    parser.add_argument(
+        "--ppo-epochs", type=_positive_int_arg, default=None
+    )
+    parser.add_argument(
+        "--minibatch-size", type=_positive_int_arg, default=None
+    )
+    parser.add_argument(
+        "--adam-beta1", type=_adam_beta_arg, default=None
+    )
+    parser.add_argument(
+        "--adam-beta2", type=_adam_beta_arg, default=None
+    )
+    parser.add_argument(
+        "--weight-decay", type=_non_negative_float_arg, default=None
+    )
+    args = parser.parse_args(argv)
     run_dir = Path(args.run_dir)
     resume_path = None if args.resume is None else Path(args.resume)
-    cli_model_config = ModelConfig(
-        d_model=args.d_model,
-        layers=args.layers,
-        heads=args.heads,
-        dropout=args.dropout,
-        max_tokens=args.max_tokens,
+    if args.init_only and resume_path is not None:
+        parser.error("--init-only cannot be combined with --resume")
+    if resume_path is None and args.d_model % args.heads != 0:
+        parser.error("--d-model must be divisible by --heads")
+    cli_model_config = (
+        ModelConfig(
+            d_model=args.d_model,
+            layers=args.layers,
+            heads=args.heads,
+            dropout=args.dropout,
+            max_tokens=args.max_tokens,
+        )
+        if resume_path is None
+        else None
     )
     model_config = resolve_model_config(
         cli_model_config=cli_model_config,
@@ -184,25 +292,32 @@ def main() -> None:
         ),
         resume_path=resume_path,
     )
-    prepared = prepare_training_run(
-        run_dir=run_dir,
-        run_id=run_dir.name,
-        model_config=model_config,
-        train_config=train_config,
-    )
-    if args.init_only:
-        print(f"dashboard: {prepared.dashboard_path}")
-        print(f"checkpoint: {prepared.checkpoint_path}")
-        return
+    if resume_path is None:
+        initialized = initialize_training_run(
+            run_dir=run_dir,
+            run_id=run_dir.name,
+            model_config=model_config,
+            train_config=train_config,
+        )
+        if args.init_only:
+            print(f"dashboard: {initialized.dashboard_path}")
+            print(f"checkpoint: {initialized.checkpoint_path}")
+            return
+        dashboard_path = initialized.dashboard_path
+        training_resume = initialized.checkpoint_path
+    else:
+        prepared = prepare_training_run(run_dir=run_dir)
+        dashboard_path = prepared.dashboard_path
+        training_resume = resume_path
     result = run_training_loop(
         run_dir=run_dir,
         run_id=run_dir.name,
         model_config=model_config,
         train_config=train_config,
         max_rounds=args.max_rounds,
-        resume=resume_path,
+        resume=training_resume,
     )
-    print(f"dashboard: {prepared.dashboard_path}")
+    print(f"dashboard: {dashboard_path}")
     print(f"checkpoint: {result.checkpoint_path}")
     print(f"rounds: {result.total_rounds}")
     print(f"updates: {result.total_updates}")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Literal
 
@@ -19,6 +20,15 @@ class ModelConfig:
     heads: int = 4
     dropout: float = 0.1
     max_tokens: int = 768
+
+    def __post_init__(self) -> None:
+        assert self.d_model > 0
+        assert self.layers > 0
+        assert self.heads > 0
+        assert self.d_model % self.heads == 0
+        assert _is_finite(self.dropout)
+        assert 0.0 <= self.dropout <= 1.0
+        assert self.max_tokens > 0
 
     def to_json(self) -> JsonObject:
         return {
@@ -60,6 +70,35 @@ class TrainConfig:
     adam_beta1: float = 0.9
     adam_beta2: float = 0.999
     weight_decay: float = 0.0
+
+    def __post_init__(self) -> None:
+        assert _is_finite(self.learning_rate)
+        assert self.learning_rate > 0.0
+        assert self.checkpoint_every_updates > 0
+        assert _is_finite(self.max_round_seconds)
+        assert self.max_round_seconds > 0.0
+        assert _is_finite(self.gamma)
+        assert 0.0 <= self.gamma <= 1.0
+        assert _is_finite(self.gae_lambda)
+        assert 0.0 <= self.gae_lambda <= 1.0
+        assert _is_finite(self.ppo_clip)
+        assert 0.0 < self.ppo_clip <= 1.0
+        assert _is_finite(self.value_clip)
+        assert self.value_clip > 0.0
+        assert _is_finite(self.entropy_coef)
+        assert self.entropy_coef >= 0.0
+        assert _is_finite(self.value_coef)
+        assert self.value_coef >= 0.0
+        assert _is_finite(self.max_grad_norm)
+        assert self.max_grad_norm >= 0.0
+        assert self.ppo_epochs > 0
+        assert self.minibatch_size > 0
+        assert _is_finite(self.adam_beta1)
+        assert 0.0 <= self.adam_beta1 < 1.0
+        assert _is_finite(self.adam_beta2)
+        assert 0.0 <= self.adam_beta2 < 1.0
+        assert _is_finite(self.weight_decay)
+        assert self.weight_decay >= 0.0
 
     def to_json(self) -> JsonObject:
         return {
@@ -126,3 +165,7 @@ def _device_json_field(data: JsonObject, field: str) -> TrainingDevice:
     if value == "cuda":
         return "cuda"
     assert False
+
+
+def _is_finite(value: float) -> bool:
+    return math.isfinite(value)
