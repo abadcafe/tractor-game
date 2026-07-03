@@ -83,14 +83,45 @@ class PublicHistoryRecorder:
         default_factory=_signature_set
     )
     _tricks: list[HistoryTrick] = field(default_factory=_history_list)
+    _last_completed_signature: tuple[object, ...] | None = None
+    _saw_open_play_since_last_completed: bool = False
 
     def update(self, snapshot: StateSnapshot) -> None:
         """Add a completed trick if this snapshot reveals a new one."""
+        has_open_play = _snapshot_has_open_play(snapshot)
         completed = snapshot.last_completed_trick
-        if completed is None:
-            return
-        signature = _completed_trick_signature(completed)
-        if signature in self._signatures:
+        if completed is not None:
+            signature = _completed_trick_signature(completed)
+            if self._should_append_completed(
+                signature,
+                has_open_play=has_open_play,
+            ):
+                self._append_completed(completed, signature)
+        if has_open_play:
+            self._saw_open_play_since_last_completed = True
+
+    def _should_append_completed(
+        self,
+        signature: tuple[object, ...],
+        *,
+        has_open_play: bool,
+    ) -> bool:
+        if self._last_completed_signature is None:
+            return True
+        if signature != self._last_completed_signature:
+            return True
+        return self._saw_open_play_since_last_completed and (
+            not has_open_play
+        )
+
+    def _append_completed(
+        self,
+        completed: CompletedTrickSnapshot,
+        signature: tuple[object, ...],
+    ) -> None:
+        if signature in self._signatures and (
+            not self._saw_open_play_since_last_completed
+        ):
             return
         self._signatures.add(signature)
         self._tricks.append(
@@ -102,6 +133,8 @@ class PublicHistoryRecorder:
                 failed_throw=completed.failed_throw,
             )
         )
+        self._last_completed_signature = signature
+        self._saw_open_play_since_last_completed = False
 
     def tricks(self) -> tuple[HistoryTrick, ...]:
         """Return completed public tricks in observed order."""
@@ -111,6 +144,8 @@ class PublicHistoryRecorder:
         """Clear per-round public trick history."""
         self._signatures.clear()
         self._tricks.clear()
+        self._last_completed_signature = None
+        self._saw_open_play_since_last_completed = False
 
 
 def build_observation(
@@ -594,6 +629,13 @@ def _hand_count(player: int, snapshot: StateSnapshot) -> int:
     if player >= len(snapshot.player_hand_counts):
         return 0
     return snapshot.player_hand_counts[player]
+
+
+def _snapshot_has_open_play(snapshot: StateSnapshot) -> bool:
+    trick = snapshot.trick
+    if trick is None:
+        return False
+    return any(slot.cards for slot in trick.slots)
 
 
 def _level_card_revealer_role(

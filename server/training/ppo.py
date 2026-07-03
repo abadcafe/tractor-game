@@ -15,16 +15,13 @@ from server.training.model import TractorPolicyModel
 from server.training.semantic_actions import (
     SemanticArgument,
     SemanticArgumentPrefix,
+    semantic_argument_id,
 )
-from server.training.semantic_torch import (
-    forward_argument_head,
-    logits_for_arguments,
-)
+from server.training.semantic_torch import forward_argument_head
 from server.training.tensorize import (
-    ArgumentPrefixTensorBatch,
     ObservationTensorBatch,
-    tensorize_argument_prefix,
-    tensorize_observation,
+    tensorize_argument_prefixes,
+    tensorize_observations,
 )
 from server.training.trajectory import RewardedDecisionStep
 
@@ -62,6 +59,23 @@ class MinibatchLoss:
     total_loss: Tensor
     approx_kl: Tensor
     clip_fraction: Tensor
+
+
+@dataclass(frozen=True, slots=True)
+class TraceBatchEval:
+    """Current-model scores for a minibatch of recorded traces."""
+
+    log_probabilities: Tensor
+    values: Tensor
+    entropies: Tensor
+
+
+@dataclass(frozen=True, slots=True)
+class _TraceAccumulator:
+    """Per-sample tensors collected from batched prefix forwards."""
+
+    log_probabilities: tuple[Tensor, ...]
+    entropies: tuple[Tensor, ...]
 
 
 class AdamWState:
@@ -270,58 +284,60 @@ class PPOTrainer:
         self,
         samples: tuple[RolloutSample, ...],
     ) -> MinibatchLoss:
-        policy_losses: list[Tensor] = []
-        value_losses: list[Tensor] = []
-        entropies: list[Tensor] = []
-        approx_kls: list[Tensor] = []
-        clip_fractions: list[Tensor] = []
-        for sample in samples:
-            log_prob, value, entropy = self._trace_log_prob(sample.step)
-            old_log_prob = _scalar_tensor(
-                sample.old_log_probability, device=self.device
-            )
-            old_value = _scalar_tensor(
-                sample.old_value_estimate, device=self.device
-            )
-            advantage = _scalar_tensor(
-                sample.advantage, device=self.device
-            )
-            return_value = _scalar_tensor(
-                sample.return_value, device=self.device
-            )
-            ratio = torch.exp(log_prob - old_log_prob)
-            clipped_ratio = torch.clamp(
-                ratio,
-                1.0 - self.train_config.ppo_clip,
-                1.0 + self.train_config.ppo_clip,
-            )
-            policy_losses.append(
-                -torch.minimum(
-                    ratio * advantage,
-                    clipped_ratio * advantage,
-                )
-            )
-            value_clipped = old_value + torch.clamp(
-                value - old_value,
-                -self.train_config.value_clip,
-                self.train_config.value_clip,
-            )
-            value_loss = torch.maximum(
-                nn.functional.mse_loss(value, return_value),
-                nn.functional.mse_loss(value_clipped, return_value),
-            )
-            value_losses.append(value_loss)
-            entropies.append(entropy)
-            approx_kls.append(old_log_prob - log_prob)
-            clip_fractions.append(
-                ratio.sub(1.0)
-                .abs()
-                .gt(self.train_config.ppo_clip)
-                .to(dtype=torch.float32)
-            )
-        policy_loss = torch.stack(policy_losses).mean()
-        value_loss = torch.stack(value_losses).mean()
-        entropy = torch.stack(entropies).mean()
+        evaluated = self._trace_batch_eval(samples)
+        old_log_probabilities = _float_tensor_vector(
+            tuple(sample.old_log_probability for sample in samples),
+            device=self.device,
+        )
+        old_values = _float_tensor_vector(
+            tuple(sample.old_value_estimate for sample in samples),
+            device=self.device,
+        )
+        advantages = _float_tensor_vector(
+            tuple(sample.advantage for sample in samples),
+            device=self.device,
+        )
+        return_values = _float_tensor_vector(
+            tuple(sample.return_value for sample in samples),
+            device=self.device,
+        )
+        ratio = torch.exp(
+            evaluated.log_probabilities - old_log_probabilities
+        )
+        clipped_ratio = torch.clamp(
+            ratio,
+            1.0 - self.train_config.ppo_clip,
+            1.0 + self.train_config.ppo_clip,
+        )
+        policy_loss = -torch.minimum(
+            ratio * advantages,
+            clipped_ratio * advantages,
+        ).mean()
+        value_clipped = old_values + torch.clamp(
+            evaluated.values - old_values,
+            -self.train_config.value_clip,
+            self.train_config.value_clip,
+        )
+        value_loss = torch.maximum(
+            nn.functional.mse_loss(
+                evaluated.values,
+                return_values,
+                reduction="none",
+            ),
+            nn.functional.mse_loss(
+                value_clipped,
+                return_values,
+                reduction="none",
+            ),
+        ).mean()
+        entropy = evaluated.entropies.mean()
+        approx_kl = old_log_probabilities - evaluated.log_probabilities
+        clip_fraction = (
+            ratio.sub(1.0)
+            .abs()
+            .gt(self.train_config.ppo_clip)
+            .to(dtype=torch.float32)
+        )
         total_loss = (
             policy_loss
             + self.train_config.value_coef * value_loss
@@ -332,93 +348,160 @@ class PPOTrainer:
             value_loss=value_loss,
             entropy=entropy,
             total_loss=total_loss,
-            approx_kl=torch.stack(approx_kls).mean(),
-            clip_fraction=torch.stack(clip_fractions).mean(),
+            approx_kl=approx_kl.mean(),
+            clip_fraction=clip_fraction.mean(),
         )
 
-    def _trace_log_prob(
+    def _trace_batch_eval(
         self,
-        step: RewardedDecisionStep,
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        observation_batch = tensorize_observation(
-            observation=step.step.observation,
+        samples: tuple[RolloutSample, ...],
+    ) -> TraceBatchEval:
+        assert samples
+        observations = tuple(
+            sample.step.step.observation for sample in samples
+        )
+        observation_batch = tensorize_observations(
+            observations=observations,
             max_observation_tokens=self.model_config.max_tokens,
             device=self.device,
         )
-        prefix = SemanticArgumentPrefix(arguments=())
-        log_probs: list[Tensor] = []
-        entropies: list[Tensor] = []
-        value = self._value_for_prefix(
-            observation_batch=observation_batch,
-            prefix=prefix,
+        empty_prefixes = tuple(
+            SemanticArgumentPrefix(arguments=()) for _ in samples
         )
-        trace = step.step.action.semantic_trace
-        for argument in trace.arguments:
-            log_prob, value, entropy = self._argument_log_prob(
-                step=step,
-                observation_batch=observation_batch,
-                prefix=prefix,
-                argument=argument,
+        value_output = forward_argument_head(
+            model=self.model,
+            observation=observation_batch,
+            prefix=tensorize_argument_prefixes(
+                prefixes=empty_prefixes,
+                device=self.device,
+            ),
+        )
+        accumulators = tuple(
+            _TraceAccumulator(log_probabilities=(), entropies=())
+            for _ in samples
+        )
+        prefixes = list(empty_prefixes)
+        max_trace_length = max(
+            len(sample.step.step.action.semantic_trace.arguments)
+            for sample in samples
+        )
+        for argument_index in range(max_trace_length):
+            active_indices = tuple(
+                index
+                for index, sample in enumerate(samples)
+                if argument_index
+                < len(sample.step.step.action.semantic_trace.arguments)
             )
-            log_probs.append(log_prob)
-            entropies.append(entropy)
-            if argument.kind == "select_face_count":
-                prefix = SemanticArgumentPrefix(
-                    arguments=(*prefix.arguments, argument)
+            step_eval = self._argument_batch_eval(
+                samples=samples,
+                active_indices=active_indices,
+                observation_batch=observation_batch,
+                prefixes=tuple(
+                    prefixes[index] for index in active_indices
+                ),
+                argument_index=argument_index,
+            )
+            for row_index, sample_index in enumerate(active_indices):
+                accumulator = accumulators[sample_index]
+                accumulators = _replace_accumulator(
+                    accumulators,
+                    index=sample_index,
+                    accumulator=_TraceAccumulator(
+                        log_probabilities=(
+                            *accumulator.log_probabilities,
+                            step_eval.log_probabilities[row_index],
+                        ),
+                        entropies=(
+                            *accumulator.entropies,
+                            step_eval.entropies[row_index],
+                        ),
+                    ),
                 )
-        return (
-            _sum_tensors(log_probs, device=self.device),
-            value,
-            _sum_tensors(entropies, device=self.device),
+                argument = samples[
+                    sample_index
+                ].step.step.action.semantic_trace.arguments[
+                    argument_index
+                ]
+                if argument.kind == "select_face_count":
+                    current_prefix = prefixes[sample_index]
+                    prefixes[sample_index] = SemanticArgumentPrefix(
+                        arguments=(*current_prefix.arguments, argument)
+                    )
+        return TraceBatchEval(
+            log_probabilities=torch.stack(
+                [
+                    _sum_tensors(
+                        accumulator.log_probabilities,
+                        device=self.device,
+                    )
+                    for accumulator in accumulators
+                ]
+            ),
+            values=value_output.values,
+            entropies=torch.stack(
+                [
+                    _sum_tensors(
+                        accumulator.entropies,
+                        device=self.device,
+                    )
+                    for accumulator in accumulators
+                ]
+            ),
         )
 
-    def _argument_log_prob(
+    def _argument_batch_eval(
         self,
         *,
-        step: RewardedDecisionStep,
+        samples: tuple[RolloutSample, ...],
+        active_indices: tuple[int, ...],
         observation_batch: ObservationTensorBatch,
-        prefix: SemanticArgumentPrefix,
-        argument: SemanticArgument,
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        prefix_batch = tensorize_argument_prefix(
-            prefix=prefix,
+        prefixes: tuple[SemanticArgumentPrefix, ...],
+        argument_index: int,
+    ) -> TraceBatchEval:
+        assert active_indices
+        active_observation_batch = _select_observations(
+            observation_batch,
+            active_indices=active_indices,
+        )
+        prefix_batch = tensorize_argument_prefixes(
+            prefixes=prefixes,
             device=self.device,
         )
         output = forward_argument_head(
             model=self.model,
-            observation=observation_batch,
+            observation=active_observation_batch,
             prefix=prefix_batch,
         )
-        allowed = step.step.legal_actions.allowed_next(prefix)
-        assert argument in allowed
-        argument_index = allowed.index(argument)
-        logits = logits_for_arguments(output, allowed)
-        log_probabilities = torch.log_softmax(logits, dim=0)
-        probabilities = torch.softmax(logits, dim=0)
-        return (
-            log_probabilities[argument_index],
-            output.values[0],
-            -(probabilities * log_probabilities).sum(),
-        )
-
-    def _value_for_prefix(
-        self,
-        *,
-        observation_batch: ObservationTensorBatch,
-        prefix: SemanticArgumentPrefix,
-    ) -> Tensor:
-        prefix_batch: ArgumentPrefixTensorBatch = (
-            tensorize_argument_prefix(
-                prefix=prefix,
-                device=self.device,
+        log_probabilities: list[Tensor] = []
+        entropies: list[Tensor] = []
+        for row_index, sample_index in enumerate(active_indices):
+            sample = samples[sample_index]
+            prefix = prefixes[row_index]
+            argument = sample.step.step.action.semantic_trace.arguments[
+                argument_index
+            ]
+            allowed = sample.step.step.legal_actions.allowed_next(
+                prefix
             )
+            assert argument in allowed
+            selected_argument_index = allowed.index(argument)
+            logits = _logits_for_argument_row(
+                output.argument_logits[row_index],
+                allowed,
+            )
+            row_log_probabilities = torch.log_softmax(logits, dim=0)
+            probabilities = torch.softmax(logits, dim=0)
+            log_probabilities.append(
+                row_log_probabilities[selected_argument_index]
+            )
+            entropies.append(
+                -(probabilities * row_log_probabilities).sum()
+            )
+        return TraceBatchEval(
+            log_probabilities=torch.stack(log_probabilities),
+            values=output.values,
+            entropies=torch.stack(entropies),
         )
-        output = forward_argument_head(
-            model=self.model,
-            observation=observation_batch,
-            prefix=prefix_batch,
-        )
-        return output.values[0]
 
 
 def _normalize_advantages(
@@ -503,15 +586,74 @@ def _mean_float(values: tuple[Tensor, ...]) -> float:
 
 
 def _sum_tensors(
-    values: list[Tensor], *, device: torch.device
+    values: tuple[Tensor, ...], *, device: torch.device
 ) -> Tensor:
     if not values:
         return torch.tensor(0.0, dtype=torch.float32, device=device)
-    return torch.stack(values).sum()
+    return torch.stack(list(values)).sum()
 
 
-def _scalar_tensor(value: float, *, device: torch.device) -> Tensor:
-    return torch.tensor(value, dtype=torch.float32, device=device)
+def _float_tensor_vector(
+    values: tuple[float, ...], *, device: torch.device
+) -> Tensor:
+    assert values
+    return torch.tensor(values, dtype=torch.float32, device=device)
+
+
+def _replace_accumulator(
+    accumulators: tuple[_TraceAccumulator, ...],
+    *,
+    index: int,
+    accumulator: _TraceAccumulator,
+) -> tuple[_TraceAccumulator, ...]:
+    result = list(accumulators)
+    result[index] = accumulator
+    return tuple(result)
+
+
+def _select_observations(
+    batch: ObservationTensorBatch,
+    *,
+    active_indices: tuple[int, ...],
+) -> ObservationTensorBatch:
+    index = torch.tensor(
+        active_indices,
+        dtype=torch.long,
+        device=batch.token_type_ids.device,
+    )
+    return ObservationTensorBatch(
+        token_type_ids=batch.token_type_ids.index_select(0, index),
+        segment_ids=batch.segment_ids.index_select(0, index),
+        field_ids=batch.field_ids.index_select(0, index),
+        value_ids=batch.value_ids.index_select(0, index),
+        suit_ids=batch.suit_ids.index_select(0, index),
+        rank_ids=batch.rank_ids.index_select(0, index),
+        points_ids=batch.points_ids.index_select(0, index),
+        color_ids=batch.color_ids.index_select(0, index),
+        role_ids=batch.role_ids.index_select(0, index),
+        trick_age_ids=batch.trick_age_ids.index_select(0, index),
+        trick_state_ids=batch.trick_state_ids.index_select(0, index),
+        play_order_ids=batch.play_order_ids.index_select(0, index),
+        count_ids=batch.count_ids.index_select(0, index),
+        play_width_ids=batch.play_width_ids.index_select(0, index),
+        event_age_ids=batch.event_age_ids.index_select(0, index),
+        numeric_values=batch.numeric_values.index_select(0, index),
+        numeric_masks=batch.numeric_masks.index_select(0, index),
+    )
+
+
+def _logits_for_argument_row(
+    argument_logits: Tensor,
+    choices: tuple[SemanticArgument, ...],
+) -> Tensor:
+    assert choices
+    ids = tuple(semantic_argument_id(argument) for argument in choices)
+    index = torch.tensor(
+        ids,
+        dtype=torch.long,
+        device=argument_logits.device,
+    )
+    return argument_logits.index_select(dim=0, index=index)
 
 
 def _float_tensor(value: Tensor) -> float:

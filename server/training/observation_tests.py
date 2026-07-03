@@ -169,6 +169,49 @@ def test_completed_history_records_plays_and_result() -> None:
     assert TrickResultFieldToken("points", 35, 1) in observation.tokens
 
 
+def test_completed_history_keeps_duplicate_after_open_play() -> None:
+    first = card("hearts", "A", 1)
+    second = card("hearts", "A", 2)
+    completed = CompletedTrickSnapshot(
+        lead_player=2,
+        slots=[
+            TrickSlotSnapshot(player=0, cards=[]),
+            TrickSlotSnapshot(player=1, cards=[]),
+            TrickSlotSnapshot(player=2, cards=[first, second]),
+            TrickSlotSnapshot(player=3, cards=[]),
+        ],
+        winner=2,
+        points=20,
+    )
+    open_trick = TrickSnapshot(
+        lead_player=2,
+        current_player=3,
+        slots=[
+            TrickSlotSnapshot(player=0, cards=[]),
+            TrickSlotSnapshot(player=1, cards=[]),
+            TrickSlotSnapshot(player=2, cards=[card("clubs", "K", 1)]),
+            TrickSlotSnapshot(player=3, cards=[]),
+        ],
+    )
+    recorder = PublicHistoryRecorder()
+
+    recorder.update(make_snapshot(last_completed_trick=completed))
+    recorder.update(make_snapshot(last_completed_trick=completed))
+    assert len(recorder.tricks()) == 1
+
+    recorder.update(
+        make_snapshot(last_completed_trick=completed, trick=open_trick)
+    )
+    recorder.update(
+        make_snapshot(last_completed_trick=completed, trick=open_trick)
+    )
+    assert len(recorder.tricks()) == 1
+
+    recorder.update(make_snapshot(last_completed_trick=completed))
+
+    assert len(recorder.tricks()) == 2
+
+
 def test_completed_history_records_failed_throw_event() -> None:
     attempted_high = card("spades", "K", 1)
     attempted_low = card("spades", "Q", 1)

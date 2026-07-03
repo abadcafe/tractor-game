@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from server.result import Ok, Rejected
 from server.rules.card_faces import (
@@ -15,6 +15,9 @@ from server.rules.card_faces import (
 from server.rules.cards import Card, Rank, Suit
 from server.rules.follow_analysis import FollowAnalysis, analyze_follow
 
+type FollowPrefix = tuple[FaceCount, ...]
+type AllowedNextCache = dict[FollowPrefix, tuple[FaceCount, ...]]
+
 
 class FollowActionSpaceRejected(Rejected):
     """Follow action space rejected a semantic selection."""
@@ -23,18 +26,38 @@ class FollowActionSpaceRejected(Rejected):
         super().__init__(reason)
 
 
+def _allowed_next_cache() -> AllowedNextCache:
+    return {}
+
+
 @dataclass(frozen=True, slots=True)
 class FollowActionSpace:
     """Exact follow-play action space for one player decision."""
 
     analysis: FollowAnalysis
     hand_faces: tuple[FaceCount, ...]
+    _allowed_next_cache: AllowedNextCache = field(
+        default_factory=_allowed_next_cache,
+        init=False,
+        repr=False,
+    )
 
     def allowed_next(
         self,
         prefix: tuple[FaceCount, ...],
     ) -> tuple[FaceCount, ...]:
         """Return next face-count choices that can complete legally."""
+        cached = self._allowed_next_cache.get(prefix)
+        if cached is not None:
+            return cached
+        allowed = self._compute_allowed_next(prefix)
+        self._allowed_next_cache[prefix] = allowed
+        return allowed
+
+    def _compute_allowed_next(
+        self,
+        prefix: tuple[FaceCount, ...],
+    ) -> tuple[FaceCount, ...]:
         if face_count_width(prefix) >= self.analysis.lead_count:
             return ()
         last_face = prefix[-1].face if prefix else None

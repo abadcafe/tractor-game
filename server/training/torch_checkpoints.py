@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import os
+import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeGuard
+from typing import TypeGuard, cast
 
 import torch
 from torch import Tensor
@@ -14,6 +15,8 @@ from server.training.config import ModelConfig, TrainConfig
 from server.training.json_types import JsonObject, JsonValue
 from server.training.model import TractorPolicyModel
 from server.training.ppo import PPOTrainer
+
+type PythonRandomState = tuple[int, tuple[int, ...], float | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +37,15 @@ class TorchCheckpointMetadata:
     train_config: TrainConfig
     total_rounds: int
     total_updates: int
+
+
+@dataclass(frozen=True, slots=True)
+class TorchRngState:
+    """Random generator states needed for exact training resume."""
+
+    python_random_state: PythonRandomState
+    torch_cpu_state: Tensor
+    torch_cuda_states: tuple[Tensor, ...]
 
 
 def create_model(
@@ -85,11 +97,12 @@ def save_torch_checkpoint(
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(f"{path.suffix}.tmp")
     payload: dict[str, object] = {
-        "schema_version": 8,
+        "schema_version": 9,
         "model_config": model_config.to_json(),
         "train_config": train_config.to_json(),
         "model_state": model.state_dict(),
         "optimizer_state": trainer.optimizer_state(),
+        "rng_state": capture_torch_rng_state(),
         "total_rounds": total_rounds,
         "total_updates": total_updates,
     }
@@ -107,7 +120,7 @@ def load_torch_checkpoint(
     """Load trainable state from a torch checkpoint."""
     loaded = _load_checkpoint_payload(path=path, map_location=device)
     schema_version = loaded["schema_version"]
-    assert schema_version == 8
+    assert schema_version == 9
     model = create_model(model_config, device)
     model_state = loaded["model_state"]
     assert _is_tensor_state_dict(model_state)
@@ -121,6 +134,9 @@ def load_torch_checkpoint(
     optimizer_state = loaded["optimizer_state"]
     assert _is_str_object_dict(optimizer_state)
     trainer.load_optimizer_state(optimizer_state)
+    rng_state = loaded["rng_state"]
+    assert isinstance(rng_state, TorchRngState)
+    restore_torch_rng_state(rng_state)
     return LoadedTrainingState(
         model=model,
         trainer=trainer,
@@ -138,7 +154,7 @@ def read_torch_checkpoint_metadata(
         map_location=torch.device("cpu"),
     )
     schema_version = loaded["schema_version"]
-    assert schema_version == 8
+    assert schema_version == 9
     model_config = loaded["model_config"]
     train_config = loaded["train_config"]
     assert _is_json_object(model_config)
@@ -149,6 +165,30 @@ def read_torch_checkpoint_metadata(
         total_rounds=_int_field(loaded, "total_rounds"),
         total_updates=_int_field(loaded, "total_updates"),
     )
+
+
+def capture_torch_rng_state() -> TorchRngState:
+    """Capture Python and torch RNG states for a checkpoint."""
+    python_state = random.getstate()
+    assert _is_python_random_state(python_state)
+    cuda_states = (
+        tuple(torch.cuda.get_rng_state_all())
+        if torch.cuda.is_available()
+        else ()
+    )
+    return TorchRngState(
+        python_random_state=python_state,
+        torch_cpu_state=torch.get_rng_state(),
+        torch_cuda_states=cuda_states,
+    )
+
+
+def restore_torch_rng_state(state: TorchRngState) -> None:
+    """Restore Python and torch RNG states from a checkpoint."""
+    random.setstate(state.python_random_state)
+    torch.set_rng_state(state.torch_cpu_state)
+    if state.torch_cuda_states and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all(list(state.torch_cuda_states))
 
 
 def _load_checkpoint_payload(
@@ -205,6 +245,29 @@ def _is_json_value(value: object) -> TypeGuard[JsonValue]:
             for key, item in value.items()
         )
     return False
+
+
+def _is_python_random_state(
+    value: object,
+) -> TypeGuard[PythonRandomState]:
+    if not isinstance(value, tuple):
+        return False
+    items = cast(tuple[object, ...], value)
+    if len(items) != 3:
+        return False
+    version, internal_state, gaussian = items
+    return (
+        isinstance(version, int)
+        and _is_int_tuple(internal_state)
+        and (gaussian is None or isinstance(gaussian, float))
+    )
+
+
+def _is_int_tuple(value: object) -> TypeGuard[tuple[int, ...]]:
+    if not isinstance(value, tuple):
+        return False
+    items = cast(tuple[object, ...], value)
+    return all(isinstance(item, int) for item in items)
 
 
 def _is_object_list(value: object) -> TypeGuard[list[object]]:
