@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from server.player.base import GameView, Player
 from server.protocol import PlayerMessage, StateMessage
-from server.result import Ok
+from server.result import Ok, Rejected
 from server.rules.cards import Card
 from server.training.legal_actions import build_legal_action_index
 from server.training.observation import (
@@ -15,10 +15,10 @@ from server.training.observation import (
     build_observation,
 )
 from server.training.policy import TrainingPolicy
-from server.training.semantic_actions import (
-    GeneratedAction,
+from server.training.semantic_actions.binding import (
     bind_generated_action,
 )
+from server.training.semantic_actions.values import GeneratedAction
 from server.training.trajectory import DecisionStep, TrajectoryRecorder
 
 
@@ -63,6 +63,7 @@ class TrainingPlayer(Player):
         self._pending: PendingDecision | None = None
         self._held_scoring_message: StateMessage | None = None
         self._action_tasks: set[asyncio.Task[None]] = set()
+        self._policy_rejection: Rejected | None = None
         self._stats = TrainingPlayerStats()
 
     async def run(self, game: GameView) -> None:
@@ -92,20 +93,27 @@ class TrainingPlayer(Player):
         """Return per-round action stats."""
         return self._stats
 
-    def raise_background_errors(self) -> None:
+    def raise_background_errors(self) -> Ok[None] | Rejected:
         """Raise any programming error from submitted action tasks."""
+        if self._policy_rejection is not None:
+            return self._policy_rejection
         for task in tuple(self._action_tasks):
             if not task.done():
                 continue
             self._action_tasks.discard(task)
             task.result()
+        return Ok(value=None)
 
-    def reset_round_tracking(self) -> None:
+    def reset_round_tracking(self) -> Ok[None] | Rejected:
         """Clear per-round history and action stats."""
-        self.raise_background_errors()
+        background_result = self.raise_background_errors()
+        if isinstance(background_result, Rejected):
+            return background_result
         self._history.clear()
         self._pending = None
+        self._policy_rejection = None
         self._stats = TrainingPlayerStats()
+        return Ok(value=None)
 
     async def confirm_held_scoring_next_round(
         self, game: GameView
@@ -169,10 +177,14 @@ class TrainingPlayer(Player):
             snapshot=message.state,
             query=observation.action_query,
         )
-        decision = self._policy.decide(
+        decision_result = self._policy.decide(
             observation,
             legal_actions,
         )
+        if isinstance(decision_result, Rejected):
+            self._policy_rejection = decision_result
+            return
+        decision = decision_result.value
         step = DecisionStep(
             player_index=self.index,
             seq=message.seq,

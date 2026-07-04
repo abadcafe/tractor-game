@@ -12,12 +12,12 @@ from server.rules.card_faces import (
     face_sort_key,
 )
 from server.rules.cards import Card
-from server.training.semantic_actions import (
-    ActionQuery,
+from server.training.semantic_actions.arguments import (
     InvalidSemanticActionRejected,
     SemanticArgument,
     SemanticArgumentTrace,
 )
+from server.training.semantic_actions.query import ActionQuery
 
 type CanCompleteSelection = Callable[[tuple[FaceCount, ...]], bool]
 

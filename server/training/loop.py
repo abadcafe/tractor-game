@@ -9,16 +9,25 @@ from pathlib import Path
 
 import torch
 
+from server import result as _result
 from server.training.config import ModelConfig, TrainConfig
-from server.training.metrics import TrainingMetric, append_metric
+from server.training.metrics import (
+    TrainingMetric,
+    append_metric,
+    validate_training_metric,
+)
+from server.training.ppo import ppo_update_stats_are_finite
 from server.training.runner import SelfPlaySession
 from server.training.torch_checkpoints import (
-    LoadedTrainingState,
-    create_training_state,
     load_torch_checkpoint,
     save_torch_checkpoint,
 )
 from server.training.torch_policy import TorchTrainingPolicy
+from server.training.training_state import (
+    LoadedTrainingState,
+    create_training_state,
+    resolve_training_device,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,16 +47,22 @@ async def train_self_play(
     train_config: TrainConfig,
     max_rounds: int,
     resume: Path | None,
-) -> TrainingLoopResult:
+) -> _result.Ok[TrainingLoopResult] | _result.Rejected:
     """Train by self-play for a fixed number of rounds."""
     assert max_rounds >= 0
-    device = torch.device(train_config.device)
-    state = _load_or_create_state(
+    device_result = resolve_training_device(train_config.device)
+    if isinstance(device_result, _result.Rejected):
+        return device_result
+    device = device_result.value
+    state_result = _load_or_create_state(
         resume=resume,
         model_config=model_config,
         train_config=train_config,
         device=device,
     )
+    if isinstance(state_result, _result.Rejected):
+        return state_result
+    state = state_result.value
     policy = TorchTrainingPolicy(
         model=state.model,
         config=model_config,
@@ -65,8 +80,22 @@ async def train_self_play(
         round_result = await session.play_round(
             max_seconds=train_config.max_round_seconds
         )
-        if round_result.rewarded_steps:
-            stats = state.trainer.update(round_result.rewarded_steps)
+        if isinstance(round_result, _result.Rejected):
+            return round_result
+        round_data = round_result.value
+        if round_data.rewarded_steps:
+            update_result = state.trainer.update(
+                round_data.rewarded_steps
+            )
+            if isinstance(update_result, _result.Rejected):
+                return update_result
+            stats = update_result.value
+            if not ppo_update_stats_are_finite(stats):
+                return _result.Rejected(
+                    reason=(
+                        "training update produced non-finite PPO stats"
+                    )
+                )
             total_updates += 1
         else:
             stats = None
@@ -74,7 +103,7 @@ async def train_self_play(
         elapsed = max(_monotonic() - start, 0.000001)
         process_rounds = total_rounds - start_total_rounds
         assert process_rounds > 0
-        decision_count = len(round_result.rewarded_steps)
+        decision_count = len(round_data.rewarded_steps)
         archive_checkpoint = (
             None
             if stats is None
@@ -89,7 +118,39 @@ async def train_self_play(
             if archive_checkpoint is None
             else archive_checkpoint
         )
-        save_torch_checkpoint(
+        metric = TrainingMetric(
+            run_id=run_id,
+            total_games=total_rounds,
+            total_updates=total_updates,
+            process_games_per_second=process_rounds / elapsed,
+            last_round_decisions_per_second=(
+                decision_count / round_data.elapsed_seconds
+            ),
+            last_team0_reward=round_data.team0_reward,
+            last_team1_reward=round_data.team1_reward,
+            last_generated_action_count=(
+                round_data.generated_action_count
+            ),
+            last_accepted_action_count=(
+                round_data.accepted_action_count
+            ),
+            last_decision_count=decision_count,
+            last_average_action_choices=(
+                round_data.average_action_choices
+            ),
+            policy_loss=None if stats is None else stats.policy_loss,
+            value_loss=None if stats is None else stats.value_loss,
+            entropy=None if stats is None else stats.entropy,
+            approx_kl=None if stats is None else stats.approx_kl,
+            clip_fraction=None
+            if stats is None
+            else stats.clip_fraction,
+            checkpoint_path=str(checkpoint_path),
+        )
+        metric_validation = validate_training_metric(metric)
+        if isinstance(metric_validation, _result.Rejected):
+            return metric_validation
+        save_result = save_torch_checkpoint(
             manifest_paths=(
                 (latest_checkpoint,)
                 if archive_checkpoint is None
@@ -105,44 +166,15 @@ async def train_self_play(
                 train_config.checkpoint_retention_updates
             ),
         )
-        append_metric(
-            run_dir,
-            TrainingMetric(
-                run_id=run_id,
-                total_games=total_rounds,
-                total_updates=total_updates,
-                process_games_per_second=process_rounds / elapsed,
-                last_round_decisions_per_second=(
-                    decision_count / round_result.elapsed_seconds
-                ),
-                last_team0_reward=round_result.team0_reward,
-                last_team1_reward=round_result.team1_reward,
-                last_generated_action_count=(
-                    round_result.generated_action_count
-                ),
-                last_accepted_action_count=(
-                    round_result.accepted_action_count
-                ),
-                last_decision_count=decision_count,
-                last_average_action_choices=(
-                    round_result.average_action_choices
-                ),
-                policy_loss=None
-                if stats is None
-                else stats.policy_loss,
-                value_loss=None if stats is None else stats.value_loss,
-                entropy=None if stats is None else stats.entropy,
-                approx_kl=None if stats is None else stats.approx_kl,
-                clip_fraction=None
-                if stats is None
-                else stats.clip_fraction,
-                checkpoint_path=str(checkpoint_path),
-            ),
-        )
-        if round_result.game_over:
+        if isinstance(save_result, _result.Rejected):
+            return save_result
+        metric_result = append_metric(run_dir, metric)
+        if isinstance(metric_result, _result.Rejected):
+            return metric_result
+        if round_data.game_over:
             session = SelfPlaySession(policy=policy)
     if max_rounds == 0:
-        save_torch_checkpoint(
+        save_result = save_torch_checkpoint(
             manifest_paths=(latest_checkpoint,),
             model=state.model,
             trainer=state.trainer,
@@ -154,10 +186,14 @@ async def train_self_play(
                 train_config.checkpoint_retention_updates
             ),
         )
-    return TrainingLoopResult(
-        total_rounds=total_rounds,
-        total_updates=total_updates,
-        checkpoint_path=latest_checkpoint,
+        if isinstance(save_result, _result.Rejected):
+            return save_result
+    return _result.Ok(
+        value=TrainingLoopResult(
+            total_rounds=total_rounds,
+            total_updates=total_updates,
+            checkpoint_path=latest_checkpoint,
+        )
     )
 
 
@@ -167,12 +203,14 @@ def _load_or_create_state(
     model_config: ModelConfig,
     train_config: TrainConfig,
     device: torch.device,
-) -> LoadedTrainingState:
+) -> _result.Ok[LoadedTrainingState] | _result.Rejected:
     if resume is None:
-        return create_training_state(
-            model_config=model_config,
-            train_config=train_config,
-            device=device,
+        return _result.Ok(
+            value=create_training_state(
+                model_config=model_config,
+                train_config=train_config,
+                device=device,
+            )
         )
     return load_torch_checkpoint(
         path=resume,
@@ -210,7 +248,7 @@ def run_training_loop(
     train_config: TrainConfig,
     max_rounds: int,
     resume: Path | None,
-) -> TrainingLoopResult:
+) -> _result.Ok[TrainingLoopResult] | _result.Rejected:
     """Synchronous wrapper for CLI entry points."""
     return asyncio.run(
         train_self_play(

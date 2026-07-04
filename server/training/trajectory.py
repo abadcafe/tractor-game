@@ -6,10 +6,8 @@ from dataclasses import dataclass, field
 
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
-from server.training.semantic_actions import (
-    ActionQuery,
-    GeneratedAction,
-)
+from server.training.semantic_actions.query import ActionQuery
+from server.training.semantic_actions.values import GeneratedAction
 
 
 @dataclass(frozen=True, slots=True)

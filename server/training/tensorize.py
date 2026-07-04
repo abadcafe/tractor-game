@@ -13,8 +13,10 @@ from server.training.numeric_features import (
     numeric_feature_values,
 )
 from server.training.observation import Observation
-from server.training.semantic_actions import SemanticArgumentPrefix
-from server.training.semantic_codec import (
+from server.training.semantic_actions.arguments import (
+    SemanticArgumentPrefix,
+)
+from server.training.semantic_actions.codec import (
     SEMANTIC_CODEC,
     semantic_argument_id,
 )

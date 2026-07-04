@@ -5,14 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from server.result import Ok, Rejected
-from server.training.semantic_actions import (
-    ActionQuery,
-    GeneratedAction,
+from server.training.semantic_actions.arguments import (
     InvalidSemanticActionRejected,
     SemanticArgument,
     SemanticArgumentPrefix,
     SemanticArgumentTrace,
 )
+from server.training.semantic_actions.query import ActionQuery
+from server.training.semantic_actions.values import GeneratedAction
 
 
 class LegalActionIndex:

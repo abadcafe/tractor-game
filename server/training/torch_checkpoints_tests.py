@@ -2,28 +2,46 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import random
-import subprocess
-import sys
+import shutil
 from pathlib import Path
 from typing import TypeGuard
 
 import pytest
 import torch
 
-from server.training import torch_checkpoints
+from server.result import Ok, Rejected
+from server.training import training_state
 from server.training.config import ModelConfig, TrainConfig
 from server.training.model import TractorPolicyModel
+from server.training.ppo import PPOTrainer
 from server.training.torch_checkpoints import (
-    create_training_state,
-    load_torch_checkpoint,
-    read_torch_checkpoint_metadata,
-    save_torch_checkpoint,
+    TorchCheckpointMetadata,
 )
+from server.training.torch_checkpoints import (
+    load_torch_checkpoint as _load_torch_checkpoint,
+)
+from server.training.torch_checkpoints import (
+    pruning as _checkpoint_pruning,
+)
+from server.training.torch_checkpoints import (
+    read_torch_checkpoint_metadata as _read_torch_checkpoint_metadata,
+)
+from server.training.torch_checkpoints import save as _checkpoint_save
+from server.training.torch_checkpoints import (
+    save_torch_checkpoint as _save_torch_checkpoint,
+)
+from server.training.torch_checkpoints.schema import CheckpointManifest
 from server.training.train import (
     TrainConfigOverrides,
     resolve_model_config,
     resolve_train_config,
+)
+from server.training.training_state import (
+    LoadedTrainingState,
+    create_training_state,
 )
 
 
@@ -64,13 +82,12 @@ def test_torch_checkpoint_metadata_drives_resume_model_config(
     assert metadata.train_config == train_config
     assert metadata.total_rounds == 7
     assert metadata.total_updates == 3
-    assert (
-        resolve_model_config(
-            cli_model_config=ModelConfig(d_model=128),
-            resume_path=path,
-        )
-        == model_config
+    resolved_model_config = resolve_model_config(
+        cli_model_config=ModelConfig(d_model=128),
+        resume_path=path,
     )
+    assert isinstance(resolved_model_config, Ok)
+    assert resolved_model_config.value == model_config
 
 
 def test_read_metadata_uses_manifest_without_torch_load(
@@ -112,6 +129,463 @@ def test_read_metadata_uses_manifest_without_torch_load(
     assert metadata.train_config == train_config
     assert metadata.total_rounds == 11
     assert metadata.total_updates == 5
+
+
+def test_torch_checkpoint_save_rejects_payload_write_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=192,
+    )
+    train_config = TrainConfig(device="cpu")
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+
+    def fail_torch_save(*args: object, **kwargs: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(torch, "save", fail_torch_save)
+
+    result = _save_torch_checkpoint(
+        manifest_paths=(tmp_path / "latest.json",),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=1,
+        total_updates=1,
+        retained_update_count=5,
+    )
+
+    assert isinstance(result, Rejected)
+    assert "state payload write failed" in result.reason
+    assert _state_paths(tmp_path) == ()
+    assert _object_entries(tmp_path) == ()
+
+
+def test_torch_checkpoint_save_rejects_checkpoint_dir_symlink(
+    tmp_path: Path,
+) -> None:
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=192,
+    )
+    train_config = TrainConfig(device="cpu")
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+    target_dir = tmp_path / "external-checkpoints"
+    target_dir.mkdir()
+    checkpoint_dir = tmp_path / "checkpoints"
+    checkpoint_dir.symlink_to(target_dir, target_is_directory=True)
+
+    result = _save_torch_checkpoint(
+        manifest_paths=(checkpoint_dir / "latest.json",),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=1,
+        total_updates=1,
+        retained_update_count=5,
+    )
+
+    assert isinstance(result, Rejected)
+    assert "checkpoint path is a symlink" in result.reason
+    assert not (target_dir / "latest.json").exists()
+    assert not (target_dir / "objects").exists()
+
+
+def test_torch_checkpoint_save_rejects_objects_dir_symlink(
+    tmp_path: Path,
+) -> None:
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=192,
+    )
+    train_config = TrainConfig(device="cpu")
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+    target_dir = tmp_path / "external-objects"
+    target_dir.mkdir()
+    objects_dir = tmp_path / "objects"
+    objects_dir.symlink_to(target_dir, target_is_directory=True)
+
+    result = _save_torch_checkpoint(
+        manifest_paths=(tmp_path / "latest.json",),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=1,
+        total_updates=1,
+        retained_update_count=5,
+    )
+
+    assert isinstance(result, Rejected)
+    assert "checkpoint objects path is a symlink" in result.reason
+    assert not (tmp_path / "latest.json").exists()
+    assert tuple(target_dir.iterdir()) == ()
+
+
+def test_torch_checkpoint_save_rolls_back_manifest_write_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=192,
+    )
+    train_config = TrainConfig(device="cpu")
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+    latest_path = tmp_path / "latest.json"
+    save_torch_checkpoint(
+        manifest_paths=(latest_path,),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=1,
+        total_updates=1,
+        retained_update_count=5,
+    )
+    latest_before = latest_path.read_bytes()
+    state_paths_before = _state_paths(tmp_path)
+    original_writer = _checkpoint_save.write_checkpoint_manifest
+    write_count = 0
+
+    def fail_second_manifest_write(
+        *,
+        path: Path,
+        manifest: CheckpointManifest,
+    ) -> Ok[None] | Rejected:
+        nonlocal write_count
+        write_count += 1
+        if write_count == 2:
+            reason = (
+                f"checkpoint corruption: {path}: manifest write failed"
+            )
+            return Rejected(reason=reason)
+        return original_writer(path=path, manifest=manifest)
+
+    monkeypatch.setattr(
+        _checkpoint_save,
+        "write_checkpoint_manifest",
+        fail_second_manifest_write,
+    )
+    update_path = tmp_path / "update-2.json"
+
+    result = _save_torch_checkpoint(
+        manifest_paths=(update_path, latest_path),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=2,
+        total_updates=2,
+        retained_update_count=5,
+    )
+
+    assert isinstance(result, Rejected)
+    assert "manifest write failed" in result.reason
+    assert write_count == 2
+    assert latest_path.read_bytes() == latest_before
+    assert not update_path.exists()
+    assert _state_paths(tmp_path) == state_paths_before
+
+
+def test_torch_checkpoint_save_commits_after_prune_unlink_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=192,
+    )
+    train_config = TrainConfig(device="cpu")
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+    latest_path = tmp_path / "latest.json"
+    update_path = tmp_path / "update-1.json"
+    save_torch_checkpoint(
+        manifest_paths=(update_path, latest_path),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=1,
+        total_updates=1,
+        retained_update_count=5,
+    )
+    original_unlink = Path.unlink
+
+    def fail_update_unlink(
+        self: Path,
+        missing_ok: bool = False,
+    ) -> None:
+        if self.name == "update-1.json":
+            raise OSError("busy")
+        original_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", fail_update_unlink)
+
+    result = _save_torch_checkpoint(
+        manifest_paths=(latest_path,),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=2,
+        total_updates=2,
+        retained_update_count=0,
+    )
+
+    assert isinstance(result, Ok)
+    metadata = read_torch_checkpoint_metadata(latest_path)
+    assert metadata.total_rounds == 2
+    assert metadata.total_updates == 2
+    assert update_path.exists()
+
+
+def test_torch_checkpoint_save_rejects_prune_symlink_before_commit(
+    tmp_path: Path,
+) -> None:
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=192,
+    )
+    train_config = TrainConfig(device="cpu")
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+    latest_path = tmp_path / "latest.json"
+    save_torch_checkpoint(
+        manifest_paths=(latest_path,),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=1,
+        total_updates=1,
+        retained_update_count=5,
+    )
+    latest_before = latest_path.read_bytes()
+    state_paths_before = _state_paths(tmp_path)
+    target = tmp_path / "external-state"
+    target.mkdir()
+    symlink_path = tmp_path / "objects" / "symlink-object"
+    symlink_path.symlink_to(target, target_is_directory=True)
+
+    result = _save_torch_checkpoint(
+        manifest_paths=(latest_path,),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=2,
+        total_updates=2,
+        retained_update_count=5,
+    )
+
+    assert isinstance(result, Rejected)
+    assert "checkpoint object is a symlink" in result.reason
+    assert latest_path.read_bytes() == latest_before
+    assert _state_paths(tmp_path) == state_paths_before
+
+
+def test_torch_checkpoint_save_rejects_retained_symlink_before_commit(
+    tmp_path: Path,
+) -> None:
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=192,
+    )
+    train_config = TrainConfig(device="cpu")
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+    latest_path = tmp_path / "latest.json"
+    update_path = tmp_path / "update-1.json"
+    save_torch_checkpoint(
+        manifest_paths=(update_path, latest_path),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=1,
+        total_updates=1,
+        retained_update_count=5,
+    )
+    latest_before = latest_path.read_bytes()
+    retained_object_dir = _single_state_path(latest_path).parent
+    retained_object_name = retained_object_dir.name
+    target = tmp_path / "external-state"
+    target.mkdir()
+    shutil.rmtree(retained_object_dir)
+    retained_object_dir.symlink_to(target, target_is_directory=True)
+
+    result = _save_torch_checkpoint(
+        manifest_paths=(latest_path,),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=2,
+        total_updates=2,
+        retained_update_count=1,
+    )
+
+    assert isinstance(result, Rejected)
+    assert "checkpoint object is a symlink" in result.reason
+    assert latest_path.read_bytes() == latest_before
+    assert tuple(path.name for path in _object_entries(tmp_path)) == (
+        retained_object_name,
+    )
+
+
+def test_torch_checkpoint_save_rejects_retained_file_before_commit(
+    tmp_path: Path,
+) -> None:
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=192,
+    )
+    train_config = TrainConfig(device="cpu")
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+    latest_path = tmp_path / "latest.json"
+    update_path = tmp_path / "update-1.json"
+    save_torch_checkpoint(
+        manifest_paths=(update_path, latest_path),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=1,
+        total_updates=1,
+        retained_update_count=5,
+    )
+    latest_before = latest_path.read_bytes()
+    retained_object_dir = _single_state_path(latest_path).parent
+    retained_object_name = retained_object_dir.name
+    shutil.rmtree(retained_object_dir)
+    retained_object_dir.write_bytes(
+        b"not-a-checkpoint-object-directory"
+    )
+
+    result = _save_torch_checkpoint(
+        manifest_paths=(latest_path,),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=2,
+        total_updates=2,
+        retained_update_count=1,
+    )
+
+    assert isinstance(result, Rejected)
+    assert "checkpoint object is not a directory" in result.reason
+    assert latest_path.read_bytes() == latest_before
+    assert tuple(path.name for path in _object_entries(tmp_path)) == (
+        retained_object_name,
+    )
+
+
+def test_torch_checkpoint_save_commits_after_prune_rmtree_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=192,
+    )
+    train_config = TrainConfig(device="cpu")
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+    latest_path = tmp_path / "latest.json"
+    save_torch_checkpoint(
+        manifest_paths=(latest_path,),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=1,
+        total_updates=1,
+        retained_update_count=5,
+    )
+    orphan_dir = tmp_path / "objects" / "orphan"
+    orphan_dir.mkdir()
+
+    def fail_rmtree(path: Path) -> None:
+        assert path == orphan_dir
+        raise OSError("busy")
+
+    monkeypatch.setattr(
+        _checkpoint_pruning.shutil, "rmtree", fail_rmtree
+    )
+
+    result = _save_torch_checkpoint(
+        manifest_paths=(latest_path,),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=2,
+        total_updates=2,
+        retained_update_count=5,
+    )
+
+    assert isinstance(result, Ok)
+    metadata = read_torch_checkpoint_metadata(latest_path)
+    assert metadata.total_rounds == 2
+    assert metadata.total_updates == 2
+    assert orphan_dir.exists()
 
 
 def test_torch_checkpoint_state_payload_is_weights_only_safe(
@@ -334,21 +808,195 @@ def test_torch_checkpoint_save_ignores_unmanaged_json(
 def test_torch_checkpoint_save_reports_corrupt_update_manifest(
     tmp_path: Path,
 ) -> None:
-    completed: subprocess.CompletedProcess[str] = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            _corrupt_update_manifest_script(tmp_path),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=192,
+    )
+    train_config = TrainConfig(device="cpu")
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+    latest_path = tmp_path / "latest.json"
+    save_torch_checkpoint(
+        manifest_paths=(latest_path,),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=1,
+        total_updates=1,
+        retained_update_count=5,
+    )
+    latest_before = latest_path.read_text(encoding="utf-8")
+    state_paths_before = _state_paths(tmp_path)
+    (tmp_path / "update-1.json").write_text(
+        "{not checkpoint json", encoding="utf-8"
     )
 
-    assert completed.returncode != 0
-    assert "CheckpointCorruptionError" in completed.stderr
-    assert "checkpoint corruption:" in completed.stderr
-    assert "update-1.json" in completed.stderr
+    result = _save_torch_checkpoint(
+        manifest_paths=(latest_path,),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=2,
+        total_updates=2,
+        retained_update_count=5,
+    )
+
+    assert isinstance(result, Rejected)
+    assert "checkpoint corruption:" in result.reason
+    assert "update-1.json" in result.reason
+    assert latest_path.read_text(encoding="utf-8") == latest_before
+    assert _state_paths(tmp_path) == state_paths_before
+    metadata = read_torch_checkpoint_metadata(latest_path)
+    assert metadata.total_updates == 1
+
+
+def test_torch_checkpoint_read_rejects_bad_model_config(
+    tmp_path: Path,
+) -> None:
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=192,
+    )
+    train_config = TrainConfig(device="cpu")
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+    path = tmp_path / "latest.json"
+    save_torch_checkpoint(
+        manifest_paths=(path,),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=11,
+        total_updates=5,
+        retained_update_count=5,
+    )
+    manifest = _read_json_object(path)
+    manifest["model_config"] = {}
+    _write_json_object(path, manifest)
+
+    result = _read_torch_checkpoint_metadata(path)
+
+    assert isinstance(result, Rejected)
+    assert "checkpoint corruption:" in result.reason
+    assert "model_config.d_model" in result.reason
+
+
+def test_torch_checkpoint_read_rejects_invalid_utf8_manifest(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "latest.json"
+    path.write_bytes(b"\xff")
+
+    result = _read_torch_checkpoint_metadata(path)
+
+    assert isinstance(result, Rejected)
+    assert "checkpoint corruption:" in result.reason
+    assert "manifest is not valid UTF-8" in result.reason
+
+
+def test_torch_checkpoint_read_rejects_directory_manifest(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "latest.json"
+    path.mkdir()
+
+    result = _read_torch_checkpoint_metadata(path)
+
+    assert isinstance(result, Rejected)
+    assert "checkpoint corruption:" in result.reason
+    assert "manifest file is not readable" in result.reason
+
+
+def test_torch_checkpoint_read_rejects_negative_total_rounds(
+    tmp_path: Path,
+) -> None:
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=192,
+    )
+    train_config = TrainConfig(device="cpu")
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+    path = tmp_path / "latest.json"
+    save_torch_checkpoint(
+        manifest_paths=(path,),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=11,
+        total_updates=5,
+        retained_update_count=5,
+    )
+    manifest = _read_json_object(path)
+    manifest["total_rounds"] = -7
+    _write_json_object(path, manifest)
+
+    result = _read_torch_checkpoint_metadata(path)
+
+    assert isinstance(result, Rejected)
+    assert "checkpoint corruption:" in result.reason
+    assert "manifest total_rounds is negative" in result.reason
+
+
+def test_torch_checkpoint_load_rejects_negative_total_updates(
+    tmp_path: Path,
+) -> None:
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=192,
+    )
+    train_config = TrainConfig(device="cpu")
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+    path = tmp_path / "latest.json"
+    save_torch_checkpoint(
+        manifest_paths=(path,),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=11,
+        total_updates=5,
+        retained_update_count=5,
+    )
+    manifest = _read_json_object(path)
+    manifest["total_updates"] = -3
+    _write_json_object(path, manifest)
+
+    result = _load_torch_checkpoint(
+        path=path,
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+
+    assert isinstance(result, Rejected)
+    assert "checkpoint corruption:" in result.reason
+    assert "manifest total_updates is negative" in result.reason
 
 
 def test_torch_checkpoint_load_rejects_state_hash_mismatch(
@@ -380,39 +1028,294 @@ def test_torch_checkpoint_load_rejects_state_hash_mismatch(
     with _single_state_path(path).open("ab") as file:
         file.write(b"corrupt")
 
-    completed: subprocess.CompletedProcess[str] = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                "from pathlib import Path\n"
-                "import torch\n"
-                "from server.training.config import ModelConfig, "
-                "TrainConfig\n"
-                "from server.training.torch_checkpoints import "
-                "load_torch_checkpoint\n"
-                "load_torch_checkpoint(\n"
-                f"    path=Path({str(path)!r}),\n"
-                "    model_config=ModelConfig(\n"
-                "        d_model=8,\n"
-                "        layers=1,\n"
-                "        heads=2,\n"
-                "        max_tokens=192,\n"
-                "    ),\n"
-                "    train_config=TrainConfig(device='cpu'),\n"
-                "    device=torch.device('cpu'),\n"
-                ")\n"
-            ),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
+    result = _load_torch_checkpoint(
+        path=path,
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
     )
 
-    assert completed.returncode != 0
-    assert "CheckpointCorruptionError" in completed.stderr
-    assert "checkpoint corruption:" in completed.stderr
-    assert "state sha256 does not match manifest" in completed.stderr
+    assert isinstance(result, Rejected)
+    assert "checkpoint corruption:" in result.reason
+    assert "state sha256 does not match manifest" in result.reason
+
+
+def test_torch_checkpoint_load_rejects_directory_state_payload(
+    tmp_path: Path,
+) -> None:
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=192,
+    )
+    train_config = TrainConfig(device="cpu")
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+    path = tmp_path / "latest.json"
+    save_torch_checkpoint(
+        manifest_paths=(path,),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=11,
+        total_updates=5,
+        retained_update_count=5,
+    )
+    state_path = _single_state_path(path)
+    state_path.unlink()
+    state_path.mkdir()
+
+    result = _load_torch_checkpoint(
+        path=path,
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+
+    assert isinstance(result, Rejected)
+    assert "checkpoint corruption:" in result.reason
+    assert "state file is not readable" in result.reason
+
+
+def test_torch_checkpoint_load_rejects_non_torch_state_payload(
+    tmp_path: Path,
+) -> None:
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=192,
+    )
+    train_config = TrainConfig(device="cpu")
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+    path = tmp_path / "latest.json"
+    save_torch_checkpoint(
+        manifest_paths=(path,),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=11,
+        total_updates=5,
+        retained_update_count=5,
+    )
+    state_path = _single_state_path(path)
+    state_path.write_bytes(b"not a torch checkpoint")
+    _update_manifest_state_sha(path, state_path)
+
+    result = _load_torch_checkpoint(
+        path=path,
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+
+    assert isinstance(result, Rejected)
+    assert "checkpoint corruption:" in result.reason
+    assert "state payload cannot be loaded" in result.reason
+
+
+def test_torch_checkpoint_load_rejects_missing_payload_field(
+    tmp_path: Path,
+) -> None:
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=192,
+    )
+    train_config = TrainConfig(device="cpu")
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+    path = tmp_path / "latest.json"
+    save_torch_checkpoint(
+        manifest_paths=(path,),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=11,
+        total_updates=5,
+        retained_update_count=5,
+    )
+    state_path = _single_state_path(path)
+    torch.save({}, state_path)
+    _update_manifest_state_sha(path, state_path)
+
+    result = _load_torch_checkpoint(
+        path=path,
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+
+    assert isinstance(result, Rejected)
+    assert "checkpoint corruption:" in result.reason
+    assert "state payload missing schema_version" in result.reason
+
+
+def test_torch_checkpoint_load_rejects_bad_python_rng_state(
+    tmp_path: Path,
+) -> None:
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=192,
+    )
+    train_config = TrainConfig(device="cpu")
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+    path = tmp_path / "latest.json"
+    save_torch_checkpoint(
+        manifest_paths=(path,),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=11,
+        total_updates=5,
+        retained_update_count=5,
+    )
+    state_path = _single_state_path(path)
+    payload = _load_state_payload(state_path)
+    rng_payload = payload["rng_state"]
+    assert _is_object_dict(rng_payload)
+    updated_rng_payload: dict[object, object] = dict(rng_payload)
+    updated_rng_payload["python_internal_state"] = []
+    payload["rng_state"] = updated_rng_payload
+    _write_state_payload(path, state_path, payload)
+
+    result = _load_torch_checkpoint(
+        path=path,
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+
+    assert isinstance(result, Rejected)
+    assert "checkpoint corruption:" in result.reason
+    assert "rng_state.python_random_state is invalid" in result.reason
+
+
+def test_torch_checkpoint_load_rejects_bad_torch_cpu_rng_state(
+    tmp_path: Path,
+) -> None:
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=192,
+    )
+    train_config = TrainConfig(device="cpu")
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+    path = tmp_path / "latest.json"
+    save_torch_checkpoint(
+        manifest_paths=(path,),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=11,
+        total_updates=5,
+        retained_update_count=5,
+    )
+    state_path = _single_state_path(path)
+    payload = _load_state_payload(state_path)
+    rng_payload = payload["rng_state"]
+    assert _is_object_dict(rng_payload)
+    updated_rng_payload: dict[object, object] = dict(rng_payload)
+    updated_rng_payload["torch_cpu_state"] = torch.tensor(
+        [1, 2, 3], dtype=torch.int64
+    )
+    payload["rng_state"] = updated_rng_payload
+    _write_state_payload(path, state_path, payload)
+
+    result = _load_torch_checkpoint(
+        path=path,
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+
+    assert isinstance(result, Rejected)
+    assert "checkpoint corruption:" in result.reason
+    assert "rng_state.torch_cpu_state is invalid" in result.reason
+
+
+def test_torch_checkpoint_load_rejects_optimizer_dtype_mismatch(
+    tmp_path: Path,
+) -> None:
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=192,
+    )
+    train_config = TrainConfig(device="cpu")
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+    path = tmp_path / "latest.json"
+    save_torch_checkpoint(
+        manifest_paths=(path,),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=11,
+        total_updates=5,
+        retained_update_count=5,
+    )
+    state_path = _single_state_path(path)
+    payload = _load_state_payload(state_path)
+    optimizer_payload = payload["optimizer_state"]
+    assert _is_object_dict(optimizer_payload)
+    exp_avgs = optimizer_payload["exp_avgs"]
+    assert _is_object_list(exp_avgs)
+    first_parameter = next(iter(state.model.parameters()))
+    updated_exp_avgs = list(exp_avgs)
+    updated_exp_avgs[0] = torch.ones(
+        first_parameter.shape, dtype=torch.int64
+    )
+    updated_optimizer_payload: dict[object, object] = dict(
+        optimizer_payload
+    )
+    updated_optimizer_payload["exp_avgs"] = updated_exp_avgs
+    payload["optimizer_state"] = updated_optimizer_payload
+    _write_state_payload(path, state_path, payload)
+
+    result = _load_torch_checkpoint(
+        path=path,
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+
+    assert isinstance(result, Rejected)
+    assert "checkpoint corruption:" in result.reason
+    assert "optimizer_state.exp_avgs tensor dtype" in result.reason
 
 
 def test_torch_checkpoint_load_restores_rng_state(
@@ -519,37 +1422,60 @@ def test_torch_checkpoint_load_rejects_seed_mismatch(
         retained_update_count=5,
     )
 
-    completed: subprocess.CompletedProcess[str] = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                "from pathlib import Path\n"
-                "import torch\n"
-                "from server.training.config import ModelConfig, "
-                "TrainConfig\n"
-                "from server.training.torch_checkpoints import "
-                "load_torch_checkpoint\n"
-                "load_torch_checkpoint(\n"
-                f"    path=Path({str(path)!r}),\n"
-                "    model_config=ModelConfig(\n"
-                "        d_model=8,\n"
-                "        layers=1,\n"
-                "        heads=2,\n"
-                "        max_tokens=192,\n"
-                "    ),\n"
-                "    train_config=TrainConfig(seed=8),\n"
-                "    device=torch.device('cpu'),\n"
-                ")\n"
-            ),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
+    result = _load_torch_checkpoint(
+        path=path,
+        model_config=model_config,
+        train_config=TrainConfig(seed=8),
+        device=torch.device("cpu"),
     )
 
-    assert completed.returncode != 0
-    assert "AssertionError" in completed.stderr
+    assert isinstance(result, Rejected)
+    assert "checkpoint mismatch:" in result.reason
+    assert "train_config.seed" in result.reason
+
+
+def test_torch_checkpoint_load_rejects_model_config_mismatch(
+    tmp_path: Path,
+) -> None:
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=192,
+    )
+    train_config = TrainConfig(seed=7)
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+    path = tmp_path / "latest.json"
+    save_torch_checkpoint(
+        manifest_paths=(path,),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=7,
+        total_updates=3,
+        retained_update_count=5,
+    )
+
+    result = _load_torch_checkpoint(
+        path=path,
+        model_config=ModelConfig(
+            d_model=16,
+            layers=1,
+            heads=2,
+            max_tokens=192,
+        ),
+        train_config=train_config,
+        device=torch.device("cpu"),
+    )
+
+    assert isinstance(result, Rejected)
+    assert "checkpoint mismatch:" in result.reason
+    assert "model_config" in result.reason
 
 
 def test_torch_checkpoint_cuda_resume_loads_payload_on_cpu(
@@ -623,16 +1549,26 @@ def test_torch_checkpoint_cuda_resume_loads_payload_on_cpu(
     def fake_cuda_available() -> bool:
         return True
 
+    original_cuda_state = torch.zeros_like(fake_cuda_state)
+
+    def fake_get_rng_state_all() -> list[torch.Tensor]:
+        return [original_cuda_state]
+
     def fake_set_rng_state_all(states: list[torch.Tensor]) -> None:
         restored_cuda_states.append(tuple(states))
 
     monkeypatch.setattr(torch, "load", fake_torch_load)
     monkeypatch.setattr(
-        torch_checkpoints,
+        training_state,
         "create_model",
         fake_create_model,
     )
     monkeypatch.setattr(torch.cuda, "is_available", fake_cuda_available)
+    monkeypatch.setattr(
+        torch.cuda,
+        "get_rng_state_all",
+        fake_get_rng_state_all,
+    )
     monkeypatch.setattr(
         torch.cuda,
         "set_rng_state_all",
@@ -650,9 +1586,13 @@ def test_torch_checkpoint_cuda_resume_loads_payload_on_cpu(
     assert loaded.total_updates == 3
     assert load_map_locations == [torch.device("cpu")]
     assert model_devices == [torch.device("cuda")]
-    assert len(restored_cuda_states) == 1
+    assert len(restored_cuda_states) == 3
     assert len(restored_cuda_states[0]) == 1
+    assert len(restored_cuda_states[1]) == 1
+    assert len(restored_cuda_states[2]) == 1
     assert torch.equal(restored_cuda_states[0][0], fake_cuda_state)
+    assert torch.equal(restored_cuda_states[1][0], original_cuda_state)
+    assert torch.equal(restored_cuda_states[2][0], fake_cuda_state)
 
 
 def test_resolve_train_config_defaults_and_resume_overrides(
@@ -704,16 +1644,70 @@ def test_resolve_train_config_defaults_and_resume_overrides(
         cli_overrides=TrainConfigOverrides(seed=train_config.seed),
         resume_path=path,
     )
-    assert fresh.max_round_seconds == 120.0
-    assert resumed == train_config
-    assert resumed_with_device.device == "cuda"
-    assert resumed_with_same_seed.seed == train_config.seed
+    assert isinstance(fresh, Ok)
+    assert isinstance(resumed, Ok)
+    assert isinstance(resumed_with_device, Ok)
+    assert isinstance(resumed_with_same_seed, Ok)
+    assert fresh.value.max_round_seconds == 120.0
+    assert resumed.value == train_config
+    assert resumed_with_device.value.device == "cuda"
+    assert resumed_with_same_seed.value.seed == train_config.seed
     assert (
-        resumed_with_device.learning_rate == train_config.learning_rate
+        resumed_with_device.value.learning_rate
+        == train_config.learning_rate
     )
-    assert resumed_with_device.max_round_seconds == (
+    assert resumed_with_device.value.max_round_seconds == (
         train_config.max_round_seconds
     )
+
+
+def save_torch_checkpoint(
+    *,
+    manifest_paths: tuple[Path, ...],
+    model: TractorPolicyModel,
+    trainer: PPOTrainer,
+    model_config: ModelConfig,
+    train_config: TrainConfig,
+    total_rounds: int,
+    total_updates: int,
+    retained_update_count: int,
+) -> None:
+    result = _save_torch_checkpoint(
+        manifest_paths=manifest_paths,
+        model=model,
+        trainer=trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=total_rounds,
+        total_updates=total_updates,
+        retained_update_count=retained_update_count,
+    )
+    assert isinstance(result, Ok)
+
+
+def load_torch_checkpoint(
+    *,
+    path: Path,
+    model_config: ModelConfig,
+    train_config: TrainConfig,
+    device: torch.device,
+) -> LoadedTrainingState:
+    result = _load_torch_checkpoint(
+        path=path,
+        model_config=model_config,
+        train_config=train_config,
+        device=device,
+    )
+    assert isinstance(result, Ok)
+    return result.value
+
+
+def read_torch_checkpoint_metadata(
+    path: Path,
+) -> TorchCheckpointMetadata:
+    result = _read_torch_checkpoint_metadata(path)
+    assert isinstance(result, Ok)
+    return result.value
 
 
 def _single_state_path(checkpoint_path: Path) -> Path:
@@ -722,47 +1716,47 @@ def _single_state_path(checkpoint_path: Path) -> Path:
     return state_paths[0]
 
 
-def _corrupt_update_manifest_script(tmp_path: Path) -> str:
-    return (
-        "from pathlib import Path\n"
-        "import torch\n"
-        "from server.training.config import ModelConfig, TrainConfig\n"
-        "from server.training.torch_checkpoints import "
-        "create_training_state, save_torch_checkpoint\n"
-        f"checkpoint_dir = Path({str(tmp_path)!r})\n"
-        "model_config = ModelConfig(d_model=8, layers=1, heads=2, "
-        "max_tokens=192)\n"
-        "train_config = TrainConfig(device='cpu')\n"
-        "state = create_training_state(\n"
-        "    model_config=model_config,\n"
-        "    train_config=train_config,\n"
-        "    device=torch.device('cpu'),\n"
-        ")\n"
-        "latest_path = checkpoint_dir / 'latest.json'\n"
-        "save_torch_checkpoint(\n"
-        "    manifest_paths=(latest_path,),\n"
-        "    model=state.model,\n"
-        "    trainer=state.trainer,\n"
-        "    model_config=model_config,\n"
-        "    train_config=train_config,\n"
-        "    total_rounds=1,\n"
-        "    total_updates=1,\n"
-        "    retained_update_count=5,\n"
-        ")\n"
-        "(checkpoint_dir / 'update-1.json').write_text(\n"
-        "    '{not checkpoint json', encoding='utf-8'\n"
-        ")\n"
-        "save_torch_checkpoint(\n"
-        "    manifest_paths=(latest_path,),\n"
-        "    model=state.model,\n"
-        "    trainer=state.trainer,\n"
-        "    model_config=model_config,\n"
-        "    train_config=train_config,\n"
-        "    total_rounds=2,\n"
-        "    total_updates=2,\n"
-        "    retained_update_count=5,\n"
-        ")\n"
+def _read_json_object(path: Path) -> dict[object, object]:
+    loaded: object = json.loads(path.read_text(encoding="utf-8"))
+    assert _is_object_dict(loaded)
+    return dict(loaded)
+
+
+def _write_json_object(path: Path, data: dict[object, object]) -> None:
+    path.write_text(
+        f"{json.dumps(data, ensure_ascii=False, sort_keys=True)}\n",
+        encoding="utf-8",
     )
+
+
+def _update_manifest_state_sha(
+    manifest_path: Path,
+    state_path: Path,
+) -> None:
+    manifest = _read_json_object(manifest_path)
+    manifest["state_sha256"] = hashlib.sha256(
+        state_path.read_bytes()
+    ).hexdigest()
+    _write_json_object(manifest_path, manifest)
+
+
+def _load_state_payload(path: Path) -> dict[object, object]:
+    loaded: object = torch.load(
+        path,
+        map_location=torch.device("cpu"),
+        weights_only=True,
+    )
+    assert _is_object_dict(loaded)
+    return dict(loaded)
+
+
+def _write_state_payload(
+    manifest_path: Path,
+    state_path: Path,
+    payload: dict[object, object],
+) -> None:
+    torch.save(payload, state_path)
+    _update_manifest_state_sha(manifest_path, state_path)
 
 
 def _state_paths(checkpoint_dir: Path) -> tuple[Path, ...]:
@@ -771,8 +1765,19 @@ def _state_paths(checkpoint_dir: Path) -> tuple[Path, ...]:
     )
 
 
+def _object_entries(checkpoint_dir: Path) -> tuple[Path, ...]:
+    objects_dir = checkpoint_dir / "objects"
+    if not objects_dir.exists():
+        return ()
+    return tuple(sorted(objects_dir.iterdir()))
+
+
 def _is_object_dict(value: object) -> TypeGuard[dict[object, object]]:
     return isinstance(value, dict)
+
+
+def _is_object_list(value: object) -> TypeGuard[list[object]]:
+    return isinstance(value, list)
 
 
 def _model_parameters(

@@ -16,16 +16,18 @@ from server.training.feature_schema import (
     is_categorical_int_field_key,
     is_numeric_field_key,
 )
+from server.training.token_context import (
+    ObservationSegment,
+    RelativeRole,
+    TokenScalar,
+    TrickRecordState,
+)
 from server.training.tokens import (
     FaceCountToken,
     GlobalFieldToken,
-    ObservationSegment,
     ObservationToken,
-    RelativeRole,
     RoundEventFieldToken,
     RoundFieldToken,
-    TokenScalar,
-    TrickRecordState,
     TrickResultFieldToken,
 )
 

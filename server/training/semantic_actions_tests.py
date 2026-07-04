@@ -15,7 +15,7 @@ from server.training.semantic_actions import (
     build_action_query,
     semantic_prefix_state,
 )
-from server.training.semantic_codec import (
+from server.training.semantic_actions.codec import (
     semantic_argument_from_id,
     semantic_argument_id,
     semantic_argument_name,
@@ -53,6 +53,54 @@ def test_bind_generated_action_binds_face_to_current_hand_ids() -> None:
         "type": "play",
         "cards": [heart_five.id],
     }
+
+
+def test_bind_generated_action_binds_pair_face_count_to_two_cards() -> (
+    None
+):
+    first_heart_five = card("hearts", "5", 1)
+    second_heart_five = card("hearts", "5", 2)
+    face = CardFace(first_heart_five.suit, first_heart_five.rank)
+    action = GeneratedAction(
+        action_kind="play",
+        message_type="play",
+        face_counts=(FaceCount(face, 2),),
+        semantic_trace=SemanticArgumentTrace(arguments=()),
+        is_pass=False,
+    )
+
+    bound = bind_generated_action(
+        action, [first_heart_five, second_heart_five]
+    )
+
+    assert isinstance(bound, Ok)
+    assert bound.value.raw == {
+        "type": "play",
+        "cards": [first_heart_five.id, second_heart_five.id],
+    }
+
+
+def test_bind_generated_action_rejects_duplicate_face_counts() -> None:
+    first_heart_five = card("hearts", "5", 1)
+    second_heart_five = card("hearts", "5", 2)
+    face = CardFace(first_heart_five.suit, first_heart_five.rank)
+    action = GeneratedAction(
+        action_kind="play",
+        message_type="play",
+        face_counts=(
+            FaceCount(face, 1),
+            FaceCount(face, 1),
+        ),
+        semantic_trace=SemanticArgumentTrace(arguments=()),
+        is_pass=False,
+    )
+
+    bound = bind_generated_action(
+        action, [first_heart_five, second_heart_five]
+    )
+
+    assert isinstance(bound, Rejected)
+    assert "同一牌面重复选择" in bound.reason
 
 
 def test_bind_generated_action_rejects_missing_face_count() -> None:

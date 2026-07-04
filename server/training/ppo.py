@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import TypeGuard, cast
 
 import torch
 from torch import Tensor
 
+from server import result as _result
 from server.sm.constants import get_team_index
+from server.training.adamw import AdamWState
 from server.training.argument_distribution import argument_distribution
 from server.training.config import ModelConfig, TrainConfig
 from server.training.model import TractorPolicyModel
@@ -19,7 +20,7 @@ from server.training.ppo_math import (
     clipped_ppo_objective,
     generalized_advantage_targets,
 )
-from server.training.semantic_actions import (
+from server.training.semantic_actions.arguments import (
     SemanticArgumentPrefix,
 )
 from server.training.semantic_torch import forward_argument_head
@@ -41,6 +42,18 @@ class PPOUpdateStats:
     total_loss: float
     approx_kl: float
     clip_fraction: float
+
+
+def ppo_update_stats_are_finite(stats: PPOUpdateStats) -> bool:
+    """Return whether all scalar PPO diagnostics are finite."""
+    return (
+        math.isfinite(stats.policy_loss)
+        and math.isfinite(stats.value_loss)
+        and math.isfinite(stats.entropy)
+        and math.isfinite(stats.total_loss)
+        and math.isfinite(stats.approx_kl)
+        and math.isfinite(stats.clip_fraction)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,107 +96,6 @@ class _TraceAccumulator:
     entropies: tuple[Tensor, ...]
 
 
-class AdamWState:
-    """Strictly typed AdamW optimizer state."""
-
-    def __init__(
-        self,
-        *,
-        parameters: tuple[Tensor, ...],
-        learning_rate: float,
-        beta1: float,
-        beta2: float,
-        weight_decay: float,
-        eps: float = 0.00000001,
-    ) -> None:
-        self._parameters = parameters
-        self._learning_rate = learning_rate
-        self._beta1 = beta1
-        self._beta2 = beta2
-        self._weight_decay = weight_decay
-        self._eps = eps
-        self._step_count = 0
-        self._exp_avgs: list[Tensor | None] = [None for _ in parameters]
-        self._exp_avg_sqs: list[Tensor | None] = [
-            None for _ in parameters
-        ]
-
-    def step(self) -> None:
-        """Apply one AdamW update using current parameter gradients."""
-        self._step_count += 1
-        with torch.no_grad():
-            for index, parameter in enumerate(self._parameters):
-                gradient = parameter.grad
-                if gradient is None:
-                    continue
-                exp_avg = self._exp_avgs[index]
-                exp_avg_sq = self._exp_avg_sqs[index]
-                if exp_avg is None:
-                    exp_avg = torch.zeros_like(parameter)
-                    self._exp_avgs[index] = exp_avg
-                if exp_avg_sq is None:
-                    exp_avg_sq = torch.zeros_like(parameter)
-                    self._exp_avg_sqs[index] = exp_avg_sq
-                if self._weight_decay != 0.0:
-                    parameter.mul_(
-                        1.0 - self._learning_rate * self._weight_decay
-                    )
-                exp_avg.mul_(self._beta1).add_(
-                    gradient, alpha=1.0 - self._beta1
-                )
-                exp_avg_sq.mul_(self._beta2).addcmul_(
-                    gradient,
-                    gradient,
-                    value=1.0 - self._beta2,
-                )
-                bias_correction1 = 1.0 - self._beta1**self._step_count
-                bias_correction2 = 1.0 - self._beta2**self._step_count
-                step_size = (
-                    self._learning_rate
-                    * math.sqrt(bias_correction2)
-                    / bias_correction1
-                )
-                denominator = exp_avg_sq.sqrt().add_(self._eps)
-                parameter.addcdiv_(
-                    exp_avg, denominator, value=-step_size
-                )
-
-    def state_dict(self) -> dict[str, object]:
-        """Return a torch-saveable optimizer state payload."""
-        return {
-            "kind": "typed_adamw",
-            "step_count": self._step_count,
-            "exp_avgs": list(self._exp_avgs),
-            "exp_avg_sqs": list(self._exp_avg_sqs),
-        }
-
-    def load_state_dict(self, state: dict[str, object]) -> None:
-        """Load optimizer state from a checkpoint payload."""
-        kind = state["kind"]
-        assert kind == "typed_adamw"
-        step_count = state["step_count"]
-        assert isinstance(step_count, int)
-        exp_avgs = state["exp_avgs"]
-        exp_avg_sqs = state["exp_avg_sqs"]
-        assert _is_optional_tensor_list(exp_avgs)
-        assert _is_optional_tensor_list(exp_avg_sqs)
-        assert len(exp_avgs) == len(self._parameters)
-        assert len(exp_avg_sqs) == len(self._parameters)
-        self._step_count = step_count
-        self._exp_avgs = [
-            _optimizer_tensor_on_parameter_device(
-                value, self._parameters[index]
-            )
-            for index, value in enumerate(exp_avgs)
-        ]
-        self._exp_avg_sqs = [
-            _optimizer_tensor_on_parameter_device(
-                value, self._parameters[index]
-            )
-            for index, value in enumerate(exp_avg_sqs)
-        ]
-
-
 class PPOTrainer:
     """Clipped PPO trainer over semantic argument traces."""
 
@@ -210,27 +122,49 @@ class PPOTrainer:
     def update(
         self,
         steps: tuple[RewardedDecisionStep, ...],
-    ) -> PPOUpdateStats:
+    ) -> _result.Ok[PPOUpdateStats] | _result.Rejected:
         """Run PPO epochs over one rewarded rollout."""
         assert steps
         self.model.train()
         samples = _normalize_advantages(self._rollout_samples(steps))
         losses: list[MinibatchLoss] = []
+        parameters = tuple(self.model.parameters())
         for _ in range(self.train_config.ppo_epochs):
             for batch in _minibatches(
                 _shuffled_samples(samples),
                 minibatch_size=self.train_config.minibatch_size,
             ):
-                loss = self._minibatch_loss(batch)
+                loss_result = self._minibatch_loss(batch)
+                if isinstance(loss_result, _result.Rejected):
+                    self.model.zero_grad(set_to_none=True)
+                    return loss_result
+                loss = loss_result.value
                 self.model.zero_grad(set_to_none=True)
+                loss_check = _validate_minibatch_loss(loss)
+                if isinstance(loss_check, _result.Rejected):
+                    self.model.zero_grad(set_to_none=True)
+                    return loss_check
                 torch.autograd.backward(loss.total_loss)
+                gradient_check = _validate_gradients(parameters)
+                if isinstance(gradient_check, _result.Rejected):
+                    self.model.zero_grad(set_to_none=True)
+                    return gradient_check
                 _clip_grad_norm(
-                    tuple(self.model.parameters()),
+                    parameters,
                     max_norm=self.train_config.max_grad_norm,
                 )
+                clipped_gradient_check = _validate_gradients(parameters)
+                if isinstance(clipped_gradient_check, _result.Rejected):
+                    self.model.zero_grad(set_to_none=True)
+                    return clipped_gradient_check
                 self.optimizer.step()
                 losses.append(loss)
-        return _mean_stats(losses)
+        stats = _mean_stats(losses)
+        if not ppo_update_stats_are_finite(stats):
+            return _result.Rejected(
+                reason="PPO update stats must be finite"
+            )
+        return _result.Ok(value=stats)
 
     def optimizer_state(self) -> dict[str, object]:
         """Return serializable AdamW optimizer state."""
@@ -289,8 +223,11 @@ class PPOTrainer:
     def _minibatch_loss(
         self,
         samples: tuple[RolloutSample, ...],
-    ) -> MinibatchLoss:
-        evaluated = self._trace_batch_eval(samples)
+    ) -> _result.Ok[MinibatchLoss] | _result.Rejected:
+        evaluated_result = self._trace_batch_eval(samples)
+        if isinstance(evaluated_result, _result.Rejected):
+            return evaluated_result
+        evaluated = evaluated_result.value
         old_log_probabilities = _float_tensor_vector(
             tuple(sample.old_log_probability for sample in samples),
             device=self.device,
@@ -322,19 +259,21 @@ class PPOTrainer:
                 entropy_coef=self.train_config.entropy_coef,
             ),
         )
-        return MinibatchLoss(
-            policy_loss=objective.policy_loss,
-            value_loss=objective.value_loss,
-            entropy=objective.entropy,
-            total_loss=objective.total_loss,
-            approx_kl=objective.approx_kl,
-            clip_fraction=objective.clip_fraction,
+        return _result.Ok(
+            value=MinibatchLoss(
+                policy_loss=objective.policy_loss,
+                value_loss=objective.value_loss,
+                entropy=objective.entropy,
+                total_loss=objective.total_loss,
+                approx_kl=objective.approx_kl,
+                clip_fraction=objective.clip_fraction,
+            )
         )
 
     def _trace_batch_eval(
         self,
         samples: tuple[RolloutSample, ...],
-    ) -> TraceBatchEval:
+    ) -> _result.Ok[TraceBatchEval] | _result.Rejected:
         assert samples
         observations = tuple(
             sample.step.step.observation for sample in samples
@@ -371,7 +310,7 @@ class PPOTrainer:
                 if argument_index
                 < len(sample.step.step.action.semantic_trace.arguments)
             )
-            step_eval = self._argument_batch_eval(
+            step_eval_result = self._argument_batch_eval(
                 samples=samples,
                 active_indices=active_indices,
                 observation_batch=observation_batch,
@@ -380,6 +319,9 @@ class PPOTrainer:
                 ),
                 argument_index=argument_index,
             )
+            if isinstance(step_eval_result, _result.Rejected):
+                return step_eval_result
+            step_eval = step_eval_result.value
             for row_index, sample_index in enumerate(active_indices):
                 accumulator = accumulators[sample_index]
                 accumulators = _replace_accumulator(
@@ -406,26 +348,28 @@ class PPOTrainer:
                     prefixes[sample_index] = SemanticArgumentPrefix(
                         arguments=(*current_prefix.arguments, argument)
                     )
-        return TraceBatchEval(
-            log_probabilities=torch.stack(
-                [
-                    _sum_tensors(
-                        accumulator.log_probabilities,
-                        device=self.device,
-                    )
-                    for accumulator in accumulators
-                ]
-            ),
-            values=value_output.values,
-            entropies=torch.stack(
-                [
-                    _sum_tensors(
-                        accumulator.entropies,
-                        device=self.device,
-                    )
-                    for accumulator in accumulators
-                ]
-            ),
+        return _result.Ok(
+            value=TraceBatchEval(
+                log_probabilities=torch.stack(
+                    [
+                        _sum_tensors(
+                            accumulator.log_probabilities,
+                            device=self.device,
+                        )
+                        for accumulator in accumulators
+                    ]
+                ),
+                values=value_output.values,
+                entropies=torch.stack(
+                    [
+                        _sum_tensors(
+                            accumulator.entropies,
+                            device=self.device,
+                        )
+                        for accumulator in accumulators
+                    ]
+                ),
+            )
         )
 
     def _argument_batch_eval(
@@ -436,7 +380,7 @@ class PPOTrainer:
         observation_batch: ObservationTensorBatch,
         prefixes: tuple[SemanticArgumentPrefix, ...],
         argument_index: int,
-    ) -> TraceBatchEval:
+    ) -> _result.Ok[TraceBatchEval] | _result.Rejected:
         assert active_indices
         active_observation_batch = _select_observations(
             observation_batch,
@@ -464,18 +408,23 @@ class PPOTrainer:
             )
             assert argument in allowed
             selected_argument_index = allowed.index(argument)
-            distribution = argument_distribution(
+            distribution_result = argument_distribution(
                 argument_logits=output.argument_logits[row_index],
                 choices=allowed,
             )
+            if isinstance(distribution_result, _result.Rejected):
+                return distribution_result
+            distribution = distribution_result.value
             log_probabilities.append(
                 distribution.log_probabilities[selected_argument_index]
             )
             entropies.append(distribution.entropy)
-        return TraceBatchEval(
-            log_probabilities=torch.stack(log_probabilities),
-            values=output.values,
-            entropies=torch.stack(entropies),
+        return _result.Ok(
+            value=TraceBatchEval(
+                log_probabilities=torch.stack(log_probabilities),
+                values=output.values,
+                entropies=torch.stack(entropies),
+            )
         )
 
 
@@ -560,6 +509,37 @@ def _mean_float(values: tuple[Tensor, ...]) -> float:
     return _float_tensor(torch.stack(list(values)).mean())
 
 
+def _validate_minibatch_loss(
+    loss: MinibatchLoss,
+) -> _result.Ok[None] | _result.Rejected:
+    fields = (
+        ("policy_loss", loss.policy_loss),
+        ("value_loss", loss.value_loss),
+        ("entropy", loss.entropy),
+        ("total_loss", loss.total_loss),
+        ("approx_kl", loss.approx_kl),
+        ("clip_fraction", loss.clip_fraction),
+    )
+    for field, value in fields:
+        if not _all_finite(value):
+            return _result.Rejected(
+                reason=f"PPO {field} must be finite"
+            )
+    return _result.Ok(value=None)
+
+
+def _validate_gradients(
+    parameters: tuple[Tensor, ...],
+) -> _result.Ok[None] | _result.Rejected:
+    for parameter in parameters:
+        gradient = parameter.grad
+        if gradient is not None and not _all_finite(gradient):
+            return _result.Rejected(
+                reason="PPO gradients must be finite"
+            )
+    return _result.Ok(value=None)
+
+
 def _sum_tensors(
     values: tuple[Tensor, ...], *, device: torch.device
 ) -> Tensor:
@@ -621,6 +601,10 @@ def _float_tensor(value: Tensor) -> float:
     return float(value.detach().cpu().item())
 
 
+def _all_finite(value: Tensor) -> bool:
+    return bool(torch.isfinite(value).all().detach().cpu().item())
+
+
 def _clip_grad_norm(
     parameters: tuple[Tensor, ...], *, max_norm: float
 ) -> None:
@@ -643,29 +627,3 @@ def _clip_grad_norm(
     with torch.no_grad():
         for gradient in grads:
             gradient.mul_(clip_coef)
-
-
-def _optimizer_tensor_on_parameter_device(
-    value: Tensor | None,
-    parameter: Tensor,
-) -> Tensor | None:
-    if value is None:
-        return None
-    assert value.shape == parameter.shape
-    return value.to(device=parameter.device)
-
-
-def _is_optional_tensor_list(
-    value: object,
-) -> TypeGuard[list[Tensor | None]]:
-    if not isinstance(value, list):
-        return False
-    items = cast(list[object], value)
-    for item in items:
-        if not _is_optional_tensor(item):
-            return False
-    return True
-
-
-def _is_optional_tensor(value: object) -> TypeGuard[Tensor | None]:
-    return value is None or isinstance(value, Tensor)

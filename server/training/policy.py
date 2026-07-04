@@ -7,16 +7,16 @@ import random
 from dataclasses import dataclass
 from typing import Protocol
 
-from server.result import Ok
+from server.result import Ok, Rejected
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
-from server.training.semantic_actions import (
-    GeneratedAction,
+from server.training.semantic_actions.arguments import (
     SemanticArgument,
     SemanticArgumentPrefix,
     SemanticArgumentTrace,
 )
-from server.training.semantic_codec import SEMANTIC_CODEC
+from server.training.semantic_actions.codec import SEMANTIC_CODEC
+from server.training.semantic_actions.values import GeneratedAction
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,7 +37,7 @@ class TrainingPolicy(Protocol):
         self,
         observation: Observation,
         legal_actions: LegalActionIndex,
-    ) -> PolicyDecision: ...
+    ) -> Ok[PolicyDecision] | Rejected: ...
 
 
 class RandomTrainingPolicy:
@@ -50,7 +50,7 @@ class RandomTrainingPolicy:
         self,
         observation: Observation,
         legal_actions: LegalActionIndex,
-    ) -> PolicyDecision:
+    ) -> Ok[PolicyDecision] | Rejected:
         prefix = SemanticArgumentPrefix(arguments=())
         arguments: list[SemanticArgument] = []
         log_probability = 0.0
@@ -77,10 +77,12 @@ class RandomTrainingPolicy:
         trace = SemanticArgumentTrace(arguments=tuple(arguments))
         decoded = legal_actions.decode(trace)
         assert isinstance(decoded, Ok)
-        return PolicyDecision(
-            action=decoded.value,
-            log_probability=log_probability,
-            value_estimate=0.0,
-            entropy=entropy,
-            choice_count=choice_count,
+        return Ok(
+            value=PolicyDecision(
+                action=decoded.value,
+                log_probability=log_probability,
+                value_estimate=0.0,
+                entropy=entropy,
+                choice_count=choice_count,
+            )
         )

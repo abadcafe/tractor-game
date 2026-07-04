@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from server.result import Ok, Rejected
 from server.rules.card_faces import MAX_FACE_COUNT, CardFace, FaceCount
 from server.rules.cards import Rank, Suit
-from server.training.semantic_actions import (
+from server.training.semantic_actions.arguments import (
     InvalidSemanticActionRejected,
     SemanticArgument,
 )

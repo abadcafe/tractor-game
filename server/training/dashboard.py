@@ -4,17 +4,26 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from server import result as _result
+
 DASHBOARD_FILENAME = "index.html"
 
 
-def write_dashboard(run_dir: Path, *, title: str = "Training") -> Path:
+def write_dashboard(
+    run_dir: Path, *, title: str = "Training"
+) -> _result.Ok[Path] | _result.Rejected:
     """Write a small dashboard that reads metrics.jsonl."""
-    run_dir.mkdir(parents=True, exist_ok=True)
     path = run_dir / DASHBOARD_FILENAME
-    path.write_text(
-        render_dashboard_html(title=title), encoding="utf-8"
-    )
-    return path
+    try:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            render_dashboard_html(title=title), encoding="utf-8"
+        )
+    except OSError:
+        return _result.Rejected(
+            reason=f"dashboard write failed: {path}"
+        )
+    return _result.Ok(value=path)
 
 
 def render_dashboard_html(*, title: str) -> str:
@@ -54,7 +63,23 @@ def render_dashboard_html(*, title: str) -> str:
       const text = await response.text();
       const lines = text.trim().split('\\n').filter(Boolean);
       if (lines.length === 0) return;
-      const latest = JSON.parse(lines[lines.length - 1]);
+      const records = [];
+      for (const line of lines) {{
+        try {{
+          const parsed = JSON.parse(line);
+          if (
+            parsed &&
+            typeof parsed === 'object' &&
+            !Array.isArray(parsed)
+          ) {{
+            records.push(parsed);
+          }}
+        }} catch (error) {{
+          continue;
+        }}
+      }}
+      if (records.length === 0) return;
+      const latest = records[records.length - 1];
       document.getElementById('latest').textContent =
         JSON.stringify(latest, null, 2);
       const keys = [

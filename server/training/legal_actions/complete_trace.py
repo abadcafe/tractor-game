@@ -10,14 +10,16 @@ from server.result import Ok, Rejected
 from server.rules.card_faces import FaceCount, canonical_face_counts
 from server.rules.cards import Card
 from server.training.legal_actions.contract import LegalActionIndex
-from server.training.semantic_actions import (
-    ActionQuery,
-    GeneratedAction,
+from server.training.semantic_actions.arguments import (
     InvalidSemanticActionRejected,
-    PlayerActionKind,
     SemanticArgument,
     SemanticArgumentPrefix,
     SemanticArgumentTrace,
+)
+from server.training.semantic_actions.query import ActionQuery
+from server.training.semantic_actions.values import (
+    GeneratedAction,
+    PlayerActionKind,
 )
 
 

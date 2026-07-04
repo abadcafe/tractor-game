@@ -16,15 +16,15 @@ from server.training.legal_actions.contract import LegalActionIndex
 from server.training.legal_actions.selection import (
     trace_is_selection_only,
 )
-from server.training.semantic_actions import (
-    ActionQuery,
-    GeneratedAction,
+from server.training.semantic_actions.arguments import (
     InvalidSemanticActionRejected,
     SemanticArgument,
     SemanticArgumentPrefix,
     SemanticArgumentTrace,
     semantic_prefix_state,
 )
+from server.training.semantic_actions.query import ActionQuery
+from server.training.semantic_actions.values import GeneratedAction
 
 
 @dataclass(slots=True)

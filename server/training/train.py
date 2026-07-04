@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from server import result as _result
 from server.training.config import (
     ModelConfig,
     TrainConfig,
@@ -28,6 +29,7 @@ from server.training.torch_checkpoints import (
 
 DEFAULT_RUN_DIR = Path("training_runs/manual")
 CHECKPOINTS_DIR_NAME = "checkpoints"
+MIN_CLI_MAX_TOKENS = 512
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,80 +60,87 @@ def resolve_model_config(
     *,
     cli_model_config: ModelConfig | None,
     resume_path: Path | None,
-) -> ModelConfig:
+) -> _result.Ok[ModelConfig] | _result.Rejected:
     """Use checkpoint model shape when resuming a run."""
     if resume_path is None:
         assert cli_model_config is not None
-        return cli_model_config
-    return read_torch_checkpoint_metadata(resume_path).model_config
+        return _result.Ok(value=cli_model_config)
+    metadata_result = read_torch_checkpoint_metadata(resume_path)
+    if isinstance(metadata_result, _result.Rejected):
+        return metadata_result
+    return _result.Ok(value=metadata_result.value.model_config)
 
 
 def resolve_train_config(
     *,
     cli_overrides: TrainConfigOverrides,
     resume_path: Path | None,
-) -> TrainConfig:
+) -> _result.Ok[TrainConfig] | _result.Rejected:
     """Resolve train config from checkpoint plus CLI overrides."""
-    base = (
-        TrainConfig()
-        if resume_path is None
-        else read_torch_checkpoint_metadata(resume_path).train_config
-    )
-    return TrainConfig(
-        device=base.device
-        if cli_overrides.device is None
-        else cli_overrides.device,
-        seed=base.seed
-        if cli_overrides.seed is None
-        else cli_overrides.seed,
-        learning_rate=base.learning_rate
-        if cli_overrides.learning_rate is None
-        else cli_overrides.learning_rate,
-        checkpoint_every_updates=base.checkpoint_every_updates
-        if cli_overrides.checkpoint_every_updates is None
-        else cli_overrides.checkpoint_every_updates,
-        checkpoint_retention_updates=base.checkpoint_retention_updates
-        if cli_overrides.checkpoint_retention_updates is None
-        else cli_overrides.checkpoint_retention_updates,
-        max_round_seconds=base.max_round_seconds
-        if cli_overrides.max_round_seconds is None
-        else cli_overrides.max_round_seconds,
-        gamma=base.gamma
-        if cli_overrides.gamma is None
-        else cli_overrides.gamma,
-        gae_lambda=base.gae_lambda
-        if cli_overrides.gae_lambda is None
-        else cli_overrides.gae_lambda,
-        ppo_clip=base.ppo_clip
-        if cli_overrides.ppo_clip is None
-        else cli_overrides.ppo_clip,
-        value_clip=base.value_clip
-        if cli_overrides.value_clip is None
-        else cli_overrides.value_clip,
-        entropy_coef=base.entropy_coef
-        if cli_overrides.entropy_coef is None
-        else cli_overrides.entropy_coef,
-        value_coef=base.value_coef
-        if cli_overrides.value_coef is None
-        else cli_overrides.value_coef,
-        max_grad_norm=base.max_grad_norm
-        if cli_overrides.max_grad_norm is None
-        else cli_overrides.max_grad_norm,
-        ppo_epochs=base.ppo_epochs
-        if cli_overrides.ppo_epochs is None
-        else cli_overrides.ppo_epochs,
-        minibatch_size=base.minibatch_size
-        if cli_overrides.minibatch_size is None
-        else cli_overrides.minibatch_size,
-        adam_beta1=base.adam_beta1
-        if cli_overrides.adam_beta1 is None
-        else cli_overrides.adam_beta1,
-        adam_beta2=base.adam_beta2
-        if cli_overrides.adam_beta2 is None
-        else cli_overrides.adam_beta2,
-        weight_decay=base.weight_decay
-        if cli_overrides.weight_decay is None
-        else cli_overrides.weight_decay,
+    if resume_path is None:
+        base = TrainConfig()
+    else:
+        metadata_result = read_torch_checkpoint_metadata(resume_path)
+        if isinstance(metadata_result, _result.Rejected):
+            return metadata_result
+        base = metadata_result.value.train_config
+    return _result.Ok(
+        value=TrainConfig(
+            device=base.device
+            if cli_overrides.device is None
+            else cli_overrides.device,
+            seed=base.seed
+            if cli_overrides.seed is None
+            else cli_overrides.seed,
+            learning_rate=base.learning_rate
+            if cli_overrides.learning_rate is None
+            else cli_overrides.learning_rate,
+            checkpoint_every_updates=base.checkpoint_every_updates
+            if cli_overrides.checkpoint_every_updates is None
+            else cli_overrides.checkpoint_every_updates,
+            checkpoint_retention_updates=base.checkpoint_retention_updates
+            if cli_overrides.checkpoint_retention_updates is None
+            else cli_overrides.checkpoint_retention_updates,
+            max_round_seconds=base.max_round_seconds
+            if cli_overrides.max_round_seconds is None
+            else cli_overrides.max_round_seconds,
+            gamma=base.gamma
+            if cli_overrides.gamma is None
+            else cli_overrides.gamma,
+            gae_lambda=base.gae_lambda
+            if cli_overrides.gae_lambda is None
+            else cli_overrides.gae_lambda,
+            ppo_clip=base.ppo_clip
+            if cli_overrides.ppo_clip is None
+            else cli_overrides.ppo_clip,
+            value_clip=base.value_clip
+            if cli_overrides.value_clip is None
+            else cli_overrides.value_clip,
+            entropy_coef=base.entropy_coef
+            if cli_overrides.entropy_coef is None
+            else cli_overrides.entropy_coef,
+            value_coef=base.value_coef
+            if cli_overrides.value_coef is None
+            else cli_overrides.value_coef,
+            max_grad_norm=base.max_grad_norm
+            if cli_overrides.max_grad_norm is None
+            else cli_overrides.max_grad_norm,
+            ppo_epochs=base.ppo_epochs
+            if cli_overrides.ppo_epochs is None
+            else cli_overrides.ppo_epochs,
+            minibatch_size=base.minibatch_size
+            if cli_overrides.minibatch_size is None
+            else cli_overrides.minibatch_size,
+            adam_beta1=base.adam_beta1
+            if cli_overrides.adam_beta1 is None
+            else cli_overrides.adam_beta1,
+            adam_beta2=base.adam_beta2
+            if cli_overrides.adam_beta2 is None
+            else cli_overrides.adam_beta2,
+            weight_decay=base.weight_decay
+            if cli_overrides.weight_decay is None
+            else cli_overrides.weight_decay,
+        )
     )
 
 
@@ -167,17 +176,18 @@ def _validate_resume_seed_override(
     parser: argparse.ArgumentParser,
     resume_path: Path | None,
     seed: int | None,
-) -> None:
+) -> _result.Ok[None] | _result.Rejected:
     if resume_path is None or seed is None:
-        return
-    checkpoint_seed = read_torch_checkpoint_metadata(
-        resume_path
-    ).train_config.seed
+        return _result.Ok(value=None)
+    metadata_result = read_torch_checkpoint_metadata(resume_path)
+    if isinstance(metadata_result, _result.Rejected):
+        return metadata_result
+    checkpoint_seed = metadata_result.value.train_config.seed
     if seed != checkpoint_seed:
-        parser.error(
+        return _result.Rejected(
             "--seed must match the checkpoint seed when using --resume"
         )
-        assert False
+    return _result.Ok(value=None)
 
 
 def _infer_resume_run_dir(resume_path: Path) -> Path | None:
@@ -203,6 +213,15 @@ def _positive_int_arg(text: str) -> int:
     value = int(text)
     if value <= 0:
         raise argparse.ArgumentTypeError("must be > 0")
+    return value
+
+
+def _max_tokens_arg(text: str) -> int:
+    value = _positive_int_arg(text)
+    if value < MIN_CLI_MAX_TOKENS:
+        raise argparse.ArgumentTypeError(
+            f"must be >= {MIN_CLI_MAX_TOKENS}"
+        )
     return value
 
 
@@ -253,6 +272,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--run-dir", default=None)
     parser.add_argument("--init-only", action="store_true")
     parser.add_argument("--resume", default=None)
+    parser.add_argument("--force-new-run", action="store_true")
     parser.add_argument(
         "--device", choices=("cpu", "cuda"), default=None
     )
@@ -265,7 +285,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--layers", type=_positive_int_arg, default=3)
     parser.add_argument("--heads", type=_positive_int_arg, default=4)
     parser.add_argument(
-        "--max-tokens", type=_positive_int_arg, default=768
+        "--max-tokens", type=_max_tokens_arg, default=768
     )
     parser.add_argument(
         "--seed", type=_non_negative_int_arg, default=None
@@ -336,13 +356,17 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     if args.init_only and resume_path is not None:
         parser.error("--init-only cannot be combined with --resume")
+    if args.force_new_run and resume_path is not None:
+        parser.error("--force-new-run cannot be combined with --resume")
     if resume_path is None and args.d_model % args.heads != 0:
         parser.error("--d-model must be divisible by --heads")
-    _validate_resume_seed_override(
+    seed_validation = _validate_resume_seed_override(
         parser=parser,
         resume_path=resume_path,
         seed=args.seed,
     )
+    if isinstance(seed_validation, _result.Rejected):
+        parser.error(seed_validation.reason)
     cli_model_config = (
         ModelConfig(
             d_model=args.d_model,
@@ -353,11 +377,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         if resume_path is None
         else None
     )
-    model_config = resolve_model_config(
+    model_config_result = resolve_model_config(
         cli_model_config=cli_model_config,
         resume_path=resume_path,
     )
-    train_config = resolve_train_config(
+    if isinstance(model_config_result, _result.Rejected):
+        parser.error(model_config_result.reason)
+    model_config = model_config_result.value
+    train_config_result = resolve_train_config(
         cli_overrides=TrainConfigOverrides(
             device=args.device,
             seed=args.seed,
@@ -382,13 +409,20 @@ def main(argv: Sequence[str] | None = None) -> None:
         ),
         resume_path=resume_path,
     )
+    if isinstance(train_config_result, _result.Rejected):
+        parser.error(train_config_result.reason)
+    train_config = train_config_result.value
     if resume_path is None:
-        initialized = initialize_training_run(
+        initialized_result = initialize_training_run(
             run_dir=run_dir,
             run_id=run_dir.name,
             model_config=model_config,
             train_config=train_config,
+            force_new_run=args.force_new_run,
         )
+        if isinstance(initialized_result, _result.Rejected):
+            parser.error(initialized_result.reason)
+        initialized = initialized_result.value
         if args.init_only:
             print(f"dashboard: {initialized.dashboard_path}")
             print(f"checkpoint: {initialized.checkpoint_path}")
@@ -396,7 +430,10 @@ def main(argv: Sequence[str] | None = None) -> None:
         dashboard_path = initialized.dashboard_path
         training_resume = initialized.checkpoint_path
     else:
-        prepared = prepare_training_run(run_dir=run_dir)
+        prepared_result = prepare_training_run(run_dir=run_dir)
+        if isinstance(prepared_result, _result.Rejected):
+            parser.error(prepared_result.reason)
+        prepared = prepared_result.value
         dashboard_path = prepared.dashboard_path
         training_resume = resume_path
     result = run_training_loop(
@@ -407,10 +444,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         max_rounds=args.max_rounds,
         resume=training_resume,
     )
+    if isinstance(result, _result.Rejected):
+        parser.error(result.reason)
+    loop_result = result.value
     print(f"dashboard: {dashboard_path}")
-    print(f"checkpoint: {result.checkpoint_path}")
-    print(f"rounds: {result.total_rounds}")
-    print(f"updates: {result.total_updates}")
+    print(f"checkpoint: {loop_result.checkpoint_path}")
+    print(f"rounds: {loop_result.total_rounds}")
+    print(f"updates: {loop_result.total_updates}")
 
 
 if __name__ == "__main__":

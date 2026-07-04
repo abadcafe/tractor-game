@@ -13,7 +13,7 @@ from server.player.test_helpers import (
     make_state_message,
 )
 from server.protocol import ScoringSnapshot
-from server.result import Ok
+from server.result import Ok, Rejected
 from server.rules.card_faces import CardFace, FaceCount
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
@@ -35,7 +35,7 @@ class FirstCardPlayPolicy:
         self,
         observation: Observation,
         legal_actions: LegalActionIndex,
-    ) -> PolicyDecision:
+    ) -> Ok[PolicyDecision] | Rejected:
         first_choices = legal_actions.allowed_next(
             SemanticArgumentPrefix(arguments=())
         )
@@ -50,12 +50,16 @@ class FirstCardPlayPolicy:
             SemanticArgumentTrace(arguments=tuple(trace_args))
         )
         assert isinstance(decoded, Ok)
-        return PolicyDecision(
-            action=decoded.value,
-            log_probability=0.0,
-            value_estimate=0.0,
-            entropy=0.0,
-            choice_count=len(decoded.value.semantic_trace.arguments),
+        return Ok(
+            value=PolicyDecision(
+                action=decoded.value,
+                log_probability=0.0,
+                value_estimate=0.0,
+                entropy=0.0,
+                choice_count=len(
+                    decoded.value.semantic_trace.arguments
+                ),
+            )
         )
 
 
@@ -69,9 +73,19 @@ class CapturingFirstCardPlayPolicy(FirstCardPlayPolicy):
         self,
         observation: Observation,
         legal_actions: LegalActionIndex,
-    ) -> PolicyDecision:
+    ) -> Ok[PolicyDecision] | Rejected:
         self.observation = observation
         return super().decide(observation, legal_actions)
+
+
+class RejectingPolicy:
+    def decide(
+        self,
+        observation: Observation,
+        legal_actions: LegalActionIndex,
+    ) -> Ok[PolicyDecision] | Rejected:
+        assert observation.action_query == legal_actions.query
+        return Rejected(reason="policy sampling failed")
 
 
 @pytest.mark.asyncio
@@ -136,6 +150,28 @@ async def test_training_player_records_action_after_acceptance() -> (
         FaceCount(CardFace(test_card.suit, test_card.rank), 1),
     )
     assert steps[0].choice_count == 2
+
+
+@pytest.mark.asyncio
+async def test_training_player_returns_policy_rejection() -> None:
+    test_card = card("spades", "A", 1)
+    snapshot = make_snapshot(
+        phase="PLAYING",
+        awaiting_action="play",
+        player_hand=[test_card],
+    )
+    game = make_game(snapshot)
+    player = TrainingPlayer(
+        index=0,
+        policy=RejectingPolicy(),
+    )
+
+    await player.on_state(game, make_state_message(snapshot, seq=1))
+
+    result = player.raise_background_errors()
+    assert isinstance(result, Rejected)
+    assert "policy sampling failed" in result.reason
+    game.receive.assert_not_awaited()
 
 
 @pytest.mark.asyncio

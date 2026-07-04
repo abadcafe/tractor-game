@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
+import pytest
+
+from server.result import Ok, Rejected
 from server.training.dashboard import (
     render_dashboard_html,
     write_dashboard,
@@ -11,32 +15,98 @@ from server.training.dashboard import (
 from server.training.metrics import (
     TrainingMetric,
     append_metric,
+    metrics_path,
     read_metrics,
 )
 
 
 def test_metrics_append_and_read_round_trip(tmp_path: Path) -> None:
-    metric = TrainingMetric(
-        run_id="run-1",
-        total_games=10,
-        total_updates=2,
-        process_games_per_second=1.5,
-        last_round_decisions_per_second=120.0,
-        last_team0_reward=0.25,
-        last_team1_reward=-0.25,
-        last_generated_action_count=17,
-        last_accepted_action_count=16,
-        last_decision_count=15,
-        last_average_action_choices=3.5,
-        policy_loss=0.1,
-        value_loss=0.2,
-        entropy=0.3,
-        approx_kl=0.01,
-        clip_fraction=0.25,
-        checkpoint_path="checkpoint.json",
+    metric = _sample_metric()
+
+    append_result = append_metric(tmp_path, metric)
+
+    assert isinstance(append_result, Ok)
+    assert read_metrics(tmp_path) == (metric,)
+
+
+def test_read_metrics_skips_corrupt_record(tmp_path: Path) -> None:
+    metric = _sample_metric()
+    append_result = append_metric(tmp_path, metric)
+    assert isinstance(append_result, Ok)
+    path = metrics_path(tmp_path)
+    with path.open("a", encoding="utf-8") as file:
+        file.write("{partial")
+
+    assert read_metrics(tmp_path) == (metric,)
+
+
+def test_read_metrics_skips_invalid_utf8_record(tmp_path: Path) -> None:
+    metric = _sample_metric()
+    append_result = append_metric(tmp_path, metric)
+    assert isinstance(append_result, Ok)
+    path = metrics_path(tmp_path)
+    with path.open("ab") as file:
+        file.write(
+            b'{"run_id":"bad'
+            b"\xff"
+            b'","total_games":11,'
+            b'"total_updates":3,'
+            b'"process_games_per_second":2.5,'
+            b'"last_round_decisions_per_second":121.0,'
+            b'"last_team0_reward":0.5,'
+            b'"last_team1_reward":-0.5,'
+            b'"last_generated_action_count":18,'
+            b'"last_accepted_action_count":17,'
+            b'"last_decision_count":16,'
+            b'"last_average_action_choices":4.5,'
+            b'"policy_loss":null,'
+            b'"value_loss":null,'
+            b'"entropy":null,'
+            b'"approx_kl":null,'
+            b'"clip_fraction":null,'
+            b'"checkpoint_path":null}\n'
+        )
+
+    assert read_metrics(tmp_path) == (metric,)
+
+
+def test_append_metric_rejects_non_finite_float(
+    tmp_path: Path,
+) -> None:
+    result = append_metric(
+        tmp_path, _sample_metric(policy_loss=math.nan)
     )
 
-    append_metric(tmp_path, metric)
+    assert isinstance(result, Rejected)
+    assert "policy_loss" in result.reason
+    assert not metrics_path(tmp_path).exists()
+
+
+def test_read_metrics_skips_non_finite_record(tmp_path: Path) -> None:
+    metric = _sample_metric()
+    append_result = append_metric(tmp_path, metric)
+    assert isinstance(append_result, Ok)
+    path = metrics_path(tmp_path)
+    with path.open("a", encoding="utf-8") as file:
+        file.write(
+            '{"run_id":"bad",'
+            '"total_games":11,'
+            '"total_updates":3,'
+            '"process_games_per_second":NaN,'
+            '"last_round_decisions_per_second":121.0,'
+            '"last_team0_reward":0.5,'
+            '"last_team1_reward":-0.5,'
+            '"last_generated_action_count":18,'
+            '"last_accepted_action_count":17,'
+            '"last_decision_count":16,'
+            '"last_average_action_choices":4.5,'
+            '"policy_loss":null,'
+            '"value_loss":null,'
+            '"entropy":null,'
+            '"approx_kl":null,'
+            '"clip_fraction":null,'
+            '"checkpoint_path":null}\n'
+        )
 
     assert read_metrics(tmp_path) == (metric,)
 
@@ -48,6 +118,64 @@ def test_dashboard_mentions_metrics_file() -> None:
 
 
 def test_write_dashboard_creates_index(tmp_path: Path) -> None:
-    path = write_dashboard(tmp_path, title="Tractor Training")
+    result = write_dashboard(tmp_path, title="Tractor Training")
+    assert isinstance(result, Ok)
+    path = result.value
     assert path.exists()
     assert path.name == "index.html"
+
+
+def test_write_dashboard_rejects_write_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_write_text = Path.write_text
+
+    def fail_index_write(
+        self: Path,
+        data: str,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> int:
+        if self.name == "index.html":
+            raise OSError("disk full")
+        return original_write_text(
+            self,
+            data,
+            encoding=encoding,
+            errors=errors,
+            newline=newline,
+        )
+
+    monkeypatch.setattr(Path, "write_text", fail_index_write)
+
+    result = write_dashboard(tmp_path, title="Tractor Training")
+
+    assert isinstance(result, Rejected)
+    assert "dashboard write failed" in result.reason
+
+
+def _sample_metric(
+    *,
+    policy_loss: float | None = 0.1,
+) -> TrainingMetric:
+    return TrainingMetric(
+        run_id="run-1",
+        total_games=10,
+        total_updates=2,
+        process_games_per_second=1.5,
+        last_round_decisions_per_second=120.0,
+        last_team0_reward=0.25,
+        last_team1_reward=-0.25,
+        last_generated_action_count=17,
+        last_accepted_action_count=16,
+        last_decision_count=15,
+        last_average_action_choices=3.5,
+        policy_loss=policy_loss,
+        value_loss=0.2,
+        entropy=0.3,
+        approx_kl=0.01,
+        clip_fraction=0.25,
+        checkpoint_path="checkpoint.json",
+    )

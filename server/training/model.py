@@ -8,7 +8,7 @@ import torch
 from torch import Tensor, nn
 
 from server.training.feature_schema import NUMERIC_FEATURE_COUNT
-from server.training.semantic_codec import SEMANTIC_CODEC
+from server.training.semantic_actions.codec import SEMANTIC_CODEC
 from server.training.tensorize import (
     ArgumentPrefixTensorBatch,
     ObservationTensorBatch,

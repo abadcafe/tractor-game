@@ -7,8 +7,9 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from server.training.semantic_actions import SemanticArgument
-from server.training.semantic_codec import semantic_argument_id
+from server import result as _result
+from server.training.semantic_actions.arguments import SemanticArgument
+from server.training.semantic_actions.codec import semantic_argument_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,20 +26,34 @@ def argument_distribution(
     *,
     argument_logits: Tensor,
     choices: tuple[SemanticArgument, ...],
-) -> ArgumentDistribution:
+) -> _result.Ok[ArgumentDistribution] | _result.Rejected:
     """Build the masked categorical distribution for legal arguments."""
     logits = argument_logits_for_choices(
         argument_logits=argument_logits,
         choices=choices,
     )
+    if not _all_finite(logits):
+        return _result.Rejected(
+            reason="policy argument logits must be finite"
+        )
     probabilities = torch.softmax(logits, dim=0)
     log_probabilities = torch.log_softmax(logits, dim=0)
     entropy = -(probabilities * log_probabilities).sum()
-    return ArgumentDistribution(
-        logits=logits,
-        probabilities=probabilities,
-        log_probabilities=log_probabilities,
-        entropy=entropy,
+    if (
+        not _all_finite(probabilities)
+        or not _all_finite(log_probabilities)
+        or not _all_finite(entropy)
+    ):
+        return _result.Rejected(
+            reason="policy argument distribution must be finite"
+        )
+    return _result.Ok(
+        value=ArgumentDistribution(
+            logits=logits,
+            probabilities=probabilities,
+            log_probabilities=log_probabilities,
+            entropy=entropy,
+        )
     )
 
 
@@ -56,3 +71,7 @@ def argument_logits_for_choices(
         device=argument_logits.device,
     )
     return argument_logits.index_select(dim=0, index=index)
+
+
+def _all_finite(value: Tensor) -> bool:
+    return bool(torch.isfinite(value).all().detach().cpu().item())

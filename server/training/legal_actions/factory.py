@@ -14,7 +14,7 @@ from server.training.legal_actions.discard import (
 from server.training.legal_actions.follow import build_follow_index
 from server.training.legal_actions.lead import LeadPlayLegalActionIndex
 from server.training.legal_actions.stir import build_stir_index
-from server.training.semantic_actions import (
+from server.training.semantic_actions.query import (
     ActionQuery,
     build_action_query,
 )

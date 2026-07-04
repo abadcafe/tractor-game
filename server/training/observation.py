@@ -27,22 +27,24 @@ from server.rules.required_progress import (
     stage_target,
 )
 from server.sm.constants import BOTTOM_CARD_COUNT, PLAYER_COUNT
-from server.training.semantic_actions import (
+from server.training.semantic_actions.query import (
     ActionQuery,
     build_action_query,
+)
+from server.training.token_context import (
+    RelativeRole,
+    TrickRecordState,
+    relative_role,
 )
 from server.training.tokens import (
     ActionQueryFieldToken,
     FaceCountToken,
     GlobalFieldToken,
     ObservationToken,
-    RelativeRole,
     RoundEventFieldToken,
     RoundFieldToken,
-    TrickRecordState,
     TrickResultFieldToken,
     face_count_token,
-    relative_role,
 )
 
 

@@ -8,96 +8,22 @@ age, trick age, and play order is represented by separate components.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
 
 from server.rules.card_faces import CardColor, FaceCount
 from server.rules.cards import Rank, Suit
-from server.sm.constants import PLAYER_COUNT
-
-type RelativeRole = Literal[
-    "self",
-    "partner",
-    "left_enemy",
-    "right_enemy",
-]
-type TokenScalar = str | int | bool | None
-type ObservationSegment = Literal[
-    "global_context",
-    "round_context",
-    "round_event",
-    "stir_event",
-    "self_hand",
-    "visible_bottom",
-    "own_exchange_pickup",
-    "own_exchange_discard",
-    "play_record",
-    "failed_throw_attempted",
-    "failed_throw_forced",
-    "trick_result",
-    "action_query",
-]
-type TrickRecordState = Literal["open", "completed"]
-type GlobalFieldName = Literal[
-    "team_layout",
-    "left_player_role",
-    "right_player_role",
-    "partner_role",
-    "deck_count",
-    "player_count",
-    "bottom_card_count",
-    "required_level",
-    "final_target",
-    "rules_version",
-]
-type RoundFieldName = Literal[
-    "phase",
-    "awaiting_action",
-    "dealer_role",
-    "dealer_team",
-    "self_team_is_declarer",
-    "enemy_team_is_declarer",
-    "self_team_level",
-    "enemy_team_level",
-    "self_team_required_level",
-    "enemy_team_required_level",
-    "self_team_distance_to_required_level",
-    "enemy_team_distance_to_required_level",
-    "trump_suit",
-    "level_rank",
-    "level_card_revealer_role",
-    "current_score",
-    "remaining_cards_self",
-    "remaining_cards_partner",
-    "remaining_cards_left_enemy",
-    "remaining_cards_right_enemy",
-    "winning_team",
-]
-type RoundEventFieldName = Literal[
-    "event_kind",
-    "actor",
-    "bid_kind",
-    "stir_kind",
-    "suit",
-    "joker_type",
-    "count",
-    "priority",
-    "trigger",
-]
-type TrickResultFieldName = Literal["winner", "points"]
-type ActionQueryFieldName = Literal[
-    "kind",
-    "pass_allowed",
-    "min_select",
-    "max_select",
-    "exact_select",
-    "action_play_order",
-    "current_trick_width",
-    "lead_actor",
-    "discard_count",
-    "trump_suit",
-    "level_rank",
-    "current_best_bid_role",
-]
+from server.training.token_context import (
+    ObservationSegment,
+    RelativeRole,
+    TokenScalar,
+    TrickRecordState,
+)
+from server.training.token_fields import (
+    ActionQueryFieldName,
+    GlobalFieldName,
+    RoundEventFieldName,
+    RoundFieldName,
+    TrickResultFieldName,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,17 +94,6 @@ type ObservationToken = (
     | TrickResultFieldToken
     | ActionQueryFieldToken
 )
-
-
-def relative_role(viewer: int, actor: int) -> RelativeRole:
-    """Map absolute player index to viewer-relative role."""
-    if actor == viewer:
-        return "self"
-    if actor == (viewer + 2) % PLAYER_COUNT:
-        return "partner"
-    if actor == (viewer + 1) % PLAYER_COUNT:
-        return "left_enemy"
-    return "right_enemy"
 
 
 def token_name(token: ObservationToken) -> str:

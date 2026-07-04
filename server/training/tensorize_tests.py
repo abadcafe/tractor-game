@@ -15,7 +15,7 @@ from server.training.semantic_actions import (
     SemanticArgument,
     SemanticArgumentPrefix,
 )
-from server.training.semantic_codec import SEMANTIC_CODEC
+from server.training.semantic_actions.codec import SEMANTIC_CODEC
 from server.training.tensorize import (
     tensorize_argument_prefix,
     tensorize_observation,

@@ -1,4 +1,4 @@
-"""Semantic action grammar for model-generated player actions."""
+"""Build player-visible semantic action queries from snapshots."""
 
 from __future__ import annotations
 
@@ -6,38 +6,17 @@ from dataclasses import dataclass
 from typing import Literal
 
 from server.protocol import StateSnapshot
-from server.result import Ok, Rejected
 from server.rules.card_faces import (
-    CardFace,
     FaceCount,
     canonical_face_counts,
     face_count_width,
-    face_sort_key,
 )
-from server.rules.cards import Card, Rank, Suit
-from server.training.tokens import RelativeRole, relative_role
+from server.rules.cards import Rank, Suit
+from server.training.token_context import RelativeRole, relative_role
 
-type PlayerActionKind = Literal["bid", "stir", "discard", "play"]
 type DecisionKind = Literal[
     "bid", "stir", "discard", "lead_play", "follow_play"
 ]
-type SemanticArgumentKind = Literal["pass", "stop", "select_face_count"]
-
-__all__ = (
-    "ActionQuery",
-    "BoundAction",
-    "DecisionKind",
-    "GeneratedAction",
-    "InvalidSemanticActionRejected",
-    "PlayerActionKind",
-    "SemanticArgument",
-    "SemanticArgumentKind",
-    "SemanticArgumentPrefix",
-    "SemanticArgumentTrace",
-    "bind_generated_action",
-    "build_action_query",
-    "semantic_prefix_state",
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,53 +36,6 @@ class ActionQuery:
     trump_suit: Suit | None
     level_rank: Rank
     current_best_bid_role: RelativeRole | None
-
-
-@dataclass(frozen=True, slots=True)
-class SemanticArgumentPrefix:
-    """Current generated semantic argument prefix."""
-
-    arguments: tuple[SemanticArgument, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class SemanticArgument:
-    """One incremental semantic action argument."""
-
-    kind: SemanticArgumentKind
-    face_count: FaceCount | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class SemanticArgumentTrace:
-    """Full generated semantic argument trace for one action."""
-
-    arguments: tuple[SemanticArgument, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class GeneratedAction:
-    """One model-generated semantic action."""
-
-    action_kind: PlayerActionKind | Literal["pass"]
-    message_type: PlayerActionKind
-    face_counts: tuple[FaceCount, ...]
-    semantic_trace: SemanticArgumentTrace
-    is_pass: bool
-
-
-@dataclass(frozen=True, slots=True)
-class BoundAction:
-    """Semantic action bound to physical ids for Game.receive()."""
-
-    raw: dict[str, object]
-
-
-class InvalidSemanticActionRejected(Rejected):
-    """Semantic action sequence violated the model grammar."""
-
-    def __init__(self, reason: str) -> None:
-        super().__init__(f"语义动作非法：{reason}")
 
 
 def build_action_query(
@@ -142,82 +74,6 @@ def build_action_query(
             player_index, snapshot
         ),
     )
-
-
-def semantic_prefix_state(
-    prefix: SemanticArgumentPrefix,
-) -> Ok[tuple[FaceCount, ...]] | Rejected:
-    """Return selected face counts after applying a prefix."""
-    selected: list[FaceCount] = []
-    terminated = False
-    for argument in prefix.arguments:
-        if terminated:
-            return InvalidSemanticActionRejected(
-                "终止参数后还有额外参数"
-            )
-        if argument.kind in ("pass", "stop"):
-            terminated = True
-            continue
-        if argument.face_count is None:
-            return InvalidSemanticActionRejected(
-                "select_face_count 缺少牌面"
-            )
-        if _face_already_selected(
-            tuple(selected), argument.face_count.face
-        ):
-            return InvalidSemanticActionRejected("同一牌面重复选择")
-        if selected and face_sort_key(argument.face_count.face) <= (
-            face_sort_key(selected[-1].face)
-        ):
-            return InvalidSemanticActionRejected("牌面未按规范顺序选择")
-        selected.append(argument.face_count)
-    return Ok(value=tuple(selected))
-
-
-def bind_generated_action(
-    action: GeneratedAction,
-    hand_cards: list[Card] | tuple[Card, ...],
-) -> Ok[BoundAction] | Rejected:
-    """Bind a semantic action to current physical card ids."""
-    if action.is_pass:
-        return Ok(
-            value=BoundAction(
-                raw={"type": action.message_type, "pass": True},
-            )
-        )
-    card_ids_result = _card_ids_for_face_counts(
-        action.face_counts, hand_cards
-    )
-    if isinstance(card_ids_result, Rejected):
-        return card_ids_result
-    return Ok(
-        value=BoundAction(
-            raw={
-                "type": action.message_type,
-                "cards": list(card_ids_result.value),
-            },
-        )
-    )
-
-
-def _card_ids_for_face_counts(
-    face_counts: tuple[FaceCount, ...],
-    hand_cards: list[Card] | tuple[Card, ...],
-) -> Ok[tuple[str, ...]] | Rejected:
-    result: list[str] = []
-    for requested in face_counts:
-        matching = [
-            card
-            for card in hand_cards
-            if card.suit == requested.face.suit
-            and card.rank == requested.face.rank
-        ]
-        if len(matching) < requested.count:
-            return InvalidSemanticActionRejected(
-                "当前手牌没有足够的指定牌面"
-            )
-        result.extend(card.id for card in matching[: requested.count])
-    return Ok(value=tuple(result))
 
 
 def _decision_kind(snapshot: StateSnapshot) -> DecisionKind | None:
@@ -304,10 +160,3 @@ def _play_order(*, lead_player: int, player: int) -> int:
     if player >= lead_player:
         return player - lead_player
     return 4 - lead_player + player
-
-
-def _face_already_selected(
-    selected: tuple[FaceCount, ...],
-    face: CardFace,
-) -> bool:
-    return any(item.face == face for item in selected)

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import pytest
 import torch
 
 from server.player.test_helpers import card, make_snapshot
-from server.result import Ok
+from server.result import Ok, Rejected
 from server.rules.card_faces import CardFace, FaceCount
 from server.training.config import ModelConfig, TrainConfig
 from server.training.legal_actions import build_legal_action_index
@@ -54,6 +55,21 @@ class CountingTractorPolicyModel(TractorPolicyModel):
             int(observation.token_type_ids.shape[0])
         )
         return super().forward_argument(observation, prefix)
+
+
+class NonFiniteValueModel(TractorPolicyModel):
+    """Policy model that produces an infinite value loss."""
+
+    def forward_argument(
+        self,
+        observation: ObservationTensorBatch,
+        prefix: ArgumentPrefixTensorBatch,
+    ) -> ArgumentHeadOutput:
+        output = super().forward_argument(observation, prefix)
+        return ArgumentHeadOutput(
+            argument_logits=output.argument_logits,
+            values=torch.full_like(output.values, torch.inf),
+        )
 
 
 def test_update_returns_stats_and_adamw_state() -> None:
@@ -109,7 +125,7 @@ def test_update_returns_stats_and_adamw_state() -> None:
     decoded = legal_actions.decode(trace)
     assert isinstance(decoded, Ok)
 
-    stats = trainer.update(
+    stats_result = trainer.update(
         (
             RewardedDecisionStep(
                 step=DecisionStep(
@@ -128,6 +144,8 @@ def test_update_returns_stats_and_adamw_state() -> None:
             ),
         )
     )
+    assert isinstance(stats_result, Ok)
+    stats = stats_result.value
     state = trainer.optimizer_state()
 
     assert stats.total_loss >= 0.0
@@ -162,17 +180,104 @@ def test_update_batches_minibatch_model_forwards() -> None:
         device=device,
     )
 
-    trainer.update(
+    update_result = trainer.update(
         tuple(
             _single_card_rewarded_step(player_index=index % 4)
             for index in range(4)
         )
     )
+    assert isinstance(update_result, Ok)
 
     assert max(model.batch_sizes) == 4
     assert model.training_modes
     assert all(training is True for training in model.training_modes)
     assert model.training is True
+
+
+def test_update_rejects_non_finite_loss_before_optimizer_step() -> None:
+    device = torch.device("cpu")
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=64,
+    )
+    train_config = TrainConfig(
+        device="cpu",
+        learning_rate=0.0003,
+        ppo_epochs=1,
+        minibatch_size=1,
+    )
+    model = NonFiniteValueModel(
+        d_model=model_config.d_model,
+        layers=model_config.layers,
+        heads=model_config.heads,
+    ).to(device)
+    trainer = PPOTrainer(
+        model=model,
+        model_config=model_config,
+        train_config=train_config,
+        device=device,
+    )
+    before = tuple(
+        parameter.detach().clone() for parameter in model.parameters()
+    )
+
+    result = trainer.update((_single_card_rewarded_step(0),))
+
+    assert isinstance(result, Rejected)
+    assert "PPO value_loss must be finite" in result.reason
+    assert trainer.optimizer_state()["step_count"] == 0
+    for index, parameter in enumerate(model.parameters()):
+        assert torch.equal(parameter.detach(), before[index])
+
+
+def test_update_rejects_non_finite_gradients_before_optimizer_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    device = torch.device("cpu")
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=64,
+    )
+    train_config = TrainConfig(
+        device="cpu",
+        learning_rate=0.0003,
+        ppo_epochs=1,
+        minibatch_size=1,
+    )
+    model = TractorPolicyModel(
+        d_model=model_config.d_model,
+        layers=model_config.layers,
+        heads=model_config.heads,
+    ).to(device)
+    trainer = PPOTrainer(
+        model=model,
+        model_config=model_config,
+        train_config=train_config,
+        device=device,
+    )
+    before = tuple(
+        parameter.detach().clone() for parameter in model.parameters()
+    )
+
+    def write_nan_gradients(*args: object, **kwargs: object) -> None:
+        assert args
+        assert not kwargs
+        for parameter in model.parameters():
+            parameter.grad = torch.full_like(parameter, torch.nan)
+
+    monkeypatch.setattr(torch.autograd, "backward", write_nan_gradients)
+
+    result = trainer.update((_single_card_rewarded_step(0),))
+
+    assert isinstance(result, Rejected)
+    assert "PPO gradients must be finite" in result.reason
+    assert trainer.optimizer_state()["step_count"] == 0
+    for index, parameter in enumerate(model.parameters()):
+        assert torch.equal(parameter.detach(), before[index])
 
 
 def _single_card_rewarded_step(

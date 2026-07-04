@@ -6,6 +6,7 @@ import asyncio
 import time
 from dataclasses import dataclass
 
+from server import result as _result
 from server.game import Game
 from server.protocol import StateSnapshot
 from server.rules.required_progress import TerminalProgress
@@ -58,11 +59,13 @@ class SelfPlaySession:
 
     async def play_round(
         self, *, max_seconds: float
-    ) -> TrainingRoundResult:
+    ) -> _result.Ok[TrainingRoundResult] | _result.Rejected:
         """Play exactly one full round from the current Game state."""
         self._recorder.clear()
         for player in self._players:
-            player.reset_round_tracking()
+            reset_result = player.reset_round_tracking()
+            if isinstance(reset_result, _result.Rejected):
+                return reset_result
         start = time.monotonic()
         if self._started:
             await self._confirm_next_round()
@@ -73,12 +76,15 @@ class SelfPlaySession:
             await asyncio.gather(
                 *(player.run(self._game) for player in self._players)
             )
-        final_snapshot = await _wait_for_round_scoring(
+        final_snapshot_result = await _wait_for_round_scoring(
             game=self._game,
             players=tuple(self._players),
             start=start,
             max_seconds=max_seconds,
         )
+        if isinstance(final_snapshot_result, _result.Rejected):
+            return final_snapshot_result
+        final_snapshot = final_snapshot_result.value
         reward0, reward1 = round_rewards(
             before=before,
             after=final_snapshot,
@@ -104,17 +110,19 @@ class SelfPlaySession:
             player.stats().action_choice_count
             for player in self._players
         )
-        return TrainingRoundResult(
-            rewarded_steps=rewarded_steps,
-            team0_reward=reward0,
-            team1_reward=reward1,
-            generated_action_count=generated_count,
-            accepted_action_count=accepted_count,
-            average_action_choices=0.0
-            if generated_count == 0
-            else choice_count / generated_count,
-            elapsed_seconds=max(time.monotonic() - start, 0.000001),
-            game_over=final_snapshot.winning_team is not None,
+        return _result.Ok(
+            value=TrainingRoundResult(
+                rewarded_steps=rewarded_steps,
+                team0_reward=reward0,
+                team1_reward=reward1,
+                generated_action_count=generated_count,
+                accepted_action_count=accepted_count,
+                average_action_choices=0.0
+                if generated_count == 0
+                else choice_count / generated_count,
+                elapsed_seconds=max(time.monotonic() - start, 0.000001),
+                game_over=final_snapshot.winning_team is not None,
+            )
         )
 
     async def _confirm_next_round(self) -> None:
@@ -126,7 +134,7 @@ async def play_training_round(
     *,
     policy: TrainingPolicy,
     max_seconds: float,
-) -> TrainingRoundResult:
+) -> _result.Ok[TrainingRoundResult] | _result.Rejected:
     """Run one self-play round in a fresh session."""
     session = SelfPlaySession(policy=policy)
     return await session.play_round(max_seconds=max_seconds)
@@ -138,15 +146,19 @@ async def _wait_for_round_scoring(
     players: tuple[TrainingPlayer, ...],
     start: float,
     max_seconds: float,
-) -> StateSnapshot:
+) -> _result.Ok[StateSnapshot] | _result.Rejected:
     while time.monotonic() - start < max_seconds:
         for player in players:
-            player.raise_background_errors()
+            background_result = player.raise_background_errors()
+            if isinstance(background_result, _result.Rejected):
+                return background_result
         snapshot = game.snapshot(for_player=0)
         if snapshot.phase == "WAITING" and snapshot.scoring is not None:
-            return snapshot
+            return _result.Ok(value=snapshot)
         await asyncio.sleep(0.001)
-    raise AssertionError("training round timed out")
+    return _result.Rejected(
+        reason=f"training round timed out after {max_seconds:g} seconds"
+    )
 
 
 def round_rewards(

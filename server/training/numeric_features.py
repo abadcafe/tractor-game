@@ -9,13 +9,13 @@ from server.training.feature_schema import (
     NumericFeatureSpec,
     numeric_feature_spec,
 )
+from server.training.token_context import TokenScalar
 from server.training.tokens import (
     FaceCountToken,
     GlobalFieldToken,
     ObservationToken,
     RoundEventFieldToken,
     RoundFieldToken,
-    TokenScalar,
     TrickResultFieldToken,
 )
 

@@ -9,10 +9,8 @@ from server.training.legal_actions.complete_trace import (
     pass_action,
     selection_action,
 )
-from server.training.semantic_actions import (
-    ActionQuery,
-    GeneratedAction,
-)
+from server.training.semantic_actions.query import ActionQuery
+from server.training.semantic_actions.values import GeneratedAction
 
 
 def build_bid_index(
