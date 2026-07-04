@@ -15,6 +15,7 @@ from pathlib import Path
 from server import result as _result
 from server.training.config import (
     ModelConfig,
+    PPOProfileMode,
     TrainConfig,
     TrainingDevice,
 )
@@ -37,6 +38,7 @@ class TrainConfigOverrides:
     """Explicit CLI overrides for train config fields."""
 
     device: TrainingDevice | None = None
+    ppo_profile: PPOProfileMode | None = None
     seed: int | None = None
     learning_rate: float | None = None
     checkpoint_every_updates: int | None = None
@@ -89,6 +91,9 @@ def resolve_train_config(
             device=base.device
             if cli_overrides.device is None
             else cli_overrides.device,
+            ppo_profile=base.ppo_profile
+            if cli_overrides.ppo_profile is None
+            else cli_overrides.ppo_profile,
             seed=base.seed
             if cli_overrides.seed is None
             else cli_overrides.seed,
@@ -267,6 +272,18 @@ def _adam_beta_arg(text: str) -> float:
     return value
 
 
+def _ppo_profile_arg(value: object) -> PPOProfileMode | None:
+    if value is None:
+        return None
+    if value == "off":
+        return "off"
+    if value == "basic":
+        return "basic"
+    if value == "detailed":
+        return "detailed"
+    assert False
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", default=None)
@@ -275,6 +292,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--force-new-run", action="store_true")
     parser.add_argument(
         "--device", choices=("cpu", "cuda"), default=None
+    )
+    parser.add_argument(
+        "--ppo-profile",
+        choices=("off", "basic", "detailed"),
+        default=None,
     )
     parser.add_argument(
         "--max-rounds", type=_non_negative_int_arg, default=0
@@ -387,6 +409,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     train_config_result = resolve_train_config(
         cli_overrides=TrainConfigOverrides(
             device=args.device,
+            ppo_profile=_ppo_profile_arg(args.ppo_profile),
             seed=args.seed,
             learning_rate=args.learning_rate,
             checkpoint_every_updates=args.checkpoint_every_updates,

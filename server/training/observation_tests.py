@@ -22,7 +22,10 @@ from server.training.observation import (
     build_observation,
     face_count_tokens,
 )
-from server.training.tensorize import tensorize_observation
+from server.training.tensorize import (
+    OBSERVATION_COMPONENT_COUNT,
+    tensorize_observation,
+)
 from server.training.tokens import (
     ActionQueryFieldToken,
     FaceCountToken,
@@ -543,7 +546,11 @@ def test_observation_worst_case_fits_default_token_budget() -> None:
 
     assert len(observation.tokens) <= config.max_tokens
     assert len(observation.tokens) > 250
-    assert tensorized.token_type_ids.shape == (1, config.max_tokens)
+    assert tensorized.component_ids.shape == (
+        1,
+        len(observation.tokens),
+        OBSERVATION_COMPONENT_COUNT,
+    )
 
 
 def _single_card_slots(

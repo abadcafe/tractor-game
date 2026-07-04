@@ -10,15 +10,16 @@ from server import result as _result
 from server.game import Game
 from server.protocol import StateSnapshot
 from server.rules.required_progress import TerminalProgress
-from server.sm.constants import get_team_index
 from server.training.player import TrainingPlayer
 from server.training.policy import TrainingPolicy
 from server.training.progress import (
+    RoundScore,
     TeamProgress,
     zero_sum_rewards,
 )
+from server.training.terminal_rewards import terminal_reward_rollout
 from server.training.trajectory import (
-    RewardedDecisionStep,
+    RolloutBatch,
     TrajectoryRecorder,
 )
 
@@ -27,7 +28,7 @@ from server.training.trajectory import (
 class TrainingRoundResult:
     """One completed self-play round."""
 
-    rewarded_steps: tuple[RewardedDecisionStep, ...]
+    rollout: RolloutBatch
     team0_reward: float
     team1_reward: float
     generated_action_count: int
@@ -89,14 +90,10 @@ class SelfPlaySession:
             before=before,
             after=final_snapshot,
         )
-        rewarded_steps = tuple(
-            RewardedDecisionStep(
-                step=step,
-                reward=reward0
-                if get_team_index(step.player_index) == 0
-                else reward1,
-            )
-            for step in self._recorder.steps()
+        rollout = terminal_reward_rollout(
+            steps=self._recorder.steps(),
+            team0_reward=reward0,
+            team1_reward=reward1,
         )
         generated_count = sum(
             player.stats().generated_action_count
@@ -112,7 +109,7 @@ class SelfPlaySession:
         )
         return _result.Ok(
             value=TrainingRoundResult(
-                rewarded_steps=rewarded_steps,
+                rollout=rollout,
                 team0_reward=reward0,
                 team1_reward=reward1,
                 generated_action_count=generated_count,
@@ -167,14 +164,20 @@ def round_rewards(
     after: StateSnapshot,
 ) -> tuple[float, float]:
     """Return zero-sum team rewards for one completed round."""
-    round_winning_team = _round_winning_team(after)
+    scoring = after.scoring
+    assert scoring is not None
+    round_winning_team = scoring.round_winning_team
+    round_declarer_team = after.declarer_team
+    assert round_declarer_team is not None
+    if before.declarer_team is not None:
+        assert before.declarer_team == round_declarer_team
     team0_before = TeamProgress(
         level=before.team0_level,
-        is_declarer=before.declarer_team == 0,
+        is_declarer=round_declarer_team == 0,
     )
     team1_before = TeamProgress(
         level=before.team1_level,
-        is_declarer=before.declarer_team == 1,
+        is_declarer=round_declarer_team == 1,
     )
     team0_after = TeamProgress(
         level=TerminalProgress.WIN
@@ -193,12 +196,9 @@ def round_rewards(
         team1_before=team1_before,
         team0_after=team0_after,
         team1_after=team1_after,
+        score=RoundScore(
+            declarer_team=round_declarer_team,
+            total_defender_points=scoring.total_defender_points,
+        ),
     )
     return reward.team0, reward.team1
-
-
-def _round_winning_team(snapshot: StateSnapshot) -> int | None:
-    scoring = snapshot.scoring
-    if scoring is not None:
-        return scoring.round_winning_team
-    return snapshot.declarer_team

@@ -17,8 +17,13 @@ from server.training.semantic_actions import (
 )
 from server.training.semantic_actions.codec import SEMANTIC_CODEC
 from server.training.tensorize import (
+    OBSERVATION_COMPONENT_COUNT,
+    observation_component_tensors,
+    stack_observation_batches,
     tensorize_argument_prefix,
+    tensorize_argument_prefixes,
     tensorize_observation,
+    tensorize_observations,
 )
 
 
@@ -37,19 +42,128 @@ def test_tensorize_observation_outputs_numeric_tensors() -> None:
 
     assert batch.numeric_values.shape == (
         1,
-        128,
+        len(observation.tokens),
         NUMERIC_FEATURE_COUNT,
     )
     assert batch.numeric_masks.shape == (
         1,
-        128,
+        len(observation.tokens),
         NUMERIC_FEATURE_COUNT,
     )
+    assert batch.component_ids.shape == (
+        1,
+        len(observation.tokens),
+        OBSERVATION_COMPONENT_COUNT,
+    )
+    assert batch.component_ids.dtype == torch.long
     assert batch.numeric_values.dtype == torch.float32
     assert batch.numeric_masks.dtype == torch.float32
     assert batch.numeric_masks.sum().item() > 0.0
-    assert batch.numeric_values[0, -1].sum().item() == 0.0
-    assert batch.numeric_masks[0, -1].sum().item() == 0.0
+
+
+def test_tensorize_observations_use_batch_max_length() -> None:
+    short_observation = build_observation(
+        player_index=0,
+        snapshot=make_snapshot(player_hand=[card("spades", "A", 1)]),
+        history=(),
+    )
+    long_observation = build_observation(
+        player_index=0,
+        snapshot=make_snapshot(
+            player_hand=[
+                card("spades", "A", 1),
+                card("hearts", "K", 2),
+                card("clubs", "3", 1),
+            ]
+        ),
+        history=(),
+    )
+
+    batch = tensorize_observations(
+        observations=(short_observation, long_observation),
+        max_observation_tokens=128,
+        device=torch.device("cpu"),
+    )
+
+    assert len(short_observation.tokens) < len(long_observation.tokens)
+    expected_width = max(
+        len(short_observation.tokens), len(long_observation.tokens)
+    )
+    assert batch.component_ids.shape == (
+        2,
+        expected_width,
+        OBSERVATION_COMPONENT_COUNT,
+    )
+    assert batch.numeric_values.shape == (
+        2,
+        expected_width,
+        NUMERIC_FEATURE_COUNT,
+    )
+    assert (
+        batch.component_ids[0, len(short_observation.tokens) :, :]
+        .sum()
+        .item()
+        == 0
+    )
+    assert (
+        batch.numeric_masks[0, len(short_observation.tokens) :, :]
+        .sum()
+        .item()
+        == 0.0
+    )
+
+
+def test_stack_observation_batches_pads_cached_batches() -> None:
+    short_observation = build_observation(
+        player_index=0,
+        snapshot=make_snapshot(player_hand=[card("spades", "A", 1)]),
+        history=(),
+    )
+    long_observation = build_observation(
+        player_index=0,
+        snapshot=make_snapshot(
+            player_hand=[
+                card("spades", "A", 1),
+                card("hearts", "K", 2),
+                card("clubs", "3", 1),
+            ]
+        ),
+        history=(),
+    )
+    short_batch = tensorize_observation(
+        observation=short_observation,
+        max_observation_tokens=128,
+        device=torch.device("cpu"),
+    )
+    long_batch = tensorize_observation(
+        observation=long_observation,
+        max_observation_tokens=128,
+        device=torch.device("cpu"),
+    )
+
+    batch = stack_observation_batches(
+        batches=(short_batch, long_batch),
+        device=torch.device("cpu"),
+    )
+
+    assert len(short_observation.tokens) < len(long_observation.tokens)
+    assert int(short_batch.component_ids.shape[1]) == len(
+        short_observation.tokens
+    )
+    assert int(long_batch.component_ids.shape[1]) == len(
+        long_observation.tokens
+    )
+    assert batch.component_ids.shape == (
+        2,
+        len(long_observation.tokens),
+        OBSERVATION_COMPONENT_COUNT,
+    )
+    assert (
+        batch.component_ids[0, len(short_observation.tokens) :, :]
+        .sum()
+        .item()
+        == 0
+    )
 
 
 def test_tensorize_observation_crashes_on_oversized_observation() -> (
@@ -102,8 +216,10 @@ def test_tensorize_observation_exposes_face_count_component() -> None:
         device=torch.device("cpu"),
     )
 
-    assert batch.count_ids.shape == (1, 128)
-    assert batch.count_ids.max().item() > 0
+    components = observation_component_tensors(batch)
+
+    assert components.count_ids.shape == (1, len(observation.tokens))
+    assert components.count_ids.max().item() > 0
 
 
 def test_tensorize_argument_prefix_outputs_bos_and_arguments() -> None:
@@ -123,6 +239,7 @@ def test_tensorize_argument_prefix_outputs_bos_and_arguments() -> None:
     )
 
     assert batch.argument_ids.shape[0] == 1
+    assert batch.argument_ids.shape[1] == 2
     assert (
         batch.argument_ids[0, 0].item()
         == SEMANTIC_CODEC.argument_bos_id
@@ -132,3 +249,25 @@ def test_tensorize_argument_prefix_outputs_bos_and_arguments() -> None:
     )
     assert batch.argument_masks[0, 0].item()
     assert batch.argument_masks[0, 1].item()
+
+
+def test_tensorize_argument_prefixes_use_batch_max_length() -> None:
+    test_card = card("clubs", "3", 1)
+    selected = SemanticArgument(
+        "select_face_count",
+        FaceCount(CardFace(test_card.suit, test_card.rank), 1),
+    )
+
+    batch = tensorize_argument_prefixes(
+        prefixes=(
+            SemanticArgumentPrefix(arguments=()),
+            SemanticArgumentPrefix(arguments=(selected,)),
+        ),
+        device=torch.device("cpu"),
+    )
+
+    assert batch.argument_ids.shape == (2, 2)
+    assert bool(batch.argument_masks[0, 0].item())
+    assert not bool(batch.argument_masks[0, 1].item())
+    assert bool(batch.argument_masks[1, 0].item())
+    assert bool(batch.argument_masks[1, 1].item())

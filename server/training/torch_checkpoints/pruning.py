@@ -6,8 +6,15 @@ import shutil
 from pathlib import Path
 
 from server import result as _result
+from server.training.torch_checkpoints.filesystem import (
+    validate_checkpoint_dir,
+    validate_checkpoint_object_dir,
+    validate_checkpoint_objects,
+    validate_checkpoint_objects_dir,
+)
 from server.training.torch_checkpoints.manifest import (
     managed_checkpoint_manifest_paths,
+    managed_update_number_from_manifest_path,
     read_checkpoint_manifest,
     update_checkpoint_manifest_paths,
 )
@@ -21,12 +28,12 @@ def preflight_managed_checkpoints(
     checkpoint_dir: Path,
 ) -> _result.Ok[None] | _result.Rejected:
     """Validate managed manifests before committing a new checkpoint."""
-    dir_check = _preflight_checkpoint_dir(checkpoint_dir)
+    dir_check = validate_checkpoint_dir(checkpoint_dir)
     if isinstance(dir_check, _result.Rejected):
         return dir_check
     if not dir_check.value:
         return _result.Ok(value=None)
-    object_check = _preflight_checkpoint_objects(checkpoint_dir)
+    object_check = validate_checkpoint_objects(checkpoint_dir)
     if isinstance(object_check, _result.Rejected):
         return object_check
     live_result = _live_checkpoint_ids(checkpoint_dir)
@@ -44,7 +51,7 @@ def preflight_torch_checkpoint_pruning(
 ) -> _result.Ok[None] | _result.Rejected:
     """Validate post-commit pruning before manifests are committed."""
     assert retained_update_count >= 0
-    dir_check = _preflight_checkpoint_dir(checkpoint_dir)
+    dir_check = validate_checkpoint_dir(checkpoint_dir)
     if isinstance(dir_check, _result.Rejected):
         return dir_check
     if not dir_check.value:
@@ -68,7 +75,7 @@ def preflight_torch_checkpoint_pruning(
     )
     if isinstance(live_result, _result.Rejected):
         return live_result
-    return _preflight_checkpoint_objects(checkpoint_dir)
+    return validate_checkpoint_objects(checkpoint_dir)
 
 
 def prune_torch_checkpoints(
@@ -78,12 +85,12 @@ def prune_torch_checkpoints(
 ) -> _result.Ok[None] | _result.Rejected:
     """Delete expired manifests and unreferenced state objects."""
     assert retained_update_count >= 0
-    dir_check = _preflight_checkpoint_dir(checkpoint_dir)
+    dir_check = validate_checkpoint_dir(checkpoint_dir)
     if isinstance(dir_check, _result.Rejected):
         return dir_check
     if not dir_check.value:
         return _result.Ok(value=None)
-    object_check = _preflight_checkpoint_objects(checkpoint_dir)
+    object_check = validate_checkpoint_objects(checkpoint_dir)
     if isinstance(object_check, _result.Rejected):
         return object_check
     prune_result = _prune_update_manifests(
@@ -93,40 +100,6 @@ def prune_torch_checkpoints(
     if isinstance(prune_result, _result.Rejected):
         return prune_result
     return _remove_unreferenced_checkpoint_objects(checkpoint_dir)
-
-
-def _preflight_checkpoint_dir(
-    checkpoint_dir: Path,
-) -> _result.Ok[bool] | _result.Rejected:
-    try:
-        checkpoint_is_symlink = checkpoint_dir.is_symlink()
-    except OSError:
-        return checkpoint_corruption(
-            checkpoint_dir, "checkpoint directory is not readable"
-        )
-    if checkpoint_is_symlink:
-        return checkpoint_corruption(
-            checkpoint_dir, "checkpoint path is a symlink"
-        )
-    try:
-        checkpoint_exists = checkpoint_dir.exists()
-    except OSError:
-        return checkpoint_corruption(
-            checkpoint_dir, "checkpoint directory is not readable"
-        )
-    if not checkpoint_exists:
-        return _result.Ok(value=False)
-    try:
-        checkpoint_is_dir = checkpoint_dir.is_dir()
-    except OSError:
-        return checkpoint_corruption(
-            checkpoint_dir, "checkpoint directory is not readable"
-        )
-    if not checkpoint_is_dir:
-        return checkpoint_corruption(
-            checkpoint_dir, "checkpoint path is not a directory"
-        )
-    return _result.Ok(value=True)
 
 
 def _future_expired_update_manifest_paths(
@@ -144,7 +117,7 @@ def _future_expired_update_manifest_paths(
             checkpoint_dir, "update manifests are not readable"
         )
     for path in pending_manifest_paths:
-        update_number = _update_number_from_manifest_path(path)
+        update_number = managed_update_number_from_manifest_path(path)
         if update_number is not None:
             update_paths[update_number] = path
     sorted_paths = tuple(
@@ -207,71 +180,6 @@ def _future_live_checkpoint_ids(
     return _result.Ok(value=checkpoint_ids)
 
 
-def _preflight_checkpoint_objects(
-    checkpoint_dir: Path,
-) -> _result.Ok[None] | _result.Rejected:
-    objects_dir = checkpoint_dir / CHECKPOINT_OBJECTS_DIR
-    try:
-        objects_is_symlink = objects_dir.is_symlink()
-    except OSError:
-        return checkpoint_corruption(
-            objects_dir, "checkpoint objects directory is not readable"
-        )
-    if objects_is_symlink:
-        return checkpoint_corruption(
-            objects_dir, "checkpoint objects path is a symlink"
-        )
-    try:
-        objects_exists = objects_dir.exists()
-    except OSError:
-        return checkpoint_corruption(
-            objects_dir, "checkpoint objects directory is not readable"
-        )
-    if not objects_exists:
-        return _result.Ok(value=None)
-    if not objects_dir.is_dir():
-        return checkpoint_corruption(
-            objects_dir, "checkpoint objects path is not a directory"
-        )
-    try:
-        object_paths = tuple(objects_dir.iterdir())
-    except OSError:
-        return checkpoint_corruption(
-            objects_dir, "checkpoint objects directory is not readable"
-        )
-    for child in object_paths:
-        object_check = _preflight_checkpoint_object(child)
-        if isinstance(object_check, _result.Rejected):
-            return object_check
-    return _result.Ok(value=None)
-
-
-def _preflight_checkpoint_object(
-    child: Path,
-) -> _result.Ok[None] | _result.Rejected:
-    try:
-        child_is_symlink = child.is_symlink()
-    except OSError:
-        return checkpoint_corruption(
-            child, "checkpoint object is not readable"
-        )
-    if child_is_symlink:
-        return checkpoint_corruption(
-            child, "checkpoint object is a symlink"
-        )
-    try:
-        child_is_dir = child.is_dir()
-    except OSError:
-        return checkpoint_corruption(
-            child, "checkpoint object is not readable"
-        )
-    if not child_is_dir:
-        return checkpoint_corruption(
-            child, "checkpoint object is not a directory"
-        )
-    return _result.Ok(value=None)
-
-
 def _prune_update_manifests(
     *,
     checkpoint_dir: Path,
@@ -299,33 +207,15 @@ def _prune_update_manifests(
     return _result.Ok(value=None)
 
 
-def _update_number_from_manifest_path(path: Path) -> int | None:
-    if path.suffix != ".json":
-        return None
-    update_text = path.stem.removeprefix("update-")
-    if update_text == path.stem:
-        return None
-    if not update_text.isdecimal():
-        return None
-    return int(update_text)
-
-
 def _remove_unreferenced_checkpoint_objects(
     checkpoint_dir: Path,
 ) -> _result.Ok[None] | _result.Rejected:
     objects_dir = checkpoint_dir / CHECKPOINT_OBJECTS_DIR
-    try:
-        objects_exists = objects_dir.exists()
-    except OSError:
-        return checkpoint_corruption(
-            objects_dir, "checkpoint objects directory is not readable"
-        )
-    if not objects_exists:
+    objects_dir_check = validate_checkpoint_objects_dir(objects_dir)
+    if isinstance(objects_dir_check, _result.Rejected):
+        return objects_dir_check
+    if not objects_dir_check.value:
         return _result.Ok(value=None)
-    if not objects_dir.is_dir():
-        return checkpoint_corruption(
-            objects_dir, "checkpoint objects path is not a directory"
-        )
     live_result = _live_checkpoint_ids(checkpoint_dir)
     if isinstance(live_result, _result.Rejected):
         return live_result
@@ -337,7 +227,7 @@ def _remove_unreferenced_checkpoint_objects(
             objects_dir, "checkpoint objects directory is not readable"
         )
     for child in object_paths:
-        object_check = _preflight_checkpoint_object(child)
+        object_check = validate_checkpoint_object_dir(child)
         if isinstance(object_check, _result.Rejected):
             return object_check
         if child.name in live_checkpoint_ids:

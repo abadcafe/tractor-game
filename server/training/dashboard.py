@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 from pathlib import Path
 
 from server import result as _result
@@ -28,12 +29,13 @@ def write_dashboard(
 
 def render_dashboard_html(*, title: str) -> str:
     """Return standalone dashboard HTML."""
+    escaped_title = html.escape(title)
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{title}</title>
+  <title>{escaped_title}</title>
   <style>
     body {{ font-family: sans-serif; margin: 24px; }}
     .grid {{
@@ -52,7 +54,7 @@ def render_dashboard_html(*, title: str) -> str:
   </style>
 </head>
 <body>
-  <h1>{title}</h1>
+  <h1>{escaped_title}</h1>
   <div id="grid" class="grid"></div>
   <h2>latest</h2>
   <pre id="latest">waiting for metrics.jsonl</pre>

@@ -16,6 +16,7 @@ from server.training.model import (
 from server.training.ppo import PPOTrainer
 from server.training.torch_checkpoints.manifest import (
     checkpoint_dir_from_manifest_paths,
+    managed_update_number_from_manifest_path,
     write_checkpoint_manifest,
 )
 from server.training.torch_checkpoints.payload import (
@@ -57,7 +58,18 @@ def save_torch_checkpoint(
     assert retained_update_count >= 0
     assert total_rounds >= 0
     assert total_updates >= 0
-    checkpoint_dir = checkpoint_dir_from_manifest_paths(manifest_paths)
+    checkpoint_dir_result = checkpoint_dir_from_manifest_paths(
+        manifest_paths
+    )
+    if isinstance(checkpoint_dir_result, _result.Rejected):
+        return checkpoint_dir_result
+    update_paths_result = _validate_update_manifest_paths(
+        manifest_paths=manifest_paths,
+        total_updates=total_updates,
+    )
+    if isinstance(update_paths_result, _result.Rejected):
+        return update_paths_result
+    checkpoint_dir = checkpoint_dir_result.value
     preflight_result = preflight_managed_checkpoints(checkpoint_dir)
     if isinstance(preflight_result, _result.Rejected):
         return preflight_result
@@ -133,6 +145,23 @@ def save_torch_checkpoint(
         checkpoint_dir=checkpoint_dir,
         retained_update_count=retained_update_count,
     )
+    return _result.Ok(value=None)
+
+
+def _validate_update_manifest_paths(
+    *,
+    manifest_paths: tuple[Path, ...],
+    total_updates: int,
+) -> _result.Ok[None] | _result.Rejected:
+    for path in manifest_paths:
+        update_number = managed_update_number_from_manifest_path(path)
+        if update_number is None:
+            continue
+        if update_number != total_updates:
+            return checkpoint_corruption(
+                path,
+                "update manifest number must equal total_updates",
+            )
     return _result.Ok(value=None)
 
 

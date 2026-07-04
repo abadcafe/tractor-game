@@ -9,6 +9,9 @@ from typing import TypeGuard, cast
 
 from server import result as _result
 from server.training.json_types import JsonObject, JsonValue
+from server.training.torch_checkpoints.filesystem import (
+    validate_checkpoint_manifest_file,
+)
 from server.training.torch_checkpoints.schema import (
     CHECKPOINT_OBJECTS_DIR,
     CHECKPOINT_SCHEMA_VERSION,
@@ -25,17 +28,29 @@ from server.training.torch_checkpoints.validation import (
 
 def checkpoint_dir_from_manifest_paths(
     manifest_paths: tuple[Path, ...],
-) -> Path:
-    """Return the shared checkpoint dir for a manifest batch."""
+) -> _result.Ok[Path] | _result.Rejected:
+    """Validate and return the shared dir for managed manifests."""
     assert manifest_paths
     checkpoint_dir = manifest_paths[0].parent
     seen_paths: set[Path] = set()
     for path in manifest_paths:
-        assert path.suffix == ".json"
-        assert path.parent == checkpoint_dir
-        assert path not in seen_paths
+        if path.parent != checkpoint_dir:
+            return checkpoint_corruption(
+                path,
+                "manifest paths must share one checkpoint directory",
+            )
+        if path in seen_paths:
+            return checkpoint_corruption(
+                path, "manifest path is duplicated"
+            )
+        if not _is_managed_manifest_path(path):
+            return checkpoint_corruption(
+                path,
+                "manifest path must be latest.json or "
+                "update-<positive n>.json",
+            )
         seen_paths.add(path)
-    return checkpoint_dir
+    return _result.Ok(value=checkpoint_dir)
 
 
 def write_checkpoint_manifest(
@@ -76,6 +91,9 @@ def read_checkpoint_manifest(
     path: Path,
 ) -> _result.Ok[CheckpointManifest] | _result.Rejected:
     """Read and validate one checkpoint manifest."""
+    path_check = validate_checkpoint_manifest_file(path)
+    if isinstance(path_check, _result.Rejected):
+        return path_check
     try:
         loaded: object = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -200,7 +218,7 @@ def update_checkpoint_manifest_paths(
     """Return managed update manifests sorted by update number."""
     paths: list[tuple[int, Path]] = []
     for path in checkpoint_dir.glob("update-*.json"):
-        update_number = _update_number_from_manifest_path(path)
+        update_number = managed_update_number_from_manifest_path(path)
         if update_number is not None:
             paths.append((update_number, path))
     return tuple(sorted(paths, key=lambda item: item[0]))
@@ -239,7 +257,8 @@ def _assert_manifest_state_path(
     return _result.Ok(value=None)
 
 
-def _update_number_from_manifest_path(path: Path) -> int | None:
+def managed_update_number_from_manifest_path(path: Path) -> int | None:
+    """Return the update number for canonical update manifests only."""
     if path.suffix != ".json":
         return None
     update_text = path.stem.removeprefix("update-")
@@ -247,7 +266,18 @@ def _update_number_from_manifest_path(path: Path) -> int | None:
         return None
     if not update_text.isdecimal():
         return None
-    return int(update_text)
+    update_number = int(update_text)
+    if update_number <= 0:
+        return None
+    if path.name != f"update-{update_number}.json":
+        return None
+    return update_number
+
+
+def _is_managed_manifest_path(path: Path) -> bool:
+    if path.name == "latest.json":
+        return True
+    return managed_update_number_from_manifest_path(path) is not None
 
 
 def _json_int_field(

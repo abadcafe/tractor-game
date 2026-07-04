@@ -6,7 +6,7 @@ import math
 
 import torch
 
-from server.training.ppo_math import (
+from server.training.ppo.math import (
     PPOObjectiveConfig,
     ValueStep,
     clipped_ppo_objective,
@@ -21,6 +21,7 @@ def test_generalized_advantage_targets_values() -> None:
             ValueStep(reward=0.0, value_estimate=0.4),
             ValueStep(reward=1.5, value_estimate=0.1),
         ),
+        terminal_reward=0.0,
         gamma=0.9,
         gae_lambda=0.8,
     )
@@ -31,6 +32,28 @@ def test_generalized_advantage_targets_values() -> None:
     _assert_close(targets[1].return_value, 1.098)
     _assert_close(targets[2].advantage, 1.4)
     _assert_close(targets[2].return_value, 1.5)
+
+
+def test_generalized_advantage_targets_terminal_reward_values() -> None:
+    targets = generalized_advantage_targets(
+        steps=(
+            ValueStep(reward=0.0, value_estimate=0.2),
+            ValueStep(reward=0.0, value_estimate=0.4),
+            ValueStep(reward=0.0, value_estimate=0.1),
+        ),
+        terminal_reward=1.0,
+        gamma=1.0,
+        gae_lambda=1.0,
+    )
+
+    assert [target.return_value for target in targets] == [
+        1.0,
+        1.0,
+        1.0,
+    ]
+    _assert_close(targets[0].advantage, 0.8)
+    _assert_close(targets[1].advantage, 0.6)
+    _assert_close(targets[2].advantage, 0.9)
 
 
 def test_clipped_ppo_objective_values() -> None:

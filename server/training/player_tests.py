@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+import torch
 
 from server.player.test_helpers import (
     card,
@@ -15,6 +16,11 @@ from server.player.test_helpers import (
 from server.protocol import ScoringSnapshot
 from server.result import Ok, Rejected
 from server.rules.card_faces import CardFace, FaceCount
+from server.training.choice_trace import (
+    SemanticChoiceStep,
+    SemanticChoiceTrace,
+    semantic_choice_step_from_offset,
+)
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
 from server.training.player import TrainingPlayer
@@ -24,6 +30,7 @@ from server.training.semantic_actions import (
     SemanticArgumentPrefix,
     SemanticArgumentTrace,
 )
+from server.training.tensorize import tensorize_observation
 from server.training.tokens import GlobalFieldToken, RoundFieldToken
 from server.training.trajectory import TrajectoryRecorder
 
@@ -41,10 +48,22 @@ class FirstCardPlayPolicy:
         )
         assert first_choices
         first_argument = first_choices[0]
+        choice_steps: list[SemanticChoiceStep] = [
+            semantic_choice_step_from_offset(
+                allowed=first_choices,
+                selected_argument_offset=0,
+            )
+        ]
         prefix = SemanticArgumentPrefix(arguments=(first_argument,))
         trace_args: list[SemanticArgument] = [first_argument]
         second_choices = legal_actions.allowed_next(prefix)
         if second_choices:
+            choice_steps.append(
+                semantic_choice_step_from_offset(
+                    allowed=second_choices,
+                    selected_argument_offset=0,
+                )
+            )
             trace_args.append(second_choices[0])
         decoded = legal_actions.decode(
             SemanticArgumentTrace(arguments=tuple(trace_args))
@@ -53,6 +72,14 @@ class FirstCardPlayPolicy:
         return Ok(
             value=PolicyDecision(
                 action=decoded.value,
+                observation_batch=tensorize_observation(
+                    observation=observation,
+                    max_observation_tokens=128,
+                    device=torch.device("cpu"),
+                ),
+                choice_trace=SemanticChoiceTrace(
+                    steps=tuple(choice_steps)
+                ),
                 log_probability=0.0,
                 value_estimate=0.0,
                 entropy=0.0,

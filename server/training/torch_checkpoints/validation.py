@@ -12,6 +12,7 @@ from torch import Tensor
 from server import result as _result
 from server.training.config import (
     ModelConfig,
+    PPOProfileMode,
     TrainConfig,
     TrainingDevice,
 )
@@ -82,6 +83,14 @@ def train_config_from_json(
     )
     if isinstance(device, _result.Rejected):
         return device
+    ppo_profile = _json_profile_field(
+        data,
+        "ppo_profile",
+        path,
+        label="train_config.ppo_profile",
+    )
+    if isinstance(ppo_profile, _result.Rejected):
+        return ppo_profile
     seed = _json_int_field(
         data, "seed", path, label="train_config.seed"
     )
@@ -207,6 +216,7 @@ def train_config_from_json(
     return _result.Ok(
         value=TrainConfig(
             device=device.value,
+            ppo_profile=ppo_profile.value,
             seed=seed.value,
             learning_rate=learning_rate.value,
             checkpoint_every_updates=checkpoint_every_updates.value,
@@ -561,6 +571,30 @@ def _json_device_field(
         return _result.Ok(value="cuda")
     return checkpoint_corruption(
         path, f"manifest {field_label} must be cpu or cuda"
+    )
+
+
+def _json_profile_field(
+    data: JsonObject,
+    field: str,
+    path: Path,
+    *,
+    label: str | None = None,
+) -> _result.Ok[PPOProfileMode] | _result.Rejected:
+    field_label = field if label is None else label
+    if field not in data:
+        return checkpoint_corruption(
+            path, f"manifest missing {field_label}"
+        )
+    value = data[field]
+    if value == "off":
+        return _result.Ok(value="off")
+    if value == "basic":
+        return _result.Ok(value="basic")
+    if value == "detailed":
+        return _result.Ok(value="detailed")
+    return checkpoint_corruption(
+        path, f"manifest {field_label} must be off, basic, or detailed"
     )
 
 

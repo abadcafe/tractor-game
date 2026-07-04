@@ -19,7 +19,7 @@ from server.training.torch_checkpoints import (
     save_torch_checkpoint,
 )
 from server.training.training_state import create_training_state
-from server.training.trajectory import RewardedDecisionStep
+from server.training.trajectory import RolloutBatch
 
 
 @pytest.mark.asyncio
@@ -340,10 +340,10 @@ async def test_train_self_play_rejects_non_finite_ppo_stats(
 ) -> None:
     def update_with_nan(
         self: PPOTrainer,
-        steps: tuple[RewardedDecisionStep, ...],
+        batch: RolloutBatch,
     ) -> Ok[PPOUpdateStats] | Rejected:
         assert self.train_config.ppo_epochs > 0
-        assert steps
+        assert not batch.is_empty()
         return Rejected(reason="PPO value_loss must be finite")
 
     monkeypatch.setattr(PPOTrainer, "update", update_with_nan)
@@ -387,7 +387,7 @@ class _NoRewardSession:
     ) -> Ok[TrainingRoundResult] | Rejected:
         return Ok(
             value=TrainingRoundResult(
-                rewarded_steps=(),
+                rollout=RolloutBatch(trajectories=()),
                 team0_reward=0.0,
                 team1_reward=0.0,
                 generated_action_count=0,

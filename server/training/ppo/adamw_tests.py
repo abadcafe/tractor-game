@@ -6,7 +6,7 @@ import math
 
 import torch
 
-from server.training.adamw import AdamWState
+from server.training.ppo.adamw import AdamWState
 
 
 def test_step_applies_adamw_update() -> None:

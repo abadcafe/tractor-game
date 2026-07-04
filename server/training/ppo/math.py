@@ -49,6 +49,7 @@ class PPOObjectiveTensors:
 def generalized_advantage_targets(
     *,
     steps: tuple[ValueStep, ...],
+    terminal_reward: float,
     gamma: float,
     gae_lambda: float,
 ) -> tuple[AdvantageTarget, ...]:
@@ -63,7 +64,15 @@ def generalized_advantage_targets(
             else steps[index + 1].value_estimate
         )
         step = steps[index]
-        delta = step.reward + gamma * next_value - step.value_estimate
+        final_reward = (
+            terminal_reward if index == len(steps) - 1 else 0.0
+        )
+        delta = (
+            step.reward
+            + final_reward
+            + gamma * next_value
+            - step.value_estimate
+        )
         gae = delta + gamma * gae_lambda * gae
         advantages[index] = gae
     return tuple(

@@ -10,20 +10,28 @@ from torch import Tensor, nn
 from server.training.feature_schema import NUMERIC_FEATURE_COUNT
 from server.training.semantic_actions.codec import SEMANTIC_CODEC
 from server.training.tensorize import (
+    OBSERVATION_COMPONENT_COUNT,
     ArgumentPrefixTensorBatch,
     ObservationTensorBatch,
+    observation_component_tensors,
 )
 from server.training.vocab_schema import VOCAB_SCHEMA
 
-OBSERVATION_COMPONENT_COUNT: int = 15
+
+@dataclass(frozen=True, slots=True)
+class ArgumentPrefixScores:
+    """Next-argument logits for one batch of prefixes."""
+
+    argument_logits: Tensor
 
 
 @dataclass(frozen=True, slots=True)
-class ArgumentHeadOutput:
-    """Next-argument logits plus the shared value estimate."""
+class ObservationEncoding:
+    """Reusable encoded observation memory for policy/value heads."""
 
-    argument_logits: Tensor
-    values: Tensor
+    memory: Tensor
+    memory_padding_mask: Tensor
+    observation_context: Tensor
 
 
 class TractorPolicyModel(nn.Module):
@@ -129,75 +137,123 @@ class TractorPolicyModel(nn.Module):
         )
         self._value_head = nn.Linear(d_model, 1)
 
-    def forward_argument(
+    def encode_observations(
         self,
         observation: ObservationTensorBatch,
-        prefix: ArgumentPrefixTensorBatch,
-    ) -> ArgumentHeadOutput:
-        """Return next semantic-argument logits for a prefix."""
-        encoded = self._encode_observation(observation)
-        obs_padding = observation.token_type_ids.eq(
+    ) -> ObservationEncoding:
+        """Encode observations once for value and argument decoding."""
+        components = observation_component_tensors(observation)
+        memory_padding_mask = components.token_type_ids.eq(
             VOCAB_SCHEMA.obs_pad_id
         )
-        query_mask = observation.segment_ids.eq(
+        memory = self._encode_observation(
+            observation,
+            memory_padding_mask=memory_padding_mask,
+        )
+        query_mask = components.segment_ids.eq(
             VOCAB_SCHEMA.segment_action_query_id
-        ) & (~obs_padding)
-        obs_context = _query_or_all_mean(
-            encoded,
-            padding_mask=obs_padding,
+        ) & (~memory_padding_mask)
+        observation_context = _query_or_all_mean(
+            memory,
+            padding_mask=memory_padding_mask,
             query_mask=query_mask,
         )
+        return ObservationEncoding(
+            memory=memory,
+            memory_padding_mask=memory_padding_mask,
+            observation_context=observation_context,
+        )
+
+    def select_observation_encoding(
+        self,
+        encoding: ObservationEncoding,
+        *,
+        active_indices: tuple[int, ...],
+    ) -> ObservationEncoding:
+        """Select rows from a reusable observation encoding."""
+        assert active_indices
+        if active_indices == tuple(
+            range(int(encoding.memory.shape[0]))
+        ):
+            return encoding
+        index = torch.tensor(
+            active_indices,
+            dtype=torch.long,
+            device=encoding.memory.device,
+        )
+        return ObservationEncoding(
+            memory=encoding.memory.index_select(0, index),
+            memory_padding_mask=encoding.memory_padding_mask.index_select(
+                0, index
+            ),
+            observation_context=encoding.observation_context.index_select(
+                0, index
+            ),
+        )
+
+    def value_estimates(self, encoding: ObservationEncoding) -> Tensor:
+        """Return value estimates from an encoded observation batch."""
+        return self._value_head(encoding.observation_context).squeeze(
+            -1
+        )
+
+    def score_argument_prefixes(
+        self,
+        encoding: ObservationEncoding,
+        prefix: ArgumentPrefixTensorBatch,
+    ) -> ArgumentPrefixScores:
+        """Return next semantic-argument logits for encoded prefixes."""
         prefix_context = self._decode_argument_prefix(
             prefix,
-            memory=encoded,
-            memory_padding_mask=obs_padding,
+            memory=encoding.memory,
+            memory_padding_mask=encoding.memory_padding_mask,
         )
         decision_context = torch.tanh(
             self._decision_projection(
-                torch.cat((obs_context, prefix_context), dim=-1)
+                torch.cat(
+                    (encoding.observation_context, prefix_context),
+                    dim=-1,
+                )
             )
         )
-        return ArgumentHeadOutput(
+        return ArgumentPrefixScores(
             argument_logits=self._argument_head(decision_context),
-            values=self._value_head(obs_context).squeeze(-1),
         )
 
     def _encode_observation(
         self,
         observation: ObservationTensorBatch,
+        *,
+        memory_padding_mask: Tensor,
     ) -> Tensor:
-        obs_padding = observation.token_type_ids.eq(
-            VOCAB_SCHEMA.obs_pad_id
-        )
         obs_embedded = self._embed_observation(observation)
         return self._observation_encoder(
             obs_embedded,
-            src_key_padding_mask=obs_padding,
+            src_key_padding_mask=memory_padding_mask,
         )
 
     def _embed_observation(
         self,
         observation: ObservationTensorBatch,
     ) -> Tensor:
+        components = observation_component_tensors(observation)
         categorical_input = torch.cat(
             (
-                self._token_type_embedding(observation.token_type_ids),
-                self._segment_embedding(observation.segment_ids),
-                self._field_embedding(observation.field_ids),
-                self._value_embedding(observation.value_ids),
-                self._suit_embedding(observation.suit_ids),
-                self._rank_embedding(observation.rank_ids),
-                self._points_embedding(observation.points_ids),
-                self._color_embedding(observation.color_ids),
-                self._role_embedding(observation.role_ids),
-                self._trick_age_embedding(observation.trick_age_ids),
-                self._trick_state_embedding(
-                    observation.trick_state_ids
-                ),
-                self._play_order_embedding(observation.play_order_ids),
-                self._count_embedding(observation.count_ids),
-                self._play_width_embedding(observation.play_width_ids),
-                self._event_age_embedding(observation.event_age_ids),
+                self._token_type_embedding(components.token_type_ids),
+                self._segment_embedding(components.segment_ids),
+                self._field_embedding(components.field_ids),
+                self._value_embedding(components.value_ids),
+                self._suit_embedding(components.suit_ids),
+                self._rank_embedding(components.rank_ids),
+                self._points_embedding(components.points_ids),
+                self._color_embedding(components.color_ids),
+                self._role_embedding(components.role_ids),
+                self._trick_age_embedding(components.trick_age_ids),
+                self._trick_state_embedding(components.trick_state_ids),
+                self._play_order_embedding(components.play_order_ids),
+                self._count_embedding(components.count_ids),
+                self._play_width_embedding(components.play_width_ids),
+                self._event_age_embedding(components.event_age_ids),
             ),
             dim=-1,
         )

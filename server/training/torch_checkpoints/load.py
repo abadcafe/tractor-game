@@ -10,6 +10,12 @@ from server import result as _result
 from server.training import training_state as _training_state
 from server.training.config import ModelConfig, TrainConfig
 from server.training.ppo import PPOTrainer
+from server.training.torch_checkpoints.filesystem import (
+    validate_checkpoint_dir,
+    validate_checkpoint_object_dir,
+    validate_checkpoint_objects_dir,
+    validate_checkpoint_state_file,
+)
 from server.training.torch_checkpoints.manifest import (
     manifest_state_file_path,
     read_checkpoint_manifest,
@@ -18,6 +24,8 @@ from server.training.torch_checkpoints.payload import (
     read_checkpoint_payload,
 )
 from server.training.torch_checkpoints.schema import (
+    CHECKPOINT_OBJECTS_DIR,
+    CheckpointManifest,
     TorchCheckpointMetadata,
     checkpoint_corruption,
     sha256_checkpoint_file,
@@ -51,10 +59,13 @@ def load_torch_checkpoint(
     )
     if isinstance(config_check, _result.Rejected):
         return config_check
-    state_path = manifest_state_file_path(
+    state_path_result = _validated_manifest_state_path(
         manifest_path=path,
         manifest=manifest,
     )
+    if isinstance(state_path_result, _result.Rejected):
+        return state_path_result
+    state_path = state_path_result.value
     state_sha256_result = sha256_checkpoint_file(state_path)
     if isinstance(state_sha256_result, _result.Rejected):
         return state_sha256_result
@@ -116,6 +127,44 @@ def read_torch_checkpoint_metadata(
     if isinstance(manifest_result, _result.Rejected):
         return manifest_result
     return _result.Ok(value=manifest_result.value.metadata)
+
+
+def _validated_manifest_state_path(
+    *,
+    manifest_path: Path,
+    manifest: CheckpointManifest,
+) -> _result.Ok[Path] | _result.Rejected:
+    checkpoint_dir = manifest_path.parent
+    checkpoint_dir_check = validate_checkpoint_dir(checkpoint_dir)
+    if isinstance(checkpoint_dir_check, _result.Rejected):
+        return checkpoint_dir_check
+    if not checkpoint_dir_check.value:
+        return checkpoint_corruption(
+            checkpoint_dir, "checkpoint directory is missing"
+        )
+    objects_dir = checkpoint_dir / CHECKPOINT_OBJECTS_DIR
+    objects_dir_check = validate_checkpoint_objects_dir(objects_dir)
+    if isinstance(objects_dir_check, _result.Rejected):
+        return objects_dir_check
+    if not objects_dir_check.value:
+        return checkpoint_corruption(
+            objects_dir, "checkpoint objects directory is missing"
+        )
+    state_path = manifest_state_file_path(
+        manifest_path=manifest_path,
+        manifest=manifest,
+    )
+    object_dir_check = validate_checkpoint_object_dir(state_path.parent)
+    if isinstance(object_dir_check, _result.Rejected):
+        return object_dir_check
+    if not object_dir_check.value:
+        return checkpoint_corruption(
+            state_path.parent, "checkpoint object is missing"
+        )
+    state_file_check = validate_checkpoint_state_file(state_path)
+    if isinstance(state_file_check, _result.Rejected):
+        return state_file_check
+    return _result.Ok(value=state_path)
 
 
 def _validate_requested_config(

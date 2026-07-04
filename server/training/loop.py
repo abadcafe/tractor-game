@@ -16,7 +16,6 @@ from server.training.metrics import (
     append_metric,
     validate_training_metric,
 )
-from server.training.ppo import ppo_update_stats_are_finite
 from server.training.runner import SelfPlaySession
 from server.training.torch_checkpoints import (
     load_torch_checkpoint,
@@ -83,19 +82,11 @@ async def train_self_play(
         if isinstance(round_result, _result.Rejected):
             return round_result
         round_data = round_result.value
-        if round_data.rewarded_steps:
-            update_result = state.trainer.update(
-                round_data.rewarded_steps
-            )
+        if not round_data.rollout.is_empty():
+            update_result = state.trainer.update(round_data.rollout)
             if isinstance(update_result, _result.Rejected):
                 return update_result
             stats = update_result.value
-            if not ppo_update_stats_are_finite(stats):
-                return _result.Rejected(
-                    reason=(
-                        "training update produced non-finite PPO stats"
-                    )
-                )
             total_updates += 1
         else:
             stats = None
@@ -103,7 +94,7 @@ async def train_self_play(
         elapsed = max(_monotonic() - start, 0.000001)
         process_rounds = total_rounds - start_total_rounds
         assert process_rounds > 0
-        decision_count = len(round_data.rewarded_steps)
+        decision_count = round_data.rollout.transition_count()
         archive_checkpoint = (
             None
             if stats is None
@@ -145,6 +136,57 @@ async def train_self_play(
             clip_fraction=None
             if stats is None
             else stats.clip_fraction,
+            ppo_update_seconds=None
+            if stats is None
+            else stats.profile.update_seconds,
+            ppo_minibatch_loss_seconds=None
+            if stats is None
+            else stats.profile.minibatch_loss_seconds,
+            ppo_observation_batch_seconds=None
+            if stats is None
+            else stats.profile.observation_batch_seconds,
+            ppo_observation_encode_seconds=None
+            if stats is None
+            else stats.profile.observation_encode_seconds,
+            ppo_value_head_seconds=None
+            if stats is None
+            else stats.profile.value_head_seconds,
+            ppo_argument_select_seconds=None
+            if stats is None
+            else stats.profile.argument_select_seconds,
+            ppo_argument_prefix_tensorize_seconds=None
+            if stats is None
+            else stats.profile.argument_prefix_tensorize_seconds,
+            ppo_argument_decode_seconds=None
+            if stats is None
+            else stats.profile.argument_decode_seconds,
+            ppo_argument_distribution_seconds=None
+            if stats is None
+            else stats.profile.argument_distribution_seconds,
+            ppo_backward_seconds=None
+            if stats is None
+            else stats.profile.backward_seconds,
+            ppo_optimizer_step_seconds=None
+            if stats is None
+            else stats.profile.optimizer_step_seconds,
+            ppo_argument_decode_fraction=None
+            if stats is None
+            else stats.profile.argument_decode_fraction,
+            ppo_argument_prefix_batch_count=None
+            if stats is None
+            else stats.profile.argument_prefix_batch_count,
+            ppo_argument_prefix_row_count=None
+            if stats is None
+            else stats.profile.argument_prefix_row_count,
+            ppo_argument_prefix_token_count=None
+            if stats is None
+            else stats.profile.argument_prefix_token_count,
+            ppo_argument_prefix_valid_token_count=None
+            if stats is None
+            else stats.profile.argument_prefix_valid_token_count,
+            ppo_argument_prefix_padding_token_count=None
+            if stats is None
+            else stats.profile.argument_prefix_padding_token_count,
             checkpoint_path=str(checkpoint_path),
         )
         metric_validation = validate_training_metric(metric)

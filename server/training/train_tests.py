@@ -65,6 +65,35 @@ def test_init_only_prints_resumable_torch_checkpoint(
     assert metadata.total_updates == 0
 
 
+def test_init_only_persists_ppo_profile(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    checkpoint_path = tmp_path / "checkpoints" / "latest.json"
+
+    main(
+        (
+            "--run-dir",
+            str(tmp_path),
+            "--init-only",
+            "--d-model",
+            "4",
+            "--layers",
+            "1",
+            "--heads",
+            "1",
+            "--max-tokens",
+            "512",
+            "--ppo-profile",
+            "detailed",
+        )
+    )
+
+    capsys.readouterr()
+    metadata = read_torch_checkpoint_metadata(checkpoint_path)
+    assert metadata.train_config.ppo_profile == "detailed"
+
+
 def test_new_run_rejects_existing_run_without_force(
     tmp_path: Path,
 ) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import pytest
+import torch
 
 from server.player.base import Player
 from server.player.test_helpers import make_snapshot
@@ -16,6 +17,7 @@ from server.protocol import (
 )
 from server.result import Ok, Rejected
 from server.training import runner
+from server.training.config import ModelConfig
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
 from server.training.policy import PolicyDecision, RandomTrainingPolicy
@@ -66,7 +68,7 @@ class _ScriptedBoundaryGame:
         self._second_final = make_snapshot(
             phase="WAITING",
             awaiting_action="next_round",
-            declarer_team=None,
+            declarer_team=1,
             scoring=ScoringSnapshot(
                 round_winning_team=1,
                 defender_points=0,
@@ -124,7 +126,7 @@ class _RecordingPolicy:
     """Random policy wrapper that records all observations."""
 
     def __init__(self, seed: int) -> None:
-        self._delegate = RandomTrainingPolicy(seed=seed)
+        self._delegate = _random_policy(seed=seed)
         self.observations: list[Observation] = []
 
     def decide(
@@ -152,8 +154,8 @@ async def test_self_play_session_clears_round_history() -> None:
         tuple(policy.observations[first_decision_count:])
     )
 
-    assert first.rewarded_steps
-    assert second.rewarded_steps
+    assert not first.rollout.is_empty()
+    assert not second.rollout.is_empty()
     assert first.generated_action_count > 0
     assert second.generated_action_count > 0
     assert first.accepted_action_count > 0
@@ -167,7 +169,7 @@ async def test_self_play_session_uses_new_round_boundary_for_rewards(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(runner, "Game", _ScriptedBoundaryGame)
-    session = SelfPlaySession(policy=RandomTrainingPolicy(seed=7))
+    session = SelfPlaySession(policy=_random_policy(seed=7))
 
     first = await session.play_round(max_seconds=120.0)
     assert isinstance(first, Ok)
@@ -185,7 +187,7 @@ async def test_self_play_session_rejects_round_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(runner, "Game", _ScriptedBoundaryGame)
-    session = SelfPlaySession(policy=RandomTrainingPolicy(seed=7))
+    session = SelfPlaySession(policy=_random_policy(seed=7))
 
     result = await session.play_round(max_seconds=0.0)
 
@@ -225,6 +227,14 @@ def test_round_rewards_uses_scoring_round_winning_team() -> None:
     assert team1_reward == -1.0
 
 
+def _random_policy(*, seed: int) -> RandomTrainingPolicy:
+    return RandomTrainingPolicy(
+        model_config=ModelConfig(max_tokens=512),
+        device=torch.device("cpu"),
+        seed=seed,
+    )
+
+
 def test_round_rewards_counts_defender_taking_stage_control() -> None:
     before = make_snapshot(
         phase="PLAYING",
@@ -236,7 +246,7 @@ def test_round_rewards_counts_defender_taking_stage_control() -> None:
     after = make_snapshot(
         phase="WAITING",
         awaiting_action="next_round",
-        declarer_team=1,
+        declarer_team=0,
         scoring=ScoringSnapshot(
             round_winning_team=1,
             defender_points=120,
@@ -257,6 +267,70 @@ def test_round_rewards_counts_defender_taking_stage_control() -> None:
     assert team1_reward == 2.0
 
 
+def test_round_rewards_uses_completed_round_declarer() -> None:
+    before = make_snapshot(
+        phase="PLAYING",
+        awaiting_action="play",
+        declarer_team=0,
+        team0_level="10",
+        team1_level="10",
+    )
+    after = make_snapshot(
+        phase="WAITING",
+        awaiting_action="next_round",
+        declarer_team=0,
+        scoring=ScoringSnapshot(
+            round_winning_team=1,
+            defender_points=135,
+            total_defender_points=135,
+            bottom_card_bonus=0,
+            bottom_cards=[],
+        ),
+        team0_level="10",
+        team1_level="J",
+    )
+
+    team0_reward, team1_reward = round_rewards(
+        before=before,
+        after=after,
+    )
+
+    _assert_close(team0_reward, -2.375)
+    _assert_close(team1_reward, 2.375)
+
+
+def test_round_rewards_uses_after_declarer_if_before_unset() -> None:
+    before = make_snapshot(
+        phase="WAITING",
+        awaiting_action="next_round",
+        declarer_team=None,
+        team0_level="10",
+        team1_level="10",
+    )
+    after = make_snapshot(
+        phase="WAITING",
+        awaiting_action="next_round",
+        declarer_team=0,
+        scoring=ScoringSnapshot(
+            round_winning_team=1,
+            defender_points=135,
+            total_defender_points=135,
+            bottom_card_bonus=0,
+            bottom_cards=[],
+        ),
+        team0_level="10",
+        team1_level="J",
+    )
+
+    team0_reward, team1_reward = round_rewards(
+        before=before,
+        after=after,
+    )
+
+    _assert_close(team0_reward, -2.375)
+    _assert_close(team1_reward, 2.375)
+
+
 def test_round_rewards_maps_winning_team_to_terminal_progress() -> None:
     before = make_snapshot(
         phase="PLAYING",
@@ -268,7 +342,7 @@ def test_round_rewards_maps_winning_team_to_terminal_progress() -> None:
     after = make_snapshot(
         phase="WAITING",
         awaiting_action="next_round",
-        declarer_team=None,
+        declarer_team=0,
         scoring=ScoringSnapshot(
             round_winning_team=0,
             defender_points=0,
@@ -301,7 +375,7 @@ def test_round_rewards_counts_team1_terminal_win() -> None:
     after = make_snapshot(
         phase="WAITING",
         awaiting_action="next_round",
-        declarer_team=None,
+        declarer_team=1,
         scoring=ScoringSnapshot(
             round_winning_team=1,
             defender_points=0,
@@ -347,3 +421,7 @@ def _trick_result_token_count(observation: Observation) -> int:
         for token in observation.tokens
         if isinstance(token, TrickResultFieldToken)
     )
+
+
+def _assert_close(actual: float, expected: float) -> None:
+    assert abs(actual - expected) <= 0.000000000001

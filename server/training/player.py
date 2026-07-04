@@ -188,9 +188,8 @@ class TrainingPlayer(Player):
         step = DecisionStep(
             player_index=self.index,
             seq=message.seq,
-            observation=observation,
-            action_query=observation.action_query,
-            legal_actions=legal_actions,
+            observation_batch=decision.observation_batch,
+            choice_trace=decision.choice_trace,
             action=decision.action,
             log_probability=decision.log_probability,
             value_estimate=decision.value_estimate,

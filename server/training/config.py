@@ -9,6 +9,7 @@ from typing import Literal
 from server.training.json_types import JsonObject
 
 type TrainingDevice = Literal["cpu", "cuda"]
+type PPOProfileMode = Literal["off", "basic", "detailed"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,13 +51,14 @@ class TrainConfig:
     """Run configuration that can move between machines."""
 
     device: TrainingDevice = "cpu"
+    ppo_profile: PPOProfileMode = "off"
     seed: int = 0
     learning_rate: float = 0.0003
     checkpoint_every_updates: int = 50
     checkpoint_retention_updates: int = 5
     max_round_seconds: float = 120.0
-    gamma: float = 0.99
-    gae_lambda: float = 0.95
+    gamma: float = 1.0
+    gae_lambda: float = 1.0
     ppo_clip: float = 0.2
     value_clip: float = 0.2
     entropy_coef: float = 0.01
@@ -69,6 +71,8 @@ class TrainConfig:
     weight_decay: float = 0.0
 
     def __post_init__(self) -> None:
+        assert self.device in ("cpu", "cuda")
+        assert self.ppo_profile in ("off", "basic", "detailed")
         assert self.seed >= 0
         assert _is_finite(self.learning_rate)
         assert self.learning_rate > 0.0
@@ -102,6 +106,7 @@ class TrainConfig:
     def to_json(self) -> JsonObject:
         return {
             "device": self.device,
+            "ppo_profile": self.ppo_profile,
             "seed": self.seed,
             "learning_rate": self.learning_rate,
             "checkpoint_every_updates": self.checkpoint_every_updates,
@@ -127,6 +132,7 @@ class TrainConfig:
     def from_json(cls, data: JsonObject) -> TrainConfig:
         return cls(
             device=_device_json_field(data, "device"),
+            ppo_profile=_profile_json_field(data, "ppo_profile"),
             seed=_int_json_field(data, "seed"),
             learning_rate=_float_json_field(data, "learning_rate"),
             checkpoint_every_updates=_int_json_field(
@@ -171,6 +177,17 @@ def _device_json_field(data: JsonObject, field: str) -> TrainingDevice:
         return "cpu"
     if value == "cuda":
         return "cuda"
+    assert False
+
+
+def _profile_json_field(data: JsonObject, field: str) -> PPOProfileMode:
+    value = data[field]
+    if value == "off":
+        return "off"
+    if value == "basic":
+        return "basic"
+    if value == "detailed":
+        return "detailed"
     assert False
 
 

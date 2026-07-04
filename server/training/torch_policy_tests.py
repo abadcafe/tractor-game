@@ -10,8 +10,15 @@ from server.player.test_helpers import card, make_snapshot
 from server.result import Ok, Rejected
 from server.training.argument_distribution import argument_distribution
 from server.training.config import ModelConfig
-from server.training.legal_actions import LegalActionIndex
-from server.training.model import ArgumentHeadOutput, TractorPolicyModel
+from server.training.legal_actions import (
+    LegalActionIndex,
+    build_legal_action_index,
+)
+from server.training.model import (
+    ArgumentPrefixScores,
+    ObservationEncoding,
+    TractorPolicyModel,
+)
 from server.training.observation import build_observation
 from server.training.semantic_actions import (
     ActionQuery,
@@ -98,6 +105,11 @@ def test_decide_scores_sampled_argument_with_shared_distribution(
         0.000001
     )
     assert abs(decision.entropy - expected_entropy) < 0.000001
+    assert len(decision.choice_trace.steps) == 1
+    assert decision.choice_trace.steps[
+        0
+    ].selected_argument_id == semantic_argument_id(pass_argument)
+    assert decision.choice_trace.steps[0].selected_argument_offset == 0
 
 
 def test_decide_rejects_non_finite_argument_logits() -> None:
@@ -186,22 +198,75 @@ def test_decide_rejects_sampling_runtime_failure(
     assert "policy sampling failed" in result.reason
 
 
+def test_decide_reuses_observation_encoding_for_full_trace() -> None:
+    model = _FixedArgumentModel(
+        argument_logits=torch.zeros(
+            (SEMANTIC_CODEC.argument_vocab_size,), dtype=torch.float32
+        )
+    )
+    model_config = ModelConfig(d_model=4, layers=1, heads=1)
+    snapshot = make_snapshot(
+        phase="PLAYING",
+        awaiting_action="play",
+        player_hand=[card("spades", "A", 1)],
+    )
+    observation = build_observation(
+        player_index=0,
+        snapshot=snapshot,
+        history=(),
+    )
+    legal_actions = build_legal_action_index(
+        player_index=0,
+        snapshot=snapshot,
+        query=observation.action_query,
+    )
+
+    decision_result = TorchTrainingPolicy(
+        model=model,
+        config=model_config,
+        device=torch.device("cpu"),
+    ).decide(observation, legal_actions)
+
+    assert isinstance(decision_result, Ok)
+    decision = decision_result.value
+    assert model.encode_calls == 1
+    assert model.score_batch_sizes == [1, 1]
+    assert model.score_prefix_widths == [1, 2]
+    assert len(decision.choice_trace.steps) == len(
+        decision.action.semantic_trace.arguments
+    )
+
+
 class _FixedArgumentModel(TractorPolicyModel):
     def __init__(self, *, argument_logits: Tensor) -> None:
         super().__init__(d_model=4, layers=1, heads=1)
         self._fixed_argument_logits = argument_logits
+        self.encode_calls = 0
+        self.score_batch_sizes: list[int] = []
+        self.score_prefix_widths: list[int] = []
 
-    def forward_argument(
+    def encode_observations(
         self,
         observation: ObservationTensorBatch,
+    ) -> ObservationEncoding:
+        self.encode_calls += 1
+        return super().encode_observations(observation)
+
+    def score_argument_prefixes(
+        self,
+        encoding: ObservationEncoding,
         prefix: ArgumentPrefixTensorBatch,
-    ) -> ArgumentHeadOutput:
-        batch_size = int(observation.token_type_ids.shape[0])
-        return ArgumentHeadOutput(
-            argument_logits=self._fixed_argument_logits.repeat(
-                batch_size, 1
-            ),
-            values=torch.zeros((batch_size,), dtype=torch.float32),
+    ) -> ArgumentPrefixScores:
+        batch_size = int(prefix.argument_ids.shape[0])
+        self.score_batch_sizes.append(batch_size)
+        self.score_prefix_widths.append(
+            int(prefix.argument_ids.shape[1])
+        )
+        logits = self._fixed_argument_logits.to(
+            prefix.argument_ids.device
+        )
+        return ArgumentPrefixScores(
+            argument_logits=logits.repeat(batch_size, 1),
         )
 
 

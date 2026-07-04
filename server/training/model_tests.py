@@ -14,7 +14,7 @@ from server.training.tensorize import (
 )
 
 
-def test_tractor_policy_model_forward_argument_shapes() -> None:
+def test_tractor_policy_model_scores_encoded_argument_shapes() -> None:
     device = torch.device("cpu")
     model = TractorPolicyModel(
         d_model=8,
@@ -40,10 +40,12 @@ def test_tractor_policy_model_forward_argument_shapes() -> None:
         device=device,
     )
 
-    output = model.forward_argument(
-        observation_batch,
+    encoding = model.encode_observations(observation_batch)
+    scores = model.score_argument_prefixes(
+        encoding,
         prefix_batch,
     )
+    values = model.value_estimates(encoding)
 
-    assert output.argument_logits.shape[0] == 1
-    assert output.values.shape == (1,)
+    assert scores.argument_logits.shape[0] == 1
+    assert values.shape == (1,)
