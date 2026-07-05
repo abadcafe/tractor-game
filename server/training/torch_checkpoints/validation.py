@@ -128,11 +128,6 @@ def train_config_from_json(
     )
     if isinstance(max_round_seconds, _result.Rejected):
         return max_round_seconds
-    gamma = _json_float_field(
-        data, "gamma", path, label="train_config.gamma"
-    )
-    if isinstance(gamma, _result.Rejected):
-        return gamma
     gae_lambda = _json_float_field(
         data, "gae_lambda", path, label="train_config.gae_lambda"
     )
@@ -198,7 +193,6 @@ def train_config_from_json(
         checkpoint_every_updates=checkpoint_every_updates.value,
         checkpoint_retention_updates=checkpoint_retention_updates.value,
         max_round_seconds=max_round_seconds.value,
-        gamma=gamma.value,
         gae_lambda=gae_lambda.value,
         ppo_clip=ppo_clip.value,
         value_clip=value_clip.value,
@@ -224,7 +218,6 @@ def train_config_from_json(
                 checkpoint_retention_updates.value
             ),
             max_round_seconds=max_round_seconds.value,
-            gamma=gamma.value,
             gae_lambda=gae_lambda.value,
             ppo_clip=ppo_clip.value,
             value_clip=value_clip.value,
@@ -332,7 +325,6 @@ def _validate_train_config_values(
     checkpoint_every_updates: int,
     checkpoint_retention_updates: int,
     max_round_seconds: float,
-    gamma: float,
     gae_lambda: float,
     ppo_clip: float,
     value_clip: float,
@@ -368,10 +360,6 @@ def _validate_train_config_values(
     if max_round_seconds <= 0.0:
         return checkpoint_corruption(
             path, "manifest train_config.max_round_seconds must be > 0"
-        )
-    if gamma < 0.0 or gamma > 1.0:
-        return checkpoint_corruption(
-            path, "manifest train_config.gamma must be between 0 and 1"
         )
     if gae_lambda < 0.0 or gae_lambda > 1.0:
         return checkpoint_corruption(

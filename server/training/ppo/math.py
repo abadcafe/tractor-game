@@ -50,7 +50,6 @@ def generalized_advantage_targets(
     *,
     steps: tuple[ValueStep, ...],
     terminal_reward: float,
-    gamma: float,
     gae_lambda: float,
 ) -> tuple[AdvantageTarget, ...]:
     """Compute generalized advantage estimates and returns."""
@@ -70,10 +69,10 @@ def generalized_advantage_targets(
         delta = (
             step.reward
             + final_reward
-            + gamma * next_value
+            + next_value
             - step.value_estimate
         )
-        gae = delta + gamma * gae_lambda * gae
+        gae = delta + gae_lambda * gae
         advantages[index] = gae
     return tuple(
         AdvantageTarget(

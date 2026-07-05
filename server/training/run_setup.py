@@ -102,6 +102,7 @@ def initialize_training_run(
     )
     if isinstance(save_result, _result.Rejected):
         return save_result
+    prune_failure = save_result.value.post_commit_prune_failure
     metric_result = append_metric(
         run_dir,
         TrainingMetric(
@@ -142,7 +143,13 @@ def initialize_training_run(
         ),
     )
     if isinstance(metric_result, _result.Rejected):
+        if prune_failure is not None:
+            return _result.Rejected(
+                reason=f"{metric_result.reason}; {prune_failure.reason}"
+            )
         return metric_result
+    if prune_failure is not None:
+        return prune_failure
     return _result.Ok(
         value=InitializedTrainingRun(
             run_dir=prepared.run_dir,

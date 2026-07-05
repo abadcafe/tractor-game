@@ -234,7 +234,7 @@ async def test_train_self_play_keeps_archive_without_update(
 
 
 @pytest.mark.asyncio
-async def test_train_self_play_metrics_follow_post_commit_prune_failure(
+async def test_train_self_play_reports_post_commit_prune_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -292,7 +292,8 @@ async def test_train_self_play_metrics_follow_post_commit_prune_failure(
         resume=latest_path,
     )
 
-    assert isinstance(result, Ok)
+    assert isinstance(result, Rejected)
+    assert "expired update manifest cannot be deleted" in result.reason
     latest_metadata = read_torch_checkpoint_metadata(latest_path)
     assert isinstance(latest_metadata, Ok)
     metrics = read_metrics(tmp_path)

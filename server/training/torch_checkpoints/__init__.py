@@ -6,13 +6,17 @@ from server.training.torch_checkpoints.load import (
     load_torch_checkpoint,
     read_torch_checkpoint_metadata,
 )
-from server.training.torch_checkpoints.save import save_torch_checkpoint
+from server.training.torch_checkpoints.save import (
+    TorchCheckpointSaveResult,
+    save_torch_checkpoint,
+)
 from server.training.torch_checkpoints.schema import (
     TorchCheckpointMetadata,
 )
 
 __all__ = (
     "TorchCheckpointMetadata",
+    "TorchCheckpointSaveResult",
     "load_torch_checkpoint",
     "read_torch_checkpoint_metadata",
     "save_torch_checkpoint",

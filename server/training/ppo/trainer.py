@@ -84,7 +84,6 @@ class PPOTrainer:
         samples = normalize_advantages(
             rollout_samples(
                 batch,
-                gamma=self.train_config.gamma,
                 gae_lambda=self.train_config.gae_lambda,
             )
         )

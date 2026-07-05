@@ -537,14 +537,15 @@ def test_cli_rejects_too_small_max_tokens() -> None:
     assert "Traceback" not in completed.stderr
 
 
-def test_cli_rejects_removed_dropout_argument() -> None:
+@pytest.mark.parametrize("argument", ("--dropout", "--gamma"))
+def test_cli_rejects_removed_argument(argument: str) -> None:
     completed: subprocess.CompletedProcess[str] = subprocess.run(
         [
             sys.executable,
             "-c",
             (
                 "from server.training.train import main\n"
-                "main(('--dropout', '0.0'))\n"
+                f"main(({argument!r}, '0.0'))\n"
             ),
         ],
         capture_output=True,
@@ -553,7 +554,7 @@ def test_cli_rejects_removed_dropout_argument() -> None:
     )
 
     assert completed.returncode != 0
-    assert "unrecognized arguments: --dropout" in completed.stderr
+    assert f"unrecognized arguments: {argument}" in completed.stderr
 
 
 def initialize_training_run(

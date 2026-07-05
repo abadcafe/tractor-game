@@ -207,6 +207,9 @@ def test_dashboard_mentions_metrics_file() -> None:
     html = render_dashboard_html(title="Tractor Training")
     assert "metrics.jsonl" in html
     assert "total_games" in html
+    assert "innerHTML" not in html
+    assert "createElement" in html
+    assert "textContent" in html
 
 
 def test_dashboard_escapes_title_html() -> None:

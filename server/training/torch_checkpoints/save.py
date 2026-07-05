@@ -43,6 +43,16 @@ class _ManifestBackup:
     content: bytes | None
 
 
+@dataclass(frozen=True, slots=True)
+class TorchCheckpointSaveResult:
+    """Committed checkpoint save result.
+
+    Post-commit pruning failures do not undo the saved checkpoint.
+    """
+
+    post_commit_prune_failure: _result.Rejected | None
+
+
 def save_torch_checkpoint(
     *,
     manifest_paths: tuple[Path, ...],
@@ -53,7 +63,7 @@ def save_torch_checkpoint(
     total_rounds: int,
     total_updates: int,
     retained_update_count: int,
-) -> _result.Ok[None] | _result.Rejected:
+) -> _result.Ok[TorchCheckpointSaveResult] | _result.Rejected:
     """Save one state object and write each manifest atomically."""
     assert retained_update_count >= 0
     assert total_rounds >= 0
@@ -141,11 +151,19 @@ def save_torch_checkpoint(
             _restore_manifest_backups(manifest_backups)
             _discard_state_object(state_path)
             return manifest_result
-    prune_torch_checkpoints(
+    prune_result = prune_torch_checkpoints(
         checkpoint_dir=checkpoint_dir,
         retained_update_count=retained_update_count,
     )
-    return _result.Ok(value=None)
+    if isinstance(prune_result, _result.Rejected):
+        return _result.Ok(
+            value=TorchCheckpointSaveResult(
+                post_commit_prune_failure=prune_result
+            )
+        )
+    return _result.Ok(
+        value=TorchCheckpointSaveResult(post_commit_prune_failure=None)
+    )
 
 
 def _validate_update_manifest_paths(

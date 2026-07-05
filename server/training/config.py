@@ -57,7 +57,6 @@ class TrainConfig:
     checkpoint_every_updates: int = 50
     checkpoint_retention_updates: int = 5
     max_round_seconds: float = 120.0
-    gamma: float = 1.0
     gae_lambda: float = 1.0
     ppo_clip: float = 0.2
     value_clip: float = 0.2
@@ -80,8 +79,6 @@ class TrainConfig:
         assert self.checkpoint_retention_updates >= 0
         assert _is_finite(self.max_round_seconds)
         assert self.max_round_seconds > 0.0
-        assert _is_finite(self.gamma)
-        assert 0.0 <= self.gamma <= 1.0
         assert _is_finite(self.gae_lambda)
         assert 0.0 <= self.gae_lambda <= 1.0
         assert _is_finite(self.ppo_clip)
@@ -114,7 +111,6 @@ class TrainConfig:
                 self.checkpoint_retention_updates
             ),
             "max_round_seconds": self.max_round_seconds,
-            "gamma": self.gamma,
             "gae_lambda": self.gae_lambda,
             "ppo_clip": self.ppo_clip,
             "value_clip": self.value_clip,
@@ -144,7 +140,6 @@ class TrainConfig:
             max_round_seconds=_float_json_field(
                 data, "max_round_seconds"
             ),
-            gamma=_float_json_field(data, "gamma"),
             gae_lambda=_float_json_field(data, "gae_lambda"),
             ppo_clip=_float_json_field(data, "ppo_clip"),
             value_clip=_float_json_field(data, "value_clip"),

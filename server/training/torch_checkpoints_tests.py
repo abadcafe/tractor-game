@@ -316,7 +316,7 @@ def test_torch_checkpoint_save_rolls_back_manifest_write_failure(
     assert _state_paths(tmp_path) == state_paths_before
 
 
-def test_torch_checkpoint_save_commits_after_prune_unlink_failure(
+def test_torch_checkpoint_save_reports_post_commit_prune_unlink_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -368,6 +368,11 @@ def test_torch_checkpoint_save_commits_after_prune_unlink_failure(
     )
 
     assert isinstance(result, Ok)
+    prune_failure = result.value.post_commit_prune_failure
+    assert isinstance(prune_failure, Rejected)
+    assert "expired update manifest cannot be deleted" in (
+        prune_failure.reason
+    )
     metadata = read_torch_checkpoint_metadata(latest_path)
     assert metadata.total_rounds == 2
     assert metadata.total_updates == 2
@@ -532,7 +537,7 @@ def test_torch_checkpoint_save_rejects_retained_file_before_commit(
     )
 
 
-def test_torch_checkpoint_save_commits_after_prune_rmtree_failure(
+def test_torch_checkpoint_save_reports_post_commit_prune_rmtree_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -582,6 +587,9 @@ def test_torch_checkpoint_save_commits_after_prune_rmtree_failure(
     )
 
     assert isinstance(result, Ok)
+    prune_failure = result.value.post_commit_prune_failure
+    assert isinstance(prune_failure, Rejected)
+    assert "checkpoint object cannot be deleted" in prune_failure.reason
     metadata = read_torch_checkpoint_metadata(latest_path)
     assert metadata.total_rounds == 2
     assert metadata.total_updates == 2
@@ -622,7 +630,7 @@ def test_torch_checkpoint_state_payload_is_weights_only_safe(
     )
 
     assert isinstance(loaded, dict)
-    assert loaded["schema_version"] == 16
+    assert loaded["schema_version"] == 17
     assert isinstance(loaded["checkpoint_id"], str)
     assert "model_config" not in loaded
     assert "train_config" not in loaded
@@ -1986,6 +1994,7 @@ def save_torch_checkpoint(
         retained_update_count=retained_update_count,
     )
     assert isinstance(result, Ok)
+    assert result.value.post_commit_prune_failure is None
 
 
 def load_torch_checkpoint(

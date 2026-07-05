@@ -44,7 +44,6 @@ class TrainConfigOverrides:
     checkpoint_every_updates: int | None = None
     checkpoint_retention_updates: int | None = None
     max_round_seconds: float | None = None
-    gamma: float | None = None
     gae_lambda: float | None = None
     ppo_clip: float | None = None
     value_clip: float | None = None
@@ -109,9 +108,6 @@ def resolve_train_config(
             max_round_seconds=base.max_round_seconds
             if cli_overrides.max_round_seconds is None
             else cli_overrides.max_round_seconds,
-            gamma=base.gamma
-            if cli_overrides.gamma is None
-            else cli_overrides.gamma,
             gae_lambda=base.gae_lambda
             if cli_overrides.gae_lambda is None
             else cli_overrides.gae_lambda,
@@ -329,9 +325,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         "--max-round-seconds", type=_positive_float_arg, default=None
     )
     parser.add_argument(
-        "--gamma", type=_unit_interval_float_arg, default=None
-    )
-    parser.add_argument(
         "--gae-lambda", type=_unit_interval_float_arg, default=None
     )
     parser.add_argument(
@@ -417,7 +410,6 @@ def main(argv: Sequence[str] | None = None) -> None:
                 args.checkpoint_retention_updates
             ),
             max_round_seconds=args.max_round_seconds,
-            gamma=args.gamma,
             gae_lambda=args.gae_lambda,
             ppo_clip=args.ppo_clip,
             value_clip=args.value_clip,

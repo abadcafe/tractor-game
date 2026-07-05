@@ -93,12 +93,20 @@ def render_dashboard_html(*, title: str) -> str:
         'policy_loss', 'value_loss', 'entropy', 'approx_kl',
         'clip_fraction'
       ];
-      document.getElementById('grid').innerHTML = keys.map((key) => `
-        <div class="metric">
-          <div class="label">${{key}}</div>
-          <div class="value">${{latest[key] ?? ''}}</div>
-        </div>
-      `).join('');
+      const grid = document.getElementById('grid');
+      grid.replaceChildren();
+      for (const key of keys) {{
+        const metric = document.createElement('div');
+        metric.className = 'metric';
+        const label = document.createElement('div');
+        label.className = 'label';
+        label.textContent = key;
+        const value = document.createElement('div');
+        value.className = 'value';
+        value.textContent = latest[key] ?? '';
+        metric.append(label, value);
+        grid.append(metric);
+      }}
     }}
     setInterval(loadMetrics, 2000);
     loadMetrics();

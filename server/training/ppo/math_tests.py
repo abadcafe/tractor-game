@@ -22,14 +22,13 @@ def test_generalized_advantage_targets_values() -> None:
             ValueStep(reward=1.5, value_estimate=0.1),
         ),
         terminal_reward=0.0,
-        gamma=0.9,
         gae_lambda=0.8,
     )
 
-    _assert_close(targets[0].advantage, 0.66256)
-    _assert_close(targets[0].return_value, 0.86256)
-    _assert_close(targets[1].advantage, 0.698)
-    _assert_close(targets[1].return_value, 1.098)
+    _assert_close(targets[0].advantage, 0.856)
+    _assert_close(targets[0].return_value, 1.056)
+    _assert_close(targets[1].advantage, 0.82)
+    _assert_close(targets[1].return_value, 1.22)
     _assert_close(targets[2].advantage, 1.4)
     _assert_close(targets[2].return_value, 1.5)
 
@@ -42,7 +41,6 @@ def test_generalized_advantage_targets_terminal_reward_values() -> None:
             ValueStep(reward=0.0, value_estimate=0.1),
         ),
         terminal_reward=1.0,
-        gamma=1.0,
         gae_lambda=1.0,
     )
 

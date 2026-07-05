@@ -211,8 +211,18 @@ async def train_self_play(
         if isinstance(save_result, _result.Rejected):
             return save_result
         metric_result = append_metric(run_dir, metric)
+        prune_failure = save_result.value.post_commit_prune_failure
         if isinstance(metric_result, _result.Rejected):
+            if prune_failure is not None:
+                return _result.Rejected(
+                    reason=(
+                        f"{metric_result.reason}; "
+                        f"{prune_failure.reason}"
+                    )
+                )
             return metric_result
+        if prune_failure is not None:
+            return prune_failure
         if round_data.game_over:
             session = SelfPlaySession(policy=policy)
     if max_rounds == 0:
@@ -230,6 +240,9 @@ async def train_self_play(
         )
         if isinstance(save_result, _result.Rejected):
             return save_result
+        prune_failure = save_result.value.post_commit_prune_failure
+        if prune_failure is not None:
+            return prune_failure
     return _result.Ok(
         value=TrainingLoopResult(
             total_rounds=total_rounds,

@@ -32,7 +32,6 @@ class RolloutSample:
 def rollout_samples(
     batch: RolloutBatch,
     *,
-    gamma: float,
     gae_lambda: float,
 ) -> tuple[RolloutSample, ...]:
     """Convert collected team trajectories into PPO samples."""
@@ -41,7 +40,6 @@ def rollout_samples(
         samples.extend(
             _team_samples(
                 trajectory,
-                gamma=gamma,
                 gae_lambda=gae_lambda,
             )
         )
@@ -110,7 +108,6 @@ def shuffled_samples(
 def _team_samples(
     trajectory: TeamTrajectory,
     *,
-    gamma: float,
     gae_lambda: float,
 ) -> tuple[RolloutSample, ...]:
     transitions = trajectory.transitions
@@ -125,7 +122,6 @@ def _team_samples(
     targets = generalized_advantage_targets(
         steps=value_steps,
         terminal_reward=trajectory.terminal_reward,
-        gamma=gamma,
         gae_lambda=gae_lambda,
     )
     return tuple(
