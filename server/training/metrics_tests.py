@@ -204,9 +204,15 @@ def test_read_metrics_skips_out_of_range_nullable_fraction_record(
 
 
 def test_dashboard_mentions_metrics_file() -> None:
-    html = render_dashboard_html(title="Tractor Training")
+    html = render_dashboard_html(
+        title="Tractor Training", telemetry_interval_seconds=2.5
+    )
     assert "metrics.jsonl" in html
+    assert "telemetry.jsonl" in html
     assert "total_games" in html
+    assert "throughput-chart" in html
+    assert "const dashboardPollMs = 2500;" in html
+    assert "setInterval(loadDashboard, dashboardPollMs)" in html
     assert "innerHTML" not in html
     assert "createElement" in html
     assert "textContent" in html
@@ -223,11 +229,18 @@ def test_dashboard_escapes_title_html() -> None:
 
 
 def test_write_dashboard_creates_index(tmp_path: Path) -> None:
-    result = write_dashboard(tmp_path, title="Tractor Training")
+    result = write_dashboard(
+        tmp_path,
+        title="Tractor Training",
+        telemetry_interval_seconds=3.0,
+    )
     assert isinstance(result, Ok)
     path = result.value
     assert path.exists()
     assert path.name == "index.html"
+    assert "const dashboardPollMs = 3000;" in path.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_write_dashboard_rejects_write_failure(

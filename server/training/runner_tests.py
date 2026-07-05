@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import pytest
-import torch
 
 from server.player.base import Player
 from server.player.test_helpers import make_snapshot
@@ -17,11 +16,11 @@ from server.protocol import (
 )
 from server.result import Ok, Rejected
 from server.training import runner
-from server.training.config import ModelConfig
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
 from server.training.policy import PolicyDecision, RandomTrainingPolicy
 from server.training.runner import SelfPlaySession, round_rewards
+from server.training.sampling import PolicyDecisionKey
 from server.training.tokens import FaceCountToken, TrickResultFieldToken
 
 
@@ -133,9 +132,12 @@ class _RecordingPolicy:
         self,
         observation: Observation,
         legal_actions: LegalActionIndex,
+        decision_key: PolicyDecisionKey,
     ) -> Ok[PolicyDecision] | Rejected:
         self.observations.append(observation)
-        return self._delegate.decide(observation, legal_actions)
+        return self._delegate.decide(
+            observation, legal_actions, decision_key
+        )
 
 
 @pytest.mark.asyncio
@@ -143,11 +145,21 @@ async def test_self_play_session_clears_round_history() -> None:
     policy = _RecordingPolicy(seed=7)
     session = SelfPlaySession(policy=policy)
 
-    first_result = await session.play_round(max_seconds=120.0)
+    first_result = await session.play_round(
+        base_seed=7,
+        policy_version=0,
+        episode_id=0,
+        max_seconds=120.0,
+    )
     assert isinstance(first_result, Ok)
     first = first_result.value
     first_decision_count = len(policy.observations)
-    second_result = await session.play_round(max_seconds=120.0)
+    second_result = await session.play_round(
+        base_seed=7,
+        policy_version=0,
+        episode_id=1,
+        max_seconds=120.0,
+    )
     assert isinstance(second_result, Ok)
     second = second_result.value
     second_round_bid = _first_bid_observation(
@@ -171,9 +183,19 @@ async def test_self_play_session_uses_new_round_boundary_for_rewards(
     monkeypatch.setattr(runner, "Game", _ScriptedBoundaryGame)
     session = SelfPlaySession(policy=_random_policy(seed=7))
 
-    first = await session.play_round(max_seconds=120.0)
+    first = await session.play_round(
+        base_seed=7,
+        policy_version=0,
+        episode_id=0,
+        max_seconds=120.0,
+    )
     assert isinstance(first, Ok)
-    second_result = await session.play_round(max_seconds=120.0)
+    second_result = await session.play_round(
+        base_seed=7,
+        policy_version=0,
+        episode_id=1,
+        max_seconds=120.0,
+    )
     assert isinstance(second_result, Ok)
     second = second_result.value
 
@@ -189,7 +211,12 @@ async def test_self_play_session_rejects_round_timeout(
     monkeypatch.setattr(runner, "Game", _ScriptedBoundaryGame)
     session = SelfPlaySession(policy=_random_policy(seed=7))
 
-    result = await session.play_round(max_seconds=0.0)
+    result = await session.play_round(
+        base_seed=7,
+        policy_version=0,
+        episode_id=0,
+        max_seconds=0.0,
+    )
 
     assert isinstance(result, Rejected)
     assert "training round timed out" in result.reason
@@ -228,11 +255,8 @@ def test_round_rewards_uses_scoring_round_winning_team() -> None:
 
 
 def _random_policy(*, seed: int) -> RandomTrainingPolicy:
-    return RandomTrainingPolicy(
-        model_config=ModelConfig(max_tokens=512),
-        device=torch.device("cpu"),
-        seed=seed,
-    )
+    assert seed >= 0
+    return RandomTrainingPolicy()
 
 
 def test_round_rewards_counts_defender_taking_stage_control() -> None:

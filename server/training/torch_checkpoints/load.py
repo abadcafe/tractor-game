@@ -9,7 +9,9 @@ import torch
 from server import result as _result
 from server.training import training_state as _training_state
 from server.training.config import ModelConfig, TrainConfig
+from server.training.model import TractorPolicyModel
 from server.training.ppo import PPOTrainer
+from server.training.runtime.config import ExecutionConfig
 from server.training.torch_checkpoints.filesystem import (
     validate_checkpoint_dir,
     validate_checkpoint_object_dir,
@@ -33,9 +35,6 @@ from server.training.torch_checkpoints.schema import (
 from server.training.torch_checkpoints.validation import (
     validate_optimizer_state_payload,
 )
-from server.training.torch_rng import (
-    restore_torch_rng_state as _restore_torch_rng_state,
-)
 
 
 def load_torch_checkpoint(
@@ -43,6 +42,7 @@ def load_torch_checkpoint(
     path: Path,
     model_config: ModelConfig,
     train_config: TrainConfig,
+    execution_config: ExecutionConfig,
     device: torch.device,
 ) -> _result.Ok[_training_state.LoadedTrainingState] | _result.Rejected:
     """Load trainable state from a torch checkpoint."""
@@ -83,7 +83,10 @@ def load_torch_checkpoint(
             state_path,
             f"state checkpoint id does not match manifest {path}",
         )
-    model = _training_state.create_model(model_config, device)
+    model = _create_checkpoint_model_without_rng_side_effect(
+        model_config=model_config,
+        device=device,
+    )
     try:
         model.load_state_dict(payload.model_state)
     except RuntimeError:
@@ -92,9 +95,9 @@ def load_torch_checkpoint(
         )
     trainer = PPOTrainer(
         model=model,
-        model_config=model_config,
         train_config=train_config,
         device=device,
+        profile_mode=execution_config.ppo_profile,
     )
     optimizer_check = validate_optimizer_state_payload(
         state=payload.optimizer_state,
@@ -104,11 +107,6 @@ def load_torch_checkpoint(
     if isinstance(optimizer_check, _result.Rejected):
         return optimizer_check
     trainer.load_optimizer_state(payload.optimizer_state)
-    rng_restore_result = _restore_torch_rng_state(payload.rng_state)
-    if isinstance(rng_restore_result, _result.Rejected):
-        return checkpoint_corruption(
-            state_path, rng_restore_result.reason
-        )
     return _result.Ok(
         value=_training_state.LoadedTrainingState(
             model=model,
@@ -165,6 +163,18 @@ def _validated_manifest_state_path(
     if isinstance(state_file_check, _result.Rejected):
         return state_file_check
     return _result.Ok(value=state_path)
+
+
+def _create_checkpoint_model_without_rng_side_effect(
+    *,
+    model_config: ModelConfig,
+    device: torch.device,
+) -> TractorPolicyModel:
+    cpu_rng_state = torch.random.get_rng_state()
+    try:
+        return _training_state.create_model(model_config, device)
+    finally:
+        torch.random.set_rng_state(cpu_rng_state)
 
 
 def _validate_requested_config(

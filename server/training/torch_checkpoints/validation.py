@@ -12,9 +12,7 @@ from torch import Tensor
 from server import result as _result
 from server.training.config import (
     ModelConfig,
-    PPOProfileMode,
     TrainConfig,
-    TrainingDevice,
 )
 from server.training.json_types import JsonObject
 from server.training.torch_checkpoints.schema import (
@@ -78,19 +76,6 @@ def train_config_from_json(
     path: Path,
 ) -> _result.Ok[TrainConfig] | _result.Rejected:
     """Parse and validate train config from checkpoint JSON."""
-    device = _json_device_field(
-        data, "device", path, label="train_config.device"
-    )
-    if isinstance(device, _result.Rejected):
-        return device
-    ppo_profile = _json_profile_field(
-        data,
-        "ppo_profile",
-        path,
-        label="train_config.ppo_profile",
-    )
-    if isinstance(ppo_profile, _result.Rejected):
-        return ppo_profile
     seed = _json_int_field(
         data, "seed", path, label="train_config.seed"
     )
@@ -120,14 +105,6 @@ def train_config_from_json(
     )
     if isinstance(checkpoint_retention_updates, _result.Rejected):
         return checkpoint_retention_updates
-    max_round_seconds = _json_float_field(
-        data,
-        "max_round_seconds",
-        path,
-        label="train_config.max_round_seconds",
-    )
-    if isinstance(max_round_seconds, _result.Rejected):
-        return max_round_seconds
     gae_lambda = _json_float_field(
         data, "gae_lambda", path, label="train_config.gae_lambda"
     )
@@ -192,7 +169,6 @@ def train_config_from_json(
         learning_rate=learning_rate.value,
         checkpoint_every_updates=checkpoint_every_updates.value,
         checkpoint_retention_updates=checkpoint_retention_updates.value,
-        max_round_seconds=max_round_seconds.value,
         gae_lambda=gae_lambda.value,
         ppo_clip=ppo_clip.value,
         value_clip=value_clip.value,
@@ -209,15 +185,12 @@ def train_config_from_json(
         return validation
     return _result.Ok(
         value=TrainConfig(
-            device=device.value,
-            ppo_profile=ppo_profile.value,
             seed=seed.value,
             learning_rate=learning_rate.value,
             checkpoint_every_updates=checkpoint_every_updates.value,
             checkpoint_retention_updates=(
                 checkpoint_retention_updates.value
             ),
-            max_round_seconds=max_round_seconds.value,
             gae_lambda=gae_lambda.value,
             ppo_clip=ppo_clip.value,
             value_clip=value_clip.value,
@@ -248,7 +221,7 @@ def validate_optimizer_state_payload(
     )
     if isinstance(kind, _result.Rejected):
         return kind
-    if kind.value != "typed_adamw":
+    if kind.value != "ppo_adamw":
         return checkpoint_corruption(
             path, "state payload optimizer_state.kind is unsupported"
         )
@@ -324,7 +297,6 @@ def _validate_train_config_values(
     learning_rate: float,
     checkpoint_every_updates: int,
     checkpoint_retention_updates: int,
-    max_round_seconds: float,
     gae_lambda: float,
     ppo_clip: float,
     value_clip: float,
@@ -356,10 +328,6 @@ def _validate_train_config_values(
             path,
             "manifest train_config.checkpoint_retention_updates must "
             "be >= 0",
-        )
-    if max_round_seconds <= 0.0:
-        return checkpoint_corruption(
-            path, "manifest train_config.max_round_seconds must be > 0"
         )
     if gae_lambda < 0.0 or gae_lambda > 1.0:
         return checkpoint_corruption(
@@ -538,52 +506,6 @@ def _json_float_field(
             path, f"manifest {field_label} is not a finite number"
         )
     return _result.Ok(value=float(value))
-
-
-def _json_device_field(
-    data: JsonObject,
-    field: str,
-    path: Path,
-    *,
-    label: str | None = None,
-) -> _result.Ok[TrainingDevice] | _result.Rejected:
-    field_label = field if label is None else label
-    if field not in data:
-        return checkpoint_corruption(
-            path, f"manifest missing {field_label}"
-        )
-    value = data[field]
-    if value == "cpu":
-        return _result.Ok(value="cpu")
-    if value == "cuda":
-        return _result.Ok(value="cuda")
-    return checkpoint_corruption(
-        path, f"manifest {field_label} must be cpu or cuda"
-    )
-
-
-def _json_profile_field(
-    data: JsonObject,
-    field: str,
-    path: Path,
-    *,
-    label: str | None = None,
-) -> _result.Ok[PPOProfileMode] | _result.Rejected:
-    field_label = field if label is None else label
-    if field not in data:
-        return checkpoint_corruption(
-            path, f"manifest missing {field_label}"
-        )
-    value = data[field]
-    if value == "off":
-        return _result.Ok(value="off")
-    if value == "basic":
-        return _result.Ok(value="basic")
-    if value == "detailed":
-        return _result.Ok(value="detailed")
-    return checkpoint_corruption(
-        path, f"manifest {field_label} must be off, basic, or detailed"
-    )
 
 
 def _is_optional_tensor_list(

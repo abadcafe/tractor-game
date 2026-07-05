@@ -14,12 +14,14 @@ from server.training.metrics import (
     append_metric,
     metrics_path,
 )
+from server.training.runtime.affinity import preflight_cpu_affinity
+from server.training.runtime.config import ExecutionConfig
 from server.training.torch_checkpoints import (
     save_torch_checkpoint,
 )
 from server.training.training_state import (
     create_training_state,
-    resolve_training_device,
+    validate_model_rank_runtime,
 )
 
 _CHECKPOINTS_DIR_NAME = "checkpoints"
@@ -45,10 +47,13 @@ class InitializedTrainingRun:
 def prepare_training_run(
     *,
     run_dir: Path,
+    telemetry_interval_seconds: float = 1.0,
 ) -> _result.Ok[PreparedTrainingRun] | _result.Rejected:
     """Create dashboard files without changing training progress."""
     dashboard_result = write_dashboard(
-        run_dir, title="Tractor Training"
+        run_dir,
+        title="Tractor Training",
+        telemetry_interval_seconds=telemetry_interval_seconds,
     )
     if isinstance(dashboard_result, _result.Rejected):
         return dashboard_result
@@ -66,12 +71,13 @@ def initialize_training_run(
     run_id: str,
     model_config: ModelConfig,
     train_config: TrainConfig,
+    execution_config: ExecutionConfig,
     force_new_run: bool = False,
 ) -> _result.Ok[InitializedTrainingRun] | _result.Rejected:
     """Create dashboard, initial metric, and torch checkpoint."""
-    device_result = resolve_training_device(train_config.device)
-    if isinstance(device_result, _result.Rejected):
-        return device_result
+    runtime_check = _preflight_training_runtime(execution_config)
+    if isinstance(runtime_check, _result.Rejected):
+        return runtime_check
     if force_new_run:
         cleanup_result = _clear_training_artifacts(run_dir)
         if isinstance(cleanup_result, _result.Rejected):
@@ -80,7 +86,12 @@ def initialize_training_run(
         guard = _reject_existing_training_run(run_dir)
         if isinstance(guard, _result.Rejected):
             return guard
-    prepared_result = prepare_training_run(run_dir=run_dir)
+    prepared_result = prepare_training_run(
+        run_dir=run_dir,
+        telemetry_interval_seconds=(
+            execution_config.telemetry_interval_seconds
+        ),
+    )
     if isinstance(prepared_result, _result.Rejected):
         return prepared_result
     prepared = prepared_result.value
@@ -88,7 +99,7 @@ def initialize_training_run(
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
-        device=device_result.value,
+        execution_config=execution_config,
     )
     save_result = save_torch_checkpoint(
         manifest_paths=(checkpoint_path,),
@@ -170,6 +181,22 @@ def _reject_existing_training_run(
             "--force-new-run"
         )
     )
+
+
+def _preflight_training_runtime(
+    execution_config: ExecutionConfig,
+) -> _result.Ok[None] | _result.Rejected:
+    model_rank_check = validate_model_rank_runtime(execution_config)
+    if isinstance(model_rank_check, _result.Rejected):
+        return model_rank_check
+    for worker_index in range(execution_config.worker_process_count()):
+        affinity_check = preflight_cpu_affinity(
+            label=f"worker-{worker_index}",
+            cpus=execution_config.worker_cpu_set(worker_index),
+        )
+        if isinstance(affinity_check, _result.Rejected):
+            return affinity_check
+    return _result.Ok(value=None)
 
 
 def _has_training_artifacts(run_dir: Path) -> bool:

@@ -18,6 +18,7 @@ from server.training.run_setup import (
 from server.training.run_setup import (
     initialize_training_run as _initialize_training_run,
 )
+from server.training.runtime import ExecutionConfig
 from server.training.torch_checkpoints import (
     TorchCheckpointMetadata,
 )
@@ -65,7 +66,7 @@ def test_init_only_prints_resumable_torch_checkpoint(
     assert metadata.total_updates == 0
 
 
-def test_init_only_persists_ppo_profile(
+def test_init_only_does_not_persist_ppo_profile(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -91,7 +92,7 @@ def test_init_only_persists_ppo_profile(
 
     capsys.readouterr()
     metadata = read_torch_checkpoint_metadata(checkpoint_path)
-    assert metadata.train_config.ppo_profile == "detailed"
+    assert metadata.train_config == TrainConfig()
 
 
 def test_new_run_rejects_existing_run_without_force(
@@ -106,7 +107,7 @@ def test_new_run_rejects_existing_run_without_force(
             heads=1,
             max_tokens=64,
         ),
-        train_config=TrainConfig(device="cpu", seed=1),
+        train_config=TrainConfig(seed=1),
     )
 
     completed: subprocess.CompletedProcess[str] = subprocess.run(
@@ -149,7 +150,7 @@ def test_new_run_rejects_existing_run_without_force(
         heads=1,
         max_tokens=64,
     )
-    assert metadata.train_config == TrainConfig(device="cpu", seed=1)
+    assert metadata.train_config == TrainConfig(seed=1)
     assert len(read_metrics(tmp_path)) == 1
 
 
@@ -166,7 +167,7 @@ def test_force_new_run_reinitializes_existing_run(
             heads=1,
             max_tokens=64,
         ),
-        train_config=TrainConfig(device="cpu", seed=1),
+        train_config=TrainConfig(seed=1),
     )
     checkpoint_path = tmp_path / "checkpoints" / "latest.json"
 
@@ -217,7 +218,7 @@ def test_resume_zero_rounds_does_not_append_initial_metric(
             heads=1,
             max_tokens=64,
         ),
-        train_config=TrainConfig(device="cpu"),
+        train_config=TrainConfig(),
     )
     metrics_before = read_metrics(tmp_path)
 
@@ -250,7 +251,7 @@ def test_resume_without_run_dir_uses_checkpoint_run_dir(
             heads=1,
             max_tokens=64,
         ),
-        train_config=TrainConfig(device="cpu"),
+        train_config=TrainConfig(),
     )
     metrics_before = read_metrics(run_dir)
 
@@ -280,7 +281,7 @@ def test_resume_rejects_mismatched_run_dir(tmp_path: Path) -> None:
             heads=1,
             max_tokens=64,
         ),
-        train_config=TrainConfig(device="cpu"),
+        train_config=TrainConfig(),
     )
     other_run_dir = tmp_path / "other-run"
 
@@ -349,7 +350,7 @@ def test_resume_seed_mismatch_reports_cli_error(tmp_path: Path) -> None:
             heads=1,
             max_tokens=64,
         ),
-        train_config=TrainConfig(device="cpu", seed=3),
+        train_config=TrainConfig(seed=3),
     )
 
     completed: subprocess.CompletedProcess[str] = subprocess.run(
@@ -493,8 +494,8 @@ def test_cuda_device_unavailable_reports_cli_error(
                 "--run-dir",
                 str(tmp_path),
                 "--init-only",
-                "--device",
-                "cuda",
+                "--model-ranks",
+                "cuda:0",
                 "--d-model",
                 "4",
                 "--layers",
@@ -510,7 +511,7 @@ def test_cuda_device_unavailable_reports_cli_error(
 
     captured = capsys.readouterr()
     assert exit_code == 2
-    assert "--device cuda is unavailable" in captured.err
+    assert "--model-ranks cuda is unavailable" in captured.err
     assert "Traceback" not in captured.err
     assert read_metrics(tmp_path) == ()
     assert not (tmp_path / "checkpoints").exists()
@@ -537,15 +538,14 @@ def test_cli_rejects_too_small_max_tokens() -> None:
     assert "Traceback" not in completed.stderr
 
 
-@pytest.mark.parametrize("argument", ("--dropout", "--gamma"))
-def test_cli_rejects_removed_argument(argument: str) -> None:
+def test_cli_rejects_duplicate_cuda_model_rank() -> None:
     completed: subprocess.CompletedProcess[str] = subprocess.run(
         [
             sys.executable,
             "-c",
             (
                 "from server.training.train import main\n"
-                f"main(({argument!r}, '0.0'))\n"
+                "main(('--model-ranks', 'cuda:0,0'))\n"
             ),
         ],
         capture_output=True,
@@ -554,7 +554,8 @@ def test_cli_rejects_removed_argument(argument: str) -> None:
     )
 
     assert completed.returncode != 0
-    assert f"unrecognized arguments: {argument}" in completed.stderr
+    assert "duplicate CUDA model rank index: 0" in completed.stderr
+    assert "Traceback" not in completed.stderr
 
 
 def initialize_training_run(
@@ -569,6 +570,7 @@ def initialize_training_run(
         run_id=run_id,
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
     )
     assert isinstance(result, Ok)
     return result.value

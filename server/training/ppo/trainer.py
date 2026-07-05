@@ -2,49 +2,71 @@
 
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass
+from typing import Protocol, cast
 
 import torch
+import torch.distributed as dist
+import torch.distributed.nn.functional as dist_functional
 from torch import Tensor
 
 from server import result as _result
-from server.training.config import ModelConfig, TrainConfig
+from server.training.config import TrainConfig
 from server.training.model import TractorPolicyModel
-from server.training.ppo.adamw import AdamWState
-from server.training.ppo.evaluation import evaluate_trace_batch
-from server.training.ppo.math import (
-    PPOObjectiveConfig,
-    clipped_ppo_objective,
+from server.training.ppo.device_targets import (
+    DevicePPOTargets,
+    device_ppo_targets,
+    shuffled_index_tensor,
+)
+from server.training.ppo.distributed import (
+    PPOLossForwarder,
+    PPOUpdatePartition,
+    build_ppo_loss_forwarder,
+    single_update_partition,
+)
+from server.training.ppo.gradients import (
+    clip_grad_norm_on_device,
+    reject_if_gradients_non_finite,
+)
+from server.training.ppo.loss_module import (
+    MinibatchLoss,
+    PPOLossModule,
+)
+from server.training.ppo.minibatch import TensorizedPPOMinibatch
+from server.training.ppo.optimizer import PPOOptimizer
+from server.training.ppo.prepared_batch import (
+    PreparedPPOBatch,
+    empty_ppo_minibatch,
+    prepare_ppo_batch,
+    prepared_ppo_minibatch,
 )
 from server.training.ppo.profile import (
     PPOProfileAccumulator,
     PPOUpdateProfile,
 )
-from server.training.ppo.rollout import (
-    RolloutSample,
-    minibatches,
-    normalize_advantages,
-    rollout_samples,
-    shuffled_samples,
-)
 from server.training.ppo.stats import (
     PPOUpdateStats,
     ppo_update_stats_are_finite,
 )
-from server.training.trajectory import RolloutBatch
+from server.training.ppo.sync import (
+    positive_count_value,
+    synchronized_count_max,
+    synchronized_count_sum,
+)
+from server.training.ppo.update_input import PPOUpdateInput
+from server.training.runtime.config import PPOProfileMode
+from server.training.sampling import ShuffleKey, shuffled_indices
+from server.training.tensor_finiteness import (
+    NamedTensorCheck,
+    reject_if_non_finite,
+)
 
 
-@dataclass(frozen=True, slots=True)
-class MinibatchLoss:
-    """Loss tensors and diagnostics for one optimizer step."""
+class _AllReduceTensor(Protocol):
+    def __call__(self, tensor: Tensor, op: object) -> Tensor: ...
 
-    policy_loss: Tensor
-    value_loss: Tensor
-    entropy: Tensor
-    total_loss: Tensor
-    approx_kl: Tensor
-    clip_fraction: Tensor
+
+_all_reduce_object: object = getattr(dist_functional, "all_reduce")
+_all_reduce_tensor = cast(_AllReduceTensor, _all_reduce_object)
 
 
 class PPOTrainer:
@@ -54,15 +76,37 @@ class PPOTrainer:
         self,
         *,
         model: TractorPolicyModel,
-        model_config: ModelConfig,
         train_config: TrainConfig,
         device: torch.device,
+        profile_mode: PPOProfileMode,
+        update_partition: PPOUpdatePartition | None = None,
     ) -> None:
         self.model = model
-        self.model_config = model_config
         self.train_config = train_config
         self.device = device
-        self.optimizer = AdamWState(
+        self.profile_mode: PPOProfileMode = profile_mode
+        self.update_partition = (
+            single_update_partition()
+            if update_partition is None
+            else update_partition
+        )
+        self.loss_module = PPOLossModule(
+            model=model,
+            train_config=train_config,
+            device=device,
+        )
+        forwarder_result = build_ppo_loss_forwarder(
+            module=self.loss_module,
+            partition=self.update_partition,
+            device=device,
+        )
+        if isinstance(forwarder_result, _result.Rejected):
+            self._loss_forwarder: PPOLossForwarder | None = None
+            self._loss_forwarder_rejection = forwarder_result
+        else:
+            self._loss_forwarder = forwarder_result.value
+            self._loss_forwarder_rejection = None
+        self.optimizer = PPOOptimizer(
             parameters=tuple(self.model.parameters()),
             learning_rate=train_config.learning_rate,
             beta1=train_config.adam_beta1,
@@ -72,58 +116,180 @@ class PPOTrainer:
 
     def update(
         self,
-        batch: RolloutBatch,
+        update_input: PPOUpdateInput,
     ) -> _result.Ok[PPOUpdateStats] | _result.Rejected:
-        """Run PPO epochs over one rewarded rollout."""
-        assert not batch.is_empty()
-        self.model.train()
+        """Run one synchronized PPO update."""
+        if (
+            update_input.local_rollout is None
+            and self.update_partition.world_size == 1
+        ):
+            return _result.Rejected(
+                reason="single-rank PPO update requires local rollout"
+            )
+        if self._loss_forwarder_rejection is not None:
+            return self._loss_forwarder_rejection
+        loss_forwarder = self._loss_forwarder
+        assert loss_forwarder is not None
+        loss_forwarder.train()
         profile = PPOProfileAccumulator.start(
             device=self.device,
-            mode=self.train_config.ppo_profile,
+            mode=self.profile_mode,
         )
-        samples = normalize_advantages(
-            rollout_samples(
-                batch,
+        global_sample_count_tensor_result = synchronized_count_sum(
+            value=update_input.local_transition_count(),
+            partition=self.update_partition,
+            device=self.device,
+        )
+        if isinstance(
+            global_sample_count_tensor_result, _result.Rejected
+        ):
+            return global_sample_count_tensor_result
+        global_sample_count_result = positive_count_value(
+            count=global_sample_count_tensor_result.value
+        )
+        if isinstance(global_sample_count_result, _result.Rejected):
+            return global_sample_count_result
+        rollout = update_input.local_rollout
+        prepared_batch: PreparedPPOBatch | None = None
+        raw_targets: DevicePPOTargets | None = None
+        if rollout is not None:
+            target_result = device_ppo_targets(
+                rollout=rollout,
                 gae_lambda=self.train_config.gae_lambda,
             )
-        )
-        losses: list[MinibatchLoss] = []
-        parameters = tuple(self.model.parameters())
-        for _ in range(self.train_config.ppo_epochs):
-            for minibatch in minibatches(
-                shuffled_samples(samples),
+            if isinstance(target_result, _result.Rejected):
+                return target_result
+            raw_targets = target_result.value
+            partition_check = _validate_update_partition(
+                sample_count=rollout.transition_count(),
                 minibatch_size=self.train_config.minibatch_size,
+            )
+            if isinstance(partition_check, _result.Rejected):
+                return partition_check
+        normalized_advantages_result = _sync_normalized_advantages(
+            advantages=(
+                raw_targets.advantages
+                if raw_targets is not None
+                else torch.empty(
+                    (0,), dtype=torch.float32, device=self.device
+                )
+            ),
+            partition=self.update_partition,
+            device=self.device,
+        )
+        if isinstance(normalized_advantages_result, _result.Rejected):
+            return normalized_advantages_result
+        if raw_targets is not None and rollout is not None:
+            targets = DevicePPOTargets(
+                old_log_probabilities=raw_targets.old_log_probabilities,
+                old_values=raw_targets.old_values,
+                advantages=normalized_advantages_result.value,
+                return_values=raw_targets.return_values,
+            )
+            observation_batch_start = profile.mark()
+            prepared_batch = prepare_ppo_batch(
+                rollout=rollout,
+                targets=targets,
+            )
+            profile.record_elapsed(
+                "observation_batch_seconds",
+                observation_batch_start,
+            )
+        partition_check = _validate_update_partition(
+            sample_count=global_sample_count_result.value,
+            minibatch_size=self.train_config.minibatch_size,
+        )
+        if isinstance(partition_check, _result.Rejected):
+            return partition_check
+        stat_sums = torch.zeros(
+            (6,), dtype=torch.float32, device=self.device
+        )
+        stat_count = torch.zeros(
+            (), dtype=torch.float32, device=self.device
+        )
+        parameters = tuple(self.model.parameters())
+        for epoch in range(self.train_config.ppo_epochs):
+            local_minibatches = _local_epoch_minibatches(
+                prepared_batch=prepared_batch,
+                train_config=self.train_config,
+                policy_version=update_input.policy_version,
+                epoch=epoch,
+                device=self.device,
+            )
+            minibatch_step_count_result = synchronized_count_max(
+                value=len(local_minibatches),
+                partition=self.update_partition,
+                device=self.device,
+            )
+            if isinstance(
+                minibatch_step_count_result, _result.Rejected
             ):
+                return minibatch_step_count_result
+            for step_index in range(minibatch_step_count_result.value):
+                local_indices = _local_minibatch_or_empty(
+                    local_minibatches,
+                    step_index=step_index,
+                    device=self.device,
+                )
+                local_count = int(local_indices.shape[0])
+                global_count_result = synchronized_count_sum(
+                    value=local_count,
+                    partition=self.update_partition,
+                    device=self.device,
+                )
+                if isinstance(global_count_result, _result.Rejected):
+                    return global_count_result
+                tensorized_minibatch = _tensorized_minibatch_for_step(
+                    prepared_batch=prepared_batch,
+                    indices=local_indices,
+                    global_count=global_count_result.value,
+                    device=self.device,
+                )
                 loss_start = profile.mark()
-                loss_result = self._minibatch_loss(
-                    minibatch, profile=profile
+                forward_output = loss_forwarder(
+                    tensorized_minibatch,
+                    profile,
                 )
                 profile.record_elapsed(
                     "minibatch_loss_seconds", loss_start
                 )
-                if isinstance(loss_result, _result.Rejected):
+                if forward_output.rejection_reason is not None:
                     self.model.zero_grad(set_to_none=True)
-                    return loss_result
-                loss = loss_result.value
+                    return _result.Rejected(
+                        reason=forward_output.rejection_reason
+                    )
+                loss = forward_output.loss
+                assert loss is not None
                 self.model.zero_grad(set_to_none=True)
                 loss_check = _validate_minibatch_loss(loss)
                 if isinstance(loss_check, _result.Rejected):
                     self.model.zero_grad(set_to_none=True)
                     return loss_check
                 backward_start = profile.mark()
-                torch.autograd.backward(loss.total_loss)
+                torch.autograd.backward(
+                    loss.total_loss
+                    * _ddp_loss_scale(
+                        local_count=local_count,
+                        global_count=global_count_result.value,
+                        world_size=self.update_partition.world_size,
+                    )
+                )
                 profile.record_elapsed(
                     "backward_seconds", backward_start
                 )
-                gradient_check = _validate_gradients(parameters)
+                gradient_check = reject_if_gradients_non_finite(
+                    parameters
+                )
                 if isinstance(gradient_check, _result.Rejected):
                     self.model.zero_grad(set_to_none=True)
                     return gradient_check
-                _clip_grad_norm(
+                clip_grad_norm_on_device(
                     parameters,
                     max_norm=self.train_config.max_grad_norm,
                 )
-                clipped_gradient_check = _validate_gradients(parameters)
+                clipped_gradient_check = reject_if_gradients_non_finite(
+                    parameters
+                )
                 if isinstance(clipped_gradient_check, _result.Rejected):
                     self.model.zero_grad(set_to_none=True)
                     return clipped_gradient_check
@@ -132,8 +298,24 @@ class PPOTrainer:
                 profile.record_elapsed(
                     "optimizer_step_seconds", optimizer_start
                 )
-                losses.append(loss)
-        stats = _mean_stats(losses, profile=profile.finish())
+                if local_count > 0:
+                    stat_sums = stat_sums + _loss_stat_tensor(
+                        loss
+                    ) * float(local_count)
+                    stat_count = stat_count + torch.tensor(
+                        float(local_count),
+                        dtype=torch.float32,
+                        device=self.device,
+                    )
+        stats_result = _finalize_update_stats(
+            stat_sums=stat_sums,
+            stat_count=stat_count,
+            profile=profile.finish(),
+            partition=self.update_partition,
+        )
+        if isinstance(stats_result, _result.Rejected):
+            return stats_result
+        stats = stats_result.value
         if not ppo_update_stats_are_finite(stats):
             return _result.Rejected(
                 reason="PPO update stats must be finite"
@@ -149,159 +331,243 @@ class PPOTrainer:
         """Load AdamW optimizer state from a checkpoint."""
         self.optimizer.load_state_dict(state)
 
-    def _minibatch_loss(
-        self,
-        samples: tuple[RolloutSample, ...],
-        *,
-        profile: PPOProfileAccumulator,
-    ) -> _result.Ok[MinibatchLoss] | _result.Rejected:
-        evaluated_result = evaluate_trace_batch(
-            model=self.model,
-            samples=samples,
-            device=self.device,
-            profile=profile,
-        )
-        if isinstance(evaluated_result, _result.Rejected):
-            return evaluated_result
-        evaluated = evaluated_result.value
-        old_log_probabilities = _float_tensor_vector(
-            tuple(sample.old_log_probability for sample in samples),
-            device=self.device,
-        )
-        old_values = _float_tensor_vector(
-            tuple(sample.old_value_estimate for sample in samples),
-            device=self.device,
-        )
-        advantages = _float_tensor_vector(
-            tuple(sample.advantage for sample in samples),
-            device=self.device,
-        )
-        return_values = _float_tensor_vector(
-            tuple(sample.return_value for sample in samples),
-            device=self.device,
-        )
-        objective = clipped_ppo_objective(
-            old_log_probabilities=old_log_probabilities,
-            new_log_probabilities=evaluated.log_probabilities,
-            advantages=advantages,
-            old_values=old_values,
-            new_values=evaluated.values,
-            return_values=return_values,
-            entropies=evaluated.entropies,
-            config=PPOObjectiveConfig(
-                ppo_clip=self.train_config.ppo_clip,
-                value_clip=self.train_config.value_clip,
-                value_coef=self.train_config.value_coef,
-                entropy_coef=self.train_config.entropy_coef,
-            ),
-        )
-        return _result.Ok(
-            value=MinibatchLoss(
-                policy_loss=objective.policy_loss,
-                value_loss=objective.value_loss,
-                entropy=objective.entropy,
-                total_loss=objective.total_loss,
-                approx_kl=objective.approx_kl,
-                clip_fraction=objective.clip_fraction,
-            )
-        )
 
-
-def _mean_stats(
-    losses: list[MinibatchLoss],
+def _local_epoch_minibatches(
     *,
-    profile: PPOUpdateProfile,
-) -> PPOUpdateStats:
-    assert losses
-    return PPOUpdateStats(
-        policy_loss=_mean_float(
-            tuple(loss.policy_loss for loss in losses)
+    prepared_batch: PreparedPPOBatch | None,
+    train_config: TrainConfig,
+    policy_version: int,
+    epoch: int,
+    device: torch.device,
+) -> tuple[Tensor, ...]:
+    if prepared_batch is None:
+        return ()
+    sample_count = prepared_batch.sample_count
+    shuffled_order = shuffled_indices(
+        key=ShuffleKey(
+            base_seed=train_config.seed,
+            policy_version=policy_version,
+            epoch=epoch,
         ),
-        value_loss=_mean_float(
-            tuple(loss.value_loss for loss in losses)
-        ),
-        entropy=_mean_float(tuple(loss.entropy for loss in losses)),
-        total_loss=_mean_float(
-            tuple(loss.total_loss for loss in losses)
-        ),
-        approx_kl=_mean_float(tuple(loss.approx_kl for loss in losses)),
-        clip_fraction=_mean_float(
-            tuple(loss.clip_fraction for loss in losses)
-        ),
-        profile=profile,
+        length=sample_count,
+    )
+    shuffled_order_tensor = shuffled_index_tensor(
+        indices=shuffled_order,
+        device=device,
+    )
+    return _index_minibatches(
+        shuffled_order_tensor,
+        minibatch_size=train_config.minibatch_size,
     )
 
 
-def _mean_float(values: tuple[Tensor, ...]) -> float:
-    assert values
-    return _float_tensor(torch.stack(list(values)).mean())
+def _tensorized_minibatch_for_step(
+    *,
+    prepared_batch: PreparedPPOBatch | None,
+    indices: Tensor,
+    global_count: Tensor,
+    device: torch.device,
+) -> TensorizedPPOMinibatch:
+    if prepared_batch is None:
+        return empty_ppo_minibatch(
+            device=device,
+            global_count=global_count,
+        )
+    return prepared_ppo_minibatch(
+        batch=prepared_batch,
+        indices=indices,
+        global_count=global_count,
+    )
+
+
+def _validate_update_partition(
+    *,
+    sample_count: int,
+    minibatch_size: int,
+) -> _result.Ok[None] | _result.Rejected:
+    assert sample_count > 0
+    if minibatch_size <= 0:
+        return _result.Rejected(reason="PPO minibatch_size must be > 0")
+    return _result.Ok(value=None)
+
+
+def _index_minibatches(
+    indices: Tensor,
+    *,
+    minibatch_size: int,
+) -> tuple[Tensor, ...]:
+    assert minibatch_size > 0
+    assert indices.ndim == 1
+    result: list[Tensor] = []
+    length = int(indices.shape[0])
+    for start in range(0, length, minibatch_size):
+        result.append(indices[start : start + minibatch_size])
+    return tuple(result)
+
+
+def _local_minibatch_or_empty(
+    minibatches: tuple[Tensor, ...],
+    *,
+    step_index: int,
+    device: torch.device,
+) -> Tensor:
+    assert step_index >= 0
+    if step_index < len(minibatches):
+        return minibatches[step_index]
+    return torch.empty((0,), dtype=torch.long, device=device)
+
+
+def _ddp_loss_scale(
+    *, local_count: int, global_count: Tensor, world_size: int
+) -> Tensor:
+    assert local_count >= 0
+    assert global_count.shape == ()
+    assert world_size > 0
+    numerator = torch.tensor(
+        float(world_size * local_count),
+        dtype=torch.float32,
+        device=global_count.device,
+    )
+    return numerator / global_count.to(dtype=torch.float32)
+
+
+def _sync_normalized_advantages(
+    *,
+    advantages: Tensor,
+    partition: PPOUpdatePartition,
+    device: torch.device,
+) -> _result.Ok[Tensor] | _result.Rejected:
+    assert advantages.ndim == 1
+    if partition.world_size == 1:
+        return _result.Ok(value=_normalize_advantages(advantages))
+    if not dist.is_initialized():
+        return _result.Rejected(
+            reason=(
+                "distributed PPO advantage sync requires process group"
+            )
+        )
+    local_count = torch.tensor(
+        float(int(advantages.shape[0])),
+        dtype=torch.float32,
+        device=device,
+    )
+    advantage_sum = advantages.sum()
+    advantage_square_sum = (advantages * advantages).sum()
+    totals = torch.stack(
+        (
+            advantage_sum,
+            advantage_square_sum,
+            local_count,
+        )
+    )
+    totals = _all_reduce_tensor(totals, dist.ReduceOp.SUM)
+    count = totals[2]
+    mean = totals[0] / count
+    variance = torch.clamp(totals[1] / count - mean * mean, min=0.0)
+    stddev = torch.sqrt(variance)
+    centered = advantages - mean
+    normalized = torch.where(
+        stddev <= 0.000001,
+        centered,
+        centered / (stddev + 0.000001),
+    )
+    return _result.Ok(value=normalized)
+
+
+def _normalize_advantages(advantages: Tensor) -> Tensor:
+    assert advantages.ndim == 1
+    assert int(advantages.shape[0]) > 0
+    mean = advantages.mean()
+    variance = ((advantages - mean) * (advantages - mean)).mean()
+    stddev = torch.sqrt(variance)
+    centered = advantages - mean
+    normalized = centered / (stddev + 0.000001)
+    return torch.where(stddev <= 0.000001, centered, normalized)
+
+
+def _loss_stat_tensor(loss: MinibatchLoss) -> Tensor:
+    return torch.stack(
+        (
+            loss.policy_loss.detach(),
+            loss.value_loss.detach(),
+            loss.entropy.detach(),
+            loss.total_loss.detach(),
+            loss.approx_kl.detach(),
+            loss.clip_fraction.detach(),
+        )
+    )
+
+
+def _finalize_update_stats(
+    *,
+    stat_sums: Tensor,
+    stat_count: Tensor,
+    profile: PPOUpdateProfile,
+    partition: PPOUpdatePartition,
+) -> _result.Ok[PPOUpdateStats] | _result.Rejected:
+    assert stat_sums.shape == (6,)
+    assert stat_count.shape == ()
+    totals = torch.cat((stat_sums, stat_count.reshape(1)))
+    if partition.world_size > 1:
+        if not dist.is_initialized():
+            return _result.Rejected(
+                reason=(
+                    "distributed PPO stats sync requires process group"
+                )
+            )
+        totals = _all_reduce_tensor(totals, dist.ReduceOp.SUM)
+    count = totals[6]
+    count_value = _float_tensor(count)
+    if count_value <= 0.0:
+        return _result.Rejected(
+            reason="PPO update stats require rollout decisions"
+        )
+    means = totals[:6] / count
+    return _result.Ok(
+        value=PPOUpdateStats(
+            policy_loss=_float_tensor(means[0]),
+            value_loss=_float_tensor(means[1]),
+            entropy=_float_tensor(means[2]),
+            total_loss=_float_tensor(means[3]),
+            approx_kl=_float_tensor(means[4]),
+            clip_fraction=_float_tensor(means[5]),
+            profile=profile,
+        )
+    )
 
 
 def _validate_minibatch_loss(
     loss: MinibatchLoss,
 ) -> _result.Ok[None] | _result.Rejected:
-    fields = (
-        ("policy_loss", loss.policy_loss),
-        ("value_loss", loss.value_loss),
-        ("entropy", loss.entropy),
-        ("total_loss", loss.total_loss),
-        ("approx_kl", loss.approx_kl),
-        ("clip_fraction", loss.clip_fraction),
+    return reject_if_non_finite(
+        (
+            NamedTensorCheck(
+                tensor=loss.policy_loss,
+                reason="PPO policy_loss must be finite",
+            ),
+            NamedTensorCheck(
+                tensor=loss.value_loss,
+                reason="PPO value_loss must be finite",
+            ),
+            NamedTensorCheck(
+                tensor=loss.entropy,
+                reason="PPO entropy must be finite",
+            ),
+            NamedTensorCheck(
+                tensor=loss.total_loss,
+                reason="PPO total_loss must be finite",
+            ),
+            NamedTensorCheck(
+                tensor=loss.approx_kl,
+                reason="PPO approx_kl must be finite",
+            ),
+            NamedTensorCheck(
+                tensor=loss.clip_fraction,
+                reason="PPO clip_fraction must be finite",
+            ),
+        )
     )
-    for field_name, value in fields:
-        if not _all_finite(value):
-            return _result.Rejected(
-                reason=f"PPO {field_name} must be finite"
-            )
-    return _result.Ok(value=None)
-
-
-def _validate_gradients(
-    parameters: tuple[Tensor, ...],
-) -> _result.Ok[None] | _result.Rejected:
-    for parameter in parameters:
-        gradient = parameter.grad
-        if gradient is not None and not _all_finite(gradient):
-            return _result.Rejected(
-                reason="PPO gradients must be finite"
-            )
-    return _result.Ok(value=None)
-
-
-def _float_tensor_vector(
-    values: tuple[float, ...], *, device: torch.device
-) -> Tensor:
-    assert values
-    return torch.tensor(values, dtype=torch.float32, device=device)
 
 
 def _float_tensor(value: Tensor) -> float:
     return float(value.detach().cpu().item())
-
-
-def _all_finite(value: Tensor) -> bool:
-    return bool(torch.isfinite(value).all().detach().cpu().item())
-
-
-def _clip_grad_norm(
-    parameters: tuple[Tensor, ...], *, max_norm: float
-) -> None:
-    if max_norm <= 0.0:
-        return
-    gradients = tuple(
-        parameter.grad
-        for parameter in parameters
-        if parameter.grad is not None
-    )
-    if not gradients:
-        return
-    total_squared_norm = 0.0
-    for gradient in gradients:
-        detached = gradient.detach()
-        total_squared_norm += _float_tensor((detached * detached).sum())
-    clip_coef = max_norm / (math.sqrt(total_squared_norm) + 0.000001)
-    if clip_coef >= 1.0:
-        return
-    with torch.no_grad():
-        for gradient in gradients:
-            gradient.mul_(clip_coef)

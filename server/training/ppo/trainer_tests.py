@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pytest
 import torch
 from torch import Tensor
@@ -9,12 +11,6 @@ from torch import Tensor
 from server.player.test_helpers import card, make_snapshot
 from server.result import Ok, Rejected
 from server.rules.card_faces import CardFace, FaceCount
-from server.sm.constants import get_team_index
-from server.training.choice_trace import (
-    SemanticChoiceStep,
-    SemanticChoiceTrace,
-    semantic_choice_step_from_argument,
-)
 from server.training.config import ModelConfig, TrainConfig
 from server.training.legal_actions import (
     LegalActionIndex,
@@ -26,22 +22,39 @@ from server.training.model import (
     TractorPolicyModel,
 )
 from server.training.observation import build_observation
-from server.training.ppo import PPOTrainer, PPOUpdateProfile
+from server.training.policy_sampling import (
+    DecisionHandle,
+    DeviceDecisionReplayRecord,
+)
+from server.training.policy_sampling.replay_arena import (
+    ModelRankReplayArena,
+)
+from server.training.ppo import (
+    PPOTrainer,
+    PPOUpdateInput,
+    PPOUpdateProfile,
+)
+from server.training.ppo.distributed import PPOUpdatePartition
+from server.training.ppo.replay_tensors import (
+    RolloutTensorBatch,
+)
+from server.training.rollout_commit import RolloutCommit
+from server.training.semantic_action_plan import (
+    advance_action_state,
+    compile_legal_action_frame,
+    initial_action_state,
+    legal_token_mask,
+    plan_batch_to_device,
+)
 from server.training.semantic_actions import (
     SemanticArgument,
-    SemanticArgumentPrefix,
     SemanticArgumentTrace,
 )
+from server.training.semantic_actions.codec import semantic_argument_id
 from server.training.tensorize import (
     ArgumentPrefixTensorBatch,
     ObservationTensorBatch,
-    tensorize_observation,
-)
-from server.training.trajectory import (
-    DecisionStep,
-    DecisionTransition,
-    RolloutBatch,
-    TeamTrajectory,
+    tensorize_observations,
 )
 
 
@@ -108,7 +121,6 @@ def test_update_returns_stats_and_adamw_state() -> None:
         max_tokens=64,
     )
     train_config = TrainConfig(
-        device="cpu",
         learning_rate=0.0003,
         ppo_epochs=1,
         minibatch_size=1,
@@ -120,79 +132,17 @@ def test_update_returns_stats_and_adamw_state() -> None:
     ).to(device)
     trainer = PPOTrainer(
         model=model,
-        model_config=model_config,
         train_config=train_config,
         device=device,
+        profile_mode="off",
     )
-    test_card = card("spades", "A", 1)
-    snapshot = make_snapshot(
-        phase="PLAYING",
-        awaiting_action="play",
-        player_hand=[test_card],
-    )
-    observation = build_observation(
-        player_index=0,
-        snapshot=snapshot,
-        history=(),
-    )
-    legal_actions = build_legal_action_index(
-        player_index=0,
-        snapshot=snapshot,
-        query=observation.action_query,
-    )
-    trace = SemanticArgumentTrace(
-        arguments=(
-            SemanticArgument(
-                "select_face_count",
-                FaceCount(CardFace(test_card.suit, test_card.rank), 1),
-            ),
-            SemanticArgument("stop"),
-        )
-    )
-    decoded = legal_actions.decode(trace)
-    assert isinstance(decoded, Ok)
-
-    stats_result = trainer.update(
-        RolloutBatch(
-            trajectories=(
-                TeamTrajectory(
-                    team_index=0,
-                    terminal_reward=1.0,
-                    transitions=(
-                        DecisionTransition(
-                            decision=DecisionStep(
-                                player_index=0,
-                                seq=1,
-                                observation_batch=tensorize_observation(
-                                    observation=observation,
-                                    max_observation_tokens=(
-                                        model_config.max_tokens
-                                    ),
-                                    device=device,
-                                ),
-                                choice_trace=_choice_trace_for(
-                                    legal_actions=legal_actions,
-                                    trace=trace,
-                                ),
-                                action=decoded.value,
-                                log_probability=0.0,
-                                value_estimate=0.0,
-                                entropy=0.0,
-                                choice_count=2,
-                            ),
-                            reward_after_step=0.0,
-                        ),
-                    ),
-                ),
-            ),
-        )
-    )
+    stats_result = trainer.update(_single_card_update_input(count=1))
     assert isinstance(stats_result, Ok)
     stats = stats_result.value
     state = trainer.optimizer_state()
 
     assert stats.total_loss >= 0.0
-    assert state["kind"] == "typed_adamw"
+    assert state["kind"] == "ppo_adamw"
     assert state["step_count"] == 1
 
 
@@ -205,8 +155,6 @@ def test_update_batches_minibatch_model_forwards() -> None:
         max_tokens=64,
     )
     train_config = TrainConfig(
-        device="cpu",
-        ppo_profile="detailed",
         learning_rate=0.0003,
         ppo_epochs=1,
         minibatch_size=4,
@@ -219,32 +167,32 @@ def test_update_batches_minibatch_model_forwards() -> None:
     model.eval()
     trainer = PPOTrainer(
         model=model,
-        model_config=model_config,
         train_config=train_config,
         device=device,
+        profile_mode="detailed",
     )
 
-    update_result = trainer.update(_single_card_rollout_batch(count=4))
+    update_result = trainer.update(_single_card_update_input(count=4))
     assert isinstance(update_result, Ok)
     profile = update_result.value.profile
 
     assert model.encode_batch_sizes == [4]
-    assert model.score_batch_sizes == [4, 4]
-    assert model.score_prefix_widths == [1, 2]
+    assert model.score_batch_sizes == [8]
+    assert model.score_prefix_widths == [2]
     assert profile.update_seconds > 0.0
     assert profile.argument_decode_seconds >= 0.0
     assert 0.0 <= profile.argument_decode_fraction <= 1.0
-    assert profile.argument_prefix_batch_count == 2
+    assert profile.argument_prefix_batch_count == 1
     assert profile.argument_prefix_row_count == 8
-    assert profile.argument_prefix_token_count == 12
+    assert profile.argument_prefix_token_count == 16
     assert profile.argument_prefix_valid_token_count == 12
-    assert profile.argument_prefix_padding_token_count == 0
+    assert profile.argument_prefix_padding_token_count == 4
     assert model.training_modes
     assert all(training is True for training in model.training_modes)
     assert model.training is True
 
 
-def test_update_disables_profile_by_default() -> None:
+def test_update_rejects_ddp_without_process_group() -> None:
     device = torch.device("cpu")
     model_config = ModelConfig(
         d_model=8,
@@ -253,7 +201,6 @@ def test_update_disables_profile_by_default() -> None:
         max_tokens=64,
     )
     train_config = TrainConfig(
-        device="cpu",
         learning_rate=0.0003,
         ppo_epochs=1,
         minibatch_size=4,
@@ -265,12 +212,112 @@ def test_update_disables_profile_by_default() -> None:
     ).to(device)
     trainer = PPOTrainer(
         model=model,
-        model_config=model_config,
         train_config=train_config,
         device=device,
+        profile_mode="off",
+        update_partition=PPOUpdatePartition(rank=0, world_size=2),
     )
 
-    update_result = trainer.update(_single_card_rollout_batch(count=4))
+    result = trainer.update(_single_card_update_input(count=4))
+
+    assert isinstance(result, Rejected)
+    assert "requires initialized process group" in result.reason
+
+
+def test_update_uses_configured_single_rank_partition() -> None:
+    device = torch.device("cpu")
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=64,
+    )
+    train_config = TrainConfig(
+        learning_rate=0.0003,
+        ppo_epochs=1,
+        minibatch_size=4,
+    )
+    model = CountingTractorPolicyModel(
+        d_model=model_config.d_model,
+        layers=model_config.layers,
+        heads=model_config.heads,
+    ).to(device)
+    trainer = PPOTrainer(
+        model=model,
+        train_config=train_config,
+        device=device,
+        profile_mode="detailed",
+        update_partition=PPOUpdatePartition(rank=0, world_size=1),
+    )
+
+    result = trainer.update(_single_card_update_input(count=4))
+
+    assert isinstance(result, Ok)
+    assert model.encode_batch_sizes == [4]
+    assert model.score_batch_sizes == [8]
+
+
+def test_update_rejects_empty_single_rank_input() -> None:
+    device = torch.device("cpu")
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=64,
+    )
+    train_config = TrainConfig(
+        learning_rate=0.0003,
+        ppo_epochs=1,
+        minibatch_size=4,
+    )
+    model = TractorPolicyModel(
+        d_model=model_config.d_model,
+        layers=model_config.layers,
+        heads=model_config.heads,
+    ).to(device)
+    trainer = PPOTrainer(
+        model=model,
+        train_config=train_config,
+        device=device,
+        profile_mode="off",
+    )
+
+    result = trainer.update(
+        PPOUpdateInput(policy_version=0, local_rollout=None)
+    )
+
+    assert isinstance(result, Rejected)
+    assert (
+        result.reason == "single-rank PPO update requires local rollout"
+    )
+
+
+def test_update_disables_profile_by_default() -> None:
+    device = torch.device("cpu")
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=2,
+        max_tokens=64,
+    )
+    train_config = TrainConfig(
+        learning_rate=0.0003,
+        ppo_epochs=1,
+        minibatch_size=4,
+    )
+    model = TractorPolicyModel(
+        d_model=model_config.d_model,
+        layers=model_config.layers,
+        heads=model_config.heads,
+    ).to(device)
+    trainer = PPOTrainer(
+        model=model,
+        train_config=train_config,
+        device=device,
+        profile_mode="off",
+    )
+
+    update_result = trainer.update(_single_card_update_input(count=4))
 
     assert isinstance(update_result, Ok)
     _assert_profile_zero(update_result.value.profile)
@@ -285,8 +332,6 @@ def test_update_basic_profile_records_only_update_seconds() -> None:
         max_tokens=64,
     )
     train_config = TrainConfig(
-        device="cpu",
-        ppo_profile="basic",
         learning_rate=0.0003,
         ppo_epochs=1,
         minibatch_size=4,
@@ -298,12 +343,12 @@ def test_update_basic_profile_records_only_update_seconds() -> None:
     ).to(device)
     trainer = PPOTrainer(
         model=model,
-        model_config=model_config,
         train_config=train_config,
         device=device,
+        profile_mode="basic",
     )
 
-    update_result = trainer.update(_single_card_rollout_batch(count=4))
+    update_result = trainer.update(_single_card_update_input(count=4))
 
     assert isinstance(update_result, Ok)
     profile = update_result.value.profile
@@ -335,7 +380,6 @@ def test_update_rejects_non_finite_loss_before_optimizer_step() -> None:
         max_tokens=64,
     )
     train_config = TrainConfig(
-        device="cpu",
         learning_rate=0.0003,
         ppo_epochs=1,
         minibatch_size=1,
@@ -347,15 +391,15 @@ def test_update_rejects_non_finite_loss_before_optimizer_step() -> None:
     ).to(device)
     trainer = PPOTrainer(
         model=model,
-        model_config=model_config,
         train_config=train_config,
         device=device,
+        profile_mode="off",
     )
     before = tuple(
         parameter.detach().clone() for parameter in model.parameters()
     )
 
-    result = trainer.update(_single_card_rollout_batch(count=1))
+    result = trainer.update(_single_card_update_input(count=1))
 
     assert isinstance(result, Rejected)
     assert "PPO value_loss must be finite" in result.reason
@@ -375,7 +419,6 @@ def test_update_rejects_non_finite_gradients_before_optimizer_step(
         max_tokens=64,
     )
     train_config = TrainConfig(
-        device="cpu",
         learning_rate=0.0003,
         ppo_epochs=1,
         minibatch_size=1,
@@ -387,9 +430,9 @@ def test_update_rejects_non_finite_gradients_before_optimizer_step(
     ).to(device)
     trainer = PPOTrainer(
         model=model,
-        model_config=model_config,
         train_config=train_config,
         device=device,
+        profile_mode="off",
     )
     before = tuple(
         parameter.detach().clone() for parameter in model.parameters()
@@ -403,7 +446,7 @@ def test_update_rejects_non_finite_gradients_before_optimizer_step(
 
     monkeypatch.setattr(torch.autograd, "backward", write_nan_gradients)
 
-    result = trainer.update(_single_card_rollout_batch(count=1))
+    result = trainer.update(_single_card_update_input(count=1))
 
     assert isinstance(result, Rejected)
     assert "PPO gradients must be finite" in result.reason
@@ -412,31 +455,38 @@ def test_update_rejects_non_finite_gradients_before_optimizer_step(
         assert torch.equal(parameter.detach(), before[index])
 
 
-def _single_card_rollout_batch(*, count: int) -> RolloutBatch:
+def _single_card_rollout_batch(*, count: int) -> RolloutTensorBatch:
     assert count > 0
-    transitions = tuple(
-        _single_card_transition(
-            player_index=index % 4,
+    device = torch.device("cpu")
+    store = ModelRankReplayArena(model_rank_index=0, device=device)
+    team0_handles: list[DecisionHandle] = []
+    team1_handles: list[DecisionHandle] = []
+    for index in range(count):
+        player_index = index % 4
+        handle = _store_single_card_decision(
+            store=store,
+            device=device,
+            player_index=player_index,
         )
-        for index in range(count)
+        if player_index in (0, 2):
+            team0_handles.append(handle)
+        else:
+            team1_handles.append(handle)
+    commit = _rollout_commit_from_team_handles(
+        team0_handles=tuple(team0_handles),
+        team1_handles=tuple(team1_handles),
     )
-    team_trajectories: list[TeamTrajectory] = []
-    for team_index in (0, 1):
-        team_transitions = tuple(
-            transition
-            for transition in transitions
-            if get_team_index(transition.decision.player_index)
-            == team_index
-        )
-        if team_transitions:
-            team_trajectories.append(
-                TeamTrajectory(
-                    team_index=team_index,
-                    terminal_reward=1.0 if team_index == 0 else -1.0,
-                    transitions=team_transitions,
-                )
-            )
-    return RolloutBatch(trajectories=tuple(team_trajectories))
+    rollout_result = store.build_rollout(commit=commit)
+    assert isinstance(rollout_result, Ok)
+    return rollout_result.value
+
+
+def _single_card_update_input(*, count: int) -> PPOUpdateInput:
+    rollout = _single_card_rollout_batch(count=count)
+    return PPOUpdateInput(
+        policy_version=rollout.policy_version,
+        local_rollout=rollout,
+    )
 
 
 def _assert_profile_zero(profile: PPOUpdateProfile) -> None:
@@ -459,9 +509,12 @@ def _assert_profile_zero(profile: PPOUpdateProfile) -> None:
     assert profile.argument_prefix_padding_token_count == 0
 
 
-def _single_card_transition(
+def _store_single_card_decision(
+    *,
+    store: ModelRankReplayArena,
+    device: torch.device,
     player_index: int,
-) -> DecisionTransition:
+) -> DecisionHandle:
     test_card = card("spades", "A", 1)
     snapshot = make_snapshot(
         phase="PLAYING",
@@ -487,49 +540,94 @@ def _single_card_transition(
             SemanticArgument("stop"),
         )
     )
-    decoded = legal_actions.decode(trace)
-    assert isinstance(decoded, Ok)
-    return DecisionTransition(
-        decision=DecisionStep(
-            player_index=player_index,
-            seq=1,
-            observation_batch=tensorize_observation(
-                observation=observation,
+    replay_trace = _replay_trace_for(
+        legal_actions=legal_actions, trace=trace, device=device
+    )
+    return store.store(
+        record=DeviceDecisionReplayRecord(
+            policy_version=0,
+            observation_batch=tensorize_observations(
+                observations=(observation,),
                 max_observation_tokens=64,
-                device=torch.device("cpu"),
+                device=device,
             ),
-            choice_trace=_choice_trace_for(
-                legal_actions=legal_actions,
-                trace=trace,
+            selected_token_ids=replay_trace.selected_token_ids,
+            legal_token_masks=replay_trace.legal_token_masks,
+            old_log_probability=torch.zeros(
+                (), dtype=torch.float32, device=device
             ),
-            action=decoded.value,
-            log_probability=0.0,
-            value_estimate=0.0,
-            entropy=0.0,
-            choice_count=2,
-        ),
-        reward_after_step=0.0,
+            old_value=torch.zeros(
+                (), dtype=torch.float32, device=device
+            ),
+        )
     )
 
 
-def _choice_trace_for(
+def _rollout_commit_from_team_handles(
+    *,
+    team0_handles: tuple[DecisionHandle, ...],
+    team1_handles: tuple[DecisionHandle, ...],
+) -> RolloutCommit:
+    decision_handles: list[DecisionHandle] = []
+    terminal_rewards: list[float] = []
+    trajectory_team_indices: list[int] = []
+    trajectory_offsets: list[int] = [0]
+    if team0_handles:
+        decision_handles.extend(team0_handles)
+        terminal_rewards.append(1.0)
+        trajectory_team_indices.append(0)
+        trajectory_offsets.append(len(decision_handles))
+    if team1_handles:
+        decision_handles.extend(team1_handles)
+        terminal_rewards.append(-1.0)
+        trajectory_team_indices.append(1)
+        trajectory_offsets.append(len(decision_handles))
+    return RolloutCommit(
+        policy_version=0,
+        first_episode_id=0,
+        episode_count=1,
+        decision_handles=tuple(decision_handles),
+        reward_after_step=tuple(0.0 for _ in decision_handles),
+        terminal_rewards=tuple(terminal_rewards),
+        trajectory_team_indices=tuple(trajectory_team_indices),
+        trajectory_offsets=tuple(trajectory_offsets),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _ReplayTrace:
+    selected_token_ids: Tensor
+    legal_token_masks: Tensor
+
+
+def _replay_trace_for(
     *,
     legal_actions: LegalActionIndex,
     trace: SemanticArgumentTrace,
-) -> SemanticChoiceTrace:
-    prefix = SemanticArgumentPrefix(arguments=())
-    steps: list[SemanticChoiceStep] = []
+    device: torch.device,
+) -> _ReplayTrace:
+    batch = plan_batch_to_device(
+        (compile_legal_action_frame(legal_actions),), device=device
+    )
+    state = initial_action_state(batch)
+    legal_masks: list[Tensor] = []
+    selected_token_ids: list[int] = []
     for argument in trace.arguments:
-        allowed = legal_actions.allowed_next(prefix)
-        steps.append(
-            semantic_choice_step_from_argument(
-                allowed=allowed,
-                selected_argument=argument,
-            )
+        mask = legal_token_mask(batch=batch, state=state)
+        token_id = semantic_argument_id(argument)
+        legal_masks.append(mask[0])
+        selected_token_ids.append(token_id)
+        state = advance_action_state(
+            batch=batch,
+            state=state,
+            selected_token_ids=torch.tensor(
+                (token_id,), dtype=torch.long, device=device
+            ),
+            legal_mask=mask,
         )
-        if argument.kind in ("pass", "stop"):
-            continue
-        prefix = SemanticArgumentPrefix(
-            arguments=(*prefix.arguments, argument)
-        )
-    return SemanticChoiceTrace(steps=tuple(steps))
+    return _ReplayTrace(
+        selected_token_ids=torch.tensor(
+            tuple(selected_token_ids), dtype=torch.long, device=device
+        ),
+        legal_token_masks=torch.stack(legal_masks),
+    )

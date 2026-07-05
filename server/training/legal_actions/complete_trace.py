@@ -9,11 +9,12 @@ from typing import Literal
 from server.result import Ok, Rejected
 from server.rules.card_faces import FaceCount, canonical_face_counts
 from server.rules.cards import Card
-from server.training.legal_actions.contract import LegalActionIndex
+from server.training.legal_actions.contract import (
+    LegalActionIndex,
+)
 from server.training.semantic_actions.arguments import (
     InvalidSemanticActionRejected,
     SemanticArgument,
-    SemanticArgumentPrefix,
     SemanticArgumentTrace,
 )
 from server.training.semantic_actions.query import ActionQuery
@@ -34,21 +35,10 @@ class CompleteTraceLegalActionIndex(LegalActionIndex):
     def query(self) -> ActionQuery:
         return self._query
 
-    def allowed_next(
-        self, prefix: SemanticArgumentPrefix
-    ) -> tuple[SemanticArgument, ...]:
-        result: list[SemanticArgument] = []
-        for action in self._actions:
-            trace_args = action.semantic_trace.arguments
-            prefix_args = prefix.arguments
-            if len(prefix_args) >= len(trace_args):
-                continue
-            if trace_args[: len(prefix_args)] != prefix_args:
-                continue
-            argument = trace_args[len(prefix_args)]
-            if argument not in result:
-                result.append(argument)
-        return tuple(result)
+    @property
+    def actions(self) -> tuple[GeneratedAction, ...]:
+        """Return the closed complete action set."""
+        return self._actions
 
     def decode(
         self, trace: SemanticArgumentTrace

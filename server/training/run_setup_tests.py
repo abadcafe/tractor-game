@@ -8,11 +8,18 @@ import pytest
 import torch
 
 from server.result import Ok, Rejected
+from server.training import run_setup
 from server.training.config import ModelConfig, TrainConfig
 from server.training.metrics import read_metrics
 from server.training.run_setup import (
     initialize_training_run,
     prepare_training_run,
+)
+from server.training.runtime import (
+    CpuAffinityStatus,
+    CpuSet,
+    ExecutionConfig,
+    ModelRankPlacement,
 )
 from server.training.torch_checkpoints import (
     read_torch_checkpoint_metadata,
@@ -39,7 +46,8 @@ def test_initialize_training_run_writes_torch_checkpoint_and_metrics(
         run_dir=tmp_path,
         run_id="run-setup-test",
         model_config=ModelConfig(d_model=128),
-        train_config=TrainConfig(device="cpu"),
+        train_config=TrainConfig(),
+        execution_config=ExecutionConfig(),
     )
 
     assert isinstance(prepared, Ok)
@@ -55,7 +63,7 @@ def test_initialize_training_run_writes_torch_checkpoint_and_metrics(
     )
     assert isinstance(metadata, Ok)
     assert metadata.value.model_config == ModelConfig(d_model=128)
-    assert metadata.value.train_config == TrainConfig(device="cpu")
+    assert metadata.value.train_config == TrainConfig()
     assert metadata.value.total_rounds == 0
     assert metadata.value.total_updates == 0
     metrics = read_metrics(tmp_path)
@@ -75,11 +83,16 @@ def test_initialize_training_run_rejects_unavailable_cuda(
         run_dir=tmp_path,
         run_id="run-setup-test",
         model_config=ModelConfig(d_model=128),
-        train_config=TrainConfig(device="cuda"),
+        train_config=TrainConfig(),
+        execution_config=ExecutionConfig(
+            model_ranks=ModelRankPlacement(
+                kind="cuda", devices=("cuda:0",)
+            )
+        ),
     )
 
     assert isinstance(prepared, Rejected)
-    assert "--device cuda is unavailable" in prepared.reason
+    assert "--model-ranks cuda is unavailable" in prepared.reason
     assert read_metrics(tmp_path) == ()
     assert not (tmp_path / "checkpoints").exists()
 
@@ -113,7 +126,8 @@ def test_initialize_training_run_rejects_dashboard_write_failure(
         run_dir=tmp_path,
         run_id="run-setup-test",
         model_config=ModelConfig(d_model=128),
-        train_config=TrainConfig(device="cpu"),
+        train_config=TrainConfig(),
+        execution_config=ExecutionConfig(),
     )
 
     assert isinstance(result, Rejected)
@@ -130,7 +144,8 @@ def test_initialize_training_run_force_cuda_failure_keeps_old_run(
         run_dir=tmp_path,
         run_id="first-run",
         model_config=ModelConfig(d_model=128),
-        train_config=TrainConfig(device="cpu", seed=1),
+        train_config=TrainConfig(seed=1),
+        execution_config=ExecutionConfig(),
     )
     assert isinstance(first, Ok)
     metrics_before = read_metrics(tmp_path)
@@ -143,20 +158,103 @@ def test_initialize_training_run_force_cuda_failure_keeps_old_run(
         run_dir=tmp_path,
         run_id="forced-run",
         model_config=ModelConfig(d_model=64),
-        train_config=TrainConfig(device="cuda", seed=2),
+        train_config=TrainConfig(seed=2),
+        execution_config=ExecutionConfig(
+            model_ranks=ModelRankPlacement(
+                kind="cuda", devices=("cuda:0",)
+            )
+        ),
         force_new_run=True,
     )
 
     assert isinstance(second, Rejected)
-    assert "--device cuda is unavailable" in second.reason
+    assert "--model-ranks cuda is unavailable" in second.reason
     assert checkpoint_path.exists()
     assert read_metrics(tmp_path) == metrics_before
     metadata = read_torch_checkpoint_metadata(checkpoint_path)
     assert isinstance(metadata, Ok)
     assert metadata.value.model_config == ModelConfig(d_model=128)
-    assert metadata.value.train_config == TrainConfig(
-        device="cpu", seed=1
+    assert metadata.value.train_config == TrainConfig(seed=1)
+
+
+def test_initialize_training_run_force_bad_cuda_index_keeps_old_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = initialize_training_run(
+        run_dir=tmp_path,
+        run_id="first-run",
+        model_config=ModelConfig(d_model=128),
+        train_config=TrainConfig(seed=1),
+        execution_config=ExecutionConfig(),
     )
+    assert isinstance(first, Ok)
+    checkpoint_path = first.value.checkpoint_path
+    metrics_before = read_metrics(tmp_path)
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
+
+    second = initialize_training_run(
+        run_dir=tmp_path,
+        run_id="forced-run",
+        model_config=ModelConfig(d_model=64),
+        train_config=TrainConfig(seed=2),
+        execution_config=ExecutionConfig(
+            model_ranks=ModelRankPlacement(
+                kind="cuda", devices=("cuda:9",)
+            )
+        ),
+        force_new_run=True,
+    )
+
+    assert isinstance(second, Rejected)
+    assert "CUDA model rank is unavailable: cuda:9" in second.reason
+    assert checkpoint_path.exists()
+    assert read_metrics(tmp_path) == metrics_before
+
+
+def test_initialize_training_run_force_bad_worker_cpu_keeps_old_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = initialize_training_run(
+        run_dir=tmp_path,
+        run_id="first-run",
+        model_config=ModelConfig(d_model=128),
+        train_config=TrainConfig(seed=1),
+        execution_config=ExecutionConfig(),
+    )
+    assert isinstance(first, Ok)
+    checkpoint_path = first.value.checkpoint_path
+    metrics_before = read_metrics(tmp_path)
+
+    def reject_worker_cpu(
+        *, label: str, cpus: CpuSet
+    ) -> Ok[CpuAffinityStatus] | Rejected:
+        assert label == "worker-0"
+        assert cpus == (999,)
+        return Rejected(
+            reason="CPU affinity preflight failed for worker-0: (999,)"
+        )
+
+    monkeypatch.setattr(
+        run_setup, "preflight_cpu_affinity", reject_worker_cpu
+    )
+
+    second = initialize_training_run(
+        run_dir=tmp_path,
+        run_id="forced-run",
+        model_config=ModelConfig(d_model=64),
+        train_config=TrainConfig(seed=2),
+        execution_config=ExecutionConfig(worker_cpus=(999,)),
+        force_new_run=True,
+    )
+
+    assert isinstance(second, Rejected)
+    assert "CPU affinity preflight failed" in second.reason
+    assert checkpoint_path.exists()
+    assert read_metrics(tmp_path) == metrics_before
 
 
 def test_initialize_training_run_force_cleanup_failure_keeps_rejected(
@@ -167,7 +265,8 @@ def test_initialize_training_run_force_cleanup_failure_keeps_rejected(
         run_dir=tmp_path,
         run_id="first-run",
         model_config=ModelConfig(d_model=128),
-        train_config=TrainConfig(device="cpu", seed=1),
+        train_config=TrainConfig(seed=1),
+        execution_config=ExecutionConfig(),
     )
     assert isinstance(first, Ok)
     original_unlink = Path.unlink
@@ -186,7 +285,8 @@ def test_initialize_training_run_force_cleanup_failure_keeps_rejected(
         run_dir=tmp_path,
         run_id="forced-run",
         model_config=ModelConfig(d_model=64),
-        train_config=TrainConfig(device="cpu", seed=2),
+        train_config=TrainConfig(seed=2),
+        execution_config=ExecutionConfig(),
         force_new_run=True,
     )
 
@@ -205,7 +305,8 @@ def test_initialize_training_run_rejects_existing_training_artifacts(
         run_dir=tmp_path,
         run_id="first-run",
         model_config=ModelConfig(d_model=128),
-        train_config=TrainConfig(device="cpu", seed=1),
+        train_config=TrainConfig(seed=1),
+        execution_config=ExecutionConfig(),
     )
     assert isinstance(first, Ok)
 
@@ -213,7 +314,8 @@ def test_initialize_training_run_rejects_existing_training_artifacts(
         run_dir=tmp_path,
         run_id="second-run",
         model_config=ModelConfig(d_model=64),
-        train_config=TrainConfig(device="cpu", seed=2),
+        train_config=TrainConfig(seed=2),
+        execution_config=ExecutionConfig(),
     )
 
     assert isinstance(second, Rejected)
@@ -223,9 +325,7 @@ def test_initialize_training_run_rejects_existing_training_artifacts(
     )
     assert isinstance(metadata, Ok)
     assert metadata.value.model_config == ModelConfig(d_model=128)
-    assert metadata.value.train_config == TrainConfig(
-        device="cpu", seed=1
-    )
+    assert metadata.value.train_config == TrainConfig(seed=1)
     metrics = read_metrics(tmp_path)
     assert len(metrics) == 1
     assert metrics[0].run_id == "first-run"
@@ -238,7 +338,8 @@ def test_initialize_training_run_force_new_run_replaces_artifacts(
         run_dir=tmp_path,
         run_id="first-run",
         model_config=ModelConfig(d_model=128),
-        train_config=TrainConfig(device="cpu", seed=1),
+        train_config=TrainConfig(seed=1),
+        execution_config=ExecutionConfig(),
     )
     assert isinstance(first, Ok)
 
@@ -246,7 +347,8 @@ def test_initialize_training_run_force_new_run_replaces_artifacts(
         run_dir=tmp_path,
         run_id="forced-run",
         model_config=ModelConfig(d_model=64),
-        train_config=TrainConfig(device="cpu", seed=2),
+        train_config=TrainConfig(seed=2),
+        execution_config=ExecutionConfig(),
         force_new_run=True,
     )
 
@@ -256,9 +358,7 @@ def test_initialize_training_run_force_new_run_replaces_artifacts(
     )
     assert isinstance(metadata, Ok)
     assert metadata.value.model_config == ModelConfig(d_model=64)
-    assert metadata.value.train_config == TrainConfig(
-        device="cpu", seed=2
-    )
+    assert metadata.value.train_config == TrainConfig(seed=2)
     metrics = read_metrics(tmp_path)
     assert len(metrics) == 1
     assert metrics[0].run_id == "forced-run"

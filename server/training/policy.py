@@ -2,46 +2,42 @@
 
 from __future__ import annotations
 
-import math
-import random
 from dataclasses import dataclass
 from typing import Protocol
 
 import torch
 
 from server.result import Ok, Rejected
-from server.training.choice_trace import (
-    SemanticChoiceStep,
-    SemanticChoiceTrace,
-    semantic_choice_step_from_offset,
-)
-from server.training.config import ModelConfig
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
-from server.training.semantic_actions.arguments import (
-    SemanticArgument,
-    SemanticArgumentPrefix,
-    SemanticArgumentTrace,
+from server.training.policy_sampling.records import DecisionHandle
+from server.training.sampling import (
+    PolicyDecisionKey,
+    uniform_choice_offset,
+)
+from server.training.semantic_action_plan import (
+    action_trace_ids,
+    advance_action_state,
+    compile_legal_action_frame,
+    initial_action_state,
+    legal_token_mask,
+    plan_batch_to_device,
+    semantic_trace_from_token_ids,
 )
 from server.training.semantic_actions.codec import SEMANTIC_CODEC
 from server.training.semantic_actions.values import GeneratedAction
-from server.training.tensorize import (
-    ObservationTensorBatch,
-    tensorize_observation,
-)
 
 
 @dataclass(frozen=True, slots=True)
 class PolicyDecision:
-    """Policy output plus trace values for one generated action."""
+    """Policy output plus a replay handle for one generated action."""
 
     action: GeneratedAction
-    observation_batch: ObservationTensorBatch
-    choice_trace: SemanticChoiceTrace
-    log_probability: float
-    value_estimate: float
-    entropy: float
+    decision_handle: DecisionHandle
     choice_count: int
+
+    def __post_init__(self) -> None:
+        assert self.choice_count > 0
 
 
 class TrainingPolicy(Protocol):
@@ -51,77 +47,66 @@ class TrainingPolicy(Protocol):
         self,
         observation: Observation,
         legal_actions: LegalActionIndex,
+        decision_key: PolicyDecisionKey,
     ) -> Ok[PolicyDecision] | Rejected: ...
 
 
 class RandomTrainingPolicy:
     """Verified random semantic policy for smoke runs."""
 
-    def __init__(
-        self,
-        *,
-        model_config: ModelConfig,
-        device: torch.device,
-        seed: int = 0,
-    ) -> None:
-        self._model_config = model_config
-        self._device = device
-        self._rng = random.Random(seed)
-
     def decide(
         self,
         observation: Observation,
         legal_actions: LegalActionIndex,
+        decision_key: PolicyDecisionKey,
     ) -> Ok[PolicyDecision] | Rejected:
-        observation_batch = tensorize_observation(
-            observation=observation,
-            max_observation_tokens=self._model_config.max_tokens,
-            device=self._device,
+        device = torch.device("cpu")
+        batch = plan_batch_to_device(
+            (compile_legal_action_frame(legal_actions),), device=device
         )
-        prefix = SemanticArgumentPrefix(arguments=())
-        arguments: list[SemanticArgument] = []
-        choice_steps: list[SemanticChoiceStep] = []
-        log_probability = 0.0
-        entropy = 0.0
-        choice_count = 0
+        state = initial_action_state(batch)
         for _ in range(SEMANTIC_CODEC.max_argument_tokens):
-            allowed = legal_actions.allowed_next(prefix)
-            if not allowed:
+            if bool(state.done.detach().cpu().item()):
                 break
-            choice_count += len(allowed)
-            selected_argument_offset = self._rng.randrange(len(allowed))
-            argument = allowed[selected_argument_offset]
-            choice_steps.append(
-                semantic_choice_step_from_offset(
-                    allowed=allowed,
-                    selected_argument_offset=selected_argument_offset,
-                )
+            mask = legal_token_mask(batch=batch, state=state)
+            legal_ids = torch.nonzero(mask[0], as_tuple=False).squeeze(
+                1
             )
-            probability = 1.0 / len(allowed)
-            log_probability += math.log(probability)
-            entropy += math.log(len(allowed))
-            arguments.append(argument)
-            if argument.kind in ("pass", "stop"):
-                break
-            assert argument.kind == "select_face_count"
-            prefix = SemanticArgumentPrefix(
-                arguments=(*prefix.arguments, argument)
+            choice_count = int(legal_ids.shape[0])
+            if choice_count <= 0:
+                return Rejected(
+                    reason="random policy has no legal token"
+                )
+            selected_argument_offset = uniform_choice_offset(
+                key=decision_key,
+                argument_index=int(state.step_counts[0].item()),
+                choice_count=choice_count,
+            )
+            selected_token = legal_ids[selected_argument_offset].view(1)
+            state = advance_action_state(
+                batch=batch,
+                state=state,
+                selected_token_ids=selected_token,
+                legal_mask=mask,
             )
         else:
             assert False
-        trace = SemanticArgumentTrace(arguments=tuple(arguments))
+        trace_ids = action_trace_ids(state)[0]
+        trace_result = semantic_trace_from_token_ids(trace_ids)
+        if isinstance(trace_result, Rejected):
+            return trace_result
+        trace = trace_result.value
         decoded = legal_actions.decode(trace)
         assert isinstance(decoded, Ok)
         return Ok(
             value=PolicyDecision(
                 action=decoded.value,
-                observation_batch=observation_batch,
-                choice_trace=SemanticChoiceTrace(
-                    steps=tuple(choice_steps)
+                decision_handle=DecisionHandle(
+                    model_rank_index=0,
+                    policy_version=decision_key.policy_version,
+                    slot_index=decision_key.decision_index,
+                    slot_generation=0,
                 ),
-                log_probability=log_probability,
-                value_estimate=0.0,
-                entropy=entropy,
-                choice_count=choice_count,
+                choice_count=int(state.choice_counts[0].item()),
             )
         )

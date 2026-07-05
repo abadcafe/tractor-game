@@ -17,6 +17,12 @@ from server.training import training_state
 from server.training.config import ModelConfig, TrainConfig
 from server.training.model import TractorPolicyModel
 from server.training.ppo import PPOTrainer
+from server.training.runtime import (
+    ExecutionConfig,
+    ExecutionTimeouts,
+    ModelRankKind,
+    ModelRankPlacement,
+)
 from server.training.torch_checkpoints import (
     TorchCheckpointMetadata,
 )
@@ -35,14 +41,37 @@ from server.training.torch_checkpoints import (
 )
 from server.training.torch_checkpoints.schema import CheckpointManifest
 from server.training.train import (
+    ExecutionConfigOverrides,
     TrainConfigOverrides,
+    resolve_execution_config,
     resolve_model_config,
     resolve_train_config,
 )
 from server.training.training_state import (
     LoadedTrainingState,
-    create_training_state,
 )
+from server.training.training_state import (
+    create_training_state as _create_training_state,
+)
+
+
+def create_training_state(
+    *,
+    model_config: ModelConfig,
+    train_config: TrainConfig,
+    execution_config: ExecutionConfig | None = None,
+    device: torch.device,
+) -> LoadedTrainingState:
+    """Create state through the execution-config public boundary."""
+    resolved_execution_config = _execution_config_for_device(
+        device=device,
+        execution_config=execution_config,
+    )
+    return _create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        execution_config=resolved_execution_config,
+    )
 
 
 def test_torch_checkpoint_metadata_drives_resume_model_config(
@@ -55,13 +84,12 @@ def test_torch_checkpoint_metadata_drives_resume_model_config(
         max_tokens=192,
     )
     train_config = TrainConfig(
-        device="cpu",
         learning_rate=0.0003,
-        max_round_seconds=30.0,
     )
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     path = tmp_path / "latest.json"
@@ -100,10 +128,11 @@ def test_read_metadata_uses_manifest_without_torch_load(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     path = tmp_path / "latest.json"
@@ -141,10 +170,11 @@ def test_torch_checkpoint_save_rejects_payload_write_failure(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
 
@@ -179,10 +209,11 @@ def test_torch_checkpoint_save_rejects_checkpoint_dir_symlink(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     target_dir = tmp_path / "external-checkpoints"
@@ -216,10 +247,11 @@ def test_torch_checkpoint_save_rejects_objects_dir_symlink(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     target_dir = tmp_path / "external-objects"
@@ -254,10 +286,11 @@ def test_torch_checkpoint_save_rolls_back_manifest_write_failure(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     latest_path = tmp_path / "latest.json"
@@ -326,10 +359,11 @@ def test_torch_checkpoint_save_reports_post_commit_prune_unlink_failure(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     latest_path = tmp_path / "latest.json"
@@ -388,10 +422,11 @@ def test_torch_checkpoint_save_rejects_prune_symlink_before_commit(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     latest_path = tmp_path / "latest.json"
@@ -438,10 +473,11 @@ def test_torch_checkpoint_save_rejects_retained_symlink_before_commit(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     latest_path = tmp_path / "latest.json"
@@ -492,10 +528,11 @@ def test_torch_checkpoint_save_rejects_retained_file_before_commit(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     latest_path = tmp_path / "latest.json"
@@ -547,10 +584,11 @@ def test_torch_checkpoint_save_reports_post_commit_prune_rmtree_failure(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     latest_path = tmp_path / "latest.json"
@@ -605,10 +643,11 @@ def test_torch_checkpoint_state_payload_is_weights_only_safe(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     path = tmp_path / "latest.json"
@@ -630,7 +669,7 @@ def test_torch_checkpoint_state_payload_is_weights_only_safe(
     )
 
     assert isinstance(loaded, dict)
-    assert loaded["schema_version"] == 17
+    assert loaded["schema_version"] == 18
     assert isinstance(loaded["checkpoint_id"], str)
     assert "model_config" not in loaded
     assert "train_config" not in loaded
@@ -647,10 +686,11 @@ def test_torch_checkpoint_alias_manifests_share_one_state_object(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     latest_path = tmp_path / "latest.json"
@@ -686,10 +726,11 @@ def test_torch_checkpoint_save_rejects_unmanaged_manifest_path(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     alias_path = tmp_path / "alias.json"
@@ -720,10 +761,11 @@ def test_torch_checkpoint_save_rejects_zero_update_manifest_path(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     update_path = tmp_path / "update-0.json"
@@ -754,10 +796,11 @@ def test_torch_checkpoint_save_rejects_update_number_mismatch(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     latest_path = tmp_path / "latest.json"
@@ -792,10 +835,11 @@ def test_torch_checkpoint_save_removes_overwritten_latest_object(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     latest_path = tmp_path / "latest.json"
@@ -839,10 +883,11 @@ def test_torch_checkpoint_save_keeps_latest_and_recent_updates(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     latest_path = tmp_path / "latest.json"
@@ -882,10 +927,11 @@ def test_torch_checkpoint_save_ignores_unmanaged_json(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     latest_path = tmp_path / "latest.json"
@@ -928,10 +974,11 @@ def test_torch_checkpoint_save_ignores_noncanonical_update_json(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     latest_path = tmp_path / "latest.json"
@@ -983,10 +1030,11 @@ def test_torch_checkpoint_save_reports_corrupt_update_manifest(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     latest_path = tmp_path / "latest.json"
@@ -1035,10 +1083,11 @@ def test_torch_checkpoint_read_rejects_bad_model_config(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     path = tmp_path / "latest.json"
@@ -1063,39 +1112,19 @@ def test_torch_checkpoint_read_rejects_bad_model_config(
     assert "model_config.d_model" in result.reason
 
 
-def test_torch_checkpoint_read_rejects_missing_ppo_profile(
+def test_torch_checkpoint_manifest_excludes_execution_fields(
     tmp_path: Path,
 ) -> None:
     _, _, path = _saved_checkpoint(tmp_path)
     manifest = _read_json_object(path)
     train_config_json: object = manifest["train_config"]
     assert _is_object_dict(train_config_json)
-    del train_config_json["ppo_profile"]
-    _write_json_object(path, manifest)
 
-    result = _read_torch_checkpoint_metadata(path)
-
-    assert isinstance(result, Rejected)
-    assert "checkpoint corruption:" in result.reason
-    assert "manifest missing train_config.ppo_profile" in result.reason
-
-
-def test_torch_checkpoint_read_rejects_invalid_ppo_profile(
-    tmp_path: Path,
-) -> None:
-    _, _, path = _saved_checkpoint(tmp_path)
-    manifest = _read_json_object(path)
-    train_config_json: object = manifest["train_config"]
-    assert _is_object_dict(train_config_json)
-    train_config_json["ppo_profile"] = "verbose"
-    _write_json_object(path, manifest)
-
-    result = _read_torch_checkpoint_metadata(path)
-
-    assert isinstance(result, Rejected)
-    assert "checkpoint corruption:" in result.reason
-    assert "train_config.ppo_profile" in result.reason
-    assert "off, basic, or detailed" in result.reason
+    assert "device" not in train_config_json
+    assert "ppo_profile" not in train_config_json
+    assert "timeouts" not in train_config_json
+    assert "round_seconds" not in train_config_json
+    assert "update_seconds" not in train_config_json
 
 
 def test_torch_checkpoint_read_rejects_invalid_utf8_manifest(
@@ -1148,10 +1177,11 @@ def test_torch_checkpoint_read_rejects_negative_total_rounds(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     path = tmp_path / "latest.json"
@@ -1185,10 +1215,11 @@ def test_torch_checkpoint_load_rejects_negative_total_updates(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     path = tmp_path / "latest.json"
@@ -1210,6 +1241,7 @@ def test_torch_checkpoint_load_rejects_negative_total_updates(
         path=path,
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
 
@@ -1227,10 +1259,11 @@ def test_torch_checkpoint_load_rejects_state_hash_mismatch(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     path = tmp_path / "latest.json"
@@ -1251,6 +1284,7 @@ def test_torch_checkpoint_load_rejects_state_hash_mismatch(
         path=path,
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
 
@@ -1271,6 +1305,7 @@ def test_torch_checkpoint_load_rejects_checkpoint_dir_symlink(
         path=checkpoint_dir / "latest.json",
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
 
@@ -1294,6 +1329,7 @@ def test_torch_checkpoint_load_rejects_objects_dir_symlink(
         path=path,
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
 
@@ -1315,6 +1351,7 @@ def test_torch_checkpoint_load_rejects_checkpoint_object_symlink(
         path=path,
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
 
@@ -1336,6 +1373,7 @@ def test_torch_checkpoint_load_rejects_state_file_symlink(
         path=path,
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
 
@@ -1353,10 +1391,11 @@ def test_torch_checkpoint_load_rejects_directory_state_payload(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     path = tmp_path / "latest.json"
@@ -1378,6 +1417,7 @@ def test_torch_checkpoint_load_rejects_directory_state_payload(
         path=path,
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
 
@@ -1395,10 +1435,11 @@ def test_torch_checkpoint_load_rejects_non_torch_state_payload(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     path = tmp_path / "latest.json"
@@ -1420,6 +1461,7 @@ def test_torch_checkpoint_load_rejects_non_torch_state_payload(
         path=path,
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
 
@@ -1437,10 +1479,11 @@ def test_torch_checkpoint_load_rejects_missing_payload_field(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     path = tmp_path / "latest.json"
@@ -1462,6 +1505,7 @@ def test_torch_checkpoint_load_rejects_missing_payload_field(
         path=path,
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
 
@@ -1470,7 +1514,7 @@ def test_torch_checkpoint_load_rejects_missing_payload_field(
     assert "state payload missing schema_version" in result.reason
 
 
-def test_torch_checkpoint_load_rejects_bad_python_rng_state(
+def test_torch_checkpoint_save_payload_excludes_rng_state(
     tmp_path: Path,
 ) -> None:
     model_config = ModelConfig(
@@ -1479,10 +1523,11 @@ def test_torch_checkpoint_load_rejects_bad_python_rng_state(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     path = tmp_path / "latest.json"
@@ -1496,74 +1541,9 @@ def test_torch_checkpoint_load_rejects_bad_python_rng_state(
         total_updates=5,
         retained_update_count=5,
     )
-    state_path = _single_state_path(path)
-    payload = _load_state_payload(state_path)
-    rng_payload = payload["rng_state"]
-    assert _is_object_dict(rng_payload)
-    updated_rng_payload: dict[object, object] = dict(rng_payload)
-    updated_rng_payload["python_internal_state"] = []
-    payload["rng_state"] = updated_rng_payload
-    _write_state_payload(path, state_path, payload)
+    payload = _load_state_payload(_single_state_path(path))
 
-    result = _load_torch_checkpoint(
-        path=path,
-        model_config=model_config,
-        train_config=train_config,
-        device=torch.device("cpu"),
-    )
-
-    assert isinstance(result, Rejected)
-    assert "checkpoint corruption:" in result.reason
-    assert "rng_state.python_random_state is invalid" in result.reason
-
-
-def test_torch_checkpoint_load_rejects_bad_torch_cpu_rng_state(
-    tmp_path: Path,
-) -> None:
-    model_config = ModelConfig(
-        d_model=8,
-        layers=1,
-        heads=2,
-        max_tokens=192,
-    )
-    train_config = TrainConfig(device="cpu")
-    state = create_training_state(
-        model_config=model_config,
-        train_config=train_config,
-        device=torch.device("cpu"),
-    )
-    path = tmp_path / "latest.json"
-    save_torch_checkpoint(
-        manifest_paths=(path,),
-        model=state.model,
-        trainer=state.trainer,
-        model_config=model_config,
-        train_config=train_config,
-        total_rounds=11,
-        total_updates=5,
-        retained_update_count=5,
-    )
-    state_path = _single_state_path(path)
-    payload = _load_state_payload(state_path)
-    rng_payload = payload["rng_state"]
-    assert _is_object_dict(rng_payload)
-    updated_rng_payload: dict[object, object] = dict(rng_payload)
-    updated_rng_payload["torch_cpu_state"] = torch.tensor(
-        [1, 2, 3], dtype=torch.int64
-    )
-    payload["rng_state"] = updated_rng_payload
-    _write_state_payload(path, state_path, payload)
-
-    result = _load_torch_checkpoint(
-        path=path,
-        model_config=model_config,
-        train_config=train_config,
-        device=torch.device("cpu"),
-    )
-
-    assert isinstance(result, Rejected)
-    assert "checkpoint corruption:" in result.reason
-    assert "rng_state.torch_cpu_state is invalid" in result.reason
+    assert "rng_state" not in payload
 
 
 def test_torch_checkpoint_load_rejects_optimizer_dtype_mismatch(
@@ -1575,10 +1555,11 @@ def test_torch_checkpoint_load_rejects_optimizer_dtype_mismatch(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     path = tmp_path / "latest.json"
@@ -1614,6 +1595,7 @@ def test_torch_checkpoint_load_rejects_optimizer_dtype_mismatch(
         path=path,
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
 
@@ -1622,7 +1604,7 @@ def test_torch_checkpoint_load_rejects_optimizer_dtype_mismatch(
     assert "optimizer_state.exp_avgs tensor dtype" in result.reason
 
 
-def test_torch_checkpoint_load_restores_rng_state(
+def test_torch_checkpoint_load_does_not_restore_global_rng_state(
     tmp_path: Path,
 ) -> None:
     model_config = ModelConfig(
@@ -1631,10 +1613,11 @@ def test_torch_checkpoint_load_restores_rng_state(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     path = tmp_path / "latest.json"
@@ -1649,23 +1632,21 @@ def test_torch_checkpoint_load_restores_rng_state(
         total_updates=3,
         retained_update_count=5,
     )
-    expected_python = random.random()
-    expected_torch = torch.rand(3)
-    for _ in range(17):
-        random.random()
-    torch.rand(17)
+    python_before = random.getstate()
+    torch_before = torch.get_rng_state().clone()
 
     loaded = load_torch_checkpoint(
         path=path,
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
 
     assert loaded.total_rounds == 7
     assert loaded.total_updates == 3
-    assert random.random() == expected_python
-    assert torch.equal(torch.rand(3), expected_torch)
+    assert random.getstate() == python_before
+    assert torch.equal(torch.get_rng_state(), torch_before)
 
 
 def test_create_training_state_seeds_initial_model() -> None:
@@ -1712,6 +1693,7 @@ def test_torch_checkpoint_load_rejects_seed_mismatch(
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     path = tmp_path / "latest.json"
@@ -1730,6 +1712,7 @@ def test_torch_checkpoint_load_rejects_seed_mismatch(
         path=path,
         model_config=model_config,
         train_config=TrainConfig(seed=8),
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
 
@@ -1751,6 +1734,7 @@ def test_torch_checkpoint_load_rejects_model_config_mismatch(
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     path = tmp_path / "latest.json"
@@ -1774,6 +1758,7 @@ def test_torch_checkpoint_load_rejects_model_config_mismatch(
             max_tokens=192,
         ),
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
 
@@ -1792,10 +1777,11 @@ def test_torch_checkpoint_cuda_resume_loads_payload_on_cpu(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     path = tmp_path / "latest.json"
@@ -1817,15 +1803,8 @@ def test_torch_checkpoint_cuda_resume_loads_payload_on_cpu(
     )
     assert _is_object_dict(saved_payload)
     payload: dict[object, object] = dict(saved_payload)
-    rng_payload = payload["rng_state"]
-    assert _is_object_dict(rng_payload)
-    updated_rng_payload: dict[object, object] = dict(rng_payload)
-    fake_cuda_state = torch.get_rng_state()
-    updated_rng_payload["torch_cuda_states"] = [fake_cuda_state]
-    payload["rng_state"] = updated_rng_payload
     load_map_locations: list[torch.device] = []
     model_devices: list[torch.device] = []
-    restored_cuda_states: list[tuple[torch.Tensor, ...]] = []
 
     def fake_torch_load(
         file_path: object,
@@ -1853,14 +1832,6 @@ def test_torch_checkpoint_cuda_resume_loads_payload_on_cpu(
     def fake_cuda_available() -> bool:
         return True
 
-    original_cuda_state = torch.zeros_like(fake_cuda_state)
-
-    def fake_get_rng_state_all() -> list[torch.Tensor]:
-        return [original_cuda_state]
-
-    def fake_set_rng_state_all(states: list[torch.Tensor]) -> None:
-        restored_cuda_states.append(tuple(states))
-
     monkeypatch.setattr(torch, "load", fake_torch_load)
     monkeypatch.setattr(
         training_state,
@@ -1868,21 +1839,16 @@ def test_torch_checkpoint_cuda_resume_loads_payload_on_cpu(
         fake_create_model,
     )
     monkeypatch.setattr(torch.cuda, "is_available", fake_cuda_available)
-    monkeypatch.setattr(
-        torch.cuda,
-        "get_rng_state_all",
-        fake_get_rng_state_all,
-    )
-    monkeypatch.setattr(
-        torch.cuda,
-        "set_rng_state_all",
-        fake_set_rng_state_all,
-    )
 
     loaded = load_torch_checkpoint(
         path=path,
         model_config=model_config,
-        train_config=TrainConfig(device="cuda"),
+        train_config=TrainConfig(),
+        execution_config=ExecutionConfig(
+            model_ranks=ModelRankPlacement(
+                kind="cuda", devices=("cuda:0",)
+            )
+        ),
         device=torch.device("cuda"),
     )
 
@@ -1890,13 +1856,6 @@ def test_torch_checkpoint_cuda_resume_loads_payload_on_cpu(
     assert loaded.total_updates == 3
     assert load_map_locations == [torch.device("cpu")]
     assert model_devices == [torch.device("cuda")]
-    assert len(restored_cuda_states) == 3
-    assert len(restored_cuda_states[0]) == 1
-    assert len(restored_cuda_states[1]) == 1
-    assert len(restored_cuda_states[2]) == 1
-    assert torch.equal(restored_cuda_states[0][0], fake_cuda_state)
-    assert torch.equal(restored_cuda_states[1][0], original_cuda_state)
-    assert torch.equal(restored_cuda_states[2][0], fake_cuda_state)
 
 
 def test_resolve_train_config_defaults_and_resume_overrides(
@@ -1909,16 +1868,14 @@ def test_resolve_train_config_defaults_and_resume_overrides(
         max_tokens=192,
     )
     train_config = TrainConfig(
-        device="cpu",
-        ppo_profile="basic",
         learning_rate=0.0007,
-        max_round_seconds=333.0,
         ppo_epochs=7,
         minibatch_size=11,
     )
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     path = tmp_path / "latest.json"
@@ -1941,34 +1898,36 @@ def test_resolve_train_config_defaults_and_resume_overrides(
         cli_overrides=TrainConfigOverrides(),
         resume_path=path,
     )
-    resumed_with_device = resolve_train_config(
-        cli_overrides=TrainConfigOverrides(device="cuda"),
-        resume_path=path,
-    )
     resumed_with_same_seed = resolve_train_config(
         cli_overrides=TrainConfigOverrides(seed=train_config.seed),
         resume_path=path,
     )
-    resumed_with_profile = resolve_train_config(
-        cli_overrides=TrainConfigOverrides(ppo_profile="detailed"),
-        resume_path=path,
+    execution = resolve_execution_config(
+        ExecutionConfigOverrides(
+            model_ranks=ModelRankPlacement(
+                kind="cuda", devices=("cuda:0",)
+            ),
+            ppo_profile="detailed",
+            round_timeout_seconds=111.0,
+            rollout_response_timeout_seconds=222.0,
+            state_sync_timeout_seconds=333.0,
+            update_timeout_seconds=444.0,
+        )
     )
     assert isinstance(fresh, Ok)
     assert isinstance(resumed, Ok)
-    assert isinstance(resumed_with_device, Ok)
     assert isinstance(resumed_with_same_seed, Ok)
-    assert isinstance(resumed_with_profile, Ok)
-    assert fresh.value.max_round_seconds == 120.0
+    assert isinstance(execution, Ok)
+    assert fresh.value == TrainConfig()
     assert resumed.value == train_config
-    assert resumed_with_device.value.device == "cuda"
-    assert resumed_with_profile.value.ppo_profile == "detailed"
     assert resumed_with_same_seed.value.seed == train_config.seed
-    assert (
-        resumed_with_device.value.learning_rate
-        == train_config.learning_rate
-    )
-    assert resumed_with_device.value.max_round_seconds == (
-        train_config.max_round_seconds
+    assert execution.value.model_ranks.kind == "cuda"
+    assert execution.value.ppo_profile == "detailed"
+    assert execution.value.timeouts == ExecutionTimeouts(
+        round_seconds=111.0,
+        rollout_response_seconds=222.0,
+        state_sync_seconds=333.0,
+        update_seconds=444.0,
     )
 
 
@@ -2002,12 +1961,18 @@ def load_torch_checkpoint(
     path: Path,
     model_config: ModelConfig,
     train_config: TrainConfig,
+    execution_config: ExecutionConfig | None = None,
     device: torch.device,
 ) -> LoadedTrainingState:
+    resolved_execution_config = _execution_config_for_device(
+        device=device,
+        execution_config=execution_config,
+    )
     result = _load_torch_checkpoint(
         path=path,
         model_config=model_config,
         train_config=train_config,
+        execution_config=resolved_execution_config,
         device=device,
     )
     assert isinstance(result, Ok)
@@ -2022,6 +1987,46 @@ def read_torch_checkpoint_metadata(
     return result.value
 
 
+def _model_rank_kind_from_torch(
+    device: torch.device,
+) -> ModelRankKind:
+    if device.type == "cpu":
+        return "inline"
+    if device.type == "cuda":
+        return "cuda"
+    if device.type == "mps":
+        return "mps"
+    assert False
+
+
+def _execution_config_for_device(
+    *,
+    device: torch.device,
+    execution_config: ExecutionConfig | None,
+) -> ExecutionConfig:
+    expected_kind = _model_rank_kind_from_torch(device)
+    if execution_config is None:
+        return _execution_config_for_model_rank_kind(expected_kind)
+    assert execution_config.model_ranks.kind == expected_kind
+    return execution_config
+
+
+def _execution_config_for_model_rank_kind(
+    model_rank_kind: ModelRankKind,
+) -> ExecutionConfig:
+    if model_rank_kind == "inline":
+        return ExecutionConfig()
+    if model_rank_kind == "cuda":
+        return ExecutionConfig(
+            model_ranks=ModelRankPlacement(
+                kind="cuda", devices=("cuda:0",)
+            ),
+        )
+    return ExecutionConfig(
+        model_ranks=ModelRankPlacement(kind="mps", devices=("mps",)),
+    )
+
+
 def _saved_checkpoint(
     checkpoint_dir: Path,
 ) -> tuple[ModelConfig, TrainConfig, Path]:
@@ -2031,10 +2036,11 @@ def _saved_checkpoint(
         heads=2,
         max_tokens=192,
     )
-    train_config = TrainConfig(device="cpu")
+    train_config = TrainConfig()
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
+        execution_config=ExecutionConfig(),
         device=torch.device("cpu"),
     )
     path = checkpoint_dir / "latest.json"

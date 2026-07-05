@@ -4,12 +4,8 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Literal
 
 from server.training.json_types import JsonObject
-
-type TrainingDevice = Literal["cpu", "cuda"]
-type PPOProfileMode = Literal["off", "basic", "detailed"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,13 +46,10 @@ class ModelConfig:
 class TrainConfig:
     """Run configuration that can move between machines."""
 
-    device: TrainingDevice = "cpu"
-    ppo_profile: PPOProfileMode = "off"
     seed: int = 0
     learning_rate: float = 0.0003
     checkpoint_every_updates: int = 50
     checkpoint_retention_updates: int = 5
-    max_round_seconds: float = 120.0
     gae_lambda: float = 1.0
     ppo_clip: float = 0.2
     value_clip: float = 0.2
@@ -70,15 +63,11 @@ class TrainConfig:
     weight_decay: float = 0.0
 
     def __post_init__(self) -> None:
-        assert self.device in ("cpu", "cuda")
-        assert self.ppo_profile in ("off", "basic", "detailed")
         assert self.seed >= 0
         assert _is_finite(self.learning_rate)
         assert self.learning_rate > 0.0
         assert self.checkpoint_every_updates > 0
         assert self.checkpoint_retention_updates >= 0
-        assert _is_finite(self.max_round_seconds)
-        assert self.max_round_seconds > 0.0
         assert _is_finite(self.gae_lambda)
         assert 0.0 <= self.gae_lambda <= 1.0
         assert _is_finite(self.ppo_clip)
@@ -102,15 +91,12 @@ class TrainConfig:
 
     def to_json(self) -> JsonObject:
         return {
-            "device": self.device,
-            "ppo_profile": self.ppo_profile,
             "seed": self.seed,
             "learning_rate": self.learning_rate,
             "checkpoint_every_updates": self.checkpoint_every_updates,
             "checkpoint_retention_updates": (
                 self.checkpoint_retention_updates
             ),
-            "max_round_seconds": self.max_round_seconds,
             "gae_lambda": self.gae_lambda,
             "ppo_clip": self.ppo_clip,
             "value_clip": self.value_clip,
@@ -127,8 +113,6 @@ class TrainConfig:
     @classmethod
     def from_json(cls, data: JsonObject) -> TrainConfig:
         return cls(
-            device=_device_json_field(data, "device"),
-            ppo_profile=_profile_json_field(data, "ppo_profile"),
             seed=_int_json_field(data, "seed"),
             learning_rate=_float_json_field(data, "learning_rate"),
             checkpoint_every_updates=_int_json_field(
@@ -136,9 +120,6 @@ class TrainConfig:
             ),
             checkpoint_retention_updates=_int_json_field(
                 data, "checkpoint_retention_updates"
-            ),
-            max_round_seconds=_float_json_field(
-                data, "max_round_seconds"
             ),
             gae_lambda=_float_json_field(data, "gae_lambda"),
             ppo_clip=_float_json_field(data, "ppo_clip"),
@@ -164,26 +145,6 @@ def _float_json_field(data: JsonObject, field: str) -> float:
     value = data[field]
     assert isinstance(value, int | float)
     return float(value)
-
-
-def _device_json_field(data: JsonObject, field: str) -> TrainingDevice:
-    value = data[field]
-    if value == "cpu":
-        return "cpu"
-    if value == "cuda":
-        return "cuda"
-    assert False
-
-
-def _profile_json_field(data: JsonObject, field: str) -> PPOProfileMode:
-    value = data[field]
-    if value == "off":
-        return "off"
-    if value == "basic":
-        return "basic"
-    if value == "detailed":
-        return "detailed"
-    assert False
 
 
 def _is_finite(value: float) -> bool:

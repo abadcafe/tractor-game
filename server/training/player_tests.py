@@ -16,21 +16,24 @@ from server.player.test_helpers import (
 from server.protocol import ScoringSnapshot
 from server.result import Ok, Rejected
 from server.rules.card_faces import CardFace, FaceCount
-from server.training.choice_trace import (
-    SemanticChoiceStep,
-    SemanticChoiceTrace,
-    semantic_choice_step_from_offset,
-)
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
 from server.training.player import TrainingPlayer
 from server.training.policy import PolicyDecision
+from server.training.policy_sampling import DecisionHandle
+from server.training.sampling import PolicyDecisionKey
+from server.training.semantic_action_plan import (
+    advance_action_state,
+    compile_legal_action_frame,
+    initial_action_state,
+    legal_token_mask,
+    plan_batch_to_device,
+    semantic_trace_from_token_ids,
+)
 from server.training.semantic_actions import (
-    SemanticArgument,
-    SemanticArgumentPrefix,
     SemanticArgumentTrace,
 )
-from server.training.tensorize import tensorize_observation
+from server.training.semantic_actions.codec import SEMANTIC_CODEC
 from server.training.tokens import GlobalFieldToken, RoundFieldToken
 from server.training.trajectory import TrajectoryRecorder
 
@@ -42,52 +45,56 @@ class FirstCardPlayPolicy:
         self,
         observation: Observation,
         legal_actions: LegalActionIndex,
+        decision_key: PolicyDecisionKey,
     ) -> Ok[PolicyDecision] | Rejected:
-        first_choices = legal_actions.allowed_next(
-            SemanticArgumentPrefix(arguments=())
-        )
-        assert first_choices
-        first_argument = first_choices[0]
-        choice_steps: list[SemanticChoiceStep] = [
-            semantic_choice_step_from_offset(
-                allowed=first_choices,
-                selected_argument_offset=0,
-            )
-        ]
-        prefix = SemanticArgumentPrefix(arguments=(first_argument,))
-        trace_args: list[SemanticArgument] = [first_argument]
-        second_choices = legal_actions.allowed_next(prefix)
-        if second_choices:
-            choice_steps.append(
-                semantic_choice_step_from_offset(
-                    allowed=second_choices,
-                    selected_argument_offset=0,
-                )
-            )
-            trace_args.append(second_choices[0])
-        decoded = legal_actions.decode(
-            SemanticArgumentTrace(arguments=tuple(trace_args))
-        )
+        assert decision_key.base_seed >= 0
+        assert decision_key.policy_version >= 0
+        assert decision_key.episode_id >= 0
+        trace_result = _first_legal_trace(legal_actions)
+        assert isinstance(trace_result, Ok)
+        decoded = legal_actions.decode(trace_result.value)
         assert isinstance(decoded, Ok)
         return Ok(
             value=PolicyDecision(
                 action=decoded.value,
-                observation_batch=tensorize_observation(
-                    observation=observation,
-                    max_observation_tokens=128,
-                    device=torch.device("cpu"),
+                decision_handle=DecisionHandle(
+                    model_rank_index=0,
+                    policy_version=decision_key.policy_version,
+                    slot_index=decision_key.decision_index,
+                    slot_generation=0,
                 ),
-                choice_trace=SemanticChoiceTrace(
-                    steps=tuple(choice_steps)
-                ),
-                log_probability=0.0,
-                value_estimate=0.0,
-                entropy=0.0,
                 choice_count=len(
                     decoded.value.semantic_trace.arguments
                 ),
             )
         )
+
+
+def _first_legal_trace(
+    legal_actions: LegalActionIndex,
+) -> Ok[SemanticArgumentTrace] | Rejected:
+    device = torch.device("cpu")
+    batch = plan_batch_to_device(
+        (compile_legal_action_frame(legal_actions),), device=device
+    )
+    state = initial_action_state(batch)
+    for _ in range(SEMANTIC_CODEC.max_argument_tokens):
+        if bool(state.done[0].item()):
+            trace_ids = tuple(
+                int(state.selected_token_ids[0, index].item())
+                for index in range(int(state.step_counts[0].item()))
+            )
+            return semantic_trace_from_token_ids(trace_ids)
+        mask = legal_token_mask(batch=batch, state=state)
+        legal_ids = torch.nonzero(mask[0], as_tuple=False).squeeze(1)
+        assert int(legal_ids.shape[0]) > 0
+        state = advance_action_state(
+            batch=batch,
+            state=state,
+            selected_token_ids=legal_ids[0].view(1),
+            legal_mask=mask,
+        )
+    assert False
 
 
 class CapturingFirstCardPlayPolicy(FirstCardPlayPolicy):
@@ -100,9 +107,10 @@ class CapturingFirstCardPlayPolicy(FirstCardPlayPolicy):
         self,
         observation: Observation,
         legal_actions: LegalActionIndex,
+        decision_key: PolicyDecisionKey,
     ) -> Ok[PolicyDecision] | Rejected:
         self.observation = observation
-        return super().decide(observation, legal_actions)
+        return super().decide(observation, legal_actions, decision_key)
 
 
 class RejectingPolicy:
@@ -110,7 +118,9 @@ class RejectingPolicy:
         self,
         observation: Observation,
         legal_actions: LegalActionIndex,
+        decision_key: PolicyDecisionKey,
     ) -> Ok[PolicyDecision] | Rejected:
+        assert decision_key.base_seed >= 0
         assert observation.action_query == legal_actions.query
         return Rejected(reason="policy sampling failed")
 

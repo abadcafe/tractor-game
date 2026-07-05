@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import torch
+
 from server.player.test_helpers import card, make_snapshot
 from server.protocol import (
     BidEventSnapshot,
@@ -13,11 +15,25 @@ from server.protocol import (
 from server.result import Ok, Rejected
 from server.rules.card_faces import CardFace, FaceCount
 from server.rules.cards import Card
-from server.training.legal_actions import build_legal_action_index
+from server.training.legal_actions import (
+    LegalActionIndex,
+    build_legal_action_index,
+)
+from server.training.semantic_action_plan import (
+    advance_action_state,
+    compile_legal_action_frame,
+    initial_action_state,
+    legal_token_mask,
+    plan_batch_to_device,
+)
 from server.training.semantic_actions import (
     SemanticArgument,
     SemanticArgumentPrefix,
     SemanticArgumentTrace,
+)
+from server.training.semantic_actions.codec import (
+    semantic_argument_from_id,
+    semantic_argument_id,
 )
 
 
@@ -44,8 +60,8 @@ def test_build_legal_action_index_ignores_action_hints_for_follow() -> (
         snapshot=snapshot,
     )
 
-    allowed = legal_actions.allowed_next(
-        SemanticArgumentPrefix(arguments=())
+    allowed = _allowed_arguments(
+        legal_actions, SemanticArgumentPrefix(arguments=())
     )
     assert _select(heart, 1) in allowed
     assert _select(spade, 1) not in allowed
@@ -95,7 +111,7 @@ def test_lead_mask_keeps_selected_cards_in_one_effective_suit() -> None:
     )
 
     prefix = SemanticArgumentPrefix(arguments=(_select(heart, 1),))
-    allowed = legal_actions.allowed_next(prefix)
+    allowed = _allowed_arguments(legal_actions, prefix)
 
     assert SemanticArgument("stop") in allowed
     assert _select(spade, 1) not in allowed
@@ -127,8 +143,9 @@ def test_discard_auto_completes_at_exact_count_without_stop() -> None:
     )
 
     assert (
-        legal_actions.allowed_next(
-            SemanticArgumentPrefix(arguments=trace.arguments)
+        _allowed_arguments(
+            legal_actions,
+            SemanticArgumentPrefix(arguments=trace.arguments),
         )
         == ()
     )
@@ -158,8 +175,8 @@ def test_bid_current_winner_can_only_pass() -> None:
         snapshot=snapshot,
     )
 
-    assert legal_actions.allowed_next(
-        SemanticArgumentPrefix(arguments=())
+    assert _allowed_arguments(
+        legal_actions, SemanticArgumentPrefix(arguments=())
     ) == (SemanticArgument("pass"),)
 
 
@@ -203,8 +220,8 @@ def test_stir_mask_uses_current_priority() -> None:
         player_index=0,
         snapshot=snapshot,
     )
-    allowed = legal_actions.allowed_next(
-        SemanticArgumentPrefix(arguments=())
+    allowed = _allowed_arguments(
+        legal_actions, SemanticArgumentPrefix(arguments=())
     )
 
     assert SemanticArgument("pass") in allowed
@@ -264,8 +281,8 @@ def test_stir_mask_uses_stir_event_priority_over_bid_winner() -> None:
         player_index=2,
         snapshot=snapshot,
     )
-    allowed = legal_actions.allowed_next(
-        SemanticArgumentPrefix(arguments=())
+    allowed = _allowed_arguments(
+        legal_actions, SemanticArgumentPrefix(arguments=())
     )
 
     assert SemanticArgument("pass") in allowed
@@ -302,3 +319,39 @@ def _select(card_value: Card, count: int) -> SemanticArgument:
             count,
         ),
     )
+
+
+def _allowed_arguments(
+    legal_actions: LegalActionIndex,
+    prefix: SemanticArgumentPrefix,
+) -> tuple[SemanticArgument, ...]:
+    device = torch.device("cpu")
+    batch = plan_batch_to_device(
+        (compile_legal_action_frame(legal_actions),), device=device
+    )
+    state = initial_action_state(batch)
+    for argument in prefix.arguments:
+        mask = legal_token_mask(batch=batch, state=state)
+        state = advance_action_state(
+            batch=batch,
+            state=state,
+            selected_token_ids=torch.tensor(
+                (semantic_argument_id(argument),),
+                dtype=torch.long,
+                device=device,
+            ),
+            legal_mask=mask,
+        )
+    if bool(state.done[0].item()):
+        return ()
+    token_ids = torch.nonzero(
+        legal_token_mask(batch=batch, state=state)[0], as_tuple=False
+    ).squeeze(1)
+    arguments: list[SemanticArgument] = []
+    for index in range(int(token_ids.shape[0])):
+        argument_result = semantic_argument_from_id(
+            int(token_ids[index].item())
+        )
+        assert isinstance(argument_result, Ok)
+        arguments.append(argument_result.value)
+    return tuple(arguments)

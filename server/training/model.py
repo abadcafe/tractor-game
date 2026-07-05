@@ -168,19 +168,27 @@ class TractorPolicyModel(nn.Module):
         self,
         encoding: ObservationEncoding,
         *,
-        active_indices: tuple[int, ...],
+        active_indices: Tensor,
     ) -> ObservationEncoding:
         """Select rows from a reusable observation encoding."""
-        assert active_indices
-        if active_indices == tuple(
-            range(int(encoding.memory.shape[0]))
+        assert active_indices.ndim == 1
+        assert int(active_indices.shape[0]) > 0
+        index = active_indices.to(
+            dtype=torch.long, device=encoding.memory.device
+        )
+        if int(index.shape[0]) == int(
+            encoding.memory.shape[0]
+        ) and bool(
+            torch.equal(
+                index,
+                torch.arange(
+                    int(encoding.memory.shape[0]),
+                    dtype=torch.long,
+                    device=encoding.memory.device,
+                ),
+            )
         ):
             return encoding
-        index = torch.tensor(
-            active_indices,
-            dtype=torch.long,
-            device=encoding.memory.device,
-        )
         return ObservationEncoding(
             memory=encoding.memory.index_select(0, index),
             memory_padding_mask=encoding.memory_padding_mask.index_select(

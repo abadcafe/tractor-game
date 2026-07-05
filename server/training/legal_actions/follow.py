@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 from server.protocol import StateSnapshot, TrickSnapshot
 from server.result import Ok, Rejected
-from server.rules.card_faces import face_count_width
 from server.rules.cards import Card
 from server.rules.follow_action_space import (
     FollowActionSpace,
@@ -18,7 +17,6 @@ from server.training.legal_actions.selection import (
 )
 from server.training.semantic_actions.arguments import (
     InvalidSemanticActionRejected,
-    SemanticArgument,
     SemanticArgumentPrefix,
     SemanticArgumentTrace,
     semantic_prefix_state,
@@ -38,22 +36,10 @@ class FollowPlayLegalActionIndex(LegalActionIndex):
     def query(self) -> ActionQuery:
         return self._query
 
-    def allowed_next(
-        self, prefix: SemanticArgumentPrefix
-    ) -> tuple[SemanticArgument, ...]:
-        selected_result = semantic_prefix_state(prefix)
-        if isinstance(selected_result, Rejected):
-            return ()
-        selected = selected_result.value
-        if (
-            face_count_width(selected)
-            >= self._space.analysis.lead_count
-        ):
-            return ()
-        return tuple(
-            SemanticArgument("select_face_count", face_count)
-            for face_count in self._space.allowed_next(selected)
-        )
+    @property
+    def space(self) -> FollowActionSpace:
+        """Return compiled follow constraints for this decision."""
+        return self._space
 
     def decode(
         self, trace: SemanticArgumentTrace

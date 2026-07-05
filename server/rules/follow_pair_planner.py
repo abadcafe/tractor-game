@@ -75,6 +75,15 @@ class FollowPairPlanner:
             last_face=last_face,
         )
 
+    @property
+    def pair_faces(self) -> PairFaceSet:
+        """Return all hand faces that can participate as pairs."""
+        return self._pair_faces
+
+    def has_tractor_segment(self) -> bool:
+        """Return whether the hand contains a multi-pair segment."""
+        return self._has_tractor_segment()
+
     def pair_selection_is_valid(
         self, selected_pair_faces: PairFaceSet
     ) -> bool:

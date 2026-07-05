@@ -17,22 +17,23 @@ from server.training.progress import (
     TeamProgress,
     zero_sum_rewards,
 )
-from server.training.terminal_rewards import terminal_reward_rollout
-from server.training.trajectory import (
-    RolloutBatch,
-    TrajectoryRecorder,
+from server.training.rollout_commit import (
+    RolloutCommit,
+    terminal_reward_rollout_commit,
 )
+from server.training.trajectory import TrajectoryRecorder
 
 
 @dataclass(frozen=True, slots=True)
 class TrainingRoundResult:
     """One completed self-play round."""
 
-    rollout: RolloutBatch
+    rollout: RolloutCommit
     team0_reward: float
     team1_reward: float
     generated_action_count: int
     accepted_action_count: int
+    action_choice_count: int
     average_action_choices: float
     elapsed_seconds: float
     game_over: bool
@@ -59,12 +60,24 @@ class SelfPlaySession:
         self._started = False
 
     async def play_round(
-        self, *, max_seconds: float
+        self,
+        *,
+        base_seed: int,
+        policy_version: int,
+        episode_id: int,
+        max_seconds: float,
     ) -> _result.Ok[TrainingRoundResult] | _result.Rejected:
         """Play exactly one full round from the current Game state."""
+        assert base_seed >= 0
+        assert policy_version >= 0
+        assert episode_id >= 0
         self._recorder.clear()
         for player in self._players:
-            reset_result = player.reset_round_tracking()
+            reset_result = player.reset_round_tracking(
+                base_seed=base_seed,
+                policy_version=policy_version,
+                episode_id=episode_id,
+            )
             if isinstance(reset_result, _result.Rejected):
                 return reset_result
         start = time.monotonic()
@@ -90,7 +103,9 @@ class SelfPlaySession:
             before=before,
             after=final_snapshot,
         )
-        rollout = terminal_reward_rollout(
+        rollout = terminal_reward_rollout_commit(
+            policy_version=policy_version,
+            episode_id=episode_id,
             steps=self._recorder.steps(),
             team0_reward=reward0,
             team1_reward=reward1,
@@ -114,6 +129,7 @@ class SelfPlaySession:
                 team1_reward=reward1,
                 generated_action_count=generated_count,
                 accepted_action_count=accepted_count,
+                action_choice_count=choice_count,
                 average_action_choices=0.0
                 if generated_count == 0
                 else choice_count / generated_count,
@@ -130,11 +146,19 @@ class SelfPlaySession:
 async def play_training_round(
     *,
     policy: TrainingPolicy,
+    base_seed: int,
+    policy_version: int,
+    episode_id: int,
     max_seconds: float,
 ) -> _result.Ok[TrainingRoundResult] | _result.Rejected:
     """Run one self-play round in a fresh session."""
     session = SelfPlaySession(policy=policy)
-    return await session.play_round(max_seconds=max_seconds)
+    return await session.play_round(
+        base_seed=base_seed,
+        policy_version=policy_version,
+        episode_id=episode_id,
+        max_seconds=max_seconds,
+    )
 
 
 async def _wait_for_round_scoring(

@@ -5,16 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from server.result import Ok, Rejected
-from server.rules.card_faces import FaceCount, face_count_width
+from server.rules.card_faces import face_count_width
 from server.training.legal_actions.contract import LegalActionIndex
 from server.training.legal_actions.selection import (
-    remaining_count_after_selected,
-    select_arguments,
     trace_is_selection_only,
 )
 from server.training.semantic_actions.arguments import (
     InvalidSemanticActionRejected,
-    SemanticArgument,
     SemanticArgumentPrefix,
     SemanticArgumentTrace,
     semantic_prefix_state,
@@ -32,22 +29,6 @@ class DiscardLegalActionIndex(LegalActionIndex):
     @property
     def query(self) -> ActionQuery:
         return self._query
-
-    def allowed_next(
-        self, prefix: SemanticArgumentPrefix
-    ) -> tuple[SemanticArgument, ...]:
-        selected_result = semantic_prefix_state(prefix)
-        if isinstance(selected_result, Rejected):
-            return ()
-        selected = selected_result.value
-        selected_count = face_count_width(selected)
-        if selected_count >= self._required_count():
-            return ()
-        return select_arguments(
-            query=self._query,
-            selected=selected,
-            can_complete=self._discard_can_complete,
-        )
 
     def decode(
         self, trace: SemanticArgumentTrace
@@ -72,22 +53,6 @@ class DiscardLegalActionIndex(LegalActionIndex):
                 semantic_trace=trace,
                 is_pass=False,
             )
-        )
-
-    def _discard_can_complete(
-        self, selected: tuple[FaceCount, ...]
-    ) -> bool:
-        selected_count = face_count_width(selected)
-        if selected_count > self._required_count():
-            return False
-        if selected_count == self._required_count():
-            return True
-        return (
-            remaining_count_after_selected(
-                hand_faces=self._query.hand_faces,
-                selected=selected,
-            )
-            >= self._required_count() - selected_count
         )
 
     def _required_count(self) -> int:

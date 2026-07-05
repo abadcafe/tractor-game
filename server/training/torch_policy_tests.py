@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 import torch
 from torch import Tensor
 
 from server.player.test_helpers import card, make_snapshot
 from server.result import Ok, Rejected
-from server.training.argument_distribution import argument_distribution
+from server.rules.card_faces import FaceCount, card_face
 from server.training.config import ModelConfig
 from server.training.legal_actions import (
     LegalActionIndex,
@@ -19,13 +21,15 @@ from server.training.model import (
     ObservationEncoding,
     TractorPolicyModel,
 )
-from server.training.observation import build_observation
+from server.training.observation import Observation, build_observation
+from server.training.policy_request_frame import (
+    PolicyRequestBatchFrame,
+    PolicyRequestFrame,
+    build_policy_request_frame,
+)
+from server.training.sampling import PolicyDecisionKey
 from server.training.semantic_actions import (
-    ActionQuery,
-    GeneratedAction,
     SemanticArgument,
-    SemanticArgumentPrefix,
-    SemanticArgumentTrace,
 )
 from server.training.semantic_actions.codec import (
     SEMANTIC_CODEC,
@@ -36,11 +40,10 @@ from server.training.tensorize import (
     ObservationTensorBatch,
 )
 from server.training.torch_policy import TorchTrainingPolicy
+from server.training.torch_sampler import sample_policy_decisions
 
 
-def test_decide_scores_sampled_argument_with_shared_distribution(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_decide_scores_sampled_argument_with_distribution() -> None:
     pass_argument = SemanticArgument("pass")
     stop_argument = SemanticArgument("stop")
     logits = torch.zeros(
@@ -61,55 +64,62 @@ def test_decide_scores_sampled_argument_with_shared_distribution(
         snapshot=snapshot,
         history=(),
     )
-    legal_actions = _FixedLegalActionIndex(
+    legal_actions = build_legal_action_index(
+        player_index=0,
+        snapshot=snapshot,
         query=observation.action_query,
-        allowed=(pass_argument, stop_argument),
     )
+    bid_card = card("hearts", "2", 1)
+    bid_argument = SemanticArgument(
+        "select_face_count",
+        FaceCount(face=card_face(bid_card), count=1),
+    )
+    logits[semantic_argument_id(bid_argument)] = 3.0
+    logits[semantic_argument_id(stop_argument)] = 0.0
 
-    def choose_first(
-        input: Tensor,
-        num_samples: int,
-        replacement: bool = False,
-        *,
-        generator: torch.Generator | None = None,
-        out: Tensor | None = None,
-    ) -> Tensor:
-        assert num_samples == 1
-        assert replacement is False
-        assert generator is None
-        assert out is None
-        assert input.shape == (2,)
-        return torch.tensor([0], dtype=torch.long)
-
-    monkeypatch.setattr(torch, "multinomial", choose_first)
-
-    decision_result = TorchTrainingPolicy(
+    sample_results = sample_policy_decisions(
         model=model,
         config=model_config,
         device=torch.device("cpu"),
-    ).decide(observation, legal_actions)
-    assert isinstance(decision_result, Ok)
-    decision = decision_result.value
-    expected_result = argument_distribution(
-        argument_logits=logits,
-        choices=(pass_argument, stop_argument),
+        requests=PolicyRequestBatchFrame(
+            frames=(_request_frame(observation, legal_actions),)
+        ),
     )
-    assert isinstance(expected_result, Ok)
-    expected = expected_result.value
-
+    assert isinstance(sample_results[0], Ok)
+    sample = sample_results[0].value
+    first_token_id = int(sample.replay_record.selected_token_ids[0])
+    first_legal_token_ids = _legal_token_ids(
+        sample.replay_record.legal_token_masks[0]
+    )
+    selected_offset = first_legal_token_ids.index(first_token_id)
+    expected_first_log_probabilities = torch.log_softmax(
+        torch.tensor([1.0, 3.0], dtype=torch.float32), dim=0
+    )
     expected_log_probability = float(
-        expected.log_probabilities[0].detach().cpu().item()
+        expected_first_log_probabilities[selected_offset]
+        .detach()
+        .cpu()
+        .item()
     )
-    expected_entropy = float(expected.entropy.detach().cpu().item())
-    assert abs(decision.log_probability - expected_log_probability) < (
-        0.000001
+    actual_log_probability = float(
+        sample.replay_record.old_log_probability.detach().cpu().item()
     )
-    assert abs(decision.entropy - expected_entropy) < 0.000001
-    assert len(decision.choice_trace.steps) == 1
-    assert decision.choice_trace.steps[
-        0
-    ].selected_argument_id == semantic_argument_id(pass_argument)
-    assert decision.choice_trace.steps[0].selected_argument_offset == 0
+    assert (
+        abs(actual_log_probability - expected_log_probability)
+        < 0.000001
+    )
+    assert first_legal_token_ids == (
+        semantic_argument_id(pass_argument),
+        semantic_argument_id(bid_argument),
+    )
+    assert first_token_id == semantic_argument_id(bid_argument)
+    assert tuple(
+        int(token_id)
+        for token_id in sample.replay_record.selected_token_ids
+    ) == (
+        semantic_argument_id(bid_argument),
+        semantic_argument_id(stop_argument),
+    )
 
 
 def test_decide_rejects_non_finite_argument_logits() -> None:
@@ -131,25 +141,72 @@ def test_decide_rejects_non_finite_argument_logits() -> None:
         snapshot=snapshot,
         history=(),
     )
-    legal_actions = _FixedLegalActionIndex(
+    legal_actions = build_legal_action_index(
+        player_index=0,
+        snapshot=snapshot,
         query=observation.action_query,
-        allowed=(pass_argument,),
     )
 
     result = TorchTrainingPolicy(
         model=model,
         config=model_config,
         device=torch.device("cpu"),
-    ).decide(observation, legal_actions)
+    ).decide(observation, legal_actions, _decision_key())
 
     assert isinstance(result, Rejected)
     assert "logits must be finite" in result.reason
 
 
-def test_decide_rejects_sampling_runtime_failure(
+def test_sample_policy_decisions_rejects_empty_legal_token_mask() -> (
+    None
+):
+    model = _FixedArgumentModel(
+        argument_logits=torch.zeros(
+            (SEMANTIC_CODEC.argument_vocab_size,), dtype=torch.float32
+        )
+    )
+    model_config = ModelConfig(d_model=4, layers=1, heads=1)
+    snapshot = make_snapshot(
+        phase="DEAL_BID",
+        awaiting_action="bid",
+        player_hand=[card("hearts", "2", 1)],
+        trump_rank="2",
+    )
+    observation = build_observation(
+        player_index=0,
+        snapshot=snapshot,
+        history=(),
+    )
+    legal_actions = build_legal_action_index(
+        player_index=0,
+        snapshot=snapshot,
+        query=observation.action_query,
+    )
+    request = _request_frame(observation, legal_actions)
+    malformed_request = PolicyRequestFrame(
+        component_rows=request.component_rows,
+        numeric_value_rows=request.numeric_value_rows,
+        numeric_mask_rows=request.numeric_mask_rows,
+        action_plan=replace(request.action_plan, trace_tokens=()),
+        decision_key=request.decision_key,
+    )
+
+    results = sample_policy_decisions(
+        model=model,
+        config=model_config,
+        device=torch.device("cpu"),
+        requests=PolicyRequestBatchFrame(frames=(malformed_request,)),
+    )
+
+    assert isinstance(results[0], Rejected)
+    assert (
+        results[0].reason == "policy action has no legal semantic token"
+    )
+
+
+def test_decide_does_not_use_torch_multinomial(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pass_argument = SemanticArgument("pass")
     logits = torch.zeros(
         (SEMANTIC_CODEC.argument_vocab_size,), dtype=torch.float32
     )
@@ -166,25 +223,16 @@ def test_decide_rejects_sampling_runtime_failure(
         snapshot=snapshot,
         history=(),
     )
-    legal_actions = _FixedLegalActionIndex(
+    legal_actions = build_legal_action_index(
+        player_index=0,
+        snapshot=snapshot,
         query=observation.action_query,
-        allowed=(pass_argument,),
     )
 
-    def fail_multinomial(
-        input: Tensor,
-        num_samples: int,
-        replacement: bool = False,
-        *,
-        generator: torch.Generator | None = None,
-        out: Tensor | None = None,
-    ) -> Tensor:
-        assert input.shape == (1,)
-        assert num_samples == 1
-        assert replacement is False
-        assert generator is None
-        assert out is None
-        raise RuntimeError("invalid multinomial distribution")
+    def fail_multinomial(*args: object, **kwargs: object) -> Tensor:
+        assert not args
+        assert not kwargs
+        raise AssertionError("torch.multinomial must not be used")
 
     monkeypatch.setattr(torch, "multinomial", fail_multinomial)
 
@@ -192,10 +240,9 @@ def test_decide_rejects_sampling_runtime_failure(
         model=model,
         config=model_config,
         device=torch.device("cpu"),
-    ).decide(observation, legal_actions)
+    ).decide(observation, legal_actions, _decision_key())
 
-    assert isinstance(result, Rejected)
-    assert "policy sampling failed" in result.reason
+    assert isinstance(result, Ok)
 
 
 def test_decide_reuses_observation_encoding_for_full_trace() -> None:
@@ -225,16 +272,65 @@ def test_decide_reuses_observation_encoding_for_full_trace() -> None:
         model=model,
         config=model_config,
         device=torch.device("cpu"),
-    ).decide(observation, legal_actions)
+    ).decide(observation, legal_actions, _decision_key())
 
     assert isinstance(decision_result, Ok)
     decision = decision_result.value
     assert model.encode_calls == 1
     assert model.score_batch_sizes == [1, 1]
     assert model.score_prefix_widths == [1, 2]
-    assert len(decision.choice_trace.steps) == len(
+    assert decision.decision_handle.slot_index == 0
+    assert decision.decision_handle.slot_generation == 1
+    assert decision.choice_count == len(
         decision.action.semantic_trace.arguments
     )
+
+
+def test_sample_policy_decisions_batches_observation_encoding() -> None:
+    pass_argument = SemanticArgument("pass")
+    stop_argument = SemanticArgument("stop")
+    logits = torch.zeros(
+        (SEMANTIC_CODEC.argument_vocab_size,), dtype=torch.float32
+    )
+    logits[semantic_argument_id(pass_argument)] = 1.0
+    logits[semantic_argument_id(stop_argument)] = 3.0
+    model = _FixedArgumentModel(argument_logits=logits)
+    model_config = ModelConfig(d_model=4, layers=1, heads=1)
+    snapshot = make_snapshot(
+        phase="DEAL_BID",
+        awaiting_action="bid",
+        player_hand=[card("hearts", "2", 1)],
+        trump_rank="2",
+    )
+    observation = build_observation(
+        player_index=0,
+        snapshot=snapshot,
+        history=(),
+    )
+    legal_actions = build_legal_action_index(
+        player_index=0,
+        snapshot=snapshot,
+        query=observation.action_query,
+    )
+
+    results = sample_policy_decisions(
+        model=model,
+        config=model_config,
+        device=torch.device("cpu"),
+        requests=PolicyRequestBatchFrame(
+            frames=(
+                _request_frame(observation, legal_actions),
+                _request_frame(observation, legal_actions),
+            )
+        ),
+    )
+
+    assert len(results) == 2
+    assert isinstance(results[0], Ok)
+    assert isinstance(results[1], Ok)
+    assert model.encode_calls == 1
+    assert model.score_batch_sizes == [2]
+    assert model.score_prefix_widths == [1]
 
 
 class _FixedArgumentModel(TractorPolicyModel):
@@ -270,36 +366,34 @@ class _FixedArgumentModel(TractorPolicyModel):
         )
 
 
-class _FixedLegalActionIndex(LegalActionIndex):
-    def __init__(
-        self,
-        *,
-        query: ActionQuery,
-        allowed: tuple[SemanticArgument, ...],
-    ) -> None:
-        self._query = query
-        self._allowed = allowed
+def _decision_key() -> PolicyDecisionKey:
+    return PolicyDecisionKey(
+        base_seed=0,
+        policy_version=0,
+        episode_id=0,
+        player_index=0,
+        decision_index=0,
+    )
 
-    @property
-    def query(self) -> ActionQuery:
-        return self._query
 
-    def allowed_next(
-        self, prefix: SemanticArgumentPrefix
-    ) -> tuple[SemanticArgument, ...]:
-        assert prefix.arguments == ()
-        return self._allowed
+def _request_frame(
+    observation: Observation,
+    legal_actions: LegalActionIndex,
+) -> PolicyRequestFrame:
+    frame_result = build_policy_request_frame(
+        observation=observation,
+        legal_actions=legal_actions,
+        decision_key=_decision_key(),
+    )
+    assert isinstance(frame_result, Ok)
+    return frame_result.value
 
-    def decode(
-        self, trace: SemanticArgumentTrace
-    ) -> Ok[GeneratedAction] | Rejected:
-        assert trace.arguments == (SemanticArgument("pass"),)
-        return Ok(
-            value=GeneratedAction(
-                action_kind="pass",
-                message_type="bid",
-                face_counts=(),
-                semantic_trace=trace,
-                is_pass=True,
-            )
-        )
+
+def _legal_token_ids(mask: Tensor) -> tuple[int, ...]:
+    positions = torch.nonzero(
+        mask.detach().cpu(), as_tuple=False
+    ).squeeze(1)
+    return tuple(
+        int(positions[index].item())
+        for index in range(int(positions.shape[0]))
+    )

@@ -15,6 +15,7 @@ from server.training.observation import (
     build_observation,
 )
 from server.training.policy import TrainingPolicy
+from server.training.sampling import PolicyDecisionKey
 from server.training.semantic_actions.binding import (
     bind_generated_action,
 )
@@ -65,6 +66,10 @@ class TrainingPlayer(Player):
         self._action_tasks: set[asyncio.Task[None]] = set()
         self._policy_rejection: Rejected | None = None
         self._stats = TrainingPlayerStats()
+        self._base_seed = 0
+        self._policy_version = 0
+        self._episode_id = 0
+        self._decision_index = 0
 
     async def run(self, game: GameView) -> None:
         """Request the current state and start the player loop."""
@@ -104,8 +109,17 @@ class TrainingPlayer(Player):
             task.result()
         return Ok(value=None)
 
-    def reset_round_tracking(self) -> Ok[None] | Rejected:
+    def reset_round_tracking(
+        self,
+        *,
+        base_seed: int,
+        policy_version: int,
+        episode_id: int,
+    ) -> Ok[None] | Rejected:
         """Clear per-round history and action stats."""
+        assert base_seed >= 0
+        assert policy_version >= 0
+        assert episode_id >= 0
         background_result = self.raise_background_errors()
         if isinstance(background_result, Rejected):
             return background_result
@@ -113,6 +127,10 @@ class TrainingPlayer(Player):
         self._pending = None
         self._policy_rejection = None
         self._stats = TrainingPlayerStats()
+        self._base_seed = base_seed
+        self._policy_version = policy_version
+        self._episode_id = episode_id
+        self._decision_index = 0
         return Ok(value=None)
 
     async def confirm_held_scoring_next_round(
@@ -180,20 +198,24 @@ class TrainingPlayer(Player):
         decision_result = self._policy.decide(
             observation,
             legal_actions,
+            PolicyDecisionKey(
+                base_seed=self._base_seed,
+                policy_version=self._policy_version,
+                episode_id=self._episode_id,
+                player_index=self.index,
+                decision_index=self._decision_index,
+            ),
         )
         if isinstance(decision_result, Rejected):
             self._policy_rejection = decision_result
             return
         decision = decision_result.value
+        self._decision_index += 1
         step = DecisionStep(
             player_index=self.index,
             seq=message.seq,
-            observation_batch=decision.observation_batch,
-            choice_trace=decision.choice_trace,
             action=decision.action,
-            log_probability=decision.log_probability,
-            value_estimate=decision.value_estimate,
-            entropy=decision.entropy,
+            decision_handle=decision.decision_handle,
             choice_count=decision.choice_count,
         )
         self._pending = PendingDecision(seq=message.seq, step=step)

@@ -8,11 +8,9 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 import torch
+from torch import Tensor
 
-from server.training.config import PPOProfileMode
-from server.training.semantic_actions.arguments import (
-    SemanticArgumentPrefix,
-)
+from server.training.runtime.config import PPOProfileMode
 
 type _ProfileField = Literal[
     "minibatch_loss_seconds",
@@ -204,19 +202,27 @@ class PPOProfileAccumulator:
             )
         )
 
-    def record_argument_prefixes(
-        self, prefixes: tuple[SemanticArgumentPrefix, ...]
+    def record_argument_prefix_lengths(
+        self, prefix_lengths: Tensor
     ) -> None:
         if self.mode != "detailed":
             return
-        assert prefixes
-        row_count = len(prefixes)
-        valid_token_count = sum(
-            len(prefix.arguments) + 1 for prefix in prefixes
+        assert prefix_lengths.ndim == 1
+        cpu_lengths = prefix_lengths.detach().cpu()
+        lengths = tuple(
+            int(cpu_lengths[index].item())
+            for index in range(int(cpu_lengths.shape[0]))
         )
-        max_token_count = max(
-            len(prefix.arguments) + 1 for prefix in prefixes
-        )
+        self._record_argument_prefix_length_values(lengths)
+
+    def _record_argument_prefix_length_values(
+        self, prefix_lengths: tuple[int, ...]
+    ) -> None:
+        assert prefix_lengths
+        assert all(length >= 0 for length in prefix_lengths)
+        row_count = len(prefix_lengths)
+        valid_token_count = sum(length + 1 for length in prefix_lengths)
+        max_token_count = max(length + 1 for length in prefix_lengths)
         token_count = row_count * max_token_count
         self.argument_prefix_batch_count += 1
         self.argument_prefix_row_count += row_count

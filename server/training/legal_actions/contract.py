@@ -7,8 +7,6 @@ from dataclasses import dataclass
 from server.result import Ok, Rejected
 from server.training.semantic_actions.arguments import (
     InvalidSemanticActionRejected,
-    SemanticArgument,
-    SemanticArgumentPrefix,
     SemanticArgumentTrace,
 )
 from server.training.semantic_actions.query import ActionQuery
@@ -21,12 +19,6 @@ class LegalActionIndex:
     @property
     def query(self) -> ActionQuery:
         """Return the action query this legal index answers."""
-        raise NotImplementedError
-
-    def allowed_next(
-        self, prefix: SemanticArgumentPrefix
-    ) -> tuple[SemanticArgument, ...]:
-        """Return legal next semantic arguments after the prefix."""
         raise NotImplementedError
 
     def decode(
@@ -45,11 +37,6 @@ class EmptyLegalActionIndex(LegalActionIndex):
     @property
     def query(self) -> ActionQuery:
         return self._query
-
-    def allowed_next(
-        self, prefix: SemanticArgumentPrefix
-    ) -> tuple[SemanticArgument, ...]:
-        return ()
 
     def decode(
         self, trace: SemanticArgumentTrace

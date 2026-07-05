@@ -15,15 +15,22 @@ from pathlib import Path
 from server import result as _result
 from server.training.config import (
     ModelConfig,
-    PPOProfileMode,
     TrainConfig,
-    TrainingDevice,
 )
-from server.training.loop import run_training_loop
 from server.training.run_setup import (
     initialize_training_run,
     prepare_training_run,
 )
+from server.training.runtime import (
+    CpuSet,
+    ExecutionConfig,
+    ExecutionTimeouts,
+    ModelRankPlacement,
+    PPOProfileMode,
+    parse_model_rank_placement,
+)
+from server.training.runtime.config import parse_cpu_set
+from server.training.runtime.coordinator import run_training_coordinator
 from server.training.torch_checkpoints import (
     read_torch_checkpoint_metadata,
 )
@@ -37,13 +44,10 @@ MIN_CLI_MAX_TOKENS = 512
 class TrainConfigOverrides:
     """Explicit CLI overrides for train config fields."""
 
-    device: TrainingDevice | None = None
-    ppo_profile: PPOProfileMode | None = None
     seed: int | None = None
     learning_rate: float | None = None
     checkpoint_every_updates: int | None = None
     checkpoint_retention_updates: int | None = None
-    max_round_seconds: float | None = None
     gae_lambda: float | None = None
     ppo_clip: float | None = None
     value_clip: float | None = None
@@ -55,6 +59,20 @@ class TrainConfigOverrides:
     adam_beta1: float | None = None
     adam_beta2: float | None = None
     weight_decay: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionConfigOverrides:
+    """Explicit CLI overrides for execution-only fields."""
+
+    worker_cpus: CpuSet | None = None
+    model_ranks: ModelRankPlacement | None = None
+    ppo_profile: PPOProfileMode | None = None
+    round_timeout_seconds: float | None = None
+    rollout_response_timeout_seconds: float | None = None
+    state_sync_timeout_seconds: float | None = None
+    update_timeout_seconds: float | None = None
+    telemetry_interval_seconds: float | None = None
 
 
 def resolve_model_config(
@@ -87,12 +105,6 @@ def resolve_train_config(
         base = metadata_result.value.train_config
     return _result.Ok(
         value=TrainConfig(
-            device=base.device
-            if cli_overrides.device is None
-            else cli_overrides.device,
-            ppo_profile=base.ppo_profile
-            if cli_overrides.ppo_profile is None
-            else cli_overrides.ppo_profile,
             seed=base.seed
             if cli_overrides.seed is None
             else cli_overrides.seed,
@@ -105,9 +117,6 @@ def resolve_train_config(
             checkpoint_retention_updates=base.checkpoint_retention_updates
             if cli_overrides.checkpoint_retention_updates is None
             else cli_overrides.checkpoint_retention_updates,
-            max_round_seconds=base.max_round_seconds
-            if cli_overrides.max_round_seconds is None
-            else cli_overrides.max_round_seconds,
             gae_lambda=base.gae_lambda
             if cli_overrides.gae_lambda is None
             else cli_overrides.gae_lambda,
@@ -141,6 +150,50 @@ def resolve_train_config(
             weight_decay=base.weight_decay
             if cli_overrides.weight_decay is None
             else cli_overrides.weight_decay,
+        )
+    )
+
+
+def resolve_execution_config(
+    overrides: ExecutionConfigOverrides,
+) -> _result.Ok[ExecutionConfig] | _result.Rejected:
+    """Build execution config from CLI-only values."""
+    base = ExecutionConfig()
+    worker_cpus = (
+        base.worker_cpus
+        if overrides.worker_cpus is None
+        else overrides.worker_cpus
+    )
+    model_ranks = (
+        base.model_ranks
+        if overrides.model_ranks is None
+        else overrides.model_ranks
+    )
+    timeouts = ExecutionTimeouts(
+        round_seconds=base.timeouts.round_seconds
+        if overrides.round_timeout_seconds is None
+        else overrides.round_timeout_seconds,
+        rollout_response_seconds=base.timeouts.rollout_response_seconds
+        if overrides.rollout_response_timeout_seconds is None
+        else overrides.rollout_response_timeout_seconds,
+        state_sync_seconds=base.timeouts.state_sync_seconds
+        if overrides.state_sync_timeout_seconds is None
+        else overrides.state_sync_timeout_seconds,
+        update_seconds=base.timeouts.update_seconds
+        if overrides.update_timeout_seconds is None
+        else overrides.update_timeout_seconds,
+    )
+    return _result.Ok(
+        value=ExecutionConfig(
+            worker_cpus=worker_cpus,
+            model_ranks=model_ranks,
+            ppo_profile=base.ppo_profile
+            if overrides.ppo_profile is None
+            else overrides.ppo_profile,
+            timeouts=timeouts,
+            telemetry_interval_seconds=base.telemetry_interval_seconds
+            if overrides.telemetry_interval_seconds is None
+            else overrides.telemetry_interval_seconds,
         )
     )
 
@@ -280,6 +333,20 @@ def _ppo_profile_arg(value: object) -> PPOProfileMode | None:
     assert False
 
 
+def _cpu_set_arg(text: str) -> CpuSet:
+    parsed = parse_cpu_set(text)
+    if isinstance(parsed, _result.Rejected):
+        raise argparse.ArgumentTypeError(parsed.reason)
+    return parsed.value
+
+
+def _model_ranks_arg(text: str) -> ModelRankPlacement:
+    parsed = parse_model_rank_placement(text)
+    if isinstance(parsed, _result.Rejected):
+        raise argparse.ArgumentTypeError(parsed.reason)
+    return parsed.value
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", default=None)
@@ -287,7 +354,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--resume", default=None)
     parser.add_argument("--force-new-run", action="store_true")
     parser.add_argument(
-        "--device", choices=("cpu", "cuda"), default=None
+        "--worker-cpus", type=_cpu_set_arg, default=None
+    )
+    parser.add_argument(
+        "--model-ranks", type=_model_ranks_arg, default=None
     )
     parser.add_argument(
         "--ppo-profile",
@@ -322,7 +392,29 @@ def main(argv: Sequence[str] | None = None) -> None:
         default=None,
     )
     parser.add_argument(
-        "--max-round-seconds", type=_positive_float_arg, default=None
+        "--round-timeout-seconds",
+        type=_positive_float_arg,
+        default=None,
+    )
+    parser.add_argument(
+        "--rollout-response-timeout-seconds",
+        type=_positive_float_arg,
+        default=None,
+    )
+    parser.add_argument(
+        "--state-sync-timeout-seconds",
+        type=_positive_float_arg,
+        default=None,
+    )
+    parser.add_argument(
+        "--update-timeout-seconds",
+        type=_positive_float_arg,
+        default=None,
+    )
+    parser.add_argument(
+        "--telemetry-interval-seconds",
+        type=_positive_float_arg,
+        default=None,
     )
     parser.add_argument(
         "--gae-lambda", type=_unit_interval_float_arg, default=None
@@ -401,15 +493,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     model_config = model_config_result.value
     train_config_result = resolve_train_config(
         cli_overrides=TrainConfigOverrides(
-            device=args.device,
-            ppo_profile=_ppo_profile_arg(args.ppo_profile),
             seed=args.seed,
             learning_rate=args.learning_rate,
             checkpoint_every_updates=args.checkpoint_every_updates,
             checkpoint_retention_updates=(
                 args.checkpoint_retention_updates
             ),
-            max_round_seconds=args.max_round_seconds,
             gae_lambda=args.gae_lambda,
             ppo_clip=args.ppo_clip,
             value_clip=args.value_clip,
@@ -427,12 +516,32 @@ def main(argv: Sequence[str] | None = None) -> None:
     if isinstance(train_config_result, _result.Rejected):
         parser.error(train_config_result.reason)
     train_config = train_config_result.value
+    execution_config_result = resolve_execution_config(
+        ExecutionConfigOverrides(
+            worker_cpus=args.worker_cpus,
+            model_ranks=args.model_ranks,
+            ppo_profile=_ppo_profile_arg(args.ppo_profile),
+            round_timeout_seconds=args.round_timeout_seconds,
+            rollout_response_timeout_seconds=(
+                args.rollout_response_timeout_seconds
+            ),
+            state_sync_timeout_seconds=(
+                args.state_sync_timeout_seconds
+            ),
+            update_timeout_seconds=args.update_timeout_seconds,
+            telemetry_interval_seconds=args.telemetry_interval_seconds,
+        )
+    )
+    if isinstance(execution_config_result, _result.Rejected):
+        parser.error(execution_config_result.reason)
+    execution_config = execution_config_result.value
     if resume_path is None:
         initialized_result = initialize_training_run(
             run_dir=run_dir,
             run_id=run_dir.name,
             model_config=model_config,
             train_config=train_config,
+            execution_config=execution_config,
             force_new_run=args.force_new_run,
         )
         if isinstance(initialized_result, _result.Rejected):
@@ -445,17 +554,23 @@ def main(argv: Sequence[str] | None = None) -> None:
         dashboard_path = initialized.dashboard_path
         training_resume = initialized.checkpoint_path
     else:
-        prepared_result = prepare_training_run(run_dir=run_dir)
+        prepared_result = prepare_training_run(
+            run_dir=run_dir,
+            telemetry_interval_seconds=(
+                execution_config.telemetry_interval_seconds
+            ),
+        )
         if isinstance(prepared_result, _result.Rejected):
             parser.error(prepared_result.reason)
         prepared = prepared_result.value
         dashboard_path = prepared.dashboard_path
         training_resume = resume_path
-    result = run_training_loop(
+    result = run_training_coordinator(
         run_dir=run_dir,
         run_id=run_dir.name,
         model_config=model_config,
         train_config=train_config,
+        execution_config=execution_config,
         max_rounds=args.max_rounds,
         resume=training_resume,
     )

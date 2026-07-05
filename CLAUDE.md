@@ -21,10 +21,10 @@
 - 必须通过 `pyright` **strict 模式**，**0 errors, 0 warnings**
 - 必须通过 `ruff check` 和 `ruff format --check`，**0 errors, 0 warnings**
 - 全量验证必须包含所有依赖：
+  - `uv run --extra dev --extra training ruff format --check`
+  - `uv run --extra dev --extra training ruff check`
   - `uv run --extra dev --extra training pyright`
   - `uv run --extra dev --extra training pytest`
-  - `uv run --extra dev --extra training ruff check`
-  - `uv run --extra dev --extra training ruff format --check`
 
 ### 3. 错误处理
 
