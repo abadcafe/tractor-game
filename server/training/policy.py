@@ -43,7 +43,7 @@ class PolicyDecision:
 class TrainingPolicy(Protocol):
     """Policy abstraction consumed by TrainingPlayer."""
 
-    def decide(
+    async def decide(
         self,
         observation: Observation,
         legal_actions: LegalActionIndex,
@@ -54,7 +54,7 @@ class TrainingPolicy(Protocol):
 class RandomTrainingPolicy:
     """Verified random semantic policy for smoke runs."""
 
-    def decide(
+    async def decide(
         self,
         observation: Observation,
         legal_actions: LegalActionIndex,

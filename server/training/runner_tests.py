@@ -128,14 +128,14 @@ class _RecordingPolicy:
         self._delegate = _random_policy(seed=seed)
         self.observations: list[Observation] = []
 
-    def decide(
+    async def decide(
         self,
         observation: Observation,
         legal_actions: LegalActionIndex,
         decision_key: PolicyDecisionKey,
     ) -> Ok[PolicyDecision] | Rejected:
         self.observations.append(observation)
-        return self._delegate.decide(
+        return await self._delegate.decide(
             observation, legal_actions, decision_key
         )
 

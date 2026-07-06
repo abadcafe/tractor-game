@@ -41,7 +41,7 @@ from server.training.trajectory import TrajectoryRecorder
 class FirstCardPlayPolicy:
     """Deterministic test policy that plays the first hand face."""
 
-    def decide(
+    async def decide(
         self,
         observation: Observation,
         legal_actions: LegalActionIndex,
@@ -103,18 +103,20 @@ class CapturingFirstCardPlayPolicy(FirstCardPlayPolicy):
     def __init__(self) -> None:
         self.observation: Observation | None = None
 
-    def decide(
+    async def decide(
         self,
         observation: Observation,
         legal_actions: LegalActionIndex,
         decision_key: PolicyDecisionKey,
     ) -> Ok[PolicyDecision] | Rejected:
         self.observation = observation
-        return super().decide(observation, legal_actions, decision_key)
+        return await super().decide(
+            observation, legal_actions, decision_key
+        )
 
 
 class RejectingPolicy:
-    def decide(
+    async def decide(
         self,
         observation: Observation,
         legal_actions: LegalActionIndex,

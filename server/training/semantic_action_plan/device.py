@@ -19,6 +19,7 @@ from server.training.semantic_action_plan.spec import (
     ACTION_FACE_COUNT,
 )
 from server.training.semantic_actions.codec import SEMANTIC_CODEC
+from server.training.tensor_staging import staged_tensor
 from server.training.tensorize import ArgumentPrefixTensorBatch
 
 _KIND_EMPTY = ACTION_KIND_EMPTY
@@ -127,67 +128,67 @@ def plan_batch_to_device(
     max_trace_steps = max(_trace_steps(spec) for spec in specs)
     max_pair_plan_count = max(_pair_plan_count(spec) for spec in specs)
     return DeviceActionPlanBatch(
-        kind_codes=torch.tensor(
+        kind_codes=staged_tensor(
             tuple(_kind_code(spec) for spec in specs),
             dtype=torch.long,
             device=device,
         ),
-        available_counts=torch.tensor(
+        available_counts=staged_tensor(
             tuple(_available_counts(spec) for spec in specs),
             dtype=torch.long,
             device=device,
         ),
-        effective_suits=torch.tensor(
+        effective_suits=staged_tensor(
             tuple(_effective_suits(spec) for spec in specs),
             dtype=torch.long,
             device=device,
         ),
-        same_suit_mask=torch.tensor(
+        same_suit_mask=staged_tensor(
             tuple(_same_suit_mask(spec) for spec in specs),
             dtype=torch.bool,
             device=device,
         ),
-        off_suit_mask=torch.tensor(
+        off_suit_mask=staged_tensor(
             tuple(_off_suit_mask(spec) for spec in specs),
             dtype=torch.bool,
             device=device,
         ),
-        pair_face_mask=torch.tensor(
+        pair_face_mask=staged_tensor(
             tuple(_pair_face_mask(spec) for spec in specs),
             dtype=torch.bool,
             device=device,
         ),
-        min_select=torch.tensor(
+        min_select=staged_tensor(
             tuple(_min_select(spec) for spec in specs),
             dtype=torch.long,
             device=device,
         ),
-        max_select=torch.tensor(
+        max_select=staged_tensor(
             tuple(_max_select(spec) for spec in specs),
             dtype=torch.long,
             device=device,
         ),
-        exact_select=torch.tensor(
+        exact_select=staged_tensor(
             tuple(_exact_select(spec) for spec in specs),
             dtype=torch.long,
             device=device,
         ),
-        required_same_suit_count=torch.tensor(
+        required_same_suit_count=staged_tensor(
             tuple(_required_same_suit_count(spec) for spec in specs),
             dtype=torch.long,
             device=device,
         ),
-        pair_floor=torch.tensor(
+        pair_floor=staged_tensor(
             tuple(_pair_floor(spec) for spec in specs),
             dtype=torch.long,
             device=device,
         ),
-        has_tractor=torch.tensor(
+        has_tractor=staged_tensor(
             tuple(_has_tractor(spec) for spec in specs),
             dtype=torch.bool,
             device=device,
         ),
-        trace_tokens=torch.tensor(
+        trace_tokens=staged_tensor(
             tuple(
                 _padded_trace_tokens(
                     spec,
@@ -199,7 +200,7 @@ def plan_batch_to_device(
             dtype=torch.long,
             device=device,
         ),
-        trace_token_mask=torch.tensor(
+        trace_token_mask=staged_tensor(
             tuple(
                 _padded_trace_token_mask(
                     spec,
@@ -211,7 +212,7 @@ def plan_batch_to_device(
             dtype=torch.bool,
             device=device,
         ),
-        trace_lengths=torch.tensor(
+        trace_lengths=staged_tensor(
             tuple(
                 _padded_trace_lengths(
                     spec, max_trace_count=max_trace_count
@@ -221,7 +222,7 @@ def plan_batch_to_device(
             dtype=torch.long,
             device=device,
         ),
-        trace_row_mask=torch.tensor(
+        trace_row_mask=staged_tensor(
             tuple(
                 _padded_trace_row_mask(
                     spec, max_trace_count=max_trace_count
@@ -231,7 +232,7 @@ def plan_batch_to_device(
             dtype=torch.bool,
             device=device,
         ),
-        pair_plan_masks=torch.tensor(
+        pair_plan_masks=staged_tensor(
             tuple(
                 _padded_pair_plan_masks(
                     spec, max_pair_plan_count=max_pair_plan_count
@@ -241,7 +242,7 @@ def plan_batch_to_device(
             dtype=torch.bool,
             device=device,
         ),
-        pair_plan_row_mask=torch.tensor(
+        pair_plan_row_mask=staged_tensor(
             tuple(
                 _padded_pair_plan_row_mask(
                     spec, max_pair_plan_count=max_pair_plan_count
@@ -483,13 +484,13 @@ def _token_tables(device: torch.device) -> _TokenTables:
             counts[token_id] = count
             is_select[token_id] = True
     tables = _TokenTables(
-        is_select=torch.tensor(
+        is_select=staged_tensor(
             is_select, dtype=torch.bool, device=device
         ),
-        face_indices=torch.tensor(
+        face_indices=staged_tensor(
             face_indices, dtype=torch.long, device=device
         ),
-        counts=torch.tensor(counts, dtype=torch.long, device=device),
+        counts=staged_tensor(counts, dtype=torch.long, device=device),
     )
     _TOKEN_TABLE_CACHE[device] = tables
     return tables

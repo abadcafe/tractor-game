@@ -9,10 +9,11 @@ from server.result import Ok, Rejected
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
 from server.training.policy import PolicyDecision
-from server.training.policy_request_frame import (
-    CompletedPolicyResponseFrame,
-    PolicyRequestBatchFrame,
-    build_policy_request_frame,
+from server.training.policy_inference_wire import (
+    CompletedPolicyResponse,
+    PolicyRequestRoute,
+    PolicyRequestWireBatch,
+    build_policy_request_wire,
     decode_policy_response,
 )
 from server.training.policy_sampling import ModelRankPolicyDecision
@@ -28,8 +29,8 @@ class ModelReplicaProtocol(Protocol):
 
     def load_state(self, *, snapshot: RuntimeTrainingState) -> None: ...
 
-    def decide_batch(
-        self, requests: PolicyRequestBatchFrame
+    def decide_wires(
+        self, requests: PolicyRequestWireBatch
     ) -> tuple[
         _result.Ok[ModelRankPolicyDecision] | _result.Rejected, ...
     ]: ...
@@ -47,29 +48,46 @@ class DirectPolicyClient:
     def __init__(self, *, replica: ModelReplicaProtocol) -> None:
         self._replica = replica
 
-    def decide(
+    async def decide(
         self,
         observation: Observation,
         legal_actions: LegalActionIndex,
         decision_key: PolicyDecisionKey,
     ) -> Ok[PolicyDecision] | Rejected:
-        frame_result = build_policy_request_frame(
+        request_result = build_policy_request_wire(
+            worker_index=0,
+            request_id=decision_key.decision_index,
             observation=observation,
             legal_actions=legal_actions,
             decision_key=decision_key,
         )
-        if isinstance(frame_result, Rejected):
-            return frame_result
-        result = self._replica.decide_batch(
-            PolicyRequestBatchFrame(frames=(frame_result.value,))
+        if isinstance(request_result, Rejected):
+            return request_result
+        result = self._replica.decide_wires(
+            PolicyRequestWireBatch(requests=(request_result.value,))
         )[0]
         if isinstance(result, Rejected):
             return result
         return decode_policy_response(
             legal_actions=legal_actions,
-            response=CompletedPolicyResponseFrame(
+            response=CompletedPolicyResponse(
+                route=PolicyRequestRoute(
+                    worker_index=0,
+                    request_id=decision_key.decision_index,
+                ),
                 trace_token_ids=result.value.trace_token_ids,
-                decision_handle=result.value.decision_handle,
+                decision_handle_model_rank=(
+                    result.value.decision_handle.model_rank_index
+                ),
+                decision_handle_policy_version=(
+                    result.value.decision_handle.policy_version
+                ),
+                decision_handle_slot_index=(
+                    result.value.decision_handle.slot_index
+                ),
+                decision_handle_slot_generation=(
+                    result.value.decision_handle.slot_generation
+                ),
                 choice_count=result.value.choice_count,
             ),
         )

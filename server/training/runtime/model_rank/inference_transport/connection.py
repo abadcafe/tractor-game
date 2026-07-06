@@ -1,75 +1,60 @@
-"""Connection-backed binary inference transport."""
+"""Connection-backed raw inference transport."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from multiprocessing.connection import Connection, wait
-from multiprocessing.shared_memory import SharedMemory
+from multiprocessing.context import BufferTooShort
 
 from server import result as _result
 from server.result import Ok, Rejected
-from server.training.policy_request_frame import (
-    decode_policy_request_frame,
-    encode_policy_request_frame,
-)
-
-from .codec import (
-    decode_request_envelope,
-    decode_response_envelope,
-    encode_request_envelope,
-    encode_response_envelope,
-)
-from .messages import (
-    PolicyInferenceRequest,
-    PolicyInferenceRequestBatch,
-    PolicyInferenceRequestControl,
-    PolicyInferenceResponseEnvelope,
+from server.training.policy_inference_wire import (
+    PolicyRequestWire,
+    PolicyResponseWire,
 )
 
 
 @dataclass(frozen=True, slots=True)
-class SharedMemoryPolicyRequestSender:
-    """Worker-side request sender over a shared-memory slot."""
+class ConnectionPolicyRequestSender:
+    """Worker-side request sender over a binary connection."""
 
     connection: Connection
-    slot_name: str
-    slot_size: int
 
-    def send(
-        self, envelope: PolicyInferenceRequest
-    ) -> Ok[None] | Rejected:
-        payload = encode_policy_request_frame(envelope.frame)
-        if len(payload) > self.slot_size:
+    def send(self, request: PolicyRequestWire) -> Ok[None] | Rejected:
+        """Send one raw inference request."""
+        try:
+            self.connection.send_bytes(request.data)
+        except OSError as exc:
             return Rejected(
                 reason=(
-                    "model-rank inference request exceeds shared "
-                    f"memory slot: {len(payload)} > {self.slot_size}"
+                    f"model-rank inference request send failed: {exc}"
                 )
             )
-        slot_result = _open_shared_memory_slot(self.slot_name)
-        if isinstance(slot_result, Rejected):
-            return slot_result
-        slot = slot_result.value
-        try:
-            buffer = _shared_memory_buffer(slot)
-            buffer[: len(payload)] = payload
-            del buffer
-            self.connection.send_bytes(
-                encode_request_envelope(
-                    PolicyInferenceRequestControl(
-                        worker_index=envelope.worker_index,
-                        request_id=envelope.request_id,
-                        byte_count=len(payload),
-                        slot_name=self.slot_name,
-                    )
-                )
-            )
-        except OSError as exc:
-            reason = f"model-rank inference request send failed: {exc}"
-            return Rejected(reason=reason)
-        finally:
-            slot.close()
         return Ok(value=None)
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectionPolicyRequestReceiver:
+    """Model-rank request receiver over a binary connection."""
+
+    connection: Connection
+
+    def receive_bytes_into(
+        self, buffer: memoryview
+    ) -> _result.Ok[int] | _result.Rejected:
+        """Receive one request directly into a caller-owned slot."""
+        try:
+            byte_count = self.connection.recv_bytes_into(buffer)
+        except BufferTooShort:
+            return Rejected(reason="policy request wire exceeds slot")
+        except (EOFError, OSError) as exc:
+            return Rejected(
+                reason=(
+                    "model-rank inference request receive failed: "
+                    f"{exc}"
+                )
+            )
+        return Ok(value=byte_count)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +65,8 @@ class ConnectionPolicyResponseReceiver:
 
     def receive(
         self, *, timeout_seconds: float
-    ) -> _result.Ok[PolicyInferenceResponseEnvelope] | _result.Rejected:
+    ) -> _result.Ok[PolicyResponseWire] | _result.Rejected:
+        """Receive one raw inference response."""
         if not self.connection.poll(timeout_seconds):
             return Rejected(
                 reason="model rank policy inference timed out"
@@ -88,61 +74,14 @@ class ConnectionPolicyResponseReceiver:
         return _receive_response(self.connection)
 
 
-def receive_policy_request_batch(
-    *,
-    receivers: tuple[SharedMemoryPolicyRequestReceiver, ...],
-    batch_size: int,
-    wait_seconds: float,
-) -> _result.Ok[PolicyInferenceRequestBatch | None] | _result.Rejected:
-    """Receive at most one model-rank inference batch."""
-    assert batch_size > 0
-    if not receivers:
-        return Ok(value=None)
-    ready = tuple(
-        item
-        for item in wait(
-            tuple(receiver.connection for receiver in receivers),
-            timeout=wait_seconds,
-        )
-        if isinstance(item, Connection)
-    )
-    if not ready:
-        return Ok(value=None)
-    requests: list[PolicyInferenceRequest] = []
-    for receiver in _ready_receivers(receivers=receivers, ready=ready):
-        if len(requests) >= batch_size:
-            break
-        request_result = receiver.receive_request()
-        if isinstance(request_result, Rejected):
-            return request_result
-        requests.append(request_result.value)
-    while len(requests) < batch_size:
-        drained = False
-        for receiver in receivers:
-            if len(requests) >= batch_size:
-                break
-            if not receiver.connection.poll():
-                continue
-            request_result = receiver.receive_request()
-            if isinstance(request_result, Rejected):
-                return request_result
-            requests.append(request_result.value)
-            drained = True
-        if not drained:
-            break
-    if not requests:
-        return Ok(value=None)
-    return Ok(value=PolicyInferenceRequestBatch(tuple(requests)))
-
-
 def send_policy_response(
     *,
     sender: Connection,
-    envelope: PolicyInferenceResponseEnvelope,
+    response: PolicyResponseWire,
 ) -> Ok[None] | Rejected:
-    """Send one model-rank inference response."""
+    """Send one raw inference response."""
     try:
-        sender.send_bytes(encode_response_envelope(envelope))
+        sender.send_bytes(response.data)
     except OSError as exc:
         return Rejected(
             reason=f"model-rank inference response send failed: {exc}"
@@ -150,104 +89,27 @@ def send_policy_response(
     return Ok(value=None)
 
 
-def _receive_request(
-    connection: Connection,
-) -> _result.Ok[PolicyInferenceRequest] | _result.Rejected:
-    try:
-        data = connection.recv_bytes()
-    except (EOFError, OSError) as exc:
-        return Rejected(
-            reason=f"model-rank inference request receive failed: {exc}"
-        )
-    control_result = decode_request_envelope(data)
-    if isinstance(control_result, Rejected):
-        return control_result
-    return _request_from_control(control_result.value)
+def wait_for_ready_receivers(
+    *,
+    receivers: tuple[ConnectionPolicyRequestReceiver, ...],
+    extra_connections: tuple[Connection, ...] = (),
+    timeout_seconds: float | None,
+) -> tuple[Connection, ...]:
+    """Wait until request or extra connections become readable."""
+    connections = tuple(receiver.connection for receiver in receivers)
+    ready = wait(
+        connections + extra_connections,
+        timeout=timeout_seconds,
+    )
+    return tuple(item for item in ready if isinstance(item, Connection))
 
 
 def _receive_response(
     connection: Connection,
-) -> _result.Ok[PolicyInferenceResponseEnvelope] | _result.Rejected:
+) -> _result.Ok[PolicyResponseWire] | _result.Rejected:
     try:
         data = connection.recv_bytes()
     except (EOFError, OSError) as exc:
         reason = f"model-rank inference response receive failed: {exc}"
         return Rejected(reason=reason)
-    return decode_response_envelope(data)
-
-
-@dataclass(frozen=True, slots=True)
-class SharedMemoryPolicyRequestReceiver:
-    """Model-rank request receiver backed by one shared-memory slot."""
-
-    connection: Connection
-
-    def receive_request(
-        self,
-    ) -> _result.Ok[PolicyInferenceRequest] | _result.Rejected:
-        return _receive_request(self.connection)
-
-
-def _request_from_control(
-    control: PolicyInferenceRequestControl,
-) -> _result.Ok[PolicyInferenceRequest] | _result.Rejected:
-    slot_result = _open_shared_memory_slot(control.slot_name)
-    if isinstance(slot_result, Rejected):
-        return slot_result
-    slot = slot_result.value
-    try:
-        buffer = _shared_memory_buffer(slot)
-        if control.byte_count > len(buffer):
-            del buffer
-            return Rejected(
-                reason=(
-                    "model-rank inference request slot length is "
-                    "invalid"
-                )
-            )
-        payload = bytes(buffer[: control.byte_count])
-        del buffer
-    finally:
-        slot.close()
-    frame_result = decode_policy_request_frame(payload)
-    if isinstance(frame_result, Rejected):
-        return frame_result
-    return Ok(
-        value=PolicyInferenceRequest(
-            worker_index=control.worker_index,
-            request_id=control.request_id,
-            frame=frame_result.value,
-            byte_count=control.byte_count,
-        )
-    )
-
-
-def _open_shared_memory_slot(
-    slot_name: str,
-) -> Ok[SharedMemory] | Rejected:
-    try:
-        return Ok(value=SharedMemory(name=slot_name, track=False))
-    except OSError as exc:
-        return Rejected(
-            reason=(
-                f"model-rank inference shared memory open failed: {exc}"
-            )
-        )
-
-
-def _shared_memory_buffer(slot: SharedMemory) -> memoryview[int]:
-    buffer = slot.buf
-    assert buffer is not None
-    return buffer
-
-
-def _ready_receivers(
-    *,
-    receivers: tuple[SharedMemoryPolicyRequestReceiver, ...],
-    ready: tuple[Connection, ...],
-) -> tuple[SharedMemoryPolicyRequestReceiver, ...]:
-    return tuple(
-        receiver
-        for receiver in receivers
-        if any(receiver.connection == item for item in ready)
-    )
+    return Ok(value=PolicyResponseWire(data=data))

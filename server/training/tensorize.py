@@ -21,6 +21,7 @@ from server.training.semantic_actions.codec import (
     SEMANTIC_CODEC,
     semantic_argument_id,
 )
+from server.training.tensor_staging import staged_tensor
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,23 +250,23 @@ def _component_tensor_rows(
     values: tuple[tuple[tuple[int, ...], ...], ...],
     device: torch.device,
 ) -> Tensor:
-    return torch.tensor(values, dtype=torch.long, device=device)
+    return staged_tensor(values, dtype=torch.long, device=device)
 
 
 def _long_tensor_rows(
     values: tuple[tuple[int, ...], ...], device: torch.device
 ) -> Tensor:
-    return torch.tensor(values, dtype=torch.long, device=device)
+    return staged_tensor(values, dtype=torch.long, device=device)
 
 
 def _numeric_tensor_rows(
     values: tuple[tuple[tuple[float, ...], ...], ...],
     device: torch.device,
 ) -> Tensor:
-    return torch.tensor(values, dtype=torch.float32, device=device)
+    return staged_tensor(values, dtype=torch.float32, device=device)
 
 
 def _bool_tensor_rows(
     values: tuple[tuple[bool, ...], ...], device: torch.device
 ) -> Tensor:
-    return torch.tensor(values, dtype=torch.bool, device=device)
+    return staged_tensor(values, dtype=torch.bool, device=device)

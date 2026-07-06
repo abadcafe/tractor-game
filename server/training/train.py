@@ -73,6 +73,7 @@ class ExecutionConfigOverrides:
     state_sync_timeout_seconds: float | None = None
     update_timeout_seconds: float | None = None
     telemetry_interval_seconds: float | None = None
+    model_inference_batch_size: int | None = None
 
 
 def resolve_model_config(
@@ -183,6 +184,15 @@ def resolve_execution_config(
         if overrides.update_timeout_seconds is None
         else overrides.update_timeout_seconds,
     )
+    model_inference_batch_size = (
+        base.model_inference_batch_size
+        if overrides.model_inference_batch_size is None
+        else overrides.model_inference_batch_size
+    )
+    if model_inference_batch_size <= 0:
+        return _result.Rejected(
+            reason="--model-inference-batch-size must be positive"
+        )
     return _result.Ok(
         value=ExecutionConfig(
             worker_cpus=worker_cpus,
@@ -194,6 +204,7 @@ def resolve_execution_config(
             telemetry_interval_seconds=base.telemetry_interval_seconds
             if overrides.telemetry_interval_seconds is None
             else overrides.telemetry_interval_seconds,
+            model_inference_batch_size=model_inference_batch_size,
         )
     )
 
@@ -417,6 +428,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         default=None,
     )
     parser.add_argument(
+        "--model-inference-batch-size",
+        type=_positive_int_arg,
+        default=None,
+    )
+    parser.add_argument(
         "--gae-lambda", type=_unit_interval_float_arg, default=None
     )
     parser.add_argument(
@@ -530,6 +546,9 @@ def main(argv: Sequence[str] | None = None) -> None:
             ),
             update_timeout_seconds=args.update_timeout_seconds,
             telemetry_interval_seconds=args.telemetry_interval_seconds,
+            model_inference_batch_size=(
+                args.model_inference_batch_size
+            ),
         )
     )
     if isinstance(execution_config_result, _result.Rejected):

@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import multiprocessing as mp
 import queue
-import time
 from dataclasses import dataclass
 from multiprocessing.connection import Connection
 from multiprocessing.context import SpawnContext
 from multiprocessing.process import BaseProcess
-from multiprocessing.shared_memory import SharedMemory
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -30,20 +28,22 @@ from server.training.runtime.messages import (
     StopWorkerCommand,
     WorkerCommandReceiver,
     WorkerCommandSender,
+    WorkerLoadStateCommand,
     WorkerRejected,
     WorkerResponseReceiver,
     WorkerResponseSender,
     WorkerRolloutCommand,
     WorkerRolloutCompleted,
     WorkerRoundSummary,
+    WorkerStateLoaded,
     WorkerUpdateCommand,
     WorkerUpdateCompleted,
 )
 from server.training.runtime.model_rank import run_model_rank_process
 from server.training.runtime.model_rank.inference_transport import (
+    ConnectionPolicyRequestReceiver,
+    ConnectionPolicyRequestSender,
     ConnectionPolicyResponseReceiver,
-    SharedMemoryPolicyRequestReceiver,
-    SharedMemoryPolicyRequestSender,
 )
 from server.training.runtime.model_rank.messages import (
     ModelRankCommandReceiver,
@@ -57,6 +57,7 @@ from server.training.runtime.model_rank.messages import (
     ModelRankUpdateCommand,
     ModelRankUpdateCompleted,
 )
+from server.training.runtime.rendezvous import create_file_rendezvous
 from server.training.runtime.state import RuntimeTrainingState
 from server.training.runtime.telemetry import (
     IntervalTelemetrySink,
@@ -73,7 +74,6 @@ from server.training.runtime.worker_process import (
 
 _GRACEFUL_PROCESS_STOP_SECONDS = 1.0
 _TERMINATED_PROCESS_STOP_SECONDS = 1.0
-_INFERENCE_REQUEST_SLOT_BYTES = 8 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,9 +153,6 @@ class _WorkerInferenceLink:
     request_receiver: Connection
     response_sender: Connection
     response_receiver: Connection
-    request_slot_name: str
-    request_slot_size: int
-    request_slot: SharedMemory
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,7 +273,7 @@ def _start_runtime_pools(
         ),
     )
     if isinstance(model_rank_pool_result, Rejected):
-        _unlink_worker_inference_slots(worker_inference_links)
+        _close_worker_inference_links(worker_inference_links)
         return model_rank_pool_result
     model_rank_pool = model_rank_pool_result.value
     worker_handles: list[_WorkerHandle] = []
@@ -287,14 +284,8 @@ def _start_runtime_pools(
         inference_request_sender = (
             None
             if model_rank_pool is None
-            else SharedMemoryPolicyRequestSender(
+            else ConnectionPolicyRequestSender(
                 connection=worker_inference_links[index].request_sender,
-                slot_name=(
-                    worker_inference_links[index].request_slot_name
-                ),
-                slot_size=(
-                    worker_inference_links[index].request_slot_size
-                ),
             )
         )
         inference_response_receiver = (
@@ -362,7 +353,7 @@ def _start_model_rank_pool(
     execution_config: ExecutionConfig,
     distributed_group: _DistributedUpdateGroup | None,
     rank_inference_request_receivers: tuple[
-        tuple[SharedMemoryPolicyRequestReceiver, ...], ...
+        tuple[ConnectionPolicyRequestReceiver, ...], ...
     ],
     worker_inference_response_senders: tuple[Connection, ...],
 ) -> _result.Ok[_ModelRankPool | None] | _result.Rejected:
@@ -375,9 +366,15 @@ def _start_model_rank_pool(
     for index, model_rank_device in enumerate(
         execution_config.model_ranks.devices
     ):
-        command_queue = context.Queue()
-        command_sender = cast(ModelRankCommandSender, command_queue)
-        command_receiver = cast(ModelRankCommandReceiver, command_queue)
+        command_receiver_raw, command_sender_raw = context.Pipe(
+            duplex=False
+        )
+        command_sender = cast(
+            ModelRankCommandSender, command_sender_raw
+        )
+        command_receiver = cast(
+            ModelRankCommandReceiver, command_receiver_raw
+        )
         process = context.Process(
             target=run_model_rank_process,
             kwargs={
@@ -433,20 +430,12 @@ def _worker_inference_links(
     for _ in range(worker_count):
         request_receiver, request_sender = context.Pipe(duplex=False)
         response_receiver, response_sender = context.Pipe(duplex=False)
-        request_slot = SharedMemory(
-            create=True,
-            size=_INFERENCE_REQUEST_SLOT_BYTES,
-            track=False,
-        )
         links.append(
             _WorkerInferenceLink(
                 request_sender=request_sender,
                 request_receiver=request_receiver,
                 response_sender=response_sender,
                 response_receiver=response_receiver,
-                request_slot_name=request_slot.name,
-                request_slot_size=_INFERENCE_REQUEST_SLOT_BYTES,
-                request_slot=request_slot,
             )
         )
     return tuple(links)
@@ -456,10 +445,10 @@ def _rank_inference_request_receivers(
     *,
     execution_config: ExecutionConfig,
     worker_inference_links: tuple[_WorkerInferenceLink, ...],
-) -> tuple[tuple[SharedMemoryPolicyRequestReceiver, ...], ...]:
+) -> tuple[tuple[ConnectionPolicyRequestReceiver, ...], ...]:
     if not execution_config.uses_model_rank_processes():
         return ()
-    groups: list[list[SharedMemoryPolicyRequestReceiver]] = [
+    groups: list[list[ConnectionPolicyRequestReceiver]] = [
         [] for _ in range(execution_config.model_rank_process_count())
     ]
     for worker_index, link in enumerate(worker_inference_links):
@@ -467,7 +456,7 @@ def _rank_inference_request_receivers(
             worker_index
         )
         groups[model_rank_index].append(
-            SharedMemoryPolicyRequestReceiver(
+            ConnectionPolicyRequestReceiver(
                 connection=link.request_receiver
             )
         )
@@ -487,13 +476,13 @@ def _distributed_update_group(
             return Rejected(
                 reason="multi-model-rank training requires CUDA NCCL"
             )
-        init_result = _distributed_init_method(run_dir)
+        init_result = create_file_rendezvous(run_dir)
         if isinstance(init_result, Rejected):
             return init_result
         return Ok(
             value=_DistributedUpdateGroup(
                 backend="nccl",
-                init_method=init_result.value,
+                init_method=init_result.value.init_method,
                 world_size=world_size,
                 timeout_seconds=(
                     execution_config.timeouts.update_seconds
@@ -503,13 +492,13 @@ def _distributed_update_group(
     world_size = execution_config.worker_process_count()
     if world_size <= 1:
         return Ok(value=None)
-    init_result = _distributed_init_method(run_dir)
+    init_result = create_file_rendezvous(run_dir)
     if isinstance(init_result, Rejected):
         return init_result
     return Ok(
         value=_DistributedUpdateGroup(
             backend="gloo",
-            init_method=init_result.value,
+            init_method=init_result.value.init_method,
             world_size=world_size,
             timeout_seconds=execution_config.timeouts.update_seconds,
         )
@@ -525,20 +514,6 @@ def _telemetry_sink(
             execution_config.telemetry_interval_seconds
         ),
     )
-
-
-def _distributed_init_method(
-    run_dir: Path,
-) -> _result.Ok[str] | _result.Rejected:
-    runtime_dir = run_dir / "runtime"
-    try:
-        runtime_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        return Rejected(
-            reason=f"failed to create distributed runtime dir: {exc}"
-        )
-    init_path = runtime_dir / f"torch-distributed-{time.time_ns()}"
-    return Ok(value=f"file://{init_path.as_posix()}")
 
 
 def _worker_distributed_rank_config(
@@ -585,7 +560,8 @@ def _run_training_wave(
     first_episode_id: int,
     active_worker_count: int,
 ) -> _result.Ok[TrainingWaveResult] | _result.Rejected:
-    prepare_result = _prepare_compute_for_rollout(
+    prepare_result = _sync_compute_rank_states(
+        worker_pool=pools.worker_pool,
         model_rank_pool=pools.model_rank_pool,
         state=state,
         policy_version=policy_version,
@@ -597,7 +573,6 @@ def _run_training_wave(
         return prepare_result
     rollout_result = _collect_worker_rollouts(
         worker_pool=pools.worker_pool,
-        state=None if pools.model_rank_pool is not None else state,
         policy_version=policy_version,
         first_episode_id=first_episode_id,
         active_worker_count=active_worker_count,
@@ -639,15 +614,21 @@ def _run_training_wave(
     )
 
 
-def _prepare_compute_for_rollout(
+def _sync_compute_rank_states(
     *,
+    worker_pool: _WorkerPool,
     model_rank_pool: _ModelRankPool | None,
     state: RuntimeTrainingState,
     policy_version: int,
     state_sync_timeout_seconds: float,
 ) -> _result.Ok[None] | _result.Rejected:
     if model_rank_pool is None:
-        return Ok(value=None)
+        return _sync_worker_states(
+            worker_pool=worker_pool,
+            state=state,
+            policy_version=policy_version,
+            state_sync_timeout_seconds=state_sync_timeout_seconds,
+        )
     return _sync_model_rank_states(
         model_rank_pool=model_rank_pool,
         state=state,
@@ -659,7 +640,6 @@ def _prepare_compute_for_rollout(
 def _collect_worker_rollouts(
     *,
     worker_pool: _WorkerPool,
-    state: RuntimeTrainingState | None,
     policy_version: int,
     first_episode_id: int,
     active_worker_count: int,
@@ -671,7 +651,6 @@ def _collect_worker_rollouts(
         handle = worker_pool.handles[worker_index]
         handle.command_sender.put(
             WorkerRolloutCommand(
-                state=state,
                 policy_version=policy_version,
                 episode_id=first_episode_id + worker_index,
             )
@@ -791,6 +770,13 @@ def _receive_worker_rollouts(
             return Rejected(reason=reason)
         if isinstance(response, WorkerUpdateCompleted):
             return Rejected(reason=unexpected_update_reason)
+        if isinstance(response, WorkerStateLoaded):
+            return Rejected(
+                reason=(
+                    "worker returned state sync during "
+                    "rollout collection"
+                )
+            )
         responses.append(
             _WorkerRolloutData(
                 worker_index=response.worker_index,
@@ -826,12 +812,67 @@ def _receive_worker_updates(
             return Rejected(reason=reason)
         if isinstance(response, WorkerRolloutCompleted):
             return Rejected(reason=unexpected_rollout_reason)
+        if isinstance(response, WorkerStateLoaded):
+            return Rejected(
+                reason=(
+                    "worker returned state sync during "
+                    "synchronized update"
+                )
+            )
         responses.append(response)
     return Ok(
         value=tuple(
             sorted(responses, key=lambda item: item.worker_index)
         )
     )
+
+
+def _sync_worker_states(
+    *,
+    worker_pool: _WorkerPool,
+    state: RuntimeTrainingState,
+    policy_version: int,
+    state_sync_timeout_seconds: float,
+) -> _result.Ok[None] | _result.Rejected:
+    expected_indices = {handle.index for handle in worker_pool.handles}
+    for handle in worker_pool.handles:
+        handle.command_sender.put(
+            WorkerLoadStateCommand(
+                state=state,
+                policy_version=policy_version,
+            )
+        )
+    loaded_indices: set[int] = set()
+    for _ in worker_pool.handles:
+        try:
+            response = worker_pool.response_receiver.get(
+                True,
+                state_sync_timeout_seconds,
+            )
+        except queue.Empty:
+            return Rejected(reason="worker state sync timed out")
+        if isinstance(response, WorkerRejected):
+            return Rejected(
+                reason=(
+                    f"worker-{response.worker_index}: {response.reason}"
+                )
+            )
+        if isinstance(response, WorkerRolloutCompleted):
+            return Rejected(
+                reason="worker returned rollout during state sync"
+            )
+        if isinstance(response, WorkerUpdateCompleted):
+            return Rejected(
+                reason="worker returned update during state sync"
+            )
+        if response.policy_version != policy_version:
+            return Rejected(
+                reason="worker state sync returned stale policy version"
+            )
+        loaded_indices.add(response.worker_index)
+    if loaded_indices != expected_indices:
+        return Rejected(reason="worker state sync rank set mismatch")
+    return Ok(value=None)
 
 
 def _sync_model_rank_states(
@@ -841,8 +882,11 @@ def _sync_model_rank_states(
     policy_version: int,
     state_sync_timeout_seconds: float,
 ) -> _result.Ok[None] | _result.Rejected:
+    expected_indices = {
+        handle.index for handle in model_rank_pool.handles
+    }
     for handle in model_rank_pool.handles:
-        handle.command_sender.put(
+        handle.command_sender.send(
             ModelRankLoadStateCommand(
                 state=state,
                 policy_version=policy_version,
@@ -869,9 +913,14 @@ def _sync_model_rank_states(
                 reason="model rank returned update during state sync"
             )
         loaded.append(response)
-    if len({item.model_rank_index for item in loaded}) != len(loaded):
+    loaded_indices = {item.model_rank_index for item in loaded}
+    if loaded_indices != expected_indices:
         return Rejected(
-            reason="model-rank state sync duplicated response"
+            reason="model-rank state sync rank set mismatch"
+        )
+    if any(item.policy_version != policy_version for item in loaded):
+        return Rejected(
+            reason="model-rank state sync returned stale policy version"
         )
     return Ok(value=None)
 
@@ -937,7 +986,7 @@ def _send_model_rank_update_wave(
         model_rank_pool.handles, wave.shards, strict=True
     ):
         assert handle.index == shard.rank_index
-        handle.command_sender.put(
+        handle.command_sender.send(
             ModelRankUpdateCommand(
                 policy_version=policy_version,
                 shard=shard,
@@ -949,7 +998,7 @@ def _stop_runtime_pools(pools: _RuntimePools) -> None:
     _stop_worker_pool(pools.worker_pool)
     if pools.model_rank_pool is not None:
         _stop_model_rank_pool(pools.model_rank_pool)
-    _unlink_worker_inference_slots(pools.worker_inference_links)
+    _close_worker_inference_links(pools.worker_inference_links)
 
 
 def _stop_worker_pool(pool: _WorkerPool) -> None:
@@ -961,7 +1010,7 @@ def _stop_worker_pool(pool: _WorkerPool) -> None:
 
 def _stop_model_rank_pool(pool: _ModelRankPool) -> None:
     for handle in pool.handles:
-        handle.command_sender.put(
+        handle.command_sender.send(
             ModelRankStopCommand(reason="complete")
         )
     for handle in pool.handles:
@@ -979,12 +1028,14 @@ def _stop_process(process: BaseProcess) -> None:
         process.join(timeout=_TERMINATED_PROCESS_STOP_SECONDS)
 
 
-def _unlink_worker_inference_slots(
+def _close_worker_inference_links(
     links: tuple[_WorkerInferenceLink, ...],
 ) -> None:
     for link in links:
-        link.request_slot.close()
-        link.request_slot.unlink()
+        link.request_sender.close()
+        link.request_receiver.close()
+        link.response_sender.close()
+        link.response_receiver.close()
 
 
 def _aggregate_ppo_update_stats(

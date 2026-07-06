@@ -1,4 +1,4 @@
-"""Batched torch policy sampling over policy request frames."""
+"""Batched torch policy sampling over staged policy requests."""
 
 from __future__ import annotations
 
@@ -8,10 +8,8 @@ from torch import Tensor
 from server.result import Ok, Rejected
 from server.training.config import ModelConfig
 from server.training.model import TractorPolicyModel
-from server.training.policy_request_frame import (
-    PolicyRequestBatchFrame,
-    PolicyRequestFrame,
-    policy_request_batch_to_device,
+from server.training.policy_inference_wire import (
+    DevicePolicyRequestBatch,
 )
 from server.training.policy_sampling import (
     DeviceDecisionReplayRecord,
@@ -31,6 +29,7 @@ from server.training.tensor_finiteness import (
     NamedTensorCheck,
     reject_if_non_finite,
 )
+from server.training.tensor_staging import staged_tensor
 from server.training.tensorize import ObservationTensorBatch
 
 type PolicySamplingResult = Ok[SampledPolicyDecision] | Rejected
@@ -43,19 +42,14 @@ def sample_policy_decisions(
     model: TractorPolicyModel,
     config: ModelConfig,
     device: torch.device,
-    requests: PolicyRequestBatchFrame,
+    requests: DevicePolicyRequestBatch,
 ) -> tuple[PolicySamplingResult, ...]:
-    """Sample policy decisions for a batch of request frames."""
-    frames = requests.frames
+    """Sample policy decisions for a staged request batch."""
+    batch_size = len(requests.policy_versions)
     model.eval()
     with torch.no_grad():
-        request_batch = policy_request_batch_to_device(
-            batch=requests,
-            max_observation_tokens=config.max_tokens,
-            device=device,
-        )
-        observation_batch = request_batch.observation_batch
-        action_batch = request_batch.action_plan_batch
+        observation_batch = requests.observation_batch
+        action_batch = requests.action_plan_batch
         encoding = model.encode_observations(observation_batch)
         values = model.value_estimates(encoding)
         value_check = reject_if_non_finite(
@@ -67,10 +61,10 @@ def sample_policy_decisions(
             )
         )
         if isinstance(value_check, Rejected):
-            return tuple(value_check for _ in frames)
+            return tuple(value_check for _ in range(batch_size))
         state = initial_action_state(action_batch)
         log_probabilities = torch.zeros(
-            (len(frames),), dtype=values.dtype, device=device
+            (batch_size,), dtype=values.dtype, device=device
         )
         error_code = torch.zeros((), dtype=torch.long, device=device)
         legal_masks: list[Tensor] = []
@@ -86,7 +80,7 @@ def sample_policy_decisions(
             sampled = sample_legal_tokens(
                 argument_logits=scores.argument_logits,
                 legal_token_mask=mask,
-                thresholds=request_batch.sampling_thresholds[
+                thresholds=requests.sampling_thresholds[
                     :, argument_index
                 ],
             )
@@ -113,30 +107,30 @@ def sample_policy_decisions(
         error_value = _error_code_value(error_code)
         if error_value != 0:
             rejection = Rejected(reason=_error_reason(error_value))
-            return tuple(rejection for _ in frames)
+            return tuple(rejection for _ in range(batch_size))
         mask_stack = torch.stack(legal_masks, dim=1)
         trace_ids = action_trace_ids(state)
         choice_counts = _int_tensor_values(state.choice_counts)
         return tuple(
             _finish_sample(
-                request=request,
                 observation_batch=observation_batch,
                 state_index=index,
+                policy_version=requests.policy_versions[index],
                 trace_token_ids=trace_ids[index],
                 legal_masks=mask_stack[index, : len(trace_ids[index])],
                 old_log_probability=log_probabilities[index],
                 old_value=values[index],
                 choice_count=choice_counts[index],
             )
-            for index, request in enumerate(frames)
+            for index in range(batch_size)
         )
 
 
 def _finish_sample(
     *,
-    request: PolicyRequestFrame,
     observation_batch: ObservationTensorBatch,
     state_index: int,
+    policy_version: int,
     trace_token_ids: tuple[int, ...],
     legal_masks: Tensor,
     old_log_probability: Tensor,
@@ -149,11 +143,11 @@ def _finish_sample(
         value=SampledPolicyDecision(
             trace_token_ids=trace_token_ids,
             replay_record=DeviceDecisionReplayRecord(
-                policy_version=request.decision_key.policy_version,
+                policy_version=policy_version,
                 observation_batch=_observation_row(
                     observation_batch, index=state_index
                 ),
-                selected_token_ids=torch.tensor(
+                selected_token_ids=staged_tensor(
                     trace_token_ids,
                     dtype=torch.long,
                     device=old_value.device,

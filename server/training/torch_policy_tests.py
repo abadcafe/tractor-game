@@ -22,10 +22,14 @@ from server.training.model import (
     TractorPolicyModel,
 )
 from server.training.observation import Observation, build_observation
-from server.training.policy_request_frame import (
-    PolicyRequestBatchFrame,
-    PolicyRequestFrame,
-    build_policy_request_frame,
+from server.training.policy_inference_wire import (
+    DevicePolicyRequestBatch,
+    PolicyRequestWire,
+    PolicyRequestWireBatch,
+    build_policy_request_wire,
+)
+from server.training.runtime.model_rank.staging import (
+    stage_policy_request_wires,
 )
 from server.training.sampling import PolicyDecisionKey
 from server.training.semantic_actions import (
@@ -81,9 +85,7 @@ def test_decide_scores_sampled_argument_with_distribution() -> None:
         model=model,
         config=model_config,
         device=torch.device("cpu"),
-        requests=PolicyRequestBatchFrame(
-            frames=(_request_frame(observation, legal_actions),)
-        ),
+        requests=_request_batch(observation, legal_actions),
     )
     assert isinstance(sample_results[0], Ok)
     sample = sample_results[0].value
@@ -122,7 +124,8 @@ def test_decide_scores_sampled_argument_with_distribution() -> None:
     )
 
 
-def test_decide_rejects_non_finite_argument_logits() -> None:
+@pytest.mark.asyncio
+async def test_decide_rejects_non_finite_argument_logits() -> None:
     pass_argument = SemanticArgument("pass")
     logits = torch.zeros(
         (SEMANTIC_CODEC.argument_vocab_size,), dtype=torch.float32
@@ -147,7 +150,7 @@ def test_decide_rejects_non_finite_argument_logits() -> None:
         query=observation.action_query,
     )
 
-    result = TorchTrainingPolicy(
+    result = await TorchTrainingPolicy(
         model=model,
         config=model_config,
         device=torch.device("cpu"),
@@ -182,20 +185,26 @@ def test_sample_policy_decisions_rejects_empty_legal_token_mask() -> (
         snapshot=snapshot,
         query=observation.action_query,
     )
-    request = _request_frame(observation, legal_actions)
-    malformed_request = PolicyRequestFrame(
-        component_rows=request.component_rows,
-        numeric_value_rows=request.numeric_value_rows,
-        numeric_mask_rows=request.numeric_mask_rows,
-        action_plan=replace(request.action_plan, trace_tokens=()),
-        decision_key=request.decision_key,
+    request = _request_batch(observation, legal_actions)
+    malformed_action_plan = replace(
+        request.action_plan_batch,
+        trace_tokens=torch.zeros((1, 1, 1), dtype=torch.long),
+        trace_token_mask=torch.zeros((1, 1, 1), dtype=torch.bool),
+        trace_lengths=torch.zeros((1, 1), dtype=torch.long),
+        trace_row_mask=torch.zeros((1, 1), dtype=torch.bool),
+    )
+    malformed_request = DevicePolicyRequestBatch(
+        observation_batch=request.observation_batch,
+        action_plan_batch=malformed_action_plan,
+        sampling_thresholds=request.sampling_thresholds,
+        policy_versions=request.policy_versions,
     )
 
     results = sample_policy_decisions(
         model=model,
         config=model_config,
         device=torch.device("cpu"),
-        requests=PolicyRequestBatchFrame(frames=(malformed_request,)),
+        requests=malformed_request,
     )
 
     assert isinstance(results[0], Rejected)
@@ -204,7 +213,8 @@ def test_sample_policy_decisions_rejects_empty_legal_token_mask() -> (
     )
 
 
-def test_decide_does_not_use_torch_multinomial(
+@pytest.mark.asyncio
+async def test_decide_does_not_use_torch_multinomial(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     logits = torch.zeros(
@@ -236,7 +246,7 @@ def test_decide_does_not_use_torch_multinomial(
 
     monkeypatch.setattr(torch, "multinomial", fail_multinomial)
 
-    result = TorchTrainingPolicy(
+    result = await TorchTrainingPolicy(
         model=model,
         config=model_config,
         device=torch.device("cpu"),
@@ -245,7 +255,10 @@ def test_decide_does_not_use_torch_multinomial(
     assert isinstance(result, Ok)
 
 
-def test_decide_reuses_observation_encoding_for_full_trace() -> None:
+@pytest.mark.asyncio
+async def test_decide_reuses_observation_encoding_for_full_trace() -> (
+    None
+):
     model = _FixedArgumentModel(
         argument_logits=torch.zeros(
             (SEMANTIC_CODEC.argument_vocab_size,), dtype=torch.float32
@@ -268,7 +281,7 @@ def test_decide_reuses_observation_encoding_for_full_trace() -> None:
         query=observation.action_query,
     )
 
-    decision_result = TorchTrainingPolicy(
+    decision_result = await TorchTrainingPolicy(
         model=model,
         config=model_config,
         device=torch.device("cpu"),
@@ -317,11 +330,10 @@ def test_sample_policy_decisions_batches_observation_encoding() -> None:
         model=model,
         config=model_config,
         device=torch.device("cpu"),
-        requests=PolicyRequestBatchFrame(
-            frames=(
-                _request_frame(observation, legal_actions),
-                _request_frame(observation, legal_actions),
-            )
+        requests=_request_batch(
+            observation,
+            legal_actions,
+            batch_size=2,
         ),
     )
 
@@ -366,27 +378,40 @@ class _FixedArgumentModel(TractorPolicyModel):
         )
 
 
-def _decision_key() -> PolicyDecisionKey:
+def _decision_key(*, decision_index: int = 0) -> PolicyDecisionKey:
     return PolicyDecisionKey(
         base_seed=0,
         policy_version=0,
         episode_id=0,
         player_index=0,
-        decision_index=0,
+        decision_index=decision_index,
     )
 
 
-def _request_frame(
+def _request_batch(
     observation: Observation,
     legal_actions: LegalActionIndex,
-) -> PolicyRequestFrame:
-    frame_result = build_policy_request_frame(
-        observation=observation,
-        legal_actions=legal_actions,
-        decision_key=_decision_key(),
+    *,
+    batch_size: int = 1,
+) -> DevicePolicyRequestBatch:
+    wires: list[PolicyRequestWire] = []
+    for index in range(batch_size):
+        wire_result = build_policy_request_wire(
+            worker_index=0,
+            request_id=index,
+            observation=observation,
+            legal_actions=legal_actions,
+            decision_key=_decision_key(decision_index=index),
+        )
+        assert isinstance(wire_result, Ok)
+        wires.append(wire_result.value)
+    staged_result = stage_policy_request_wires(
+        requests=PolicyRequestWireBatch(requests=tuple(wires)),
+        max_observation_tokens=512,
+        device=torch.device("cpu"),
     )
-    assert isinstance(frame_result, Ok)
-    return frame_result.value
+    assert isinstance(staged_result, Ok)
+    return staged_result.value.device_batch
 
 
 def _legal_token_ids(mask: Tensor) -> tuple[int, ...]:

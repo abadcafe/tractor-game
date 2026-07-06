@@ -89,7 +89,7 @@ class TrainingPlayer(Player):
         if message.state.awaiting_action == "next_round":
             self._handle_next_round_state(game, message)
             return
-        self._submit_model_action(game, message)
+        await self._submit_model_action(game, message)
 
     def recorder(self) -> TrajectoryRecorder:
         return self._recorder
@@ -180,7 +180,7 @@ class TrainingPlayer(Player):
             {"type": "next_round"},
         )
 
-    def _submit_model_action(
+    async def _submit_model_action(
         self,
         game: GameView,
         message: StateMessage,
@@ -195,7 +195,7 @@ class TrainingPlayer(Player):
             snapshot=message.state,
             query=observation.action_query,
         )
-        decision_result = self._policy.decide(
+        decision_result = await self._policy.decide(
             observation,
             legal_actions,
             PolicyDecisionKey(

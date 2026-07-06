@@ -29,13 +29,23 @@ class WorkerRoundSummary:
 class WorkerRolloutCommand:
     """Collect one self-play rollout using the requested policy."""
 
-    state: RuntimeTrainingState | None
     policy_version: int
     episode_id: int
 
     def __post_init__(self) -> None:
         assert self.policy_version >= 0
         assert self.episode_id >= 0
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerLoadStateCommand:
+    """Load canonical state into an inline worker model rank."""
+
+    state: RuntimeTrainingState
+    policy_version: int
+
+    def __post_init__(self) -> None:
+        assert self.policy_version >= 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,8 +68,23 @@ class StopWorkerCommand:
 
 
 type WorkerCommand = (
-    WorkerRolloutCommand | WorkerUpdateCommand | StopWorkerCommand
+    WorkerLoadStateCommand
+    | WorkerRolloutCommand
+    | WorkerUpdateCommand
+    | StopWorkerCommand
 )
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerStateLoaded:
+    """Worker acknowledged loading a canonical state."""
+
+    worker_index: int
+    policy_version: int
+
+    def __post_init__(self) -> None:
+        assert self.worker_index >= 0
+        assert self.policy_version >= 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,7 +115,10 @@ class WorkerRejected:
 
 
 type WorkerResponse = (
-    WorkerUpdateCompleted | WorkerRolloutCompleted | WorkerRejected
+    WorkerStateLoaded
+    | WorkerUpdateCompleted
+    | WorkerRolloutCompleted
+    | WorkerRejected
 )
 
 

@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import multiprocessing as mp
-from multiprocessing.shared_memory import SharedMemory
+from multiprocessing.connection import Connection
 
+import pytest
 import torch
 
 from server.player.test_helpers import card, make_snapshot
-from server.result import Ok
+from server.result import Ok, Rejected
 from server.training.legal_actions import (
     LegalActionIndex,
     build_legal_action_index,
@@ -17,10 +19,13 @@ from server.training.observation import (
     Observation,
     build_observation,
 )
-from server.training.policy_request_frame import (
-    CompletedPolicyResponseFrame,
-    PolicyRequestBatchFrame,
-    build_policy_request_frame,
+from server.training.policy_inference_wire import (
+    PolicyRequestMetadata,
+    PolicyRequestRoute,
+    PolicyRequestWireBatch,
+    build_completed_policy_response_wire,
+    decode_policy_request_metadata,
+    max_policy_request_wire_bytes,
 )
 from server.training.policy_sampling import (
     DecisionHandle,
@@ -34,12 +39,9 @@ from server.training.runtime.model_rank import (
     InlineModelRank,
 )
 from server.training.runtime.model_rank.inference_transport import (
+    ConnectionPolicyRequestReceiver,
+    ConnectionPolicyRequestSender,
     ConnectionPolicyResponseReceiver,
-    PolicyInferenceRequestBatch,
-    PolicyInferenceResponseEnvelope,
-    SharedMemoryPolicyRequestReceiver,
-    SharedMemoryPolicyRequestSender,
-    receive_policy_request_batch,
     send_policy_response,
 )
 from server.training.runtime.state import RuntimeTrainingState
@@ -52,7 +54,10 @@ from server.training.semantic_actions import (
 from server.training.semantic_actions.codec import semantic_argument_id
 
 
-def test_direct_policy_client_calls_replica_without_queue() -> None:
+@pytest.mark.asyncio
+async def test_direct_policy_client_calls_replica_without_queue() -> (
+    None
+):
     observation = _observation()
     legal_actions = _legal_actions(observation)
     rank_decision = _model_rank_policy_decision()
@@ -60,7 +65,7 @@ def test_direct_policy_client_calls_replica_without_queue() -> None:
         state=_runtime_state(), decision=rank_decision
     )
 
-    result = DirectPolicyClient(replica=replica).decide(
+    result = await DirectPolicyClient(replica=replica).decide(
         observation,
         legal_actions,
         _decision_key(),
@@ -70,7 +75,7 @@ def test_direct_policy_client_calls_replica_without_queue() -> None:
     assert result.value.action.semantic_trace == _pass_trace()
     assert result.value.decision_handle == rank_decision.decision_handle
     assert result.value.choice_count == rank_decision.choice_count
-    assert replica.calls == ("decide_batch",)
+    assert replica.calls == ("decide_wires",)
 
 
 def test_inline_model_rank_loads_updates_and_snapshots_replica() -> (
@@ -103,49 +108,49 @@ def test_inline_model_rank_loads_updates_and_snapshots_replica() -> (
     assert snapshot_result.value is state
 
 
-def test_framed_policy_client_sends_request_and_reads_response() -> (
+@pytest.mark.asyncio
+async def test_framed_policy_client_roundtrips_connection_payload() -> (
     None
 ):
     context = mp.get_context("spawn")
     request_receiver, request_sender = context.Pipe(duplex=False)
     response_receiver, response_sender = context.Pipe(duplex=False)
-    request_slot = SharedMemory(
-        create=True, size=1024 * 1024, track=False
-    )
     rank_decision = _model_rank_policy_decision()
     try:
-        send_result = send_policy_response(
-            sender=response_sender,
-            envelope=PolicyInferenceResponseEnvelope(
-                worker_index=2,
-                request_id=0,
-                frame=CompletedPolicyResponseFrame(
-                    trace_token_ids=rank_decision.trace_token_ids,
-                    decision_handle=rank_decision.decision_handle,
-                    choice_count=rank_decision.choice_count,
-                ),
-            ),
-        )
-        assert isinstance(send_result, Ok)
         observation = _observation()
         legal_actions = _legal_actions(observation)
 
-        result = FramedPolicyClient(
-            worker_index=2,
-            request_sender=SharedMemoryPolicyRequestSender(
-                connection=request_sender,
-                slot_name=request_slot.name,
-                slot_size=1024 * 1024,
-            ),
-            response_receiver=(
-                ConnectionPolicyResponseReceiver(response_receiver)
-            ),
-            timeout_seconds=1.0,
-        ).decide(
-            observation,
-            legal_actions,
-            _decision_key(),
+        task = asyncio.create_task(
+            FramedPolicyClient(
+                worker_index=2,
+                request_sender=ConnectionPolicyRequestSender(
+                    connection=request_sender
+                ),
+                response_receiver=(
+                    ConnectionPolicyResponseReceiver(response_receiver)
+                ),
+                timeout_seconds=1.0,
+            ).decide(
+                observation,
+                legal_actions,
+                _decision_key(),
+            )
         )
+        metadata = await _receive_request_metadata(
+            request_receiver=request_receiver
+        )
+        assert metadata.route.worker_index == 2
+        assert metadata.route.request_id == 0
+        send_result = send_policy_response(
+            sender=response_sender,
+            response=build_completed_policy_response_wire(
+                route=metadata.route,
+                decision=rank_decision,
+            ),
+        )
+        assert isinstance(send_result, Ok)
+
+        result = await task
 
         assert isinstance(result, Ok)
         assert result.value.action.semantic_trace == _pass_trace()
@@ -154,47 +159,84 @@ def test_framed_policy_client_sends_request_and_reads_response() -> (
             == rank_decision.decision_handle
         )
         assert result.value.choice_count == rank_decision.choice_count
-        request_result = receive_policy_request_batch(
-            receivers=(
-                SharedMemoryPolicyRequestReceiver(
-                    connection=request_receiver
+    finally:
+        request_receiver.close()
+        request_sender.close()
+        response_receiver.close()
+        response_sender.close()
+
+
+@pytest.mark.asyncio
+async def test_framed_policy_client_rejects_response_mismatch() -> None:
+    context = mp.get_context("spawn")
+    request_receiver, request_sender = context.Pipe(duplex=False)
+    response_receiver, response_sender = context.Pipe(duplex=False)
+    try:
+        observation = _observation()
+        legal_actions = _legal_actions(observation)
+        task = asyncio.create_task(
+            FramedPolicyClient(
+                worker_index=2,
+                request_sender=ConnectionPolicyRequestSender(
+                    connection=request_sender
                 ),
+                response_receiver=(
+                    ConnectionPolicyResponseReceiver(response_receiver)
+                ),
+                timeout_seconds=1.0,
+            ).decide(
+                observation,
+                legal_actions,
+                _decision_key(),
+            )
+        )
+        metadata = await _receive_request_metadata(
+            request_receiver=request_receiver
+        )
+        assert metadata.route.request_id == 0
+        send_result = send_policy_response(
+            sender=response_sender,
+            response=build_completed_policy_response_wire(
+                route=PolicyRequestRoute(
+                    worker_index=3,
+                    request_id=metadata.route.request_id,
+                ),
+                decision=_model_rank_policy_decision(),
             ),
-            batch_size=1,
-            wait_seconds=0.0,
         )
-        assert isinstance(request_result, Ok)
-        request_batch = request_result.value
-        assert isinstance(request_batch, PolicyInferenceRequestBatch)
-        request = request_batch.requests[0]
-        assert request.worker_index == 2
-        assert request.request_id == 0
-        expected_frame = build_policy_request_frame(
-            observation=observation,
-            legal_actions=legal_actions,
-            decision_key=_decision_key(),
-        )
-        assert isinstance(expected_frame, Ok)
-        assert request.frame.component_rows == (
-            expected_frame.value.component_rows
-        )
-        assert request.frame.numeric_mask_rows == (
-            expected_frame.value.numeric_mask_rows
-        )
-        assert _float_rows_close(
-            request.frame.numeric_value_rows,
-            expected_frame.value.numeric_value_rows,
-        )
+        assert isinstance(send_result, Ok)
+        result = await task
+        assert isinstance(result, Rejected)
         assert (
-            request.frame.action_plan
-            == expected_frame.value.action_plan
-        )
-        assert request.frame.decision_key == (
-            expected_frame.value.decision_key
+            result.reason
+            == "model rank inference response worker mismatch"
         )
     finally:
-        request_slot.close()
-        request_slot.unlink()
+        request_receiver.close()
+        request_sender.close()
+        response_receiver.close()
+        response_sender.close()
+
+
+async def _receive_request_metadata(
+    *,
+    request_receiver: Connection,
+) -> PolicyRequestMetadata:
+    request_buffer = bytearray(
+        max_policy_request_wire_bytes(max_observation_tokens=512)
+    )
+    request_result = await asyncio.to_thread(
+        ConnectionPolicyRequestReceiver(
+            connection=request_receiver
+        ).receive_bytes_into,
+        memoryview(request_buffer),
+    )
+    assert isinstance(request_result, Ok)
+    metadata = decode_policy_request_metadata(
+        memoryview(request_buffer)[: request_result.value]
+    )
+    assert isinstance(metadata, Ok)
+    return metadata.value
 
 
 class _FakeReplica:
@@ -216,11 +258,11 @@ class _FakeReplica:
         assert snapshot is self._state
         self._calls.append("load_state")
 
-    def decide_batch(
-        self, requests: PolicyRequestBatchFrame
+    def decide_wires(
+        self, requests: PolicyRequestWireBatch
     ) -> tuple[Ok[ModelRankPolicyDecision], ...]:
-        assert len(requests.frames) == 1
-        self._calls.append("decide_batch")
+        assert requests.batch_size() == 1
+        self._calls.append("decide_wires")
         return (Ok(value=self._decision),)
 
     def update_shard(
@@ -252,23 +294,6 @@ def _model_rank_policy_decision() -> ModelRankPolicyDecision:
 
 def _pass_trace() -> SemanticArgumentTrace:
     return SemanticArgumentTrace(arguments=(SemanticArgument("pass"),))
-
-
-def _float_rows_close(
-    left: tuple[tuple[float, ...], ...],
-    right: tuple[tuple[float, ...], ...],
-) -> bool:
-    if len(left) != len(right):
-        return False
-    for left_row, right_row in zip(left, right, strict=True):
-        if len(left_row) != len(right_row):
-            return False
-        for left_value, right_value in zip(
-            left_row, right_row, strict=True
-        ):
-            if abs(left_value - right_value) > 0.000001:
-                return False
-    return True
 
 
 def _observation() -> Observation:

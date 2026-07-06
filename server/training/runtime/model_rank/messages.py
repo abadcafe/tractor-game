@@ -81,17 +81,15 @@ type ModelRankResponse = (
 class ModelRankCommandReceiver(Protocol):
     """Receive commands in a model-rank process."""
 
-    def get(
-        self,
-        block: bool = True,
-        timeout: float | None = None,
-    ) -> ModelRankCommand: ...
+    def poll(self, timeout: float = 0.0) -> bool: ...
+
+    def recv(self) -> ModelRankCommand: ...
 
 
 class ModelRankCommandSender(Protocol):
     """Send commands to one model-rank process."""
 
-    def put(self, item: ModelRankCommand) -> None: ...
+    def send(self, item: ModelRankCommand) -> None: ...
 
 
 class ModelRankResponseReceiver(Protocol):

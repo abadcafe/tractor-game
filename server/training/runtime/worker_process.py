@@ -28,12 +28,14 @@ from server.training.runtime.messages import (
     StopWorkerCommand,
     WorkerCommand,
     WorkerCommandReceiver,
+    WorkerLoadStateCommand,
     WorkerRejected,
     WorkerResponse,
     WorkerResponseSender,
     WorkerRolloutCommand,
     WorkerRolloutCompleted,
     WorkerRoundSummary,
+    WorkerStateLoaded,
     WorkerUpdateCommand,
     WorkerUpdateCompleted,
 )
@@ -44,8 +46,8 @@ from server.training.runtime.model_rank import (
     create_model_replica,
 )
 from server.training.runtime.model_rank.inference_transport import (
+    ConnectionPolicyRequestSender,
     ConnectionPolicyResponseReceiver,
-    SharedMemoryPolicyRequestSender,
 )
 from server.training.runtime.telemetry import (
     TelemetryEvent,
@@ -72,7 +74,7 @@ def run_training_worker_process(
     command_receiver: WorkerCommandReceiver,
     response_sender: WorkerResponseSender,
     telemetry_sink: TelemetrySink,
-    inference_request_sender: SharedMemoryPolicyRequestSender | None,
+    inference_request_sender: ConnectionPolicyRequestSender | None,
     inference_response_receiver: (
         ConnectionPolicyResponseReceiver | None
     ),
@@ -169,7 +171,7 @@ def _create_worker_runtime(
     train_config: TrainConfig,
     execution_config: ExecutionConfig,
     device: torch.device,
-    inference_request_sender: SharedMemoryPolicyRequestSender | None,
+    inference_request_sender: ConnectionPolicyRequestSender | None,
     inference_response_receiver: (
         ConnectionPolicyResponseReceiver | None
     ),
@@ -240,6 +242,12 @@ def _handle_worker_command(
 ) -> WorkerResponse | None:
     if isinstance(command, StopWorkerCommand):
         return None
+    if isinstance(command, WorkerLoadStateCommand):
+        return _load_worker_state(
+            worker_index=worker_index,
+            runtime=runtime,
+            command=command,
+        )
     if isinstance(command, WorkerRolloutCommand):
         return _run_worker_rollout(
             worker_index=worker_index,
@@ -258,6 +266,32 @@ def _handle_worker_command(
         runtime=runtime,
         command=command,
         telemetry_sink=telemetry_sink,
+    )
+
+
+def _load_worker_state(
+    *,
+    worker_index: int,
+    runtime: _WorkerRuntime,
+    command: WorkerLoadStateCommand,
+) -> WorkerResponse:
+    if runtime.inline_model_rank is None:
+        return WorkerRejected(
+            worker_index=worker_index,
+            reason="worker does not own an inline model rank",
+        )
+    load_result = runtime.inline_model_rank.load_state(
+        state=command.state,
+        policy_version=command.policy_version,
+    )
+    if isinstance(load_result, Rejected):
+        return WorkerRejected(
+            worker_index=worker_index,
+            reason=load_result.reason,
+        )
+    return WorkerStateLoaded(
+        worker_index=worker_index,
+        policy_version=command.policy_version,
     )
 
 
@@ -315,21 +349,6 @@ def _run_worker_rollout(
     command: WorkerRolloutCommand,
     telemetry_sink: TelemetrySink,
 ) -> WorkerResponse:
-    if command.state is not None:
-        if runtime.inline_model_rank is None:
-            return WorkerRejected(
-                worker_index=worker_index,
-                reason="worker does not own an inline model rank",
-            )
-        load_result = runtime.inline_model_rank.load_state(
-            state=command.state,
-            policy_version=command.policy_version,
-        )
-        if isinstance(load_result, Rejected):
-            return WorkerRejected(
-                worker_index=worker_index,
-                reason=load_result.reason,
-            )
     telemetry_result = _record_worker_stage(
         telemetry_sink=telemetry_sink,
         run_id=run_id,

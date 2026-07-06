@@ -9,7 +9,10 @@ import torch
 from server import result as _result
 from server.result import Rejected
 from server.training.config import ModelConfig, TrainConfig
-from server.training.policy_request_frame import PolicyRequestBatchFrame
+from server.training.policy_inference_wire import (
+    DevicePolicyRequestBatch,
+    PolicyRequestWireBatch,
+)
 from server.training.policy_sampling import ModelRankPolicyDecision
 from server.training.policy_sampling.replay_arena import (
     ModelRankReplayArena,
@@ -24,6 +27,9 @@ from server.training.ppo.distributed import (
     single_update_partition,
 )
 from server.training.runtime.config import ExecutionConfig
+from server.training.runtime.model_rank.staging import (
+    stage_policy_request_wires,
+)
 from server.training.runtime.seeding import seed_training_rng
 from server.training.runtime.state import (
     RuntimeTrainingState,
@@ -58,8 +64,23 @@ class ModelReplica:
         load_runtime_training_state(state=self.state, snapshot=snapshot)
         self.replay_arena.clear()
 
+    def decide_wires(
+        self, requests: PolicyRequestWireBatch
+    ) -> tuple[
+        _result.Ok[ModelRankPolicyDecision] | _result.Rejected, ...
+    ]:
+        """Stage request wires and run batched policy inference."""
+        staged = stage_policy_request_wires(
+            requests=requests,
+            max_observation_tokens=self.model_config.max_tokens,
+            device=self.device,
+        )
+        if isinstance(staged, Rejected):
+            return tuple(staged for _ in requests.requests)
+        return self.decide_batch(staged.value.device_batch)
+
     def decide_batch(
-        self, requests: PolicyRequestBatchFrame
+        self, requests: DevicePolicyRequestBatch
     ) -> tuple[
         _result.Ok[ModelRankPolicyDecision] | _result.Rejected, ...
     ]:

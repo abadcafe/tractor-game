@@ -75,7 +75,6 @@ class ExecutionConfig:
     )
     telemetry_interval_seconds: float = 1.0
     model_inference_batch_size: int = 64
-    model_inference_max_wait_ms: int = 2
 
     def __post_init__(self) -> None:
         assert _cpu_set_is_valid(self.worker_cpus)
@@ -83,7 +82,6 @@ class ExecutionConfig:
         assert _is_finite(self.telemetry_interval_seconds)
         assert self.telemetry_interval_seconds > 0.0
         assert self.model_inference_batch_size > 0
-        assert self.model_inference_max_wait_ms >= 0
 
     def worker_process_count(self) -> int:
         """Return OS worker process count."""

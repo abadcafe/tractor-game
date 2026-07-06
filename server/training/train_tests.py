@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from server.result import Ok
+from server.result import Ok, Rejected
 from server.training.config import ModelConfig, TrainConfig
 from server.training.metrics import read_metrics
 from server.training.run_setup import (
@@ -25,7 +25,12 @@ from server.training.torch_checkpoints import (
 from server.training.torch_checkpoints import (
     read_torch_checkpoint_metadata as _read_torch_checkpoint_metadata,
 )
-from server.training.train import MIN_CLI_MAX_TOKENS, main
+from server.training.train import (
+    MIN_CLI_MAX_TOKENS,
+    ExecutionConfigOverrides,
+    main,
+    resolve_execution_config,
+)
 
 
 def test_init_only_prints_resumable_torch_checkpoint(
@@ -64,6 +69,28 @@ def test_init_only_prints_resumable_torch_checkpoint(
     assert metadata.train_config == TrainConfig(seed=123)
     assert metadata.total_rounds == 0
     assert metadata.total_updates == 0
+
+
+def test_resolve_execution_config_sets_inference_batching() -> None:
+    result = resolve_execution_config(
+        ExecutionConfigOverrides(
+            model_inference_batch_size=32,
+        )
+    )
+
+    assert isinstance(result, Ok)
+    assert result.value.model_inference_batch_size == 32
+
+
+def test_execution_config_rejects_bad_inference_batch_size() -> None:
+    result = resolve_execution_config(
+        ExecutionConfigOverrides(
+            model_inference_batch_size=0,
+        )
+    )
+
+    assert isinstance(result, Rejected)
+    assert "--model-inference-batch-size" in result.reason
 
 
 def test_init_only_does_not_persist_ppo_profile(

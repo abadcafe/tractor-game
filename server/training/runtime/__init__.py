@@ -16,6 +16,10 @@ from server.training.runtime.config import (
     PPOProfileMode,
     parse_model_rank_placement,
 )
+from server.training.runtime.rendezvous import (
+    FileRendezvous,
+    create_file_rendezvous,
+)
 from server.training.runtime.telemetry import (
     IntervalTelemetrySink,
     JsonlTelemetrySink,
@@ -35,6 +39,7 @@ __all__ = [
     "CpuAffinityStatus",
     "ExecutionConfig",
     "ExecutionTimeouts",
+    "FileRendezvous",
     "IntervalTelemetrySink",
     "JsonlTelemetrySink",
     "ModelRankDevice",
@@ -48,6 +53,7 @@ __all__ = [
     "TorchThreadStatus",
     "apply_cpu_affinity",
     "apply_torch_thread_config",
+    "create_file_rendezvous",
     "current_cpu_affinity",
     "parse_model_rank_placement",
     "preflight_cpu_affinity",

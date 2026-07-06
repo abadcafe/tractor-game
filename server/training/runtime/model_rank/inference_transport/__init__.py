@@ -1,25 +1,17 @@
 """Binary inference transport between workers and model ranks."""
 
 from .connection import (
+    ConnectionPolicyRequestReceiver,
+    ConnectionPolicyRequestSender,
     ConnectionPolicyResponseReceiver,
-    SharedMemoryPolicyRequestReceiver,
-    SharedMemoryPolicyRequestSender,
-    receive_policy_request_batch,
     send_policy_response,
-)
-from .messages import (
-    PolicyInferenceRequest,
-    PolicyInferenceRequestBatch,
-    PolicyInferenceResponseEnvelope,
+    wait_for_ready_receivers,
 )
 
 __all__ = (
+    "ConnectionPolicyRequestReceiver",
+    "ConnectionPolicyRequestSender",
     "ConnectionPolicyResponseReceiver",
-    "PolicyInferenceRequest",
-    "PolicyInferenceRequestBatch",
-    "PolicyInferenceResponseEnvelope",
-    "SharedMemoryPolicyRequestReceiver",
-    "SharedMemoryPolicyRequestSender",
-    "receive_policy_request_batch",
     "send_policy_response",
+    "wait_for_ready_receivers",
 )
