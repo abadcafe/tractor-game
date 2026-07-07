@@ -10,6 +10,7 @@ import pytest
 import torch
 
 from server.result import Ok, Rejected
+from server.training import train as train_module
 from server.training.config import ModelConfig, TrainConfig
 from server.training.metrics import read_metrics
 from server.training.run_setup import (
@@ -19,6 +20,7 @@ from server.training.run_setup import (
     initialize_training_run as _initialize_training_run,
 )
 from server.training.runtime import ExecutionConfig
+from server.training.runtime.result import TrainingLoopResult
 from server.training.torch_checkpoints import (
     TorchCheckpointMetadata,
 )
@@ -232,9 +234,10 @@ def test_force_new_run_reinitializes_existing_run(
     assert metrics[0].run_id == tmp_path.name
 
 
-def test_resume_zero_rounds_does_not_append_initial_metric(
+def test_resume_does_not_append_initial_metric_before_coordinator(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     initialized = initialize_training_run(
         run_dir=tmp_path,
@@ -248,6 +251,44 @@ def test_resume_zero_rounds_does_not_append_initial_metric(
         train_config=TrainConfig(),
     )
     metrics_before = read_metrics(tmp_path)
+    coordinator_max_samples: list[int] = []
+
+    def fake_run_training_coordinator(
+        *,
+        run_dir: Path,
+        run_id: str,
+        model_config: ModelConfig,
+        train_config: TrainConfig,
+        execution_config: ExecutionConfig,
+        max_samples: int,
+        resume: Path | None,
+    ) -> Ok[TrainingLoopResult] | Rejected:
+        assert run_dir == tmp_path
+        assert run_id == tmp_path.name
+        assert model_config == ModelConfig(
+            d_model=4,
+            layers=1,
+            heads=1,
+            max_tokens=64,
+        )
+        assert train_config == TrainConfig()
+        assert execution_config == ExecutionConfig()
+        assert resume == initialized.checkpoint_path
+        coordinator_max_samples.append(max_samples)
+        return Ok(
+            value=TrainingLoopResult(
+                total_rounds=0,
+                total_samples=0,
+                total_updates=0,
+                checkpoint_path=initialized.checkpoint_path,
+            )
+        )
+
+    monkeypatch.setattr(
+        train_module,
+        "run_training_coordinator",
+        fake_run_training_coordinator,
+    )
 
     main(
         (
@@ -255,18 +296,20 @@ def test_resume_zero_rounds_does_not_append_initial_metric(
             str(tmp_path),
             "--resume",
             str(initialized.checkpoint_path),
-            "--max-rounds",
+            "--max-samples",
             "0",
         )
     )
 
     capsys.readouterr()
+    assert coordinator_max_samples == [0]
     assert read_metrics(tmp_path) == metrics_before
 
 
 def test_resume_without_run_dir_uses_checkpoint_run_dir(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     run_dir = tmp_path / "source-run"
     initialized = initialize_training_run(
@@ -282,11 +325,48 @@ def test_resume_without_run_dir_uses_checkpoint_run_dir(
     )
     metrics_before = read_metrics(run_dir)
 
+    def fake_run_training_coordinator(
+        *,
+        run_dir: Path,
+        run_id: str,
+        model_config: ModelConfig,
+        train_config: TrainConfig,
+        execution_config: ExecutionConfig,
+        max_samples: int,
+        resume: Path | None,
+    ) -> Ok[TrainingLoopResult] | Rejected:
+        assert run_dir == tmp_path / "source-run"
+        assert run_id == "source-run"
+        assert model_config == ModelConfig(
+            d_model=4,
+            layers=1,
+            heads=1,
+            max_tokens=64,
+        )
+        assert train_config == TrainConfig()
+        assert execution_config == ExecutionConfig()
+        assert max_samples == 0
+        assert resume == initialized.checkpoint_path
+        return Ok(
+            value=TrainingLoopResult(
+                total_rounds=0,
+                total_samples=0,
+                total_updates=0,
+                checkpoint_path=initialized.checkpoint_path,
+            )
+        )
+
+    monkeypatch.setattr(
+        train_module,
+        "run_training_coordinator",
+        fake_run_training_coordinator,
+    )
+
     main(
         (
             "--resume",
             str(initialized.checkpoint_path),
-            "--max-rounds",
+            "--max-samples",
             "0",
         )
     )
@@ -323,7 +403,7 @@ def test_resume_rejects_mismatched_run_dir(tmp_path: Path) -> None:
                 f"    {str(other_run_dir)!r},\n"
                 "    '--resume',\n"
                 f"    {str(initialized.checkpoint_path)!r},\n"
-                "    '--max-rounds',\n"
+                "    '--max-samples',\n"
                 "    '0',\n"
                 "))\n"
             ),
@@ -352,7 +432,7 @@ def test_resume_rejects_checkpoint_outside_run_dir(
             (
                 "from server.training.train import main\n"
                 "main(('--resume', "
-                f"{str(invalid_resume)!r}, '--max-rounds', '0'))\n"
+                f"{str(invalid_resume)!r}, '--max-samples', '0'))\n"
             ),
         ],
         capture_output=True,
@@ -391,7 +471,7 @@ def test_resume_seed_mismatch_reports_cli_error(tmp_path: Path) -> None:
                 f"    {str(initialized.checkpoint_path)!r},\n"
                 "    '--seed',\n"
                 "    '4',\n"
-                "    '--max-rounds',\n"
+                "    '--max-samples',\n"
                 "    '0',\n"
                 "))\n"
             ),
@@ -426,7 +506,7 @@ def test_resume_corrupt_checkpoint_reports_cli_error(
                 "main((\n"
                 "    '--resume',\n"
                 f"    {str(checkpoint_path)!r},\n"
-                "    '--max-rounds',\n"
+                "    '--max-samples',\n"
                 "    '0',\n"
                 "))\n"
             ),
@@ -459,7 +539,7 @@ def test_resume_invalid_utf8_checkpoint_reports_cli_error(
                 "main((\n"
                 "    '--resume',\n"
                 f"    {str(checkpoint_path)!r},\n"
-                "    '--max-rounds',\n"
+                "    '--max-samples',\n"
                 "    '0',\n"
                 "))\n"
             ),
@@ -491,7 +571,7 @@ def test_resume_directory_checkpoint_reports_cli_error(
                 "main((\n"
                 "    '--resume',\n"
                 f"    {str(checkpoint_path)!r},\n"
-                "    '--max-rounds',\n"
+                "    '--max-samples',\n"
                 "    '0',\n"
                 "))\n"
             ),

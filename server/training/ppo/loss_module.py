@@ -42,6 +42,17 @@ class PPOLossForwardOutput:
         assert (self.loss is None) != (self.rejection_reason is None)
 
 
+type PPOLossForwardTensors = tuple[
+    Tensor,
+    Tensor,
+    Tensor,
+    Tensor,
+    Tensor,
+    Tensor,
+    Tensor,
+]
+
+
 class PPOLossModule(nn.Module):
     """Train-time PPO objective module wrapped by DDP when needed."""
 
@@ -65,12 +76,12 @@ class PPOLossModule(nn.Module):
         self,
         minibatch: TensorizedPPOMinibatch,
         profile: PPOProfileAccumulator,
-    ) -> PPOLossForwardOutput:
-        """Return one minibatch PPO objective."""
+    ) -> PPOLossForwardTensors:
+        """Return one minibatch PPO objective as DDP-visible tensors."""
         if minibatch.is_empty():
             zero = self._zero_loss_touching_all_parameters()
-            return PPOLossForwardOutput(
-                loss=MinibatchLoss(
+            return _loss_tensors(
+                MinibatchLoss(
                     policy_loss=zero,
                     value_loss=zero,
                     entropy=zero,
@@ -78,7 +89,7 @@ class PPOLossModule(nn.Module):
                     approx_kl=zero,
                     clip_fraction=zero,
                 ),
-                rejection_reason=None,
+                rejected=False,
             )
         evaluated_result = evaluate_trace_batch(
             model=self._model,
@@ -87,9 +98,17 @@ class PPOLossModule(nn.Module):
             profile=profile,
         )
         if isinstance(evaluated_result, _result.Rejected):
-            return PPOLossForwardOutput(
-                loss=None,
-                rejection_reason=evaluated_result.reason,
+            zero = self._zero_loss_touching_all_parameters()
+            return _loss_tensors(
+                MinibatchLoss(
+                    policy_loss=zero,
+                    value_loss=zero,
+                    entropy=zero,
+                    total_loss=zero,
+                    approx_kl=zero,
+                    clip_fraction=zero,
+                ),
+                rejected=True,
             )
         evaluated = evaluated_result.value
         objective = clipped_ppo_objective(
@@ -107,8 +126,8 @@ class PPOLossModule(nn.Module):
                 entropy_coef=self._train_config.entropy_coef,
             ),
         )
-        return PPOLossForwardOutput(
-            loss=MinibatchLoss(
+        return _loss_tensors(
+            MinibatchLoss(
                 policy_loss=objective.policy_loss,
                 value_loss=objective.value_loss,
                 entropy=objective.entropy,
@@ -116,7 +135,7 @@ class PPOLossModule(nn.Module):
                 approx_kl=objective.approx_kl,
                 clip_fraction=objective.clip_fraction,
             ),
-            rejection_reason=None,
+            rejected=False,
         )
 
     def _zero_loss_touching_all_parameters(self) -> Tensor:
@@ -126,3 +145,44 @@ class PPOLossModule(nn.Module):
             zero = term if zero is None else zero + term
         assert zero is not None
         return zero
+
+
+def _loss_tensors(
+    loss: MinibatchLoss, *, rejected: bool
+) -> PPOLossForwardTensors:
+    rejection_flag = torch.zeros(
+        (), dtype=torch.float32, device=loss.total_loss.device
+    )
+    if rejected:
+        rejection_flag = rejection_flag + 1.0
+    return (
+        loss.policy_loss,
+        loss.value_loss,
+        loss.entropy,
+        loss.total_loss,
+        loss.approx_kl,
+        loss.clip_fraction,
+        rejection_flag,
+    )
+
+
+def loss_forward_output_from_tensors(
+    tensors: PPOLossForwardTensors,
+    *,
+    rejected: bool,
+) -> PPOLossForwardOutput:
+    """Convert DDP-visible loss tensors back to trainer output."""
+    loss = MinibatchLoss(
+        policy_loss=tensors[0],
+        value_loss=tensors[1],
+        entropy=tensors[2],
+        total_loss=tensors[3],
+        approx_kl=tensors[4],
+        clip_fraction=tensors[5],
+    )
+    if rejected:
+        return PPOLossForwardOutput(
+            loss=None,
+            rejection_reason="PPO trace evaluation failed",
+        )
+    return PPOLossForwardOutput(loss=loss, rejection_reason=None)

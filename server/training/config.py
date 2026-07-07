@@ -50,7 +50,6 @@ class TrainConfig:
     learning_rate: float = 0.0003
     checkpoint_every_updates: int = 50
     checkpoint_retention_updates: int = 5
-    gae_lambda: float = 1.0
     ppo_clip: float = 0.2
     value_clip: float = 0.2
     entropy_coef: float = 0.01
@@ -68,8 +67,6 @@ class TrainConfig:
         assert self.learning_rate > 0.0
         assert self.checkpoint_every_updates > 0
         assert self.checkpoint_retention_updates >= 0
-        assert _is_finite(self.gae_lambda)
-        assert 0.0 <= self.gae_lambda <= 1.0
         assert _is_finite(self.ppo_clip)
         assert 0.0 < self.ppo_clip <= 1.0
         assert _is_finite(self.value_clip)
@@ -97,7 +94,6 @@ class TrainConfig:
             "checkpoint_retention_updates": (
                 self.checkpoint_retention_updates
             ),
-            "gae_lambda": self.gae_lambda,
             "ppo_clip": self.ppo_clip,
             "value_clip": self.value_clip,
             "entropy_coef": self.entropy_coef,
@@ -121,7 +117,6 @@ class TrainConfig:
             checkpoint_retention_updates=_int_json_field(
                 data, "checkpoint_retention_updates"
             ),
-            gae_lambda=_float_json_field(data, "gae_lambda"),
             ppo_clip=_float_json_field(data, "ppo_clip"),
             value_clip=_float_json_field(data, "value_clip"),
             entropy_coef=_float_json_field(data, "entropy_coef"),

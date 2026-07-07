@@ -105,11 +105,6 @@ def train_config_from_json(
     )
     if isinstance(checkpoint_retention_updates, _result.Rejected):
         return checkpoint_retention_updates
-    gae_lambda = _json_float_field(
-        data, "gae_lambda", path, label="train_config.gae_lambda"
-    )
-    if isinstance(gae_lambda, _result.Rejected):
-        return gae_lambda
     ppo_clip = _json_float_field(
         data, "ppo_clip", path, label="train_config.ppo_clip"
     )
@@ -169,7 +164,6 @@ def train_config_from_json(
         learning_rate=learning_rate.value,
         checkpoint_every_updates=checkpoint_every_updates.value,
         checkpoint_retention_updates=checkpoint_retention_updates.value,
-        gae_lambda=gae_lambda.value,
         ppo_clip=ppo_clip.value,
         value_clip=value_clip.value,
         entropy_coef=entropy_coef.value,
@@ -191,7 +185,6 @@ def train_config_from_json(
             checkpoint_retention_updates=(
                 checkpoint_retention_updates.value
             ),
-            gae_lambda=gae_lambda.value,
             ppo_clip=ppo_clip.value,
             value_clip=value_clip.value,
             entropy_coef=entropy_coef.value,
@@ -297,7 +290,6 @@ def _validate_train_config_values(
     learning_rate: float,
     checkpoint_every_updates: int,
     checkpoint_retention_updates: int,
-    gae_lambda: float,
     ppo_clip: float,
     value_clip: float,
     entropy_coef: float,
@@ -328,11 +320,6 @@ def _validate_train_config_values(
             path,
             "manifest train_config.checkpoint_retention_updates must "
             "be >= 0",
-        )
-    if gae_lambda < 0.0 or gae_lambda > 1.0:
-        return checkpoint_corruption(
-            path,
-            "manifest train_config.gae_lambda must be between 0 and 1",
         )
     if ppo_clip <= 0.0 or ppo_clip > 1.0:
         return checkpoint_corruption(

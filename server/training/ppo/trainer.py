@@ -12,11 +12,7 @@ from torch import Tensor
 from server import result as _result
 from server.training.config import TrainConfig
 from server.training.model import TractorPolicyModel
-from server.training.ppo.device_targets import (
-    DevicePPOTargets,
-    device_ppo_targets,
-    shuffled_index_tensor,
-)
+from server.training.ppo.device_targets import shuffled_index_tensor
 from server.training.ppo.distributed import (
     PPOLossForwarder,
     PPOUpdatePartition,
@@ -120,11 +116,11 @@ class PPOTrainer:
     ) -> _result.Ok[PPOUpdateStats] | _result.Rejected:
         """Run one synchronized PPO update."""
         if (
-            update_input.local_rollout is None
+            update_input.local_batch is None
             and self.update_partition.world_size == 1
         ):
             return _result.Rejected(
-                reason="single-rank PPO update requires local rollout"
+                reason="single-rank PPO update requires local batch"
             )
         if self._loss_forwarder_rejection is not None:
             return self._loss_forwarder_rejection
@@ -149,48 +145,38 @@ class PPOTrainer:
         )
         if isinstance(global_sample_count_result, _result.Rejected):
             return global_sample_count_result
-        rollout = update_input.local_rollout
+        batch = update_input.local_batch
         prepared_batch: PreparedPPOBatch | None = None
-        raw_targets: DevicePPOTargets | None = None
-        if rollout is not None:
-            target_result = device_ppo_targets(
-                rollout=rollout,
-                gae_lambda=self.train_config.gae_lambda,
-            )
-            if isinstance(target_result, _result.Rejected):
-                return target_result
-            raw_targets = target_result.value
+        raw_advantages = torch.empty(
+            (0,), dtype=torch.float32, device=self.device
+        )
+        if batch is not None:
+            raw_advantages = batch.raw_advantages
             partition_check = _validate_update_partition(
-                sample_count=rollout.transition_count(),
+                sample_count=batch.sample_count(),
                 minibatch_size=self.train_config.minibatch_size,
             )
             if isinstance(partition_check, _result.Rejected):
                 return partition_check
         normalized_advantages_result = _sync_normalized_advantages(
-            advantages=(
-                raw_targets.advantages
-                if raw_targets is not None
-                else torch.empty(
-                    (0,), dtype=torch.float32, device=self.device
-                )
-            ),
+            advantages=raw_advantages,
             partition=self.update_partition,
             device=self.device,
         )
         if isinstance(normalized_advantages_result, _result.Rejected):
             return normalized_advantages_result
-        if raw_targets is not None and rollout is not None:
-            targets = DevicePPOTargets(
-                old_log_probabilities=raw_targets.old_log_probabilities,
-                old_values=raw_targets.old_values,
-                advantages=normalized_advantages_result.value,
-                return_values=raw_targets.return_values,
+        if batch is not None:
+            normalized_batch = type(batch)(
+                policy_version=batch.policy_version,
+                observation_batch=batch.observation_batch,
+                replay=batch.replay,
+                old_log_probabilities=batch.old_log_probabilities,
+                old_values=batch.old_values,
+                return_values=batch.return_values,
+                raw_advantages=normalized_advantages_result.value,
             )
             observation_batch_start = profile.mark()
-            prepared_batch = prepare_ppo_batch(
-                rollout=rollout,
-                targets=targets,
-            )
+            prepared_batch = prepare_ppo_batch(batch=normalized_batch)
             profile.record_elapsed(
                 "observation_batch_seconds",
                 observation_batch_start,

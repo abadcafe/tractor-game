@@ -33,10 +33,12 @@ class RuntimeCheckpointState:
 
     state: RuntimeTrainingState
     total_rounds: int
+    total_samples: int
     total_updates: int
 
     def __post_init__(self) -> None:
         assert self.total_rounds >= 0
+        assert self.total_samples >= 0
         assert self.total_updates >= 0
 
 
@@ -86,12 +88,14 @@ def save_runtime_checkpoint_state(
     train_config: TrainConfig,
     execution_config: ExecutionConfig,
     total_rounds: int,
+    total_samples: int,
     total_updates: int,
     retained_update_count: int,
 ) -> _result.Ok[TorchCheckpointSaveResult] | _result.Rejected:
     """Persist a portable runtime state as a torch checkpoint."""
     assert retained_update_count >= 0
     assert total_rounds >= 0
+    assert total_samples >= 0
     assert total_updates >= 0
     loaded = _loaded_state_from_runtime_state(
         state=state,
@@ -99,6 +103,7 @@ def save_runtime_checkpoint_state(
         train_config=train_config,
         execution_config=execution_config,
         total_rounds=total_rounds,
+        total_samples=total_samples,
         total_updates=total_updates,
     )
     return save_torch_checkpoint(
@@ -108,6 +113,7 @@ def save_runtime_checkpoint_state(
         model_config=model_config,
         train_config=train_config,
         total_rounds=total_rounds,
+        total_samples=total_samples,
         total_updates=total_updates,
         retained_update_count=retained_update_count,
     )
@@ -122,6 +128,7 @@ def _runtime_checkpoint_state_from_loaded(
             trainer=loaded.trainer,
         ),
         total_rounds=loaded.total_rounds,
+        total_samples=loaded.total_samples,
         total_updates=loaded.total_updates,
     )
 
@@ -133,6 +140,7 @@ def _loaded_state_from_runtime_state(
     train_config: TrainConfig,
     execution_config: ExecutionConfig,
     total_rounds: int,
+    total_samples: int,
     total_updates: int,
 ) -> LoadedTrainingState:
     loaded = _create_cpu_training_state_without_rng_side_effect(
@@ -145,6 +153,7 @@ def _loaded_state_from_runtime_state(
         model=loaded.model,
         trainer=loaded.trainer,
         total_rounds=total_rounds,
+        total_samples=total_samples,
         total_updates=total_updates,
     )
 

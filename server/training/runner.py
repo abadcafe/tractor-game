@@ -17,10 +17,7 @@ from server.training.progress import (
     TeamProgress,
     zero_sum_rewards,
 )
-from server.training.rollout_commit import (
-    RolloutCommit,
-    terminal_reward_rollout_commit,
-)
+from server.training.returns import ReturnCommit, terminal_return_commit
 from server.training.trajectory import TrajectoryRecorder
 
 
@@ -28,7 +25,7 @@ from server.training.trajectory import TrajectoryRecorder
 class TrainingRoundResult:
     """One completed self-play round."""
 
-    rollout: RolloutCommit
+    returns: ReturnCommit
     team0_reward: float
     team1_reward: float
     generated_action_count: int
@@ -103,7 +100,7 @@ class SelfPlaySession:
             before=before,
             after=final_snapshot,
         )
-        rollout = terminal_reward_rollout_commit(
+        returns = terminal_return_commit(
             policy_version=policy_version,
             episode_id=episode_id,
             steps=self._recorder.steps(),
@@ -124,7 +121,7 @@ class SelfPlaySession:
         )
         return _result.Ok(
             value=TrainingRoundResult(
-                rollout=rollout,
+                returns=returns,
                 team0_reward=reward0,
                 team1_reward=reward1,
                 generated_action_count=generated_count,
@@ -141,6 +138,11 @@ class SelfPlaySession:
     async def _confirm_next_round(self) -> None:
         for player in self._players:
             await player.confirm_held_scoring_next_round(self._game)
+
+    async def close(self) -> None:
+        """Cancel in-flight tasks before discarding this session."""
+        for player in self._players:
+            await player.cancel_background_tasks()
 
 
 async def play_training_round(

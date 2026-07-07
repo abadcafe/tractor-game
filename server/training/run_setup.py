@@ -108,6 +108,7 @@ def initialize_training_run(
         model_config=model_config,
         train_config=train_config,
         total_rounds=0,
+        total_samples=0,
         total_updates=0,
         retained_update_count=train_config.checkpoint_retention_updates,
     )
@@ -119,8 +120,10 @@ def initialize_training_run(
         TrainingMetric(
             run_id=run_id,
             total_games=0,
+            total_samples=0,
             total_updates=0,
             process_games_per_second=0.0,
+            process_samples_per_second=0.0,
             last_round_decisions_per_second=0.0,
             last_team0_reward=0.0,
             last_team1_reward=0.0,

@@ -9,22 +9,6 @@ from torch import Tensor, nn
 
 
 @dataclass(frozen=True, slots=True)
-class ValueStep:
-    """One value estimate with the reward observed after it."""
-
-    reward: float
-    value_estimate: float
-
-
-@dataclass(frozen=True, slots=True)
-class AdvantageTarget:
-    """GAE advantage and value-function return for one step."""
-
-    advantage: float
-    return_value: float
-
-
-@dataclass(frozen=True, slots=True)
 class PPOObjectiveConfig:
     """Scalar coefficients for clipped PPO objective calculation."""
 
@@ -44,43 +28,6 @@ class PPOObjectiveTensors:
     total_loss: Tensor
     approx_kl: Tensor
     clip_fraction: Tensor
-
-
-def generalized_advantage_targets(
-    *,
-    steps: tuple[ValueStep, ...],
-    terminal_reward: float,
-    gae_lambda: float,
-) -> tuple[AdvantageTarget, ...]:
-    """Compute generalized advantage estimates and returns."""
-    assert steps
-    advantages = [0.0 for _ in steps]
-    gae = 0.0
-    for index in range(len(steps) - 1, -1, -1):
-        next_value = (
-            0.0
-            if index == len(steps) - 1
-            else steps[index + 1].value_estimate
-        )
-        step = steps[index]
-        final_reward = (
-            terminal_reward if index == len(steps) - 1 else 0.0
-        )
-        delta = (
-            step.reward
-            + final_reward
-            + next_value
-            - step.value_estimate
-        )
-        gae = delta + gae_lambda * gae
-        advantages[index] = gae
-    return tuple(
-        AdvantageTarget(
-            advantage=advantages[index],
-            return_value=advantages[index] + step.value_estimate,
-        )
-        for index, step in enumerate(steps)
-    )
 
 
 def clipped_ppo_objective(

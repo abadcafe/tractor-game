@@ -1,4 +1,4 @@
-"""Inline model-rank implementation used inside CPU workers."""
+"""Worker-local model-rank implementation."""
 
 from __future__ import annotations
 
@@ -18,14 +18,14 @@ from server.training.policy_inference_wire import (
 )
 from server.training.policy_sampling import ModelRankPolicyDecision
 from server.training.ppo import PPOUpdateStats
+from server.training.returns import ReturnCommit
 from server.training.runtime.model_rank.update import ModelUpdateResult
 from server.training.runtime.state import RuntimeTrainingState
-from server.training.runtime.update_wave import SynchronizedUpdateShard
 from server.training.sampling import PolicyDecisionKey
 
 
 class ModelReplicaProtocol(Protocol):
-    """Model replica operations used by inline model ranks."""
+    """Model replica operations used by same-process model ranks."""
 
     def load_state(self, *, snapshot: RuntimeTrainingState) -> None: ...
 
@@ -35,8 +35,8 @@ class ModelReplicaProtocol(Protocol):
         _result.Ok[ModelRankPolicyDecision] | _result.Rejected, ...
     ]: ...
 
-    def update_shard(
-        self, *, shard: SynchronizedUpdateShard
+    def update_commit(
+        self, *, commit: ReturnCommit
     ) -> _result.Ok[PPOUpdateStats] | _result.Rejected: ...
 
     def snapshot(self) -> RuntimeTrainingState: ...
@@ -93,8 +93,8 @@ class DirectPolicyClient:
         )
 
 
-class InlineModelRank:
-    """Model rank hosted inside a rollout worker process."""
+class LocalModelRank:
+    """Model rank hosted inside the current worker process."""
 
     def __init__(self, *, replica: ModelReplicaProtocol) -> None:
         self._replica = replica
@@ -112,12 +112,12 @@ class InlineModelRank:
     def update(
         self,
         *,
-        shard: SynchronizedUpdateShard,
+        commit: ReturnCommit,
         policy_version: int,
     ) -> _result.Ok[ModelUpdateResult] | _result.Rejected:
         assert policy_version >= 0
-        assert shard.policy_version == policy_version
-        update_result = self._replica.update_shard(shard=shard)
+        assert commit.policy_version == policy_version
+        update_result = self._replica.update_commit(commit=commit)
         if isinstance(update_result, Rejected):
             return update_result
         return Ok(

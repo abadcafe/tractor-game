@@ -6,16 +6,20 @@ import torch
 
 from server.training.runtime.messages import (
     WorkerLoadStateCommand,
-    WorkerRolloutCommand,
+    WorkerStartSamplingCommand,
 )
 from server.training.runtime.state import RuntimeTrainingState
 
 
-def test_worker_rollout_command_carries_no_state_snapshot() -> None:
-    command = WorkerRolloutCommand(policy_version=2, episode_id=5)
+def test_worker_start_sampling_command_carries_no_state_snapshot() -> (
+    None
+):
+    command = WorkerStartSamplingCommand(
+        policy_version=2, game_env_count=3
+    )
 
     assert command.policy_version == 2
-    assert command.episode_id == 5
+    assert command.game_env_count == 3
     assert not hasattr(command, "state")
 
 

@@ -101,6 +101,7 @@ def test_torch_checkpoint_metadata_drives_resume_model_config(
         model_config=model_config,
         train_config=train_config,
         total_rounds=7,
+        total_samples=0,
         total_updates=3,
         retained_update_count=5,
     )
@@ -143,6 +144,7 @@ def test_read_metadata_uses_manifest_without_torch_load(
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
+        total_samples=0,
         total_updates=5,
         retained_update_count=5,
     )
@@ -190,6 +192,7 @@ def test_torch_checkpoint_save_rejects_payload_write_failure(
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
+        total_samples=0,
         total_updates=1,
         retained_update_count=5,
     )
@@ -228,6 +231,7 @@ def test_torch_checkpoint_save_rejects_checkpoint_dir_symlink(
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
+        total_samples=0,
         total_updates=1,
         retained_update_count=5,
     )
@@ -266,6 +270,7 @@ def test_torch_checkpoint_save_rejects_objects_dir_symlink(
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
+        total_samples=0,
         total_updates=1,
         retained_update_count=5,
     )
@@ -301,6 +306,7 @@ def test_torch_checkpoint_save_rolls_back_manifest_write_failure(
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
+        total_samples=0,
         total_updates=1,
         retained_update_count=5,
     )
@@ -337,6 +343,7 @@ def test_torch_checkpoint_save_rolls_back_manifest_write_failure(
         model_config=model_config,
         train_config=train_config,
         total_rounds=2,
+        total_samples=0,
         total_updates=2,
         retained_update_count=5,
     )
@@ -375,6 +382,7 @@ def test_torch_checkpoint_save_reports_post_commit_prune_unlink_failure(
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
+        total_samples=0,
         total_updates=1,
         retained_update_count=5,
     )
@@ -397,6 +405,7 @@ def test_torch_checkpoint_save_reports_post_commit_prune_unlink_failure(
         model_config=model_config,
         train_config=train_config,
         total_rounds=2,
+        total_samples=0,
         total_updates=2,
         retained_update_count=0,
     )
@@ -437,6 +446,7 @@ def test_torch_checkpoint_save_rejects_prune_symlink_before_commit(
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
+        total_samples=0,
         total_updates=1,
         retained_update_count=5,
     )
@@ -454,6 +464,7 @@ def test_torch_checkpoint_save_rejects_prune_symlink_before_commit(
         model_config=model_config,
         train_config=train_config,
         total_rounds=2,
+        total_samples=0,
         total_updates=2,
         retained_update_count=5,
     )
@@ -489,6 +500,7 @@ def test_torch_checkpoint_save_rejects_retained_symlink_before_commit(
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
+        total_samples=0,
         total_updates=1,
         retained_update_count=5,
     )
@@ -507,6 +519,7 @@ def test_torch_checkpoint_save_rejects_retained_symlink_before_commit(
         model_config=model_config,
         train_config=train_config,
         total_rounds=2,
+        total_samples=0,
         total_updates=2,
         retained_update_count=1,
     )
@@ -544,6 +557,7 @@ def test_torch_checkpoint_save_rejects_retained_file_before_commit(
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
+        total_samples=0,
         total_updates=1,
         retained_update_count=5,
     )
@@ -562,6 +576,7 @@ def test_torch_checkpoint_save_rejects_retained_file_before_commit(
         model_config=model_config,
         train_config=train_config,
         total_rounds=2,
+        total_samples=0,
         total_updates=2,
         retained_update_count=1,
     )
@@ -599,6 +614,7 @@ def test_torch_checkpoint_save_reports_post_commit_prune_rmtree_failure(
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
+        total_samples=0,
         total_updates=1,
         retained_update_count=5,
     )
@@ -620,6 +636,7 @@ def test_torch_checkpoint_save_reports_post_commit_prune_rmtree_failure(
         model_config=model_config,
         train_config=train_config,
         total_rounds=2,
+        total_samples=0,
         total_updates=2,
         retained_update_count=5,
     )
@@ -658,6 +675,7 @@ def test_torch_checkpoint_state_payload_is_weights_only_safe(
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
+        total_samples=0,
         total_updates=5,
         retained_update_count=5,
     )
@@ -669,7 +687,7 @@ def test_torch_checkpoint_state_payload_is_weights_only_safe(
     )
 
     assert isinstance(loaded, dict)
-    assert loaded["schema_version"] == 18
+    assert loaded["schema_version"] == 19
     assert isinstance(loaded["checkpoint_id"], str)
     assert "model_config" not in loaded
     assert "train_config" not in loaded
@@ -703,6 +721,7 @@ def test_torch_checkpoint_alias_manifests_share_one_state_object(
         model_config=model_config,
         train_config=train_config,
         total_rounds=13,
+        total_samples=0,
         total_updates=5,
         retained_update_count=5,
     )
@@ -742,6 +761,7 @@ def test_torch_checkpoint_save_rejects_unmanaged_manifest_path(
         model_config=model_config,
         train_config=train_config,
         total_rounds=13,
+        total_samples=0,
         total_updates=5,
         retained_update_count=5,
     )
@@ -777,6 +797,7 @@ def test_torch_checkpoint_save_rejects_zero_update_manifest_path(
         model_config=model_config,
         train_config=train_config,
         total_rounds=13,
+        total_samples=0,
         total_updates=0,
         retained_update_count=5,
     )
@@ -813,6 +834,7 @@ def test_torch_checkpoint_save_rejects_update_number_mismatch(
         model_config=model_config,
         train_config=train_config,
         total_rounds=13,
+        total_samples=0,
         total_updates=5,
         retained_update_count=5,
     )
@@ -851,6 +873,7 @@ def test_torch_checkpoint_save_removes_overwritten_latest_object(
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
+        total_samples=0,
         total_updates=1,
         retained_update_count=0,
     )
@@ -863,6 +886,7 @@ def test_torch_checkpoint_save_removes_overwritten_latest_object(
         model_config=model_config,
         train_config=train_config,
         total_rounds=2,
+        total_samples=0,
         total_updates=2,
         retained_update_count=0,
     )
@@ -901,6 +925,7 @@ def test_torch_checkpoint_save_keeps_latest_and_recent_updates(
             model_config=model_config,
             train_config=train_config,
             total_rounds=update_number,
+            total_samples=0,
             total_updates=update_number,
             retained_update_count=2,
         )
@@ -942,6 +967,7 @@ def test_torch_checkpoint_save_ignores_unmanaged_json(
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
+        total_samples=0,
         total_updates=1,
         retained_update_count=5,
     )
@@ -956,6 +982,7 @@ def test_torch_checkpoint_save_ignores_unmanaged_json(
         model_config=model_config,
         train_config=train_config,
         total_rounds=2,
+        total_samples=0,
         total_updates=2,
         retained_update_count=5,
     )
@@ -989,6 +1016,7 @@ def test_torch_checkpoint_save_ignores_noncanonical_update_json(
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
+        total_samples=0,
         total_updates=1,
         retained_update_count=5,
     )
@@ -1009,6 +1037,7 @@ def test_torch_checkpoint_save_ignores_noncanonical_update_json(
         model_config=model_config,
         train_config=train_config,
         total_rounds=2,
+        total_samples=0,
         total_updates=2,
         retained_update_count=5,
     )
@@ -1045,6 +1074,7 @@ def test_torch_checkpoint_save_reports_corrupt_update_manifest(
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
+        total_samples=0,
         total_updates=1,
         retained_update_count=5,
     )
@@ -1061,6 +1091,7 @@ def test_torch_checkpoint_save_reports_corrupt_update_manifest(
         model_config=model_config,
         train_config=train_config,
         total_rounds=2,
+        total_samples=0,
         total_updates=2,
         retained_update_count=5,
     )
@@ -1098,6 +1129,7 @@ def test_torch_checkpoint_read_rejects_bad_model_config(
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
+        total_samples=0,
         total_updates=5,
         retained_update_count=5,
     )
@@ -1192,6 +1224,7 @@ def test_torch_checkpoint_read_rejects_negative_total_rounds(
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
+        total_samples=0,
         total_updates=5,
         retained_update_count=5,
     )
@@ -1230,6 +1263,7 @@ def test_torch_checkpoint_load_rejects_negative_total_updates(
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
+        total_samples=0,
         total_updates=5,
         retained_update_count=5,
     )
@@ -1274,6 +1308,7 @@ def test_torch_checkpoint_load_rejects_state_hash_mismatch(
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
+        total_samples=0,
         total_updates=5,
         retained_update_count=5,
     )
@@ -1406,6 +1441,7 @@ def test_torch_checkpoint_load_rejects_directory_state_payload(
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
+        total_samples=0,
         total_updates=5,
         retained_update_count=5,
     )
@@ -1450,6 +1486,7 @@ def test_torch_checkpoint_load_rejects_non_torch_state_payload(
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
+        total_samples=0,
         total_updates=5,
         retained_update_count=5,
     )
@@ -1494,6 +1531,7 @@ def test_torch_checkpoint_load_rejects_missing_payload_field(
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
+        total_samples=0,
         total_updates=5,
         retained_update_count=5,
     )
@@ -1538,6 +1576,7 @@ def test_torch_checkpoint_save_payload_excludes_rng_state(
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
+        total_samples=0,
         total_updates=5,
         retained_update_count=5,
     )
@@ -1570,6 +1609,7 @@ def test_torch_checkpoint_load_rejects_optimizer_dtype_mismatch(
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
+        total_samples=0,
         total_updates=5,
         retained_update_count=5,
     )
@@ -1629,6 +1669,7 @@ def test_torch_checkpoint_load_does_not_restore_global_rng_state(
         model_config=model_config,
         train_config=train_config,
         total_rounds=7,
+        total_samples=0,
         total_updates=3,
         retained_update_count=5,
     )
@@ -1704,6 +1745,7 @@ def test_torch_checkpoint_load_rejects_seed_mismatch(
         model_config=model_config,
         train_config=train_config,
         total_rounds=7,
+        total_samples=0,
         total_updates=3,
         retained_update_count=5,
     )
@@ -1745,6 +1787,7 @@ def test_torch_checkpoint_load_rejects_model_config_mismatch(
         model_config=model_config,
         train_config=train_config,
         total_rounds=7,
+        total_samples=0,
         total_updates=3,
         retained_update_count=5,
     )
@@ -1792,6 +1835,7 @@ def test_torch_checkpoint_cuda_resume_loads_payload_on_cpu(
         model_config=model_config,
         train_config=train_config,
         total_rounds=7,
+        total_samples=0,
         total_updates=3,
         retained_update_count=5,
     )
@@ -1886,6 +1930,7 @@ def test_resolve_train_config_defaults_and_resume_overrides(
         model_config=model_config,
         train_config=train_config,
         total_rounds=7,
+        total_samples=0,
         total_updates=3,
         retained_update_count=5,
     )
@@ -1939,6 +1984,7 @@ def save_torch_checkpoint(
     model_config: ModelConfig,
     train_config: TrainConfig,
     total_rounds: int,
+    total_samples: int = 0,
     total_updates: int,
     retained_update_count: int,
 ) -> None:
@@ -1949,6 +1995,7 @@ def save_torch_checkpoint(
         model_config=model_config,
         train_config=train_config,
         total_rounds=total_rounds,
+        total_samples=total_samples,
         total_updates=total_updates,
         retained_update_count=retained_update_count,
     )
@@ -1991,7 +2038,7 @@ def _model_rank_kind_from_torch(
     device: torch.device,
 ) -> ModelRankKind:
     if device.type == "cpu":
-        return "inline"
+        return "none"
     if device.type == "cuda":
         return "cuda"
     if device.type == "mps":
@@ -2014,7 +2061,7 @@ def _execution_config_for_device(
 def _execution_config_for_model_rank_kind(
     model_rank_kind: ModelRankKind,
 ) -> ExecutionConfig:
-    if model_rank_kind == "inline":
+    if model_rank_kind == "none":
         return ExecutionConfig()
     if model_rank_kind == "cuda":
         return ExecutionConfig(
@@ -2051,6 +2098,7 @@ def _saved_checkpoint(
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
+        total_samples=0,
         total_updates=5,
         retained_update_count=5,
     )

@@ -112,6 +112,7 @@ def load_torch_checkpoint(
             model=model,
             trainer=trainer,
             total_rounds=metadata.total_rounds,
+            total_samples=metadata.total_samples,
             total_updates=metadata.total_updates,
         )
     )

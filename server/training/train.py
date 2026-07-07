@@ -48,7 +48,6 @@ class TrainConfigOverrides:
     learning_rate: float | None = None
     checkpoint_every_updates: int | None = None
     checkpoint_retention_updates: int | None = None
-    gae_lambda: float | None = None
     ppo_clip: float | None = None
     value_clip: float | None = None
     entropy_coef: float | None = None
@@ -74,6 +73,8 @@ class ExecutionConfigOverrides:
     update_timeout_seconds: float | None = None
     telemetry_interval_seconds: float | None = None
     model_inference_batch_size: int | None = None
+    game_envs_per_worker: int | None = None
+    samples_per_worker_update: int | None = None
 
 
 def resolve_model_config(
@@ -118,9 +119,6 @@ def resolve_train_config(
             checkpoint_retention_updates=base.checkpoint_retention_updates
             if cli_overrides.checkpoint_retention_updates is None
             else cli_overrides.checkpoint_retention_updates,
-            gae_lambda=base.gae_lambda
-            if cli_overrides.gae_lambda is None
-            else cli_overrides.gae_lambda,
             ppo_clip=base.ppo_clip
             if cli_overrides.ppo_clip is None
             else cli_overrides.ppo_clip,
@@ -193,6 +191,16 @@ def resolve_execution_config(
         return _result.Rejected(
             reason="--model-inference-batch-size must be positive"
         )
+    game_envs_per_worker = (
+        base.game_envs_per_worker
+        if overrides.game_envs_per_worker is None
+        else overrides.game_envs_per_worker
+    )
+    samples_per_worker_update = (
+        base.samples_per_worker_update
+        if overrides.samples_per_worker_update is None
+        else overrides.samples_per_worker_update
+    )
     return _result.Ok(
         value=ExecutionConfig(
             worker_cpus=worker_cpus,
@@ -205,6 +213,8 @@ def resolve_execution_config(
             if overrides.telemetry_interval_seconds is None
             else overrides.telemetry_interval_seconds,
             model_inference_batch_size=model_inference_batch_size,
+            game_envs_per_worker=game_envs_per_worker,
+            samples_per_worker_update=samples_per_worker_update,
         )
     )
 
@@ -311,13 +321,6 @@ def _non_negative_float_arg(text: str) -> float:
     return value
 
 
-def _unit_interval_float_arg(text: str) -> float:
-    value = _finite_float_arg(text)
-    if value < 0.0 or value > 1.0:
-        raise argparse.ArgumentTypeError("must be between 0 and 1")
-    return value
-
-
 def _positive_unit_float_arg(text: str) -> float:
     value = _finite_float_arg(text)
     if value <= 0.0 or value > 1.0:
@@ -376,7 +379,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         default=None,
     )
     parser.add_argument(
-        "--max-rounds", type=_non_negative_int_arg, default=0
+        "--max-samples", type=_non_negative_int_arg, default=0
     )
     parser.add_argument(
         "--d-model", type=_positive_int_arg, default=128
@@ -433,7 +436,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         default=None,
     )
     parser.add_argument(
-        "--gae-lambda", type=_unit_interval_float_arg, default=None
+        "--game-envs-per-worker",
+        type=_positive_int_arg,
+        default=None,
+    )
+    parser.add_argument(
+        "--samples-per-worker-update",
+        type=_positive_int_arg,
+        default=None,
     )
     parser.add_argument(
         "--ppo-clip", type=_positive_unit_float_arg, default=None
@@ -515,7 +525,6 @@ def main(argv: Sequence[str] | None = None) -> None:
             checkpoint_retention_updates=(
                 args.checkpoint_retention_updates
             ),
-            gae_lambda=args.gae_lambda,
             ppo_clip=args.ppo_clip,
             value_clip=args.value_clip,
             entropy_coef=args.entropy_coef,
@@ -549,6 +558,8 @@ def main(argv: Sequence[str] | None = None) -> None:
             model_inference_batch_size=(
                 args.model_inference_batch_size
             ),
+            game_envs_per_worker=args.game_envs_per_worker,
+            samples_per_worker_update=args.samples_per_worker_update,
         )
     )
     if isinstance(execution_config_result, _result.Rejected):
@@ -590,7 +601,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         model_config=model_config,
         train_config=train_config,
         execution_config=execution_config,
-        max_rounds=args.max_rounds,
+        max_samples=args.max_samples,
         resume=training_resume,
     )
     if isinstance(result, _result.Rejected):
@@ -599,6 +610,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     print(f"dashboard: {dashboard_path}")
     print(f"checkpoint: {loop_result.checkpoint_path}")
     print(f"rounds: {loop_result.total_rounds}")
+    print(f"samples: {loop_result.total_samples}")
     print(f"updates: {loop_result.total_updates}")
 
 

@@ -15,8 +15,10 @@ METRICS_FILENAME = "metrics.jsonl"
 _REQUIRED_METRIC_SCHEMA_FIELDS: tuple[str, ...] = (
     "run_id",
     "total_games",
+    "total_samples",
     "total_updates",
     "process_games_per_second",
+    "process_samples_per_second",
     "last_round_decisions_per_second",
     "last_team0_reward",
     "last_team1_reward",
@@ -66,8 +68,10 @@ class TrainingMetric:
 
     run_id: str
     total_games: int
+    total_samples: int
     total_updates: int
     process_games_per_second: float
+    process_samples_per_second: float
     last_round_decisions_per_second: float
     last_team0_reward: float
     last_team1_reward: float
@@ -137,6 +141,10 @@ def validate_training_metric(
     """Reject metric samples that cannot be valid JSON numbers."""
     required_floats = (
         ("process_games_per_second", metric.process_games_per_second),
+        (
+            "process_samples_per_second",
+            metric.process_samples_per_second,
+        ),
         (
             "last_round_decisions_per_second",
             metric.last_round_decisions_per_second,
@@ -286,6 +294,7 @@ def validate_training_metric(
             )
     required_ints = (
         ("total_games", metric.total_games),
+        ("total_samples", metric.total_samples),
         ("total_updates", metric.total_updates),
         (
             "last_generated_action_count",
@@ -324,8 +333,10 @@ def _to_json(metric: TrainingMetric) -> JsonObject:
     return {
         "run_id": metric.run_id,
         "total_games": metric.total_games,
+        "total_samples": metric.total_samples,
         "total_updates": metric.total_updates,
         "process_games_per_second": metric.process_games_per_second,
+        "process_samples_per_second": metric.process_samples_per_second,
         "last_round_decisions_per_second": (
             metric.last_round_decisions_per_second
         ),
@@ -414,9 +425,13 @@ def _from_json(data: dict[object, object]) -> TrainingMetric | None:
         return None
     run_id = _str_field(data, "run_id")
     total_games = _int_field(data, "total_games")
+    total_samples = _int_field(data, "total_samples")
     total_updates = _int_field(data, "total_updates")
     process_games_per_second = _float_field(
         data, "process_games_per_second"
+    )
+    process_samples_per_second = _float_field(
+        data, "process_samples_per_second"
     )
     last_round_decisions_per_second = _float_field(
         data, "last_round_decisions_per_second"
@@ -454,8 +469,10 @@ def _from_json(data: dict[object, object]) -> TrainingMetric | None:
     if (
         run_id is None
         or total_games is None
+        or total_samples is None
         or total_updates is None
         or process_games_per_second is None
+        or process_samples_per_second is None
         or last_round_decisions_per_second is None
         or last_team0_reward is None
         or last_team1_reward is None
@@ -468,8 +485,10 @@ def _from_json(data: dict[object, object]) -> TrainingMetric | None:
     metric = TrainingMetric(
         run_id=run_id,
         total_games=total_games,
+        total_samples=total_samples,
         total_updates=total_updates,
         process_games_per_second=process_games_per_second,
+        process_samples_per_second=process_samples_per_second,
         last_round_decisions_per_second=last_round_decisions_per_second,
         last_team0_reward=last_team0_reward,
         last_team1_reward=last_team1_reward,

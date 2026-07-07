@@ -153,6 +153,11 @@ def read_checkpoint_manifest(
     )
     if isinstance(total_rounds_result, _result.Rejected):
         return total_rounds_result
+    total_samples_result = _json_non_negative_int_field(
+        loaded, "total_samples", path
+    )
+    if isinstance(total_samples_result, _result.Rejected):
+        return total_samples_result
     total_updates_result = _json_non_negative_int_field(
         loaded, "total_updates", path
     )
@@ -176,6 +181,7 @@ def read_checkpoint_manifest(
             model_config=parsed_model_config.value,
             train_config=parsed_train_config.value,
             total_rounds=total_rounds_result.value,
+            total_samples=total_samples_result.value,
             total_updates=total_updates_result.value,
         ),
     )
@@ -234,6 +240,7 @@ def _manifest_to_json(manifest: CheckpointManifest) -> JsonObject:
         "model_config": metadata.model_config.to_json(),
         "train_config": metadata.train_config.to_json(),
         "total_rounds": metadata.total_rounds,
+        "total_samples": metadata.total_samples,
         "total_updates": metadata.total_updates,
     }
 

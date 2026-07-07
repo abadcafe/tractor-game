@@ -25,6 +25,7 @@ class LoadedTrainingState:
     model: TractorPolicyModel
     trainer: PPOTrainer
     total_rounds: int
+    total_samples: int
     total_updates: int
 
 
@@ -33,7 +34,7 @@ def validate_model_rank_runtime(
 ) -> _result.Ok[None] | _result.Rejected:
     """Validate model-rank device availability before setup."""
     model_ranks = execution_config.model_ranks
-    if model_ranks.kind == "inline":
+    if model_ranks.kind == "none":
         return _result.Ok(value=None)
     if model_ranks.kind == "cuda":
         if not torch.cuda.is_available():
@@ -103,5 +104,6 @@ def create_training_state(
         model=model,
         trainer=trainer,
         total_rounds=0,
+        total_samples=0,
         total_updates=0,
     )

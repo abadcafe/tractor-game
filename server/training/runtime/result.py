@@ -11,5 +11,6 @@ class TrainingLoopResult:
     """Completed training progress and final checkpoint manifest."""
 
     total_rounds: int
+    total_samples: int
     total_updates: int
     checkpoint_path: Path

@@ -6,7 +6,7 @@ from server.training.runtime.model_rank.core import (
 )
 from server.training.runtime.model_rank.local import (
     DirectPolicyClient,
-    InlineModelRank,
+    LocalModelRank,
 )
 from server.training.runtime.model_rank.process import (
     run_model_rank_process,
@@ -21,7 +21,7 @@ from server.training.runtime.model_rank.update import (
 __all__ = [
     "DirectPolicyClient",
     "FramedPolicyClient",
-    "InlineModelRank",
+    "LocalModelRank",
     "ModelReplica",
     "ModelUpdateResult",
     "create_model_replica",

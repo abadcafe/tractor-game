@@ -14,8 +14,8 @@ from server.training.policy_inference_wire import (
     PolicyRequestWireBatch,
 )
 from server.training.policy_sampling import ModelRankPolicyDecision
-from server.training.policy_sampling.replay_arena import (
-    ModelRankReplayArena,
+from server.training.policy_sampling.model_rank_sample_arena import (
+    ModelRankSampleArena,
 )
 from server.training.ppo import (
     PPOTrainer,
@@ -26,6 +26,7 @@ from server.training.ppo.distributed import (
     PPOUpdatePartition,
     single_update_partition,
 )
+from server.training.returns import ReturnCommit
 from server.training.runtime.config import ExecutionConfig
 from server.training.runtime.model_rank.staging import (
     stage_policy_request_wires,
@@ -36,7 +37,6 @@ from server.training.runtime.state import (
     capture_runtime_training_state,
     load_runtime_training_state,
 )
-from server.training.runtime.update_wave import SynchronizedUpdateShard
 from server.training.torch_sampler import sample_policy_decisions
 from server.training.training_state import (
     LoadedTrainingState,
@@ -53,7 +53,7 @@ class ModelReplica:
     train_config: TrainConfig
     execution_config: ExecutionConfig
     device: torch.device
-    replay_arena: ModelRankReplayArena
+    sample_arena: ModelRankSampleArena
 
     def load_state(
         self,
@@ -62,7 +62,7 @@ class ModelReplica:
     ) -> None:
         """Load a CPU snapshot into this model replica."""
         load_runtime_training_state(state=self.state, snapshot=snapshot)
-        self.replay_arena.clear()
+        self.sample_arena.clear()
 
     def decide_wires(
         self, requests: PolicyRequestWireBatch
@@ -97,7 +97,7 @@ class ModelReplica:
             if not isinstance(sample_result, Rejected)
         )
         handles = (
-            self.replay_arena.store_batch(records=records)
+            self.sample_arena.store_batch(records=records)
             if records
             else ()
         )
@@ -123,29 +123,32 @@ class ModelReplica:
             )
         return tuple(decisions)
 
-    def update_shard(
-        self, *, shard: SynchronizedUpdateShard
+    def update_commit(
+        self, *, commit: ReturnCommit
     ) -> _result.Ok[PPOUpdateStats] | _result.Rejected:
-        """Resolve committed handles on-device and apply PPO update."""
-        if shard.is_empty():
+        """Resolve return targets on-device and apply PPO update."""
+        if commit.is_empty():
             update_input = PPOUpdateInput(
-                policy_version=shard.policy_version,
-                local_rollout=None,
+                policy_version=commit.policy_version,
+                local_batch=None,
             )
         else:
-            rollout_result = self.replay_arena.build_rollout(
-                commit=shard.rollout_commit
+            batch_result = self.sample_arena.materialize_return_commit(
+                commit=commit
             )
-            if isinstance(rollout_result, Rejected):
-                return rollout_result
+            if isinstance(batch_result, Rejected):
+                return batch_result
             update_input = PPOUpdateInput(
-                policy_version=shard.policy_version,
-                local_rollout=rollout_result.value,
+                policy_version=commit.policy_version,
+                local_batch=batch_result.value,
             )
         update_result = self.state.trainer.update(update_input)
         if isinstance(update_result, Rejected):
             return update_result
-        self.replay_arena.discard(commit=shard.rollout_commit)
+        self.sample_arena.discard_commit(commit=commit)
+        self.sample_arena.discard_uncommitted_policy_version(
+            policy_version=commit.policy_version
+        )
         return _result.Ok(value=update_result.value)
 
     def snapshot(self) -> RuntimeTrainingState:
@@ -183,6 +186,7 @@ def create_model_replica(
         model=model,
         trainer=trainer,
         total_rounds=0,
+        total_samples=0,
         total_updates=0,
     )
     return ModelReplica(
@@ -191,7 +195,7 @@ def create_model_replica(
         train_config=train_config,
         execution_config=execution_config,
         device=device,
-        replay_arena=ModelRankReplayArena(
+        sample_arena=ModelRankSampleArena(
             model_rank_index=model_rank_index,
             device=device,
         ),

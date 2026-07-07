@@ -26,8 +26,8 @@ from server.training.policy_sampling import (
     DecisionHandle,
     DeviceDecisionReplayRecord,
 )
-from server.training.policy_sampling.replay_arena import (
-    ModelRankReplayArena,
+from server.training.policy_sampling.model_rank_sample_arena import (
+    ModelRankSampleArena,
 )
 from server.training.ppo import (
     PPOTrainer,
@@ -36,9 +36,9 @@ from server.training.ppo import (
 )
 from server.training.ppo.distributed import PPOUpdatePartition
 from server.training.ppo.replay_tensors import (
-    RolloutTensorBatch,
+    ReadyPPOBatch,
 )
-from server.training.rollout_commit import RolloutCommit
+from server.training.returns import ReturnCommit
 from server.training.semantic_action_plan import (
     advance_action_state,
     compile_legal_action_frame,
@@ -283,12 +283,12 @@ def test_update_rejects_empty_single_rank_input() -> None:
     )
 
     result = trainer.update(
-        PPOUpdateInput(policy_version=0, local_rollout=None)
+        PPOUpdateInput(policy_version=0, local_batch=None)
     )
 
     assert isinstance(result, Rejected)
     assert (
-        result.reason == "single-rank PPO update requires local rollout"
+        result.reason == "single-rank PPO update requires local batch"
     )
 
 
@@ -455,12 +455,12 @@ def test_update_rejects_non_finite_gradients_before_optimizer_step(
         assert torch.equal(parameter.detach(), before[index])
 
 
-def _single_card_rollout_batch(*, count: int) -> RolloutTensorBatch:
+def _single_card_batch(*, count: int) -> ReadyPPOBatch:
     assert count > 0
     device = torch.device("cpu")
-    store = ModelRankReplayArena(model_rank_index=0, device=device)
-    team0_handles: list[DecisionHandle] = []
-    team1_handles: list[DecisionHandle] = []
+    store = ModelRankSampleArena(model_rank_index=0, device=device)
+    handles: list[DecisionHandle] = []
+    return_values: list[float] = []
     for index in range(count):
         player_index = index % 4
         handle = _store_single_card_decision(
@@ -468,24 +468,25 @@ def _single_card_rollout_batch(*, count: int) -> RolloutTensorBatch:
             device=device,
             player_index=player_index,
         )
-        if player_index in (0, 2):
-            team0_handles.append(handle)
-        else:
-            team1_handles.append(handle)
-    commit = _rollout_commit_from_team_handles(
-        team0_handles=tuple(team0_handles),
-        team1_handles=tuple(team1_handles),
+        handles.append(handle)
+        return_values.append(1.0 if player_index in (0, 2) else -1.0)
+    commit = ReturnCommit(
+        policy_version=0,
+        first_episode_id=0,
+        episode_count=1,
+        decision_handles=tuple(handles),
+        return_values=tuple(return_values),
     )
-    rollout_result = store.build_rollout(commit=commit)
-    assert isinstance(rollout_result, Ok)
-    return rollout_result.value
+    batch_result = store.materialize_return_commit(commit=commit)
+    assert isinstance(batch_result, Ok)
+    return batch_result.value
 
 
 def _single_card_update_input(*, count: int) -> PPOUpdateInput:
-    rollout = _single_card_rollout_batch(count=count)
+    batch = _single_card_batch(count=count)
     return PPOUpdateInput(
-        policy_version=rollout.policy_version,
-        local_rollout=rollout,
+        policy_version=batch.policy_version,
+        local_batch=batch,
     )
 
 
@@ -511,7 +512,7 @@ def _assert_profile_zero(profile: PPOUpdateProfile) -> None:
 
 def _store_single_card_decision(
     *,
-    store: ModelRankReplayArena,
+    store: ModelRankSampleArena,
     device: torch.device,
     player_index: int,
 ) -> DecisionHandle:
@@ -560,37 +561,6 @@ def _store_single_card_decision(
                 (), dtype=torch.float32, device=device
             ),
         )
-    )
-
-
-def _rollout_commit_from_team_handles(
-    *,
-    team0_handles: tuple[DecisionHandle, ...],
-    team1_handles: tuple[DecisionHandle, ...],
-) -> RolloutCommit:
-    decision_handles: list[DecisionHandle] = []
-    terminal_rewards: list[float] = []
-    trajectory_team_indices: list[int] = []
-    trajectory_offsets: list[int] = [0]
-    if team0_handles:
-        decision_handles.extend(team0_handles)
-        terminal_rewards.append(1.0)
-        trajectory_team_indices.append(0)
-        trajectory_offsets.append(len(decision_handles))
-    if team1_handles:
-        decision_handles.extend(team1_handles)
-        terminal_rewards.append(-1.0)
-        trajectory_team_indices.append(1)
-        trajectory_offsets.append(len(decision_handles))
-    return RolloutCommit(
-        policy_version=0,
-        first_episode_id=0,
-        episode_count=1,
-        decision_handles=tuple(decision_handles),
-        reward_after_step=tuple(0.0 for _ in decision_handles),
-        terminal_rewards=tuple(terminal_rewards),
-        trajectory_team_indices=tuple(trajectory_team_indices),
-        trajectory_offsets=tuple(trajectory_offsets),
     )
 
 

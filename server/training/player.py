@@ -133,6 +133,21 @@ class TrainingPlayer(Player):
         self._decision_index = 0
         return Ok(value=None)
 
+    async def cancel_background_tasks(self) -> None:
+        """Cancel in-flight actions before discarding a game."""
+        tasks = tuple(self._action_tasks)
+        if not tasks:
+            return
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        self._action_tasks.clear()
+        self._pending = None
+
     async def confirm_held_scoring_next_round(
         self, game: GameView
     ) -> bool:

@@ -51,59 +51,39 @@ class PPOReplayTensorBatch:
 
 
 @dataclass(frozen=True, slots=True)
-class RolloutTensorBatch:
-    """Learner-ready rollout tensors on one torch device."""
+class ReadyPPOBatch:
+    """Learner-ready flat PPO samples on one torch device."""
 
     policy_version: int
-    first_episode_id: int
-    episode_count: int
-    max_trajectory_length: int
-    trajectory_count: int
     observation_batch: ObservationTensorBatch
     replay: PPOReplayTensorBatch
     old_log_probabilities: Tensor
     old_values: Tensor
-    reward_after_step: Tensor
-    terminal_rewards: Tensor
-    trajectory_offsets: Tensor
-    trajectory_team_indices: Tensor
+    return_values: Tensor
+    raw_advantages: Tensor
 
     def __post_init__(self) -> None:
         assert self.policy_version >= 0
-        assert self.first_episode_id >= 0
-        assert self.episode_count >= 0
-        assert self.max_trajectory_length > 0
-        assert self.trajectory_count > 0
         assert self.old_log_probabilities.ndim == 1
         assert self.old_values.ndim == 1
-        assert self.reward_after_step.ndim == 1
-        assert self.terminal_rewards.ndim == 1
-        assert self.trajectory_offsets.ndim == 1
-        assert self.trajectory_team_indices.ndim == 1
+        assert self.return_values.ndim == 1
+        assert self.raw_advantages.ndim == 1
         sample_count = self.replay.sample_count
         assert int(self.old_log_probabilities.shape[0]) == sample_count
         assert int(self.old_values.shape[0]) == sample_count
-        assert int(self.reward_after_step.shape[0]) == sample_count
+        assert int(self.return_values.shape[0]) == sample_count
+        assert int(self.raw_advantages.shape[0]) == sample_count
         assert int(self.observation_batch.component_ids.shape[0]) == (
             sample_count
         )
-        assert int(self.trajectory_offsets.shape[0]) == (
-            self.trajectory_count + 1
-        )
-        assert int(self.trajectory_team_indices.shape[0]) == (
-            self.trajectory_count
-        )
-        assert int(self.terminal_rewards.shape[0]) == (
-            self.trajectory_count
-        )
 
-    def transition_count(self) -> int:
-        """Return the number of decision transitions."""
+    def sample_count(self) -> int:
+        """Return the number of trainable samples."""
         return self.replay.sample_count
 
     def is_empty(self) -> bool:
-        """Return whether this batch has no trainable transitions."""
-        return self.transition_count() == 0
+        """Return whether this batch has no trainable samples."""
+        return self.sample_count() == 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,10 +119,10 @@ class ReplayPrefixTensorBatch:
         assert self.selected_token_ids.dtype == torch.long
 
 
-def merge_rollout_tensor_batches(
-    batches: tuple[RolloutTensorBatch, ...],
-) -> RolloutTensorBatch:
-    """Merge rollout tensor batches for one policy version."""
+def merge_ready_ppo_batches(
+    batches: tuple[ReadyPPOBatch, ...],
+) -> ReadyPPOBatch:
+    """Merge ready PPO batches for one policy version."""
     assert batches
     policy_version = batches[0].policy_version
     assert all(
@@ -154,18 +134,8 @@ def merge_rollout_tensor_batches(
         int(batch.observation_batch.component_ids.shape[1])
         for batch in batches
     )
-    return RolloutTensorBatch(
+    return ReadyPPOBatch(
         policy_version=policy_version,
-        first_episode_id=min(
-            batch.first_episode_id for batch in batches
-        ),
-        episode_count=sum(batch.episode_count for batch in batches),
-        max_trajectory_length=max(
-            batch.max_trajectory_length for batch in batches
-        ),
-        trajectory_count=sum(
-            batch.trajectory_count for batch in batches
-        ),
         observation_batch=_merge_observation_batches(
             batches=batches, max_tokens=max_tokens
         ),
@@ -176,15 +146,11 @@ def merge_rollout_tensor_batches(
             [batch.old_log_probabilities for batch in batches], dim=0
         ),
         old_values=torch.cat([batch.old_values for batch in batches]),
-        reward_after_step=torch.cat(
-            [batch.reward_after_step for batch in batches], dim=0
+        return_values=torch.cat(
+            [batch.return_values for batch in batches], dim=0
         ),
-        terminal_rewards=torch.cat(
-            [batch.terminal_rewards for batch in batches], dim=0
-        ),
-        trajectory_offsets=_merge_trajectory_offsets(batches),
-        trajectory_team_indices=torch.cat(
-            [batch.trajectory_team_indices for batch in batches], dim=0
+        raw_advantages=torch.cat(
+            [batch.raw_advantages for batch in batches], dim=0
         ),
     )
 
@@ -321,7 +287,7 @@ def _merge_replay_batches(
 
 def _merge_observation_batches(
     *,
-    batches: tuple[RolloutTensorBatch, ...],
+    batches: tuple[ReadyPPOBatch, ...],
     max_tokens: int,
 ) -> ObservationTensorBatch:
     return ObservationTensorBatch(
@@ -374,22 +340,6 @@ def _pad_observation_tokens(
         device=values.device,
     )
     return torch.cat((values, padding), dim=1)
-
-
-def _merge_trajectory_offsets(
-    batches: tuple[RolloutTensorBatch, ...],
-) -> Tensor:
-    pieces: list[Tensor] = []
-    transition_base = 0
-    for batch in batches:
-        pieces.append(batch.trajectory_offsets[:-1] + transition_base)
-        transition_base += batch.transition_count()
-    last = torch.tensor(
-        (transition_base,),
-        dtype=torch.long,
-        device=batches[0].trajectory_offsets.device,
-    )
-    return torch.cat((*pieces, last), dim=0)
 
 
 def _pad_step_columns(values: Tensor, *, max_steps: int) -> Tensor:

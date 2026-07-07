@@ -136,8 +136,10 @@ def test_read_metrics_accepts_missing_nullable_schema_fields(
         file.write(
             '{"run_id":"bad",'
             '"total_games":11,'
+            '"total_samples":151,'
             '"total_updates":3,'
             '"process_games_per_second":2.5,'
+            '"process_samples_per_second":23.5,'
             '"last_round_decisions_per_second":121.0,'
             '"last_team0_reward":0.5,'
             '"last_team1_reward":-0.5,'
@@ -282,8 +284,10 @@ def _sample_metric(
     return TrainingMetric(
         run_id="run-1",
         total_games=10,
+        total_samples=150,
         total_updates=2,
         process_games_per_second=1.5,
+        process_samples_per_second=22.5,
         last_round_decisions_per_second=120.0,
         last_team0_reward=0.25,
         last_team1_reward=-0.25,

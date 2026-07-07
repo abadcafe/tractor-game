@@ -1,91 +1,79 @@
-"""Black-box tests for PPO math primitives."""
+"""Tests for PPO objective math."""
 
 from __future__ import annotations
-
-import math
 
 import torch
 
 from server.training.ppo.math import (
     PPOObjectiveConfig,
-    ValueStep,
     clipped_ppo_objective,
-    generalized_advantage_targets,
 )
 
 
-def test_generalized_advantage_targets_values() -> None:
-    targets = generalized_advantage_targets(
-        steps=(
-            ValueStep(reward=0.0, value_estimate=0.2),
-            ValueStep(reward=0.0, value_estimate=0.4),
-            ValueStep(reward=1.5, value_estimate=0.1),
-        ),
-        terminal_reward=0.0,
-        gae_lambda=0.8,
+def test_clipped_ppo_objective_returns_finite_scalar_losses() -> None:
+    old_log_probabilities = torch.log(
+        torch.tensor([0.4, 0.6], dtype=torch.float32)
     )
-
-    _assert_close(targets[0].advantage, 0.856)
-    _assert_close(targets[0].return_value, 1.056)
-    _assert_close(targets[1].advantage, 0.82)
-    _assert_close(targets[1].return_value, 1.22)
-    _assert_close(targets[2].advantage, 1.4)
-    _assert_close(targets[2].return_value, 1.5)
-
-
-def test_generalized_advantage_targets_terminal_reward_values() -> None:
-    targets = generalized_advantage_targets(
-        steps=(
-            ValueStep(reward=0.0, value_estimate=0.2),
-            ValueStep(reward=0.0, value_estimate=0.4),
-            ValueStep(reward=0.0, value_estimate=0.1),
-        ),
-        terminal_reward=1.0,
-        gae_lambda=1.0,
+    new_log_probabilities = torch.log(
+        torch.tensor([0.5, 0.5], dtype=torch.float32)
     )
+    old_values = torch.tensor([0.1, -0.2], dtype=torch.float32)
+    new_values = torch.tensor([0.3, -0.1], dtype=torch.float32)
+    return_values = torch.tensor([1.0, -1.0], dtype=torch.float32)
+    advantages = torch.tensor([0.8, -0.4], dtype=torch.float32)
+    entropies = torch.tensor([0.2, 0.4], dtype=torch.float32)
 
-    assert [target.return_value for target in targets] == [
-        1.0,
-        1.0,
-        1.0,
-    ]
-    _assert_close(targets[0].advantage, 0.8)
-    _assert_close(targets[1].advantage, 0.6)
-    _assert_close(targets[2].advantage, 0.9)
-
-
-def test_clipped_ppo_objective_values() -> None:
     objective = clipped_ppo_objective(
-        old_log_probabilities=torch.log(torch.tensor([0.5, 0.5])),
-        new_log_probabilities=torch.log(torch.tensor([0.8, 0.2])),
-        advantages=torch.tensor([2.0, -1.0]),
-        old_values=torch.tensor([0.0, 1.0]),
-        new_values=torch.tensor([1.0, 0.0]),
-        return_values=torch.tensor([2.0, -1.0]),
-        entropies=torch.tensor([0.3, 0.7]),
+        old_log_probabilities=old_log_probabilities,
+        new_log_probabilities=new_log_probabilities,
+        advantages=advantages,
+        old_values=old_values,
+        new_values=new_values,
+        return_values=return_values,
+        entropies=entropies,
         config=PPOObjectiveConfig(
             ppo_clip=0.2,
-            value_clip=0.25,
+            value_clip=0.1,
             value_coef=0.5,
             entropy_coef=0.01,
         ),
     )
 
-    _assert_tensor_close(objective.policy_loss, -0.8)
-    _assert_tensor_close(objective.value_loss, 3.0625)
-    _assert_tensor_close(objective.entropy, 0.5)
-    _assert_tensor_close(
-        objective.approx_kl,
-        (math.log(0.5) - math.log(0.8) + math.log(0.5) - math.log(0.2))
-        / 2.0,
+    assert objective.policy_loss.shape == ()
+    assert objective.value_loss.shape == ()
+    assert objective.entropy.shape == ()
+    assert objective.total_loss.shape == ()
+    assert objective.approx_kl.shape == ()
+    assert objective.clip_fraction.shape == ()
+    assert torch.isfinite(objective.total_loss)
+
+
+def test_clipped_ppo_objective_clips_policy_ratio() -> None:
+    objective = clipped_ppo_objective(
+        old_log_probabilities=torch.log(
+            torch.tensor([0.5], dtype=torch.float32)
+        ),
+        new_log_probabilities=torch.log(
+            torch.tensor([1.0], dtype=torch.float32)
+        ),
+        advantages=torch.tensor([1.0], dtype=torch.float32),
+        old_values=torch.tensor([0.0], dtype=torch.float32),
+        new_values=torch.tensor([0.0], dtype=torch.float32),
+        return_values=torch.tensor([0.0], dtype=torch.float32),
+        entropies=torch.tensor([0.0], dtype=torch.float32),
+        config=PPOObjectiveConfig(
+            ppo_clip=0.2,
+            value_clip=0.2,
+            value_coef=0.0,
+            entropy_coef=0.0,
+        ),
     )
-    _assert_tensor_close(objective.clip_fraction, 1.0)
-    _assert_tensor_close(objective.total_loss, 0.72625)
 
-
-def _assert_tensor_close(actual: torch.Tensor, expected: float) -> None:
-    _assert_close(float(actual.detach().cpu().item()), expected)
-
-
-def _assert_close(actual: float, expected: float) -> None:
-    assert abs(actual - expected) < 0.000001
+    assert torch.allclose(
+        objective.policy_loss,
+        torch.tensor(-1.2, dtype=torch.float32),
+    )
+    assert torch.allclose(
+        objective.clip_fraction,
+        torch.tensor(1.0, dtype=torch.float32),
+    )

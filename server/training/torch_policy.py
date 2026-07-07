@@ -17,8 +17,8 @@ from server.training.policy_inference_wire import (
     build_policy_request_wire,
     decode_policy_response,
 )
-from server.training.policy_sampling.replay_arena import (
-    ModelRankReplayArena,
+from server.training.policy_sampling.model_rank_sample_arena import (
+    ModelRankSampleArena,
 )
 from server.training.runtime.model_rank.staging import (
     stage_policy_request_wires,
@@ -40,7 +40,7 @@ class TorchTrainingPolicy:
         self.model = model
         self.config = config
         self.device = device
-        self.replay_arena = ModelRankReplayArena(
+        self.sample_arena = ModelRankSampleArena(
             model_rank_index=0,
             device=device,
         )
@@ -80,7 +80,7 @@ class TorchTrainingPolicy:
         if isinstance(result, Rejected):
             return result
         sample = result.value
-        handle = self.replay_arena.store(record=sample.replay_record)
+        handle = self.sample_arena.store(record=sample.replay_record)
         return decode_policy_response(
             legal_actions=legal_actions,
             response=CompletedPolicyResponse(

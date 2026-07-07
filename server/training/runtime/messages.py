@@ -6,40 +6,24 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from server.training.ppo import PPOUpdateStats
-from server.training.rollout_commit import RolloutCommit
 from server.training.runtime.state import RuntimeTrainingState
-from server.training.runtime.update_wave import SynchronizedUpdateShard
 
 
 @dataclass(frozen=True, slots=True)
-class WorkerRoundSummary:
-    """Round metrics returned by one worker."""
-
-    team0_reward: float
-    team1_reward: float
-    generated_action_count: int
-    accepted_action_count: int
-    action_choice_count: int
-    decision_count: int
-    elapsed_seconds: float
-    game_over: bool
-
-
-@dataclass(frozen=True, slots=True)
-class WorkerRolloutCommand:
-    """Collect one self-play rollout using the requested policy."""
+class WorkerStartSamplingCommand:
+    """Run worker game envs until the worker arena is full."""
 
     policy_version: int
-    episode_id: int
+    game_env_count: int
 
     def __post_init__(self) -> None:
         assert self.policy_version >= 0
-        assert self.episode_id >= 0
+        assert self.game_env_count > 0
 
 
 @dataclass(frozen=True, slots=True)
 class WorkerLoadStateCommand:
-    """Load canonical state into an inline worker model rank."""
+    """Load canonical state into a worker-local model rank."""
 
     state: RuntimeTrainingState
     policy_version: int
@@ -53,11 +37,9 @@ class WorkerUpdateCommand:
     """Apply one synchronized PPO update rank."""
 
     policy_version: int
-    shard: SynchronizedUpdateShard
 
     def __post_init__(self) -> None:
         assert self.policy_version >= 0
-        assert self.shard.policy_version == self.policy_version
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,7 +51,7 @@ class StopWorkerCommand:
 
 type WorkerCommand = (
     WorkerLoadStateCommand
-    | WorkerRolloutCommand
+    | WorkerStartSamplingCommand
     | WorkerUpdateCommand
     | StopWorkerCommand
 )
@@ -97,13 +79,15 @@ class WorkerUpdateCompleted:
 
 
 @dataclass(frozen=True, slots=True)
-class WorkerRolloutCompleted:
-    """Worker response after rollout collection."""
+class WorkerSamplingStopped:
+    """Worker response after its rollout arena becomes full."""
 
     worker_index: int
-    episode_id: int
-    summary: WorkerRoundSummary
-    rollout_commit: RolloutCommit
+    policy_version: int
+
+    def __post_init__(self) -> None:
+        assert self.worker_index >= 0
+        assert self.policy_version >= 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,7 +101,7 @@ class WorkerRejected:
 type WorkerResponse = (
     WorkerStateLoaded
     | WorkerUpdateCompleted
-    | WorkerRolloutCompleted
+    | WorkerSamplingStopped
     | WorkerRejected
 )
 

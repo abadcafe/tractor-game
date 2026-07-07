@@ -1,4 +1,4 @@
-"""Model-rank-owned device replay arena for sampled decisions."""
+"""Model-rank-owned device sample arena for PPO-ready decisions."""
 
 from __future__ import annotations
 
@@ -15,9 +15,9 @@ from server.training.policy_sampling.records import (
 )
 from server.training.ppo.replay_tensors import (
     PPOReplayTensorBatch,
-    RolloutTensorBatch,
+    ReadyPPOBatch,
 )
-from server.training.rollout_commit import RolloutCommit
+from server.training.returns import ReturnCommit
 from server.training.semantic_actions.codec import SEMANTIC_CODEC
 from server.training.tensorize import ObservationTensorBatch
 
@@ -33,8 +33,8 @@ def _bool_list() -> list[bool]:
 
 
 @dataclass(slots=True)
-class ModelRankReplayArena:
-    """Own sampled replay tensors in reusable device slots."""
+class ModelRankSampleArena:
+    """Own sampled replay tensors and materialized return targets."""
 
     model_rank_index: int
     device: torch.device
@@ -86,12 +86,12 @@ class ModelRankReplayArena:
             slot_generation=generation,
         )
 
-    def build_rollout(
-        self, *, commit: RolloutCommit
-    ) -> _result.Ok[RolloutTensorBatch] | _result.Rejected:
-        """Resolve committed handles into a device PPO rollout."""
+    def materialize_return_commit(
+        self, *, commit: ReturnCommit
+    ) -> _result.Ok[ReadyPPOBatch] | _result.Rejected:
+        """Resolve committed handles into flat device PPO samples."""
         if commit.is_empty():
-            return Rejected(reason="rollout commit has no decisions")
+            return Rejected(reason="return commit has no decisions")
         slots_result = self._slot_indices_for_commit(commit)
         if isinstance(slots_result, Rejected):
             return slots_result
@@ -102,13 +102,15 @@ class ModelRankReplayArena:
             dim=0, index=slot_tensor
         )
         max_step_count = _positive_tensor_max(step_counts)
+        old_values = self._old_values_tensor().index_select(
+            dim=0, index=slot_tensor
+        )
+        return_values = _float_tensor(
+            commit.return_values, device=self.device
+        )
         return _result.Ok(
-            value=RolloutTensorBatch(
+            value=ReadyPPOBatch(
                 policy_version=commit.policy_version,
-                first_episode_id=commit.first_episode_id,
-                episode_count=commit.episode_count,
-                max_trajectory_length=commit.max_trajectory_length(),
-                trajectory_count=commit.trajectory_count(),
                 observation_batch=ObservationTensorBatch(
                     component_ids=self._component_ids_tensor().index_select(
                         dim=0, index=slot_tensor
@@ -145,25 +147,13 @@ class ModelRankReplayArena:
                         dim=0, index=slot_tensor
                     )
                 ),
-                old_values=self._old_values_tensor().index_select(
-                    dim=0, index=slot_tensor
-                ),
-                reward_after_step=_float_tensor(
-                    commit.reward_after_step, device=self.device
-                ),
-                terminal_rewards=_float_tensor(
-                    commit.terminal_rewards, device=self.device
-                ),
-                trajectory_offsets=_long_tensor(
-                    commit.trajectory_offsets, device=self.device
-                ),
-                trajectory_team_indices=_long_tensor(
-                    commit.trajectory_team_indices, device=self.device
-                ),
+                old_values=old_values,
+                return_values=return_values,
+                raw_advantages=return_values - old_values,
             )
         )
 
-    def discard(self, *, commit: RolloutCommit) -> None:
+    def discard_commit(self, *, commit: ReturnCommit) -> None:
         """Release committed slots after a successful PPO update."""
         for handle in commit.decision_handles:
             if handle.model_rank_index != self.model_rank_index:
@@ -172,6 +162,23 @@ class ModelRankReplayArena:
                 continue
             self._slot_active[handle.slot_index] = False
             self._free_slots.append(handle.slot_index)
+
+    def discard_uncommitted_policy_version(
+        self, *, policy_version: int
+    ) -> None:
+        """Release active slots from a completed rollout version."""
+        assert policy_version >= 0
+        if self._capacity == 0:
+            return
+        versions = self._policy_versions_tensor()
+        for slot in range(self._capacity):
+            if not self._slot_active[slot]:
+                continue
+            slot_version = int(versions[slot].detach().cpu().item())
+            if slot_version != policy_version:
+                continue
+            self._slot_active[slot] = False
+            self._free_slots.append(slot)
 
     def _ensure_capacity_for(
         self, record: DeviceDecisionReplayRecord
@@ -357,21 +364,21 @@ class ModelRankReplayArena:
         self._policy_versions_tensor()[slot] = record.policy_version
 
     def _slot_indices_for_commit(
-        self, commit: RolloutCommit
+        self, commit: ReturnCommit
     ) -> _result.Ok[tuple[int, ...]] | Rejected:
         slots: list[int] = []
         for handle in commit.decision_handles:
             if handle.model_rank_index != self.model_rank_index:
                 return Rejected(
-                    reason="rollout commit targets the wrong model rank"
+                    reason="return commit targets the wrong model rank"
                 )
             if handle.policy_version != commit.policy_version:
                 return Rejected(
-                    reason="rollout commit policy version mismatch"
+                    reason="return commit policy version mismatch"
                 )
             if not self._slot_is_current(handle):
                 return Rejected(
-                    reason="rollout commit references missing replay"
+                    reason="return commit references missing replay"
                 )
             policy_version = int(
                 self._policy_versions_tensor()[handle.slot_index]
@@ -485,10 +492,3 @@ def _float_tensor(
 ) -> Tensor:
     assert values
     return torch.tensor(values, dtype=torch.float32, device=device)
-
-
-def _long_tensor(
-    values: tuple[int, ...], *, device: torch.device
-) -> Tensor:
-    assert values
-    return torch.tensor(values, dtype=torch.long, device=device)

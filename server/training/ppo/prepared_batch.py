@@ -7,9 +7,8 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from server.training.ppo.device_targets import DevicePPOTargets
 from server.training.ppo.minibatch import TensorizedPPOMinibatch
-from server.training.ppo.replay_tensors import RolloutTensorBatch
+from server.training.ppo.replay_tensors import ReadyPPOBatch
 from server.training.tensorize import (
     ObservationTensorBatch,
 )
@@ -19,7 +18,7 @@ from server.training.tensorize import (
 class PreparedPPOBatch:
     """One PPO rollout batch tensorized once on a learner device."""
 
-    rollout: RolloutTensorBatch
+    batch: ReadyPPOBatch
     old_log_probabilities: Tensor
     old_values: Tensor
     advantages: Tensor
@@ -28,7 +27,7 @@ class PreparedPPOBatch:
 
     def __post_init__(self) -> None:
         assert self.sample_count > 0
-        assert self.rollout.transition_count() == self.sample_count
+        assert self.batch.sample_count() == self.sample_count
         assert (
             int(self.old_log_probabilities.shape[0])
             == self.sample_count
@@ -40,18 +39,17 @@ class PreparedPPOBatch:
 
 def prepare_ppo_batch(
     *,
-    rollout: RolloutTensorBatch,
-    targets: DevicePPOTargets,
+    batch: ReadyPPOBatch,
 ) -> PreparedPPOBatch:
     """Tensorize a full PPO update batch once on the learner device."""
-    assert not rollout.is_empty()
-    sample_count = rollout.transition_count()
+    assert not batch.is_empty()
+    sample_count = batch.sample_count()
     return PreparedPPOBatch(
-        rollout=rollout,
-        old_log_probabilities=targets.old_log_probabilities,
-        old_values=targets.old_values,
-        advantages=targets.advantages,
-        return_values=targets.return_values,
+        batch=batch,
+        old_log_probabilities=batch.old_log_probabilities,
+        old_values=batch.old_values,
+        advantages=batch.raw_advantages,
+        return_values=batch.return_values,
         sample_count=sample_count,
     )
 
@@ -75,9 +73,9 @@ def prepared_ppo_minibatch(
         )
     return TensorizedPPOMinibatch(
         observation_batch=_select_observation_rows(
-            batch.rollout.observation_batch, index_tensor=index_tensor
+            batch.batch.observation_batch, index_tensor=index_tensor
         ),
-        replay=batch.rollout.replay,
+        replay=batch.batch.replay,
         sample_indices=index_tensor,
         old_log_probabilities=batch.old_log_probabilities.index_select(
             dim=0, index=index_tensor

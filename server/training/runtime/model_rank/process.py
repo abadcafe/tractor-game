@@ -49,6 +49,11 @@ from server.training.runtime.model_rank.staging import (
     PolicyRequestStager,
     StagedPolicyRequestBatch,
 )
+from server.training.runtime.shared_rollout_arena import (
+    RolloutArenaHandle,
+    SharedRolloutArenaReader,
+    attach_rollout_arena_reader,
+)
 from server.training.runtime.telemetry import (
     TelemetryEvent,
     TelemetryMeasurement,
@@ -70,6 +75,7 @@ def run_model_rank_process(
         ConnectionPolicyRequestReceiver, ...
     ],
     inference_response_senders: tuple[Connection, ...],
+    rollout_arena_handles: tuple[RolloutArenaHandle, ...],
     telemetry_sink: TelemetrySink,
     distributed_rank_config: DistributedRankConfig | None,
 ) -> None:
@@ -107,6 +113,7 @@ def run_model_rank_process(
         device=setup_result.value,
         update_partition=update_partition,
     )
+    arena_reader = attach_rollout_arena_reader(rollout_arena_handles)
     try:
         loop_result = _run_model_rank_event_loop(
             model_rank_index=model_rank_index,
@@ -117,6 +124,7 @@ def run_model_rank_process(
             response_sender=response_sender,
             inference_request_receivers=inference_request_receivers,
             inference_response_senders=inference_response_senders,
+            rollout_arena_reader=arena_reader,
             telemetry_sink=telemetry_sink,
         )
         if isinstance(loop_result, Rejected):
@@ -128,6 +136,7 @@ def run_model_rank_process(
             )
         return
     finally:
+        arena_reader.close()
         destroy_distributed_rank()
 
 
@@ -202,6 +211,7 @@ def _run_model_rank_event_loop(
         ConnectionPolicyRequestReceiver, ...
     ],
     inference_response_senders: tuple[Connection, ...],
+    rollout_arena_reader: SharedRolloutArenaReader,
     telemetry_sink: TelemetrySink,
 ) -> _result.Ok[None] | _result.Rejected:
     command_connection = cast(Connection, command_receiver)
@@ -240,6 +250,7 @@ def _run_model_rank_event_loop(
                 core=core,
                 command=command,
                 response_sender=response_sender,
+                rollout_arena_reader=rollout_arena_reader,
                 telemetry_sink=telemetry_sink,
             )
             if command_result == "stopped":
@@ -349,6 +360,7 @@ def _handle_model_rank_command(
     core: ModelReplica,
     command: ModelRankCommand,
     response_sender: ModelRankResponseSender,
+    rollout_arena_reader: SharedRolloutArenaReader,
     telemetry_sink: TelemetrySink,
 ) -> str:
     if isinstance(command, ModelRankStopCommand):
@@ -368,6 +380,7 @@ def _handle_model_rank_command(
         run_id=run_id,
         core=core,
         command=command,
+        rollout_arena_reader=rollout_arena_reader,
         telemetry_sink=telemetry_sink,
     )
     response_sender.put(update_response)
@@ -380,6 +393,7 @@ def _run_model_rank_update(
     run_id: str,
     core: ModelReplica,
     command: ModelRankUpdateCommand,
+    rollout_arena_reader: SharedRolloutArenaReader,
     telemetry_sink: TelemetrySink,
 ) -> ModelRankUpdateCompleted | ModelRankRejected:
     telemetry_result = _record_model_rank_stage(
@@ -395,12 +409,16 @@ def _run_model_rank_update(
             model_rank_index=model_rank_index,
             reason=telemetry_result.reason,
         )
-    if command.shard.rank_index != model_rank_index:
+    commit_result = rollout_arena_reader.read_commit_for_rank(
+        policy_version=command.policy_version,
+        model_rank_index=model_rank_index,
+    )
+    if isinstance(commit_result, Rejected):
         return ModelRankRejected(
             model_rank_index=model_rank_index,
-            reason="model-rank update shard targets a different rank",
+            reason=commit_result.reason,
         )
-    update_result = core.update_shard(shard=command.shard)
+    update_result = core.update_commit(commit=commit_result.value)
     if isinstance(update_result, Rejected):
         return ModelRankRejected(
             model_rank_index=model_rank_index,
@@ -408,7 +426,7 @@ def _run_model_rank_update(
         )
     return ModelRankUpdateCompleted(
         model_rank_index=model_rank_index,
-        rank_index=command.shard.rank_index,
+        rank_index=model_rank_index,
         update_stats=update_result.value,
         state=core.snapshot(),
     )

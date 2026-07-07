@@ -22,7 +22,6 @@ from server.training.runtime.checkpoint_state import (
     save_runtime_checkpoint_state,
 )
 from server.training.runtime.config import ExecutionConfig
-from server.training.runtime.messages import WorkerRoundSummary
 from server.training.runtime.result import TrainingLoopResult
 from server.training.runtime.state import (
     RuntimeTrainingState,
@@ -37,8 +36,8 @@ from server.training.runtime.telemetry import (
 )
 from server.training.runtime.training_runtime import (
     TrainingRuntime,
-    TrainingWaveRequest,
-    TrainingWaveResult,
+    TrainingUpdateRequest,
+    TrainingUpdateResult,
     open_training_runtime,
 )
 
@@ -54,11 +53,11 @@ def run_training_coordinator(
     model_config: ModelConfig,
     train_config: TrainConfig,
     execution_config: ExecutionConfig,
-    max_rounds: int,
+    max_samples: int,
     resume: Path | None,
 ) -> _result.Ok[TrainingLoopResult] | _result.Rejected:
     """Run synchronized worker training and commit canonical state."""
-    assert max_rounds >= 0
+    assert max_samples >= 0
     setup_result = _setup_coordinator_runtime(
         execution_config=execution_config
     )
@@ -78,7 +77,7 @@ def run_training_coordinator(
             total_rounds=0,
             total_updates=0,
             progress_numerator=0,
-            progress_denominator=max_rounds,
+            progress_denominator=_progress_denominator(max_samples),
             unix_seconds=time.time(),
         )
     )
@@ -92,17 +91,6 @@ def run_training_coordinator(
     )
     if isinstance(state_result, Rejected):
         return state_result
-    if max_rounds == 0:
-        return _commit_checkpoint_only(
-            run_dir=run_dir,
-            run_id=run_id,
-            model_config=model_config,
-            train_config=train_config,
-            execution_config=execution_config,
-            state=state_result.value,
-            telemetry_sink=telemetry_sink,
-            max_rounds=max_rounds,
-        )
     runtime_result = open_training_runtime(
         run_dir=run_dir,
         run_id=run_id,
@@ -121,7 +109,7 @@ def run_training_coordinator(
             train_config=train_config,
             execution_config=execution_config,
             state=state_result.value,
-            max_rounds=max_rounds,
+            max_samples=max_samples,
             telemetry_sink=telemetry_sink,
             runtime=runtime,
         )
@@ -132,8 +120,9 @@ def run_training_coordinator(
     complete_result = _record_coordinator_complete(
         telemetry_sink=telemetry_sink,
         run_id=run_id,
-        max_rounds=max_rounds,
+        max_samples=max_samples,
         total_rounds=training_result.value.total_rounds,
+        total_samples=training_result.value.total_samples,
         total_updates=training_result.value.total_updates,
     )
     if isinstance(complete_result, Rejected):
@@ -147,6 +136,44 @@ def _setup_coordinator_runtime(
 ) -> _result.Ok[None] | _result.Rejected:
     assert execution_config.worker_process_count() > 0
     return Ok(value=None)
+
+
+def _progress_denominator(max_samples: int) -> int:
+    assert max_samples >= 0
+    if max_samples == 0:
+        return 1
+    return max_samples
+
+
+def _progress_numerator(
+    *, max_samples: int, processed_samples: int
+) -> int:
+    assert max_samples >= 0
+    assert processed_samples >= 0
+    if max_samples == 0:
+        return 0
+    return min(processed_samples, max_samples)
+
+
+def _complete_progress_numerator(*, max_samples: int) -> int:
+    assert max_samples >= 0
+    if max_samples == 0:
+        return 1
+    return max_samples
+
+
+def _should_continue_training(
+    *,
+    max_samples: int,
+    start_total_samples: int,
+    total_samples: int,
+) -> bool:
+    assert max_samples >= 0
+    assert start_total_samples >= 0
+    assert total_samples >= start_total_samples
+    if max_samples == 0:
+        return True
+    return total_samples - start_total_samples < max_samples
 
 
 def _load_or_create_state(
@@ -172,47 +199,6 @@ def _load_or_create_state(
     )
 
 
-def _commit_checkpoint_only(
-    *,
-    run_dir: Path,
-    run_id: str,
-    model_config: ModelConfig,
-    train_config: TrainConfig,
-    execution_config: ExecutionConfig,
-    state: RuntimeCheckpointState,
-    telemetry_sink: TelemetrySink,
-    max_rounds: int,
-) -> _result.Ok[TrainingLoopResult] | _result.Rejected:
-    checkpoint_result = _save_checkpoint(
-        run_dir=run_dir,
-        model_config=model_config,
-        train_config=train_config,
-        execution_config=execution_config,
-        state=state.state,
-        total_rounds=state.total_rounds,
-        total_updates=state.total_updates,
-        update_stats=None,
-    )
-    if isinstance(checkpoint_result, Rejected):
-        return checkpoint_result
-    complete_result = _record_coordinator_complete(
-        telemetry_sink=telemetry_sink,
-        run_id=run_id,
-        max_rounds=max_rounds,
-        total_rounds=state.total_rounds,
-        total_updates=state.total_updates,
-    )
-    if isinstance(complete_result, Rejected):
-        return complete_result
-    return Ok(
-        value=TrainingLoopResult(
-            total_rounds=state.total_rounds,
-            total_updates=state.total_updates,
-            checkpoint_path=checkpoint_result.value,
-        )
-    )
-
-
 def _run_synchronized_training(
     *,
     run_dir: Path,
@@ -221,71 +207,80 @@ def _run_synchronized_training(
     train_config: TrainConfig,
     execution_config: ExecutionConfig,
     state: RuntimeCheckpointState,
-    max_rounds: int,
+    max_samples: int,
     telemetry_sink: TelemetrySink,
     runtime: TrainingRuntime,
 ) -> _result.Ok[TrainingLoopResult] | _result.Rejected:
     start = time.monotonic()
     total_rounds = state.total_rounds
+    total_samples = state.total_samples
     total_updates = state.total_updates
     runtime_state = state.state
     start_total_rounds = total_rounds
-    while total_rounds - start_total_rounds < max_rounds:
-        processed_rounds = total_rounds - start_total_rounds
-        active_worker_count = min(
-            execution_config.worker_process_count(),
-            max_rounds - processed_rounds,
-        )
+    start_total_samples = total_samples
+    while _should_continue_training(
+        max_samples=max_samples,
+        start_total_samples=start_total_samples,
+        total_samples=total_samples,
+    ):
+        processed_samples = total_samples - start_total_samples
         stage_result = _record_coordinator_stage(
             telemetry_sink=telemetry_sink,
             run_id=run_id,
             stage="rollout",
             total_rounds=total_rounds,
             total_updates=total_updates,
-            progress_numerator=processed_rounds,
-            progress_denominator=max_rounds,
+            progress_numerator=_progress_numerator(
+                max_samples=max_samples,
+                processed_samples=processed_samples,
+            ),
+            progress_denominator=_progress_denominator(max_samples),
         )
         if isinstance(stage_result, Rejected):
             return stage_result
-        wave_result = runtime.run_wave(
-            TrainingWaveRequest(
+        update_result = runtime.run_update(
+            TrainingUpdateRequest(
                 state=runtime_state,
                 policy_version=total_updates,
-                first_episode_id=total_rounds,
-                active_worker_count=active_worker_count,
             )
         )
-        if isinstance(wave_result, Rejected):
-            return wave_result
-        wave = wave_result.value
-        if wave.update_stats is not None:
-            update_stage = _record_coordinator_stage(
-                telemetry_sink=telemetry_sink,
-                run_id=run_id,
-                stage="update",
-                total_rounds=total_rounds,
-                total_updates=total_updates,
-                progress_numerator=processed_rounds,
-                progress_denominator=max_rounds,
-            )
-            if isinstance(update_stage, Rejected):
-                return update_stage
-            canonical_state_result = (
-                select_canonical_runtime_training_state(wave.states)
-            )
-            if isinstance(canonical_state_result, Rejected):
-                return canonical_state_result
-            runtime_state = canonical_state_result.value
-            total_updates += 1
-        total_rounds += active_worker_count
+        if isinstance(update_result, Rejected):
+            return update_result
+        update = update_result.value
+        update_stage = _record_coordinator_stage(
+            telemetry_sink=telemetry_sink,
+            run_id=run_id,
+            stage="update",
+            total_rounds=total_rounds,
+            total_updates=total_updates,
+            progress_numerator=_progress_numerator(
+                max_samples=max_samples,
+                processed_samples=processed_samples,
+            ),
+            progress_denominator=_progress_denominator(max_samples),
+        )
+        if isinstance(update_stage, Rejected):
+            return update_stage
+        canonical_state_result = (
+            select_canonical_runtime_training_state(update.states)
+        )
+        if isinstance(canonical_state_result, Rejected):
+            return canonical_state_result
+        runtime_state = canonical_state_result.value
+        total_updates += 1
+        total_rounds += update.snapshot.round_count
+        total_samples += update.snapshot.sample_count
         checkpoint_stage = _record_coordinator_stage(
             telemetry_sink=telemetry_sink,
             run_id=run_id,
             stage="checkpoint",
             total_rounds=total_rounds,
             total_updates=total_updates,
-            progress_numerator=total_rounds - start_total_rounds,
-            progress_denominator=max_rounds,
+            progress_numerator=_progress_numerator(
+                max_samples=max_samples,
+                processed_samples=total_samples - start_total_samples,
+            ),
+            progress_denominator=_progress_denominator(max_samples),
         )
         if isinstance(checkpoint_stage, Rejected):
             return checkpoint_stage
@@ -296,27 +291,31 @@ def _run_synchronized_training(
             execution_config=execution_config,
             state=runtime_state,
             total_rounds=total_rounds,
+            total_samples=total_samples,
             total_updates=total_updates,
-            update_stats=wave.update_stats,
+            update_stats=update.update_stats,
         )
         if isinstance(checkpoint_result, Rejected):
             return checkpoint_result
         elapsed = max(time.monotonic() - start, 0.000001)
-        metric_result = _append_wave_metric(
+        metric_result = _append_update_metric(
             run_dir=run_dir,
             run_id=run_id,
             checkpoint_path=checkpoint_result.value,
             start_total_rounds=start_total_rounds,
+            start_total_samples=start_total_samples,
             total_rounds=total_rounds,
+            total_samples=total_samples,
             total_updates=total_updates,
             elapsed_seconds=elapsed,
-            wave=wave,
+            update=update,
         )
         if isinstance(metric_result, Rejected):
             return metric_result
     return Ok(
         value=TrainingLoopResult(
             total_rounds=total_rounds,
+            total_samples=total_samples,
             total_updates=total_updates,
             checkpoint_path=run_dir
             / _CHECKPOINTS_DIR_NAME
@@ -333,18 +332,15 @@ def _save_checkpoint(
     execution_config: ExecutionConfig,
     state: RuntimeTrainingState,
     total_rounds: int,
+    total_samples: int,
     total_updates: int,
-    update_stats: PPOUpdateStats | None,
+    update_stats: PPOUpdateStats,
 ) -> _result.Ok[Path] | _result.Rejected:
     latest_checkpoint = run_dir / _CHECKPOINTS_DIR_NAME / "latest.json"
-    archive_checkpoint = (
-        None
-        if update_stats is None
-        else _archive_checkpoint_path(
-            run_dir=run_dir,
-            total_updates=total_updates,
-            train_config=train_config,
-        )
+    archive_checkpoint = _archive_checkpoint_path(
+        run_dir=run_dir,
+        total_updates=total_updates,
+        train_config=train_config,
     )
     checkpoint_path = (
         latest_checkpoint
@@ -362,6 +358,7 @@ def _save_checkpoint(
         train_config=train_config,
         execution_config=execution_config,
         total_rounds=total_rounds,
+        total_samples=total_samples,
         total_updates=total_updates,
         retained_update_count=train_config.checkpoint_retention_updates,
     )
@@ -393,129 +390,102 @@ def _archive_checkpoint_path(
     return None
 
 
-def _append_wave_metric(
+def _append_update_metric(
     *,
     run_dir: Path,
     run_id: str,
     checkpoint_path: Path,
     start_total_rounds: int,
+    start_total_samples: int,
     total_rounds: int,
+    total_samples: int,
     total_updates: int,
     elapsed_seconds: float,
-    wave: TrainingWaveResult,
+    update: TrainingUpdateResult,
 ) -> _result.Ok[None] | _result.Rejected:
-    summary = _aggregate_round_summaries(wave.summaries)
+    snapshot = update.snapshot
     process_rounds = total_rounds - start_total_rounds
+    process_samples = total_samples - start_total_samples
     assert process_rounds > 0
-    stats = wave.update_stats
+    assert process_samples > 0
+    stats = update.update_stats
     metric = TrainingMetric(
         run_id=run_id,
         total_games=total_rounds,
+        total_samples=total_samples,
         total_updates=total_updates,
         process_games_per_second=process_rounds / elapsed_seconds,
+        process_samples_per_second=process_samples / elapsed_seconds,
         last_round_decisions_per_second=(
-            summary.decision_count / summary.elapsed_seconds
+            0.0
+            if snapshot.elapsed_seconds_max <= 0.0
+            else snapshot.sample_count / snapshot.elapsed_seconds_max
         ),
-        last_team0_reward=summary.team0_reward,
-        last_team1_reward=summary.team1_reward,
-        last_generated_action_count=summary.generated_action_count,
-        last_accepted_action_count=summary.accepted_action_count,
-        last_decision_count=summary.decision_count,
+        last_team0_reward=snapshot.average_team0_reward(),
+        last_team1_reward=snapshot.average_team1_reward(),
+        last_generated_action_count=snapshot.generated_action_count,
+        last_accepted_action_count=snapshot.accepted_action_count,
+        last_decision_count=snapshot.sample_count,
         last_average_action_choices=0.0
-        if summary.generated_action_count == 0
-        else summary.action_choice_count
-        / summary.generated_action_count,
-        policy_loss=None if stats is None else stats.policy_loss,
-        value_loss=None if stats is None else stats.value_loss,
-        entropy=None if stats is None else stats.entropy,
-        approx_kl=None if stats is None else stats.approx_kl,
-        clip_fraction=None if stats is None else stats.clip_fraction,
-        ppo_update_seconds=None
-        if stats is None
-        else stats.profile.update_seconds,
-        ppo_minibatch_loss_seconds=None
-        if stats is None
-        else stats.profile.minibatch_loss_seconds,
-        ppo_observation_batch_seconds=None
-        if stats is None
-        else stats.profile.observation_batch_seconds,
-        ppo_observation_encode_seconds=None
-        if stats is None
-        else stats.profile.observation_encode_seconds,
-        ppo_value_head_seconds=None
-        if stats is None
-        else stats.profile.value_head_seconds,
-        ppo_argument_select_seconds=None
-        if stats is None
-        else stats.profile.argument_select_seconds,
-        ppo_argument_prefix_tensorize_seconds=None
-        if stats is None
-        else stats.profile.argument_prefix_tensorize_seconds,
-        ppo_argument_decode_seconds=None
-        if stats is None
-        else stats.profile.argument_decode_seconds,
-        ppo_argument_distribution_seconds=None
-        if stats is None
-        else stats.profile.argument_distribution_seconds,
-        ppo_backward_seconds=None
-        if stats is None
-        else stats.profile.backward_seconds,
-        ppo_optimizer_step_seconds=None
-        if stats is None
-        else stats.profile.optimizer_step_seconds,
-        ppo_argument_decode_fraction=None
-        if stats is None
-        else stats.profile.argument_decode_fraction,
-        ppo_argument_prefix_batch_count=None
-        if stats is None
-        else stats.profile.argument_prefix_batch_count,
-        ppo_argument_prefix_row_count=None
-        if stats is None
-        else stats.profile.argument_prefix_row_count,
-        ppo_argument_prefix_token_count=None
-        if stats is None
-        else stats.profile.argument_prefix_token_count,
-        ppo_argument_prefix_valid_token_count=None
-        if stats is None
-        else stats.profile.argument_prefix_valid_token_count,
-        ppo_argument_prefix_padding_token_count=None
-        if stats is None
-        else stats.profile.argument_prefix_padding_token_count,
+        if snapshot.generated_action_count == 0
+        else snapshot.action_choice_count
+        / snapshot.generated_action_count,
+        policy_loss=stats.policy_loss,
+        value_loss=stats.value_loss,
+        entropy=stats.entropy,
+        approx_kl=stats.approx_kl,
+        clip_fraction=stats.clip_fraction,
+        ppo_update_seconds=stats.profile.update_seconds,
+        ppo_minibatch_loss_seconds=(
+            stats.profile.minibatch_loss_seconds
+        ),
+        ppo_observation_batch_seconds=(
+            stats.profile.observation_batch_seconds
+        ),
+        ppo_observation_encode_seconds=(
+            stats.profile.observation_encode_seconds
+        ),
+        ppo_value_head_seconds=stats.profile.value_head_seconds,
+        ppo_argument_select_seconds=(
+            stats.profile.argument_select_seconds
+        ),
+        ppo_argument_prefix_tensorize_seconds=(
+            stats.profile.argument_prefix_tensorize_seconds
+        ),
+        ppo_argument_decode_seconds=(
+            stats.profile.argument_decode_seconds
+        ),
+        ppo_argument_distribution_seconds=(
+            stats.profile.argument_distribution_seconds
+        ),
+        ppo_backward_seconds=stats.profile.backward_seconds,
+        ppo_optimizer_step_seconds=(
+            stats.profile.optimizer_step_seconds
+        ),
+        ppo_argument_decode_fraction=(
+            stats.profile.argument_decode_fraction
+        ),
+        ppo_argument_prefix_batch_count=(
+            stats.profile.argument_prefix_batch_count
+        ),
+        ppo_argument_prefix_row_count=(
+            stats.profile.argument_prefix_row_count
+        ),
+        ppo_argument_prefix_token_count=(
+            stats.profile.argument_prefix_token_count
+        ),
+        ppo_argument_prefix_valid_token_count=(
+            stats.profile.argument_prefix_valid_token_count
+        ),
+        ppo_argument_prefix_padding_token_count=(
+            stats.profile.argument_prefix_padding_token_count
+        ),
         checkpoint_path=str(checkpoint_path),
     )
     validation = validate_training_metric(metric)
     if isinstance(validation, Rejected):
         return validation
     return append_metric(run_dir, metric)
-
-
-def _aggregate_round_summaries(
-    summaries: tuple[WorkerRoundSummary, ...],
-) -> WorkerRoundSummary:
-    assert summaries
-    count = len(summaries)
-    return WorkerRoundSummary(
-        team0_reward=sum(summary.team0_reward for summary in summaries)
-        / count,
-        team1_reward=sum(summary.team1_reward for summary in summaries)
-        / count,
-        generated_action_count=sum(
-            summary.generated_action_count for summary in summaries
-        ),
-        accepted_action_count=sum(
-            summary.accepted_action_count for summary in summaries
-        ),
-        action_choice_count=sum(
-            summary.action_choice_count for summary in summaries
-        ),
-        decision_count=sum(
-            summary.decision_count for summary in summaries
-        ),
-        elapsed_seconds=max(
-            summary.elapsed_seconds for summary in summaries
-        ),
-        game_over=any(summary.game_over for summary in summaries),
-    )
 
 
 def _record_coordinator_stage(
@@ -547,8 +517,9 @@ def _record_coordinator_complete(
     *,
     telemetry_sink: TelemetrySink,
     run_id: str,
-    max_rounds: int,
+    max_samples: int,
     total_rounds: int,
+    total_samples: int,
     total_updates: int,
 ) -> _result.Ok[None] | _result.Rejected:
     return telemetry_sink.append(
@@ -558,8 +529,10 @@ def _record_coordinator_complete(
             stage="complete",
             total_rounds=total_rounds,
             total_updates=total_updates,
-            progress_numerator=max_rounds,
-            progress_denominator=max_rounds,
+            progress_numerator=_complete_progress_numerator(
+                max_samples=max_samples
+            ),
+            progress_denominator=_progress_denominator(max_samples),
             unix_seconds=time.time(),
         )
     )

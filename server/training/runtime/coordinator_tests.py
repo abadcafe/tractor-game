@@ -40,7 +40,7 @@ def test_run_training_coordinator_spawns_worker_and_commits_progress(
         ppo_epochs=1,
         minibatch_size=512,
     )
-    execution_config = ExecutionConfig()
+    execution_config = ExecutionConfig(samples_per_worker_update=32)
     initialized = initialize_training_run(
         run_dir=tmp_path,
         run_id=tmp_path.name,
@@ -56,26 +56,35 @@ def test_run_training_coordinator_spawns_worker_and_commits_progress(
         model_config=model_config,
         train_config=train_config,
         execution_config=execution_config,
-        max_rounds=1,
+        max_samples=1,
         resume=initialized.value.checkpoint_path,
     )
 
     assert isinstance(result, Ok)
-    assert result.value.total_rounds == 1
+    assert result.value.total_rounds >= 1
+    assert result.value.total_samples > 0
     assert result.value.total_updates == 1
     metadata = read_torch_checkpoint_metadata(
         result.value.checkpoint_path
     )
     assert isinstance(metadata, Ok)
-    assert metadata.value.total_rounds == 1
+    assert metadata.value.total_rounds == result.value.total_rounds
+    assert metadata.value.total_samples == result.value.total_samples
     assert metadata.value.total_updates == 1
     metrics = read_metrics(tmp_path)
-    assert [metric.total_games for metric in metrics] == [0, 1]
+    assert [metric.total_games for metric in metrics] == [
+        0,
+        result.value.total_rounds,
+    ]
+    assert [metric.total_samples for metric in metrics] == [
+        0,
+        result.value.total_samples,
+    ]
     assert telemetry_path(tmp_path).exists()
 
 
 @pytest.mark.timeout(120.0)
-def test_run_training_coordinator_synchronizes_partial_cpu_update_wave(
+def test_run_training_coordinator_synchronizes_cpu_arena_update(
     tmp_path: Path,
 ) -> None:
     model_config = ModelConfig(
@@ -93,7 +102,10 @@ def test_run_training_coordinator_synchronizes_partial_cpu_update_wave(
     worker_cpus = current_cpu_affinity()[:2]
     if len(worker_cpus) < 2:
         pytest.skip("multi-rank CPU update requires two available CPUs")
-    execution_config = ExecutionConfig(worker_cpus=worker_cpus)
+    execution_config = ExecutionConfig(
+        worker_cpus=worker_cpus,
+        samples_per_worker_update=32,
+    )
     initial = create_initial_runtime_checkpoint_state(
         model_config=model_config,
         train_config=train_config,
@@ -114,6 +126,7 @@ def test_run_training_coordinator_synchronizes_partial_cpu_update_wave(
         train_config=train_config,
         execution_config=execution_config,
         total_rounds=1,
+        total_samples=17,
         total_updates=1,
         retained_update_count=1,
     )
@@ -125,10 +138,11 @@ def test_run_training_coordinator_synchronizes_partial_cpu_update_wave(
         model_config=model_config,
         train_config=train_config,
         execution_config=execution_config,
-        max_rounds=1,
+        max_samples=1,
         resume=checkpoint_path,
     )
 
     assert isinstance(result, Ok)
-    assert result.value.total_rounds == 2
+    assert result.value.total_rounds >= 2
+    assert result.value.total_samples > 17
     assert result.value.total_updates == 2

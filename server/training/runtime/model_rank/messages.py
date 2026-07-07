@@ -7,7 +7,6 @@ from typing import Protocol
 
 from server.training.ppo import PPOUpdateStats
 from server.training.runtime.state import RuntimeTrainingState
-from server.training.runtime.update_wave import SynchronizedUpdateShard
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,14 +22,12 @@ class ModelRankLoadStateCommand:
 
 @dataclass(frozen=True, slots=True)
 class ModelRankUpdateCommand:
-    """Run PPO update for one rollout shard."""
+    """Run PPO update from shared rollout arenas."""
 
     policy_version: int
-    shard: SynchronizedUpdateShard
 
     def __post_init__(self) -> None:
         assert self.policy_version >= 0
-        assert self.shard.policy_version == self.policy_version
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +54,7 @@ class ModelRankStateLoaded:
 
 @dataclass(frozen=True, slots=True)
 class ModelRankUpdateCompleted:
-    """Model-rank update shard result."""
+    """Model-rank update result."""
 
     model_rank_index: int
     rank_index: int

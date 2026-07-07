@@ -61,12 +61,14 @@ def save_torch_checkpoint(
     model_config: ModelConfig,
     train_config: TrainConfig,
     total_rounds: int,
+    total_samples: int,
     total_updates: int,
     retained_update_count: int,
 ) -> _result.Ok[TorchCheckpointSaveResult] | _result.Rejected:
     """Save one state object and write each manifest atomically."""
     assert retained_update_count >= 0
     assert total_rounds >= 0
+    assert total_samples >= 0
     assert total_updates >= 0
     checkpoint_dir_result = checkpoint_dir_from_manifest_paths(
         manifest_paths
@@ -131,6 +133,7 @@ def save_torch_checkpoint(
             model_config=model_config,
             train_config=train_config,
             total_rounds=total_rounds,
+            total_samples=total_samples,
             total_updates=total_updates,
         ),
     )

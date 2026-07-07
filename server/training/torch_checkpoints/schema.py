@@ -9,7 +9,7 @@ from pathlib import Path
 from server import result as _result
 from server.training.config import ModelConfig, TrainConfig
 
-CHECKPOINT_SCHEMA_VERSION = 18
+CHECKPOINT_SCHEMA_VERSION = 19
 CHECKPOINT_OBJECTS_DIR = "objects"
 CHECKPOINT_STATE_FILENAME = "state.pt"
 
@@ -21,10 +21,12 @@ class TorchCheckpointMetadata:
     model_config: ModelConfig
     train_config: TrainConfig
     total_rounds: int
+    total_samples: int
     total_updates: int
 
     def __post_init__(self) -> None:
         assert self.total_rounds >= 0
+        assert self.total_samples >= 0
         assert self.total_updates >= 0
 
 

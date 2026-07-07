@@ -50,11 +50,18 @@ def test_parse_cpu_set_rejects_non_numeric_part() -> None:
     assert "invalid CPU number" in parsed.reason
 
 
-def test_parse_model_rank_accepts_inline() -> None:
-    parsed = parse_model_rank_placement("inline")
+def test_parse_model_rank_accepts_none() -> None:
+    parsed = parse_model_rank_placement("none")
 
     assert isinstance(parsed, Ok)
-    assert parsed.value == ModelRankPlacement(kind="inline", devices=())
+    assert parsed.value == ModelRankPlacement(kind="none", devices=())
+
+
+def test_parse_model_rank_rejects_inline() -> None:
+    parsed = parse_model_rank_placement("inline")
+
+    assert isinstance(parsed, Rejected)
+    assert "--model-ranks" in parsed.reason
 
 
 def test_parse_model_rank_accepts_mps() -> None:

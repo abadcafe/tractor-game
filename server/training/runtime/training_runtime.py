@@ -1,4 +1,4 @@
-"""Training runtime topology hidden behind a wave-oriented interface."""
+"""Training runtime topology hidden behind an update-cycle interface."""
 
 from __future__ import annotations
 
@@ -15,10 +15,6 @@ from server import result as _result
 from server.result import Ok, Rejected
 from server.training.config import ModelConfig, TrainConfig
 from server.training.ppo import PPOUpdateProfile, PPOUpdateStats
-from server.training.rollout_commit import (
-    RolloutCommit,
-    merge_rollout_commits,
-)
 from server.training.runtime.config import ExecutionConfig
 from server.training.runtime.distributed import (
     DistributedBackend,
@@ -32,9 +28,8 @@ from server.training.runtime.messages import (
     WorkerRejected,
     WorkerResponseReceiver,
     WorkerResponseSender,
-    WorkerRolloutCommand,
-    WorkerRolloutCompleted,
-    WorkerRoundSummary,
+    WorkerSamplingStopped,
+    WorkerStartSamplingCommand,
     WorkerStateLoaded,
     WorkerUpdateCommand,
     WorkerUpdateCompleted,
@@ -58,15 +53,20 @@ from server.training.runtime.model_rank.messages import (
     ModelRankUpdateCompleted,
 )
 from server.training.runtime.rendezvous import create_file_rendezvous
+from server.training.runtime.shared_rollout_arena import (
+    RolloutArenaHandle,
+    RolloutArenaSnapshot,
+    SharedRolloutArenaGroup,
+    close_shared_rollout_arenas,
+    create_shared_rollout_arena_group,
+    reset_rollout_arenas,
+    wait_all_rollout_arenas_full,
+)
 from server.training.runtime.state import RuntimeTrainingState
 from server.training.runtime.telemetry import (
     IntervalTelemetrySink,
     JsonlTelemetrySink,
     TelemetrySink,
-)
-from server.training.runtime.update_wave import (
-    SynchronizedUpdateWave,
-    build_synchronized_update_wave,
 )
 from server.training.runtime.worker_process import (
     run_training_worker_process,
@@ -77,39 +77,34 @@ _TERMINATED_PROCESS_STOP_SECONDS = 1.0
 
 
 @dataclass(frozen=True, slots=True)
-class TrainingWaveRequest:
-    """One synchronized rollout/update wave requested by coordinator."""
+class TrainingUpdateRequest:
+    """One synchronized arena-backed update requested by coordinator."""
 
     state: RuntimeTrainingState
     policy_version: int
-    first_episode_id: int
-    active_worker_count: int
 
     def __post_init__(self) -> None:
         assert self.policy_version >= 0
-        assert self.first_episode_id >= 0
-        assert self.active_worker_count > 0
 
 
 @dataclass(frozen=True, slots=True)
-class TrainingWaveResult:
-    """Result produced by one training wave."""
+class TrainingUpdateResult:
+    """Result produced by one arena-backed training update."""
 
-    summaries: tuple[WorkerRoundSummary, ...]
+    snapshot: RolloutArenaSnapshot
     states: tuple[RuntimeTrainingState, ...]
-    update_stats: PPOUpdateStats | None
+    update_stats: PPOUpdateStats
 
     def __post_init__(self) -> None:
-        assert self.summaries
         assert self.states
 
 
 class TrainingRuntime(Protocol):
     """Coordinator-facing training runtime interface."""
 
-    def run_wave(
-        self, request: TrainingWaveRequest
-    ) -> _result.Ok[TrainingWaveResult] | _result.Rejected: ...
+    def run_update(
+        self, request: TrainingUpdateRequest
+    ) -> _result.Ok[TrainingUpdateResult] | _result.Rejected: ...
 
     def close(self) -> None: ...
 
@@ -145,6 +140,7 @@ class _RuntimePools:
     worker_pool: _WorkerPool
     model_rank_pool: _ModelRankPool | None
     worker_inference_links: tuple[_WorkerInferenceLink, ...]
+    rollout_arena_group: SharedRolloutArenaGroup
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,17 +160,9 @@ class _DistributedUpdateGroup:
 
 
 @dataclass(frozen=True, slots=True)
-class _WorkerRolloutData:
-    worker_index: int
-    episode_id: int
-    summary: WorkerRoundSummary
-    rollout_commit: RolloutCommit
-
-
-@dataclass(frozen=True, slots=True)
 class _UpdateResult:
     states: tuple[RuntimeTrainingState, ...]
-    update_stats: PPOUpdateStats | None
+    update_stats: PPOUpdateStats
 
     def __post_init__(self) -> None:
         assert self.states
@@ -185,16 +173,14 @@ class _ProcessTrainingRuntime:
     execution_config: ExecutionConfig
     pools: _RuntimePools
 
-    def run_wave(
-        self, request: TrainingWaveRequest
-    ) -> _result.Ok[TrainingWaveResult] | _result.Rejected:
-        return _run_training_wave(
+    def run_update(
+        self, request: TrainingUpdateRequest
+    ) -> _result.Ok[TrainingUpdateResult] | _result.Rejected:
+        return _run_training_update(
             pools=self.pools,
             execution_config=self.execution_config,
             state=request.state,
             policy_version=request.policy_version,
-            first_episode_id=request.first_episode_id,
-            active_worker_count=request.active_worker_count,
         )
 
     def close(self) -> None:
@@ -243,6 +229,16 @@ def _start_runtime_pools(
     if isinstance(distributed_group_result, Rejected):
         return distributed_group_result
     distributed_group = distributed_group_result.value
+    arena_group_result = create_shared_rollout_arena_group(
+        context=context,
+        worker_count=execution_config.worker_process_count(),
+        samples_per_worker_update=(
+            execution_config.samples_per_worker_update
+        ),
+    )
+    if isinstance(arena_group_result, Rejected):
+        return arena_group_result
+    arena_group = arena_group_result.value
     worker_response_queue = context.Queue()
     worker_response_receiver = cast(
         WorkerResponseReceiver, worker_response_queue
@@ -271,9 +267,11 @@ def _start_runtime_pools(
         worker_inference_response_senders=tuple(
             link.response_sender for link in worker_inference_links
         ),
+        rollout_arena_handles=arena_group.handles,
     )
     if isinstance(model_rank_pool_result, Rejected):
         _close_worker_inference_links(worker_inference_links)
+        close_shared_rollout_arenas(arena_group)
         return model_rank_pool_result
     model_rank_pool = model_rank_pool_result.value
     worker_handles: list[_WorkerHandle] = []
@@ -314,6 +312,7 @@ def _start_runtime_pools(
                 "inference_response_receiver": (
                     inference_response_receiver
                 ),
+                "rollout_arena_handles": arena_group.handles,
                 "distributed_rank_config": (
                     _worker_distributed_rank_config(
                         execution_config=execution_config,
@@ -339,6 +338,7 @@ def _start_runtime_pools(
             ),
             model_rank_pool=model_rank_pool,
             worker_inference_links=worker_inference_links,
+            rollout_arena_group=arena_group,
         )
     )
 
@@ -356,6 +356,7 @@ def _start_model_rank_pool(
         tuple[ConnectionPolicyRequestReceiver, ...], ...
     ],
     worker_inference_response_senders: tuple[Connection, ...],
+    rollout_arena_handles: tuple[RolloutArenaHandle, ...],
 ) -> _result.Ok[_ModelRankPool | None] | _result.Rejected:
     if not execution_config.uses_model_rank_processes():
         return Ok(value=None)
@@ -392,6 +393,7 @@ def _start_model_rank_pool(
                 "inference_response_senders": (
                     worker_inference_response_senders
                 ),
+                "rollout_arena_handles": rollout_arena_handles,
                 "telemetry_sink": _telemetry_sink(
                     run_dir=run_dir,
                     execution_config=execution_config,
@@ -551,15 +553,13 @@ def _rank_config(
     )
 
 
-def _run_training_wave(
+def _run_training_update(
     *,
     pools: _RuntimePools,
     execution_config: ExecutionConfig,
     state: RuntimeTrainingState,
     policy_version: int,
-    first_episode_id: int,
-    active_worker_count: int,
-) -> _result.Ok[TrainingWaveResult] | _result.Rejected:
+) -> _result.Ok[TrainingUpdateResult] | _result.Rejected:
     prepare_result = _sync_compute_rank_states(
         worker_pool=pools.worker_pool,
         model_rank_pool=pools.model_rank_pool,
@@ -571,43 +571,45 @@ def _run_training_wave(
     )
     if isinstance(prepare_result, Rejected):
         return prepare_result
-    rollout_result = _collect_worker_rollouts(
-        worker_pool=pools.worker_pool,
+    reset_result = reset_rollout_arenas(
+        group=pools.rollout_arena_group,
         policy_version=policy_version,
-        first_episode_id=first_episode_id,
-        active_worker_count=active_worker_count,
-        rollout_response_timeout_seconds=(
-            execution_config.timeouts.rollout_response_seconds
-        ),
     )
-    if isinstance(rollout_result, Rejected):
-        return rollout_result
-    rollouts = rollout_result.value
-    merged_commit = merge_rollout_commits(
-        tuple(response.rollout_commit for response in rollouts)
+    if isinstance(reset_result, Rejected):
+        return reset_result
+    start_result = _start_worker_sampling(
+        worker_pool=pools.worker_pool,
+        execution_config=execution_config,
+        policy_version=policy_version,
     )
-    if merged_commit.is_empty():
-        return Ok(
-            value=TrainingWaveResult(
-                summaries=tuple(
-                    response.summary for response in rollouts
-                ),
-                states=(state,),
-                update_stats=None,
-            )
-        )
+    if isinstance(start_result, Rejected):
+        return start_result
+    snapshot_result = wait_all_rollout_arenas_full(
+        group=pools.rollout_arena_group,
+        policy_version=policy_version,
+        timeout_seconds=execution_config.timeouts.rollout_response_seconds,
+    )
+    if isinstance(snapshot_result, Rejected):
+        return snapshot_result
+    stopped_result = _receive_worker_sampling_stopped(
+        receiver=pools.worker_pool.response_receiver,
+        expected_count=len(pools.worker_pool.handles),
+        policy_version=policy_version,
+        timeout_seconds=execution_config.timeouts.rollout_response_seconds,
+    )
+    if isinstance(stopped_result, Rejected):
+        return stopped_result
     update_result = _run_compute_updates(
         worker_pool=pools.worker_pool,
         model_rank_pool=pools.model_rank_pool,
         policy_version=policy_version,
-        rollout_commit=merged_commit,
         update_timeout_seconds=execution_config.timeouts.update_seconds,
     )
     if isinstance(update_result, Rejected):
         return update_result
     return Ok(
-        value=TrainingWaveResult(
-            summaries=tuple(response.summary for response in rollouts),
+        value=TrainingUpdateResult(
+            snapshot=snapshot_result.value,
             states=update_result.value.states,
             update_stats=update_result.value.update_stats,
         )
@@ -637,34 +639,21 @@ def _sync_compute_rank_states(
     )
 
 
-def _collect_worker_rollouts(
+def _start_worker_sampling(
     *,
     worker_pool: _WorkerPool,
+    execution_config: ExecutionConfig,
     policy_version: int,
-    first_episode_id: int,
-    active_worker_count: int,
-    rollout_response_timeout_seconds: float,
-) -> _result.Ok[tuple[_WorkerRolloutData, ...]] | _result.Rejected:
-    assert active_worker_count > 0
+) -> _result.Ok[None] | _result.Rejected:
     assert worker_pool.handles
-    for worker_index in range(active_worker_count):
-        handle = worker_pool.handles[worker_index]
+    for handle in worker_pool.handles:
         handle.command_sender.put(
-            WorkerRolloutCommand(
+            WorkerStartSamplingCommand(
                 policy_version=policy_version,
-                episode_id=first_episode_id + worker_index,
+                game_env_count=execution_config.game_envs_per_worker,
             )
         )
-    return _receive_worker_rollouts(
-        receiver=worker_pool.response_receiver,
-        expected_count=active_worker_count,
-        rollout_response_timeout_seconds=(
-            rollout_response_timeout_seconds
-        ),
-        unexpected_update_reason=(
-            "worker returned update during rollout collection"
-        ),
-    )
+    return Ok(value=None)
 
 
 def _run_compute_updates(
@@ -672,20 +661,17 @@ def _run_compute_updates(
     worker_pool: _WorkerPool,
     model_rank_pool: _ModelRankPool | None,
     policy_version: int,
-    rollout_commit: RolloutCommit,
     update_timeout_seconds: float,
 ) -> _result.Ok[_UpdateResult] | _result.Rejected:
     if model_rank_pool is not None:
         return _run_model_rank_updates(
             model_rank_pool=model_rank_pool,
             policy_version=policy_version,
-            rollout_commit=rollout_commit,
             update_timeout_seconds=update_timeout_seconds,
         )
     return _run_worker_updates(
         worker_pool=worker_pool,
         policy_version=policy_version,
-        rollout_commit=rollout_commit,
         update_timeout_seconds=update_timeout_seconds,
     )
 
@@ -694,27 +680,18 @@ def _run_worker_updates(
     *,
     worker_pool: _WorkerPool,
     policy_version: int,
-    rollout_commit: RolloutCommit,
     update_timeout_seconds: float,
 ) -> _result.Ok[_UpdateResult] | _result.Rejected:
-    assert not rollout_commit.is_empty()
-    wave_result = build_synchronized_update_wave(
-        rollout_commit=rollout_commit,
-        rank_count=len(worker_pool.handles),
-    )
-    if isinstance(wave_result, Rejected):
-        return wave_result
-    _send_worker_update_wave(
+    _send_worker_update_commands(
         worker_pool=worker_pool,
         policy_version=policy_version,
-        wave=wave_result.value,
     )
     responses_result = _receive_worker_updates(
         receiver=worker_pool.response_receiver,
         expected_count=len(worker_pool.handles),
         update_timeout_seconds=update_timeout_seconds,
-        unexpected_rollout_reason=(
-            "worker returned rollout during synchronized update"
+        unexpected_sampling_reason=(
+            "worker returned sampling during synchronized update"
         ),
     )
     if isinstance(responses_result, Rejected):
@@ -729,38 +706,30 @@ def _run_worker_updates(
     )
 
 
-def _send_worker_update_wave(
+def _send_worker_update_commands(
     *,
     worker_pool: _WorkerPool,
     policy_version: int,
-    wave: SynchronizedUpdateWave,
 ) -> None:
-    assert len(worker_pool.handles) == wave.rank_count
-    for handle, shard in zip(
-        worker_pool.handles, wave.shards, strict=True
-    ):
-        assert handle.index == shard.rank_index
+    for handle in worker_pool.handles:
         handle.command_sender.put(
             WorkerUpdateCommand(
                 policy_version=policy_version,
-                shard=shard,
             )
         )
 
 
-def _receive_worker_rollouts(
+def _receive_worker_sampling_stopped(
     *,
     receiver: WorkerResponseReceiver,
     expected_count: int,
-    rollout_response_timeout_seconds: float,
-    unexpected_update_reason: str,
-) -> _result.Ok[tuple[_WorkerRolloutData, ...]] | _result.Rejected:
-    responses: list[_WorkerRolloutData] = []
+    policy_version: int,
+    timeout_seconds: float,
+) -> _result.Ok[tuple[WorkerSamplingStopped, ...]] | _result.Rejected:
+    responses: list[WorkerSamplingStopped] = []
     for _ in range(expected_count):
         try:
-            response = receiver.get(
-                True, rollout_response_timeout_seconds
-            )
+            response = receiver.get(True, timeout_seconds)
         except queue.Empty:
             return Rejected(reason="training worker response timed out")
         if isinstance(response, WorkerRejected):
@@ -769,22 +738,18 @@ def _receive_worker_rollouts(
             )
             return Rejected(reason=reason)
         if isinstance(response, WorkerUpdateCompleted):
-            return Rejected(reason=unexpected_update_reason)
+            return Rejected(
+                reason="worker returned update during sampling"
+            )
         if isinstance(response, WorkerStateLoaded):
             return Rejected(
-                reason=(
-                    "worker returned state sync during "
-                    "rollout collection"
-                )
+                reason="worker returned state sync during sampling"
             )
-        responses.append(
-            _WorkerRolloutData(
-                worker_index=response.worker_index,
-                episode_id=response.episode_id,
-                summary=response.summary,
-                rollout_commit=response.rollout_commit,
+        if response.policy_version != policy_version:
+            return Rejected(
+                reason="worker returned stale sampling policy version"
             )
-        )
+        responses.append(response)
     return Ok(
         value=tuple(
             sorted(responses, key=lambda item: item.worker_index)
@@ -797,7 +762,7 @@ def _receive_worker_updates(
     receiver: WorkerResponseReceiver,
     expected_count: int,
     update_timeout_seconds: float,
-    unexpected_rollout_reason: str,
+    unexpected_sampling_reason: str,
 ) -> _result.Ok[tuple[WorkerUpdateCompleted, ...]] | _result.Rejected:
     responses: list[WorkerUpdateCompleted] = []
     for _ in range(expected_count):
@@ -810,8 +775,8 @@ def _receive_worker_updates(
                 f"worker-{response.worker_index}: {response.reason}"
             )
             return Rejected(reason=reason)
-        if isinstance(response, WorkerRolloutCompleted):
-            return Rejected(reason=unexpected_rollout_reason)
+        if isinstance(response, WorkerSamplingStopped):
+            return Rejected(reason=unexpected_sampling_reason)
         if isinstance(response, WorkerStateLoaded):
             return Rejected(
                 reason=(
@@ -857,9 +822,9 @@ def _sync_worker_states(
                     f"worker-{response.worker_index}: {response.reason}"
                 )
             )
-        if isinstance(response, WorkerRolloutCompleted):
+        if isinstance(response, WorkerSamplingStopped):
             return Rejected(
-                reason="worker returned rollout during state sync"
+                reason="worker returned sampling during state sync"
             )
         if isinstance(response, WorkerUpdateCompleted):
             return Rejected(
@@ -929,20 +894,11 @@ def _run_model_rank_updates(
     *,
     model_rank_pool: _ModelRankPool,
     policy_version: int,
-    rollout_commit: RolloutCommit,
     update_timeout_seconds: float,
 ) -> _result.Ok[_UpdateResult] | _result.Rejected:
-    assert not rollout_commit.is_empty()
-    wave_result = build_synchronized_update_wave(
-        rollout_commit=rollout_commit,
-        rank_count=len(model_rank_pool.handles),
-    )
-    if isinstance(wave_result, Rejected):
-        return wave_result
-    _send_model_rank_update_wave(
+    _send_model_rank_update_commands(
         model_rank_pool=model_rank_pool,
         policy_version=policy_version,
-        wave=wave_result.value,
     )
     responses: list[ModelRankUpdateCompleted] = []
     for _ in model_rank_pool.handles:
@@ -975,21 +931,15 @@ def _run_model_rank_updates(
     )
 
 
-def _send_model_rank_update_wave(
+def _send_model_rank_update_commands(
     *,
     model_rank_pool: _ModelRankPool,
     policy_version: int,
-    wave: SynchronizedUpdateWave,
 ) -> None:
-    assert len(model_rank_pool.handles) == wave.rank_count
-    for handle, shard in zip(
-        model_rank_pool.handles, wave.shards, strict=True
-    ):
-        assert handle.index == shard.rank_index
+    for handle in model_rank_pool.handles:
         handle.command_sender.send(
             ModelRankUpdateCommand(
                 policy_version=policy_version,
-                shard=shard,
             )
         )
 
@@ -999,6 +949,7 @@ def _stop_runtime_pools(pools: _RuntimePools) -> None:
     if pools.model_rank_pool is not None:
         _stop_model_rank_pool(pools.model_rank_pool)
     _close_worker_inference_links(pools.worker_inference_links)
+    close_shared_rollout_arenas(pools.rollout_arena_group)
 
 
 def _stop_worker_pool(pool: _WorkerPool) -> None:

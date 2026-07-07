@@ -166,8 +166,8 @@ async def test_self_play_session_clears_round_history() -> None:
         tuple(policy.observations[first_decision_count:])
     )
 
-    assert not first.rollout.is_empty()
-    assert not second.rollout.is_empty()
+    assert not first.returns.is_empty()
+    assert not second.returns.is_empty()
     assert first.generated_action_count > 0
     assert second.generated_action_count > 0
     assert first.accepted_action_count > 0

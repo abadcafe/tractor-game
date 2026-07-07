@@ -14,7 +14,7 @@ from typing import Literal
 
 from server import result as _result
 
-type ModelRankKind = Literal["inline", "cuda", "mps"]
+type ModelRankKind = Literal["none", "cuda", "mps"]
 type ModelRankDevice = str
 type PPOProfileMode = Literal["off", "basic", "detailed"]
 type CpuSet = tuple[int, ...]
@@ -28,8 +28,8 @@ class ModelRankPlacement:
     devices: tuple[ModelRankDevice, ...]
 
     def __post_init__(self) -> None:
-        assert self.kind in ("inline", "cuda", "mps")
-        if self.kind == "inline":
+        assert self.kind in ("none", "cuda", "mps")
+        if self.kind == "none":
             assert self.devices == ()
             return
         if self.kind == "mps":
@@ -66,7 +66,7 @@ class ExecutionConfig:
     worker_cpus: CpuSet = ()
     model_ranks: ModelRankPlacement = field(
         default_factory=lambda: ModelRankPlacement(
-            kind="inline", devices=()
+            kind="none", devices=()
         )
     )
     ppo_profile: PPOProfileMode = "off"
@@ -75,6 +75,8 @@ class ExecutionConfig:
     )
     telemetry_interval_seconds: float = 1.0
     model_inference_batch_size: int = 64
+    game_envs_per_worker: int = 1
+    samples_per_worker_update: int = 1024
 
     def __post_init__(self) -> None:
         assert _cpu_set_is_valid(self.worker_cpus)
@@ -82,6 +84,8 @@ class ExecutionConfig:
         assert _is_finite(self.telemetry_interval_seconds)
         assert self.telemetry_interval_seconds > 0.0
         assert self.model_inference_batch_size > 0
+        assert self.game_envs_per_worker > 0
+        assert self.samples_per_worker_update > 0
 
     def worker_process_count(self) -> int:
         """Return OS worker process count."""
@@ -103,7 +107,7 @@ class ExecutionConfig:
 
     def uses_model_rank_processes(self) -> bool:
         """Return whether model compute is delegated out of workers."""
-        return self.model_ranks.kind != "inline"
+        return self.model_ranks.kind != "none"
 
     def model_rank_index_for_worker(self, worker_index: int) -> int:
         """Return the stable model-rank index for one worker."""
@@ -138,9 +142,9 @@ def parse_model_rank_placement(
     text: str,
 ) -> _result.Ok[ModelRankPlacement] | _result.Rejected:
     """Parse the user-facing model-rank placement string."""
-    if text == "inline":
+    if text == "none":
         return _result.Ok(
-            value=ModelRankPlacement(kind="inline", devices=())
+            value=ModelRankPlacement(kind="none", devices=())
         )
     if text == "mps":
         return _result.Ok(
@@ -149,7 +153,7 @@ def parse_model_rank_placement(
     if not text.startswith("cuda:"):
         return _result.Rejected(
             reason=(
-                "--model-ranks must be inline, mps, or "
+                "--model-ranks must be none, mps, or "
                 "cuda:<index>[,<index>...]"
             )
         )

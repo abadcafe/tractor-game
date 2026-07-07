@@ -32,11 +32,11 @@ from server.training.policy_sampling import (
     ModelRankPolicyDecision,
 )
 from server.training.ppo import PPOUpdateProfile, PPOUpdateStats
-from server.training.rollout_commit import RolloutCommit
+from server.training.returns import ReturnCommit
 from server.training.runtime.model_rank import (
     DirectPolicyClient,
     FramedPolicyClient,
-    InlineModelRank,
+    LocalModelRank,
 )
 from server.training.runtime.model_rank.inference_transport import (
     ConnectionPolicyRequestReceiver,
@@ -45,7 +45,6 @@ from server.training.runtime.model_rank.inference_transport import (
     send_policy_response,
 )
 from server.training.runtime.state import RuntimeTrainingState
-from server.training.runtime.update_wave import SynchronizedUpdateShard
 from server.training.sampling import PolicyDecisionKey
 from server.training.semantic_actions import (
     SemanticArgument,
@@ -78,19 +77,17 @@ async def test_direct_policy_client_calls_replica_without_queue() -> (
     assert replica.calls == ("decide_wires",)
 
 
-def test_inline_model_rank_loads_updates_and_snapshots_replica() -> (
-    None
-):
+def test_local_model_rank_loads_updates_and_snapshots_replica() -> None:
     state = _runtime_state()
     replica = _FakeReplica(
         state=state,
         decision=_model_rank_policy_decision(),
     )
-    rank = InlineModelRank(replica=replica)
+    rank = LocalModelRank(replica=replica)
 
     load_result = rank.load_state(state=state, policy_version=3)
     update_result = rank.update(
-        shard=_update_shard(),
+        commit=_return_commit(),
         policy_version=3,
     )
     snapshot_result = rank.snapshot()
@@ -100,7 +97,7 @@ def test_inline_model_rank_loads_updates_and_snapshots_replica() -> (
     assert isinstance(snapshot_result, Ok)
     assert replica.calls == (
         "load_state",
-        "update_shard",
+        "update_commit",
         "snapshot",
         "snapshot",
     )
@@ -265,11 +262,11 @@ class _FakeReplica:
         self._calls.append("decide_wires")
         return (Ok(value=self._decision),)
 
-    def update_shard(
-        self, *, shard: SynchronizedUpdateShard
+    def update_commit(
+        self, *, commit: ReturnCommit
     ) -> Ok[PPOUpdateStats]:
-        assert not shard.is_empty()
-        self._calls.append("update_shard")
+        assert not commit.is_empty()
+        self._calls.append("update_commit")
         return Ok(value=_ppo_update_stats())
 
     def snapshot(self) -> RuntimeTrainingState:
@@ -336,16 +333,8 @@ def _decision_key() -> PolicyDecisionKey:
     )
 
 
-def _update_shard() -> SynchronizedUpdateShard:
-    return SynchronizedUpdateShard(
-        rank_index=0,
-        policy_version=3,
-        rollout_commit=_rollout_commit(),
-    )
-
-
-def _rollout_commit() -> RolloutCommit:
-    return RolloutCommit(
+def _return_commit() -> ReturnCommit:
+    return ReturnCommit(
         policy_version=3,
         first_episode_id=0,
         episode_count=1,
@@ -357,10 +346,7 @@ def _rollout_commit() -> RolloutCommit:
                 slot_generation=1,
             ),
         ),
-        reward_after_step=(0.0,),
-        terminal_rewards=(1.0,),
-        trajectory_team_indices=(0,),
-        trajectory_offsets=(0, 1),
+        return_values=(1.0,),
     )
 
 
