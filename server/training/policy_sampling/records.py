@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import torch
 from torch import Tensor
 
+from server.training.semantic_actions.codec import SEMANTIC_CODEC
 from server.training.tensorize import ObservationTensorBatch
 
 
@@ -26,46 +28,53 @@ class DecisionHandle:
 
 
 @dataclass(frozen=True, slots=True)
-class DeviceDecisionReplayRecord:
-    """One sampled decision retained on the model-rank device."""
+class SampledPolicyBatch:
+    """Device policy samples before model-rank slot assignment."""
 
-    policy_version: int
+    policy_versions: tuple[int, ...]
+    status_codes: Tensor
     observation_batch: ObservationTensorBatch
-    selected_token_ids: Tensor
-    legal_token_masks: Tensor
-    old_log_probability: Tensor
-    old_value: Tensor
+    selected_token_ids_padded: Tensor
+    legal_token_masks_padded: Tensor
+    step_counts: Tensor
+    choice_counts: Tensor
+    old_log_probabilities: Tensor
+    old_values: Tensor
 
     def __post_init__(self) -> None:
-        assert self.policy_version >= 0
-        assert int(self.observation_batch.component_ids.shape[0]) == 1
-        assert int(self.observation_batch.numeric_values.shape[0]) == 1
-        assert int(self.observation_batch.numeric_masks.shape[0]) == 1
-        assert self.selected_token_ids.ndim == 1
-        assert self.legal_token_masks.ndim == 2
-        assert int(self.legal_token_masks.shape[0]) == int(
-            self.selected_token_ids.shape[0]
+        batch_size = len(self.policy_versions)
+        assert batch_size > 0
+        assert all(version >= 0 for version in self.policy_versions)
+        assert self.status_codes.shape == (batch_size,)
+        assert self.status_codes.dtype == torch.long
+        assert self.selected_token_ids_padded.shape == (
+            batch_size,
+            SEMANTIC_CODEC.max_argument_tokens,
         )
-        assert self.old_log_probability.ndim == 0
-        assert self.old_value.ndim == 0
+        assert self.selected_token_ids_padded.dtype == torch.long
+        assert self.legal_token_masks_padded.shape == (
+            batch_size,
+            SEMANTIC_CODEC.max_argument_tokens,
+            SEMANTIC_CODEC.argument_vocab_size,
+        )
+        assert self.legal_token_masks_padded.dtype == torch.bool
+        assert self.step_counts.shape == (batch_size,)
+        assert self.step_counts.dtype == torch.long
+        assert self.choice_counts.shape == (batch_size,)
+        assert self.choice_counts.dtype == torch.long
+        assert self.old_log_probabilities.shape == (batch_size,)
+        assert self.old_values.shape == (batch_size,)
+        assert int(self.observation_batch.component_ids.shape[0]) == (
+            batch_size
+        )
         device = self.observation_batch.component_ids.device
-        assert self.old_log_probability.device == device
-        assert self.old_value.device == device
-        assert self.selected_token_ids.device == device
-        assert self.legal_token_masks.device == device
-
-
-@dataclass(frozen=True, slots=True)
-class SampledPolicyDecision:
-    """Torch sampler output before a model rank assigns a handle."""
-
-    trace_token_ids: tuple[int, ...]
-    replay_record: DeviceDecisionReplayRecord
-    choice_count: int
-
-    def __post_init__(self) -> None:
-        assert self.trace_token_ids
-        assert self.choice_count > 0
+        assert self.status_codes.device == device
+        assert self.selected_token_ids_padded.device == device
+        assert self.legal_token_masks_padded.device == device
+        assert self.step_counts.device == device
+        assert self.choice_counts.device == device
+        assert self.old_log_probabilities.device == device
+        assert self.old_values.device == device
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,3 +88,30 @@ class ModelRankPolicyDecision:
     def __post_init__(self) -> None:
         assert self.trace_token_ids
         assert self.choice_count > 0
+
+
+@dataclass(frozen=True, slots=True)
+class RankReturnBatch:
+    """Rank-local tensor-ready return targets for stored decisions."""
+
+    policy_version: int
+    model_rank_index: int
+    slot_indices: Tensor
+    slot_generations: Tensor
+    return_values: Tensor
+    round_count: int
+
+    def __post_init__(self) -> None:
+        assert self.policy_version >= 0
+        assert self.model_rank_index >= 0
+        assert self.slot_indices.ndim == 1
+        assert self.slot_generations.shape == self.slot_indices.shape
+        assert self.return_values.shape == self.slot_indices.shape
+        assert self.slot_indices.dtype == torch.long
+        assert self.slot_generations.dtype == torch.long
+        assert self.return_values.dtype == torch.float32
+        assert self.round_count >= 0
+
+    def is_empty(self) -> bool:
+        """Return whether this rank has no committed samples."""
+        return int(self.slot_indices.shape[0]) == 0

@@ -105,6 +105,7 @@ type WireBuffer = bytes | bytearray | memoryview
 
 def build_policy_request_wire(
     *,
+    max_observation_tokens: int,
     worker_index: int,
     request_id: int,
     observation: Observation,
@@ -112,6 +113,7 @@ def build_policy_request_wire(
     decision_key: PolicyDecisionKey,
 ) -> _result.Ok[PolicyRequestWire] | _result.Rejected:
     """Build one compact tensor-oriented request wire message."""
+    assert max_observation_tokens > 0
     assert worker_index >= 0
     assert request_id >= 0
     packed = pack_observation(observation)
@@ -119,17 +121,15 @@ def build_policy_request_wire(
     validate_result = _validate_wire_sizes(
         packed=packed,
         action_plan=action_plan,
+        max_observation_tokens=max_observation_tokens,
     )
     if isinstance(validate_result, Rejected):
         return validate_result
-    trace_count = _trace_count(action_plan)
-    trace_steps = _trace_steps(action_plan)
-    pair_plan_count = _pair_plan_count(action_plan)
     offsets = request_section_offsets(
-        token_count=packed.token_count(),
-        trace_count=trace_count,
-        trace_steps=trace_steps,
-        pair_plan_count=pair_plan_count,
+        token_count=max_observation_tokens,
+        trace_count=WIRE_MAX_TRACE_COUNT,
+        trace_steps=SEMANTIC_CODEC.max_argument_tokens,
+        pair_plan_count=WIRE_MAX_PAIR_PLAN_COUNT,
     )
     writer = _WireWriter(bytearray(offsets.total_bytes))
     _write_header(
@@ -137,10 +137,10 @@ def build_policy_request_wire(
         total_bytes=offsets.total_bytes,
         worker_index=worker_index,
         request_id=request_id,
-        token_count=packed.token_count(),
-        trace_count=trace_count,
-        trace_steps=trace_steps,
-        pair_plan_count=pair_plan_count,
+        token_count=max_observation_tokens,
+        trace_count=WIRE_MAX_TRACE_COUNT,
+        trace_steps=SEMANTIC_CODEC.max_argument_tokens,
+        pair_plan_count=WIRE_MAX_PAIR_PLAN_COUNT,
         decision_key=decision_key,
         action_plan=action_plan,
     )
@@ -151,9 +151,9 @@ def build_policy_request_wire(
         writer=writer,
         offsets=offsets,
         action_plan=action_plan,
-        trace_count=trace_count,
-        trace_steps=trace_steps,
-        pair_plan_count=pair_plan_count,
+        trace_count=WIRE_MAX_TRACE_COUNT,
+        trace_steps=SEMANTIC_CODEC.max_argument_tokens,
+        pair_plan_count=WIRE_MAX_PAIR_PLAN_COUNT,
     )
     _write_sampling_thresholds(
         writer=writer,
@@ -538,8 +538,15 @@ def _write_bool_tuple(
 
 
 def _validate_wire_sizes(
-    *, packed: PackedObservation, action_plan: ActionPlanFrame
+    *,
+    packed: PackedObservation,
+    action_plan: ActionPlanFrame,
+    max_observation_tokens: int,
 ) -> Ok[None] | Rejected:
+    if packed.token_count() > max_observation_tokens:
+        return Rejected(
+            reason="policy request observation exceeds token budget"
+        )
     trace_count = _trace_count(action_plan)
     if trace_count > WIRE_MAX_TRACE_COUNT:
         return Rejected(reason="policy request has too many traces")
@@ -567,12 +574,6 @@ def _validate_wire_sizes(
 
 def _trace_count(action_plan: ActionPlanFrame) -> int:
     return max(len(action_plan.trace_tokens), 1)
-
-
-def _trace_steps(action_plan: ActionPlanFrame) -> int:
-    if not action_plan.trace_tokens:
-        return 1
-    return max(len(trace) for trace in action_plan.trace_tokens)
 
 
 def _pair_plan_count(action_plan: ActionPlanFrame) -> int:

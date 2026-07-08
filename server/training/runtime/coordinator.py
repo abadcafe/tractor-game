@@ -23,10 +23,7 @@ from server.training.runtime.checkpoint_state import (
 )
 from server.training.runtime.config import ExecutionConfig
 from server.training.runtime.result import TrainingLoopResult
-from server.training.runtime.state import (
-    RuntimeTrainingState,
-    select_canonical_runtime_training_state,
-)
+from server.training.runtime.state import RuntimeTrainingState
 from server.training.runtime.telemetry import (
     IntervalTelemetrySink,
     JsonlTelemetrySink,
@@ -36,7 +33,6 @@ from server.training.runtime.telemetry import (
 )
 from server.training.runtime.training_runtime import (
     TrainingRuntime,
-    TrainingUpdateRequest,
     TrainingUpdateResult,
     open_training_runtime,
 )
@@ -218,6 +214,12 @@ def _run_synchronized_training(
     runtime_state = state.state
     start_total_rounds = total_rounds
     start_total_samples = total_samples
+    load_result = runtime.load_state(
+        state=runtime_state,
+        policy_version=total_updates,
+    )
+    if isinstance(load_result, Rejected):
+        return load_result
     while _should_continue_training(
         max_samples=max_samples,
         start_total_samples=start_total_samples,
@@ -239,10 +241,7 @@ def _run_synchronized_training(
         if isinstance(stage_result, Rejected):
             return stage_result
         update_result = runtime.run_update(
-            TrainingUpdateRequest(
-                state=runtime_state,
-                policy_version=total_updates,
-            )
+            policy_version=total_updates,
         )
         if isinstance(update_result, Rejected):
             return update_result
@@ -261,12 +260,6 @@ def _run_synchronized_training(
         )
         if isinstance(update_stage, Rejected):
             return update_stage
-        canonical_state_result = (
-            select_canonical_runtime_training_state(update.states)
-        )
-        if isinstance(canonical_state_result, Rejected):
-            return canonical_state_result
-        runtime_state = canonical_state_result.value
         total_updates += 1
         total_rounds += update.snapshot.round_count
         total_samples += update.snapshot.sample_count
@@ -284,6 +277,10 @@ def _run_synchronized_training(
         )
         if isinstance(checkpoint_stage, Rejected):
             return checkpoint_stage
+        snapshot_result = runtime.snapshot(policy_version=total_updates)
+        if isinstance(snapshot_result, Rejected):
+            return snapshot_result
+        runtime_state = snapshot_result.value
         checkpoint_result = _save_checkpoint(
             run_dir=run_dir,
             model_config=model_config,

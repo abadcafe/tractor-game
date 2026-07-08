@@ -44,7 +44,7 @@ from server.training.tensorize import (
     ObservationTensorBatch,
 )
 from server.training.torch_policy import TorchTrainingPolicy
-from server.training.torch_sampler import sample_policy_decisions
+from server.training.torch_sampler import sample_policy_batch
 
 
 def test_decide_scores_sampled_argument_with_distribution() -> None:
@@ -81,17 +81,17 @@ def test_decide_scores_sampled_argument_with_distribution() -> None:
     logits[semantic_argument_id(bid_argument)] = 3.0
     logits[semantic_argument_id(stop_argument)] = 0.0
 
-    sample_results = sample_policy_decisions(
+    sample_result = sample_policy_batch(
         model=model,
         config=model_config,
         device=torch.device("cpu"),
         requests=_request_batch(observation, legal_actions),
     )
-    assert isinstance(sample_results[0], Ok)
-    sample = sample_results[0].value
-    first_token_id = int(sample.replay_record.selected_token_ids[0])
+    assert isinstance(sample_result, Ok)
+    sample = sample_result.value
+    first_token_id = int(sample.selected_token_ids_padded[0, 0])
     first_legal_token_ids = _legal_token_ids(
-        sample.replay_record.legal_token_masks[0]
+        sample.legal_token_masks_padded[0, 0]
     )
     selected_offset = first_legal_token_ids.index(first_token_id)
     expected_first_log_probabilities = torch.log_softmax(
@@ -104,7 +104,7 @@ def test_decide_scores_sampled_argument_with_distribution() -> None:
         .item()
     )
     actual_log_probability = float(
-        sample.replay_record.old_log_probability.detach().cpu().item()
+        sample.old_log_probabilities[0].detach().cpu().item()
     )
     assert (
         abs(actual_log_probability - expected_log_probability)
@@ -116,8 +116,8 @@ def test_decide_scores_sampled_argument_with_distribution() -> None:
     )
     assert first_token_id == semantic_argument_id(bid_argument)
     assert tuple(
-        int(token_id)
-        for token_id in sample.replay_record.selected_token_ids
+        int(sample.selected_token_ids_padded[0, index])
+        for index in range(int(sample.step_counts[0].item()))
     ) == (
         semantic_argument_id(bid_argument),
         semantic_argument_id(stop_argument),
@@ -160,9 +160,7 @@ async def test_decide_rejects_non_finite_argument_logits() -> None:
     assert "logits must be finite" in result.reason
 
 
-def test_sample_policy_decisions_rejects_empty_legal_token_mask() -> (
-    None
-):
+def test_sample_policy_batch_rejects_empty_legal_token_mask() -> None:
     model = _FixedArgumentModel(
         argument_logits=torch.zeros(
             (SEMANTIC_CODEC.argument_vocab_size,), dtype=torch.float32
@@ -200,17 +198,15 @@ def test_sample_policy_decisions_rejects_empty_legal_token_mask() -> (
         policy_versions=request.policy_versions,
     )
 
-    results = sample_policy_decisions(
+    result = sample_policy_batch(
         model=model,
         config=model_config,
         device=torch.device("cpu"),
         requests=malformed_request,
     )
 
-    assert isinstance(results[0], Rejected)
-    assert (
-        results[0].reason == "policy action has no legal semantic token"
-    )
+    assert isinstance(result, Rejected)
+    assert result.reason == "policy action has no legal semantic token"
 
 
 @pytest.mark.asyncio
@@ -299,7 +295,7 @@ async def test_decide_reuses_observation_encoding_for_full_trace() -> (
     )
 
 
-def test_sample_policy_decisions_batches_observation_encoding() -> None:
+def test_sample_policy_batch_batches_observation_encoding() -> None:
     pass_argument = SemanticArgument("pass")
     stop_argument = SemanticArgument("stop")
     logits = torch.zeros(
@@ -326,7 +322,7 @@ def test_sample_policy_decisions_batches_observation_encoding() -> None:
         query=observation.action_query,
     )
 
-    results = sample_policy_decisions(
+    result = sample_policy_batch(
         model=model,
         config=model_config,
         device=torch.device("cpu"),
@@ -337,9 +333,9 @@ def test_sample_policy_decisions_batches_observation_encoding() -> None:
         ),
     )
 
-    assert len(results) == 2
-    assert isinstance(results[0], Ok)
-    assert isinstance(results[1], Ok)
+    assert isinstance(result, Ok)
+    assert len(result.value.policy_versions) == 2
+    assert int(result.value.selected_token_ids_padded.shape[0]) == 2
     assert model.encode_calls == 1
     assert model.score_batch_sizes == [2]
     assert model.score_prefix_widths == [1]
@@ -397,6 +393,7 @@ def _request_batch(
     wires: list[PolicyRequestWire] = []
     for index in range(batch_size):
         wire_result = build_policy_request_wire(
+            max_observation_tokens=512,
             worker_index=0,
             request_id=index,
             observation=observation,

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import multiprocessing as mp
 
+import torch
+
 from server.result import Ok, Rejected
 from server.training.policy_sampling import DecisionHandle
 from server.training.returns import ReturnCommit
@@ -43,19 +45,23 @@ def test_append_round_partially_fills_and_filters_rank() -> None:
             assert append_result.value.dropped_sample_count == 1
             assert append_result.value.arena_full
 
-            rank0 = reader.read_commit_for_rank(
+            rank0 = reader.read_rank_batch(
                 policy_version=3, model_rank_index=0
             )
             assert isinstance(rank0, Ok)
-            assert rank0.value.sample_count() == 1
-            assert rank0.value.return_values == (1.0,)
+            assert int(rank0.value.slot_indices.shape[0]) == 1
+            assert torch.equal(
+                rank0.value.return_values, torch.tensor((1.0,))
+            )
 
-            rank1 = reader.read_commit_for_rank(
+            rank1 = reader.read_rank_batch(
                 policy_version=3, model_rank_index=1
             )
             assert isinstance(rank1, Ok)
-            assert rank1.value.sample_count() == 1
-            assert rank1.value.return_values == (2.0,)
+            assert int(rank1.value.slot_indices.shape[0]) == 1
+            assert torch.equal(
+                rank1.value.return_values, torch.tensor((2.0,))
+            )
         finally:
             writer.close()
             reader.close()

@@ -30,9 +30,9 @@ from server.training.policy_inference_wire import (
 from server.training.policy_sampling import (
     DecisionHandle,
     ModelRankPolicyDecision,
+    RankReturnBatch,
 )
 from server.training.ppo import PPOUpdateProfile, PPOUpdateStats
-from server.training.returns import ReturnCommit
 from server.training.runtime.model_rank import (
     DirectPolicyClient,
     FramedPolicyClient,
@@ -64,7 +64,10 @@ async def test_direct_policy_client_calls_replica_without_queue() -> (
         state=_runtime_state(), decision=rank_decision
     )
 
-    result = await DirectPolicyClient(replica=replica).decide(
+    result = await DirectPolicyClient(
+        replica=replica,
+        max_observation_tokens=512,
+    ).decide(
         observation,
         legal_actions,
         _decision_key(),
@@ -87,7 +90,7 @@ def test_local_model_rank_loads_updates_and_snapshots_replica() -> None:
 
     load_result = rank.load_state(state=state, policy_version=3)
     update_result = rank.update(
-        commit=_return_commit(),
+        returns=_return_batch(),
         policy_version=3,
     )
     snapshot_result = rank.snapshot()
@@ -97,11 +100,10 @@ def test_local_model_rank_loads_updates_and_snapshots_replica() -> None:
     assert isinstance(snapshot_result, Ok)
     assert replica.calls == (
         "load_state",
-        "update_commit",
-        "snapshot",
+        "update_returns",
         "snapshot",
     )
-    assert update_result.value.state is state
+    assert update_result.value == _ppo_update_stats()
     assert snapshot_result.value is state
 
 
@@ -120,6 +122,7 @@ async def test_framed_policy_client_roundtrips_connection_payload() -> (
         task = asyncio.create_task(
             FramedPolicyClient(
                 worker_index=2,
+                max_observation_tokens=512,
                 request_sender=ConnectionPolicyRequestSender(
                     connection=request_sender
                 ),
@@ -174,6 +177,7 @@ async def test_framed_policy_client_rejects_response_mismatch() -> None:
         task = asyncio.create_task(
             FramedPolicyClient(
                 worker_index=2,
+                max_observation_tokens=512,
                 request_sender=ConnectionPolicyRequestSender(
                     connection=request_sender
                 ),
@@ -262,11 +266,11 @@ class _FakeReplica:
         self._calls.append("decide_wires")
         return (Ok(value=self._decision),)
 
-    def update_commit(
-        self, *, commit: ReturnCommit
+    def update_returns(
+        self, *, returns: RankReturnBatch
     ) -> Ok[PPOUpdateStats]:
-        assert not commit.is_empty()
-        self._calls.append("update_commit")
+        assert not returns.is_empty()
+        self._calls.append("update_returns")
         return Ok(value=_ppo_update_stats())
 
     def snapshot(self) -> RuntimeTrainingState:
@@ -333,20 +337,14 @@ def _decision_key() -> PolicyDecisionKey:
     )
 
 
-def _return_commit() -> ReturnCommit:
-    return ReturnCommit(
+def _return_batch() -> RankReturnBatch:
+    return RankReturnBatch(
         policy_version=3,
-        first_episode_id=0,
-        episode_count=1,
-        decision_handles=(
-            DecisionHandle(
-                model_rank_index=0,
-                policy_version=3,
-                slot_index=0,
-                slot_generation=1,
-            ),
-        ),
-        return_values=(1.0,),
+        model_rank_index=0,
+        slot_indices=torch.tensor((0,), dtype=torch.long),
+        slot_generations=torch.tensor((1,), dtype=torch.long),
+        return_values=torch.tensor((1.0,), dtype=torch.float32),
+        round_count=1,
     )
 
 

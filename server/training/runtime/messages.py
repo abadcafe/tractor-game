@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
 
 from server.training.ppo import PPOUpdateStats
 from server.training.runtime.state import RuntimeTrainingState
@@ -43,6 +42,16 @@ class WorkerUpdateCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkerSnapshotCommand:
+    """Capture the worker-local model rank state for checkpointing."""
+
+    policy_version: int
+
+    def __post_init__(self) -> None:
+        assert self.policy_version >= 0
+
+
+@dataclass(frozen=True, slots=True)
 class StopWorkerCommand:
     """Command to stop a worker process."""
 
@@ -53,6 +62,7 @@ type WorkerCommand = (
     WorkerLoadStateCommand
     | WorkerStartSamplingCommand
     | WorkerUpdateCommand
+    | WorkerSnapshotCommand
     | StopWorkerCommand
 )
 
@@ -74,8 +84,25 @@ class WorkerUpdateCompleted:
     """Worker response after synchronized PPO update."""
 
     worker_index: int
+    policy_version: int
     update_stats: PPOUpdateStats
+
+    def __post_init__(self) -> None:
+        assert self.worker_index >= 0
+        assert self.policy_version >= 0
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerSnapshotCompleted:
+    """Worker response carrying a checkpoint state snapshot."""
+
+    worker_index: int
+    policy_version: int
     state: RuntimeTrainingState
+
+    def __post_init__(self) -> None:
+        assert self.worker_index >= 0
+        assert self.policy_version >= 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,34 +128,7 @@ class WorkerRejected:
 type WorkerResponse = (
     WorkerStateLoaded
     | WorkerUpdateCompleted
+    | WorkerSnapshotCompleted
     | WorkerSamplingStopped
     | WorkerRejected
 )
-
-
-class WorkerCommandReceiver(Protocol):
-    """Receive commands from the coordinator."""
-
-    def get(self) -> WorkerCommand: ...
-
-
-class WorkerCommandSender(Protocol):
-    """Send commands to one worker."""
-
-    def put(self, item: WorkerCommand) -> None: ...
-
-
-class WorkerResponseReceiver(Protocol):
-    """Receive worker responses in the coordinator."""
-
-    def get(
-        self,
-        block: bool = True,
-        timeout: float | None = None,
-    ) -> WorkerResponse: ...
-
-
-class WorkerResponseSender(Protocol):
-    """Send worker responses from a worker process."""
-
-    def put(self, item: WorkerResponse) -> None: ...

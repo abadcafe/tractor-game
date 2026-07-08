@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import time
 from multiprocessing.connection import Connection
-from typing import cast
 
 import torch
 
@@ -12,7 +11,8 @@ from server import result as _result
 from server.result import Ok, Rejected
 from server.training.config import ModelConfig, TrainConfig
 from server.training.policy_inference_wire import (
-    build_completed_policy_response_wire,
+    PolicyRequestRoute,
+    build_policy_response_wire_batch,
     build_rejected_policy_response_wire,
 )
 from server.training.ppo.distributed import (
@@ -29,17 +29,20 @@ from server.training.runtime.model_rank.core import (
     ModelReplica,
     create_model_replica,
 )
+from server.training.runtime.model_rank.data_plane import (
+    ModelRankDataPlane,
+)
 from server.training.runtime.model_rank.inference_transport import (
     ConnectionPolicyRequestReceiver,
     send_policy_response,
-    wait_for_ready_receivers,
 )
 from server.training.runtime.model_rank.messages import (
     ModelRankCommand,
-    ModelRankCommandReceiver,
     ModelRankLoadStateCommand,
     ModelRankRejected,
-    ModelRankResponseSender,
+    ModelRankResponse,
+    ModelRankSnapshotCommand,
+    ModelRankSnapshotCompleted,
     ModelRankStateLoaded,
     ModelRankStopCommand,
     ModelRankUpdateCommand,
@@ -49,6 +52,7 @@ from server.training.runtime.model_rank.staging import (
     PolicyRequestStager,
     StagedPolicyRequestBatch,
 )
+from server.training.runtime.process_control import ChildControlEndpoint
 from server.training.runtime.shared_rollout_arena import (
     RolloutArenaHandle,
     SharedRolloutArenaReader,
@@ -69,8 +73,7 @@ def run_model_rank_process(
     model_config: ModelConfig,
     train_config: TrainConfig,
     execution_config: ExecutionConfig,
-    command_receiver: ModelRankCommandReceiver,
-    response_sender: ModelRankResponseSender,
+    control: ChildControlEndpoint[ModelRankCommand, ModelRankResponse],
     inference_request_receivers: tuple[
         ConnectionPolicyRequestReceiver, ...
     ],
@@ -86,7 +89,7 @@ def run_model_rank_process(
         execution_config=execution_config,
     )
     if isinstance(setup_result, Rejected):
-        response_sender.put(
+        control.send_response(
             ModelRankRejected(
                 model_rank_index=model_rank_index,
                 reason=setup_result.reason,
@@ -95,7 +98,7 @@ def run_model_rank_process(
         return
     sync_result = initialize_distributed_rank(distributed_rank_config)
     if isinstance(sync_result, Rejected):
-        response_sender.put(
+        control.send_response(
             ModelRankRejected(
                 model_rank_index=model_rank_index,
                 reason=sync_result.reason,
@@ -120,15 +123,14 @@ def run_model_rank_process(
             run_id=run_id,
             core=core,
             execution_config=execution_config,
-            command_receiver=command_receiver,
-            response_sender=response_sender,
+            control=control,
             inference_request_receivers=inference_request_receivers,
             inference_response_senders=inference_response_senders,
             rollout_arena_reader=arena_reader,
             telemetry_sink=telemetry_sink,
         )
         if isinstance(loop_result, Rejected):
-            response_sender.put(
+            control.send_response(
                 ModelRankRejected(
                     model_rank_index=model_rank_index,
                     reason=loop_result.reason,
@@ -205,8 +207,7 @@ def _run_model_rank_event_loop(
     run_id: str,
     core: ModelReplica,
     execution_config: ExecutionConfig,
-    command_receiver: ModelRankCommandReceiver,
-    response_sender: ModelRankResponseSender,
+    control: ChildControlEndpoint[ModelRankCommand, ModelRankResponse],
     inference_request_receivers: tuple[
         ConnectionPolicyRequestReceiver, ...
     ],
@@ -214,56 +215,114 @@ def _run_model_rank_event_loop(
     rollout_arena_reader: SharedRolloutArenaReader,
     telemetry_sink: TelemetrySink,
 ) -> _result.Ok[None] | _result.Rejected:
-    command_connection = cast(Connection, command_receiver)
-    stager = PolicyRequestStager(
-        batch_size=execution_config.model_inference_batch_size,
-        max_observation_tokens=core.model_config.max_tokens,
-        device=core.device,
+    data_plane = ModelRankDataPlane(
+        control=control,
+        request_receivers=inference_request_receivers,
+        stager=PolicyRequestStager(
+            batch_size=execution_config.model_inference_batch_size,
+            max_observation_tokens=core.model_config.max_tokens,
+            device=core.device,
+        ),
     )
+
+    def process_batch(
+        batch: StagedPolicyRequestBatch,
+    ) -> _result.Ok[None] | _result.Rejected:
+        return _process_staged_inference_batch(
+            model_rank_index=model_rank_index,
+            run_id=run_id,
+            core=core,
+            staged_batch=batch,
+            response_senders=inference_response_senders,
+            telemetry_sink=telemetry_sink,
+            configured_batch_size=(
+                execution_config.model_inference_batch_size
+            ),
+        )
+
+    def reject_batch(
+        *, routes: tuple[PolicyRequestRoute, ...], reason: str
+    ) -> _result.Ok[None] | _result.Rejected:
+        return _send_rejected_inference_batch(
+            routes=routes,
+            reason=reason,
+            response_senders=inference_response_senders,
+        )
+
+    command_result = control.recv_command()
+    if isinstance(command_result, Rejected):
+        return command_result
+    command = command_result.value
     while True:
-        staged_result = stager.receive_ready_batch(
-            inference_request_receivers
-        )
-        if isinstance(staged_result, Rejected):
-            return staged_result
-        staged_batch = staged_result.value
-        if staged_batch is not None:
-            serve_result = _serve_staged_inference_batch(
-                model_rank_index=model_rank_index,
-                run_id=run_id,
-                core=core,
-                staged_batch=staged_batch,
-                response_senders=inference_response_senders,
-                telemetry_sink=telemetry_sink,
-                configured_batch_size=(
-                    execution_config.model_inference_batch_size
-                ),
+        if isinstance(command, ModelRankStopCommand):
+            return Ok(value=None)
+        if isinstance(command, ModelRankLoadStateCommand):
+            core.load_state(snapshot=command.state)
+            state_loaded_result = control.send_response(
+                ModelRankStateLoaded(
+                    model_rank_index=model_rank_index,
+                    policy_version=command.policy_version,
+                )
             )
-            if isinstance(serve_result, Rejected):
-                return serve_result
-            continue
-        command = _try_receive_model_rank_command(command_receiver)
-        if command is not None:
-            command_result = _handle_model_rank_command(
-                model_rank_index=model_rank_index,
-                run_id=run_id,
-                core=core,
-                command=command,
-                response_sender=response_sender,
-                rollout_arena_reader=rollout_arena_reader,
-                telemetry_sink=telemetry_sink,
+            if isinstance(state_loaded_result, Rejected):
+                return state_loaded_result
+            next_command = data_plane.run_until_command(
+                policy_version=command.policy_version,
+                process_batch=process_batch,
+                reject_batch=reject_batch,
             )
-            if command_result == "stopped":
-                return Ok(value=None)
+            if isinstance(next_command, Rejected):
+                return next_command
+            command = next_command.value
             continue
-        wait_for_ready_receivers(
-            receivers=inference_request_receivers,
-            extra_connections=(command_connection,),
-            timeout_seconds=None,
+        if isinstance(command, ModelRankSnapshotCommand):
+            snapshot_result = control.send_response(
+                ModelRankSnapshotCompleted(
+                    model_rank_index=model_rank_index,
+                    policy_version=command.policy_version,
+                    state=core.snapshot(),
+                )
+            )
+            if isinstance(snapshot_result, Rejected):
+                return snapshot_result
+            next_command = data_plane.run_until_command(
+                policy_version=command.policy_version,
+                process_batch=process_batch,
+                reject_batch=reject_batch,
+            )
+            if isinstance(next_command, Rejected):
+                return next_command
+            command = next_command.value
+            continue
+        assert isinstance(command, ModelRankUpdateCommand)
+        update_response = _run_model_rank_update(
+            model_rank_index=model_rank_index,
+            run_id=run_id,
+            core=core,
+            command=command,
+            rollout_arena_reader=rollout_arena_reader,
+            telemetry_sink=telemetry_sink,
         )
+        update_send_result = control.send_response(update_response)
+        if isinstance(update_send_result, Rejected):
+            return update_send_result
+        if isinstance(update_response, ModelRankRejected):
+            command_result = control.recv_command()
+            if isinstance(command_result, Rejected):
+                return command_result
+            command = command_result.value
+            continue
+        next_command = data_plane.run_until_command(
+            policy_version=command.policy_version + 1,
+            process_batch=process_batch,
+            reject_batch=reject_batch,
+        )
+        if isinstance(next_command, Rejected):
+            return next_command
+        command = next_command.value
 
 
-def _serve_staged_inference_batch(
+def _process_staged_inference_batch(
     *,
     model_rank_index: int,
     run_id: str,
@@ -273,15 +332,15 @@ def _serve_staged_inference_batch(
     telemetry_sink: TelemetrySink,
     configured_batch_size: int,
 ) -> _result.Ok[None] | _result.Rejected:
-    serve_start = time.perf_counter()
-    serve_result = _serve_inference_batch(
+    process_start = time.perf_counter()
+    process_result = _process_inference_batch(
         core=core,
         staged_batch=staged_batch,
         response_senders=response_senders,
     )
-    serve_seconds = time.perf_counter() - serve_start
-    if isinstance(serve_result, Rejected):
-        return serve_result
+    process_seconds = time.perf_counter() - process_start
+    if isinstance(process_result, Rejected):
+        return process_result
     telemetry_result = _record_model_rank_stage(
         telemetry_sink=telemetry_sink,
         run_id=run_id,
@@ -319,7 +378,7 @@ def _serve_staged_inference_batch(
             ),
             TelemetryMeasurement(
                 key="model_rank_inference_seconds",
-                value=serve_seconds,
+                value=process_seconds,
             ),
         ),
     )
@@ -345,48 +404,6 @@ def _model_rank_update_partition(
     )
 
 
-def _try_receive_model_rank_command(
-    receiver: ModelRankCommandReceiver,
-) -> ModelRankCommand | None:
-    if not receiver.poll(0.0):
-        return None
-    return receiver.recv()
-
-
-def _handle_model_rank_command(
-    *,
-    model_rank_index: int,
-    run_id: str,
-    core: ModelReplica,
-    command: ModelRankCommand,
-    response_sender: ModelRankResponseSender,
-    rollout_arena_reader: SharedRolloutArenaReader,
-    telemetry_sink: TelemetrySink,
-) -> str:
-    if isinstance(command, ModelRankStopCommand):
-        return "stopped"
-    if isinstance(command, ModelRankLoadStateCommand):
-        core.load_state(snapshot=command.state)
-        response_sender.put(
-            ModelRankStateLoaded(
-                model_rank_index=model_rank_index,
-                policy_version=command.policy_version,
-            )
-        )
-        return "running"
-    assert isinstance(command, ModelRankUpdateCommand)
-    update_response = _run_model_rank_update(
-        model_rank_index=model_rank_index,
-        run_id=run_id,
-        core=core,
-        command=command,
-        rollout_arena_reader=rollout_arena_reader,
-        telemetry_sink=telemetry_sink,
-    )
-    response_sender.put(update_response)
-    return "running"
-
-
 def _run_model_rank_update(
     *,
     model_rank_index: int,
@@ -409,16 +426,16 @@ def _run_model_rank_update(
             model_rank_index=model_rank_index,
             reason=telemetry_result.reason,
         )
-    commit_result = rollout_arena_reader.read_commit_for_rank(
+    returns_result = rollout_arena_reader.read_rank_batch(
         policy_version=command.policy_version,
         model_rank_index=model_rank_index,
     )
-    if isinstance(commit_result, Rejected):
+    if isinstance(returns_result, Rejected):
         return ModelRankRejected(
             model_rank_index=model_rank_index,
-            reason=commit_result.reason,
+            reason=returns_result.reason,
         )
-    update_result = core.update_commit(commit=commit_result.value)
+    update_result = core.update_returns(returns=returns_result.value)
     if isinstance(update_result, Rejected):
         return ModelRankRejected(
             model_rank_index=model_rank_index,
@@ -427,36 +444,57 @@ def _run_model_rank_update(
     return ModelRankUpdateCompleted(
         model_rank_index=model_rank_index,
         rank_index=model_rank_index,
+        policy_version=command.policy_version,
         update_stats=update_result.value,
-        state=core.snapshot(),
     )
 
 
-def _serve_inference_batch(
+def _send_rejected_inference_batch(
+    *,
+    routes: tuple[PolicyRequestRoute, ...],
+    reason: str,
+    response_senders: tuple[Connection, ...],
+) -> _result.Ok[None] | _result.Rejected:
+    for route in routes:
+        worker_index = route.worker_index
+        if worker_index >= len(response_senders):
+            return Rejected(
+                reason="policy request worker route is out of range"
+            )
+        response = build_rejected_policy_response_wire(
+            route=route,
+            reason=reason,
+        )
+        send_result = send_policy_response(
+            sender=response_senders[worker_index],
+            response=response,
+        )
+        if isinstance(send_result, Rejected):
+            return send_result
+    return Ok(value=None)
+
+
+def _process_inference_batch(
     *,
     core: ModelReplica,
     staged_batch: StagedPolicyRequestBatch,
     response_senders: tuple[Connection, ...],
 ) -> _result.Ok[None] | _result.Rejected:
     decisions = core.decide_batch(staged_batch.device_batch)
-    for route, decision_result in zip(
-        staged_batch.routes, decisions, strict=True
+    response_batch = build_policy_response_wire_batch(
+        routes=staged_batch.routes,
+        decisions=decisions,
+    )
+    if isinstance(response_batch, Rejected):
+        return response_batch
+    for route, response in zip(
+        staged_batch.routes, response_batch.value, strict=True
     ):
         if route.worker_index >= len(response_senders):
             return Rejected(
                 reason="policy request worker route is out of range"
             )
         sender = response_senders[route.worker_index]
-        if isinstance(decision_result, Rejected):
-            response = build_rejected_policy_response_wire(
-                route=route,
-                reason=decision_result.reason,
-            )
-        else:
-            response = build_completed_policy_response_wire(
-                route=route,
-                decision=decision_result.value,
-            )
         send_result = send_policy_response(
             sender=sender,
             response=response,

@@ -6,7 +6,9 @@ import torch
 
 from server.training.runtime.messages import (
     WorkerLoadStateCommand,
+    WorkerSnapshotCommand,
     WorkerStartSamplingCommand,
+    WorkerUpdateCommand,
 )
 from server.training.runtime.state import RuntimeTrainingState
 
@@ -38,3 +40,17 @@ def test_worker_load_state_command_carries_state_snapshot() -> None:
 
     assert command.state is state
     assert command.policy_version == 3
+
+
+def test_worker_update_command_carries_no_state_snapshot() -> None:
+    command = WorkerUpdateCommand(policy_version=4)
+
+    assert command.policy_version == 4
+    assert not hasattr(command, "state")
+
+
+def test_worker_snapshot_command_carries_no_state_snapshot() -> None:
+    command = WorkerSnapshotCommand(policy_version=5)
+
+    assert command.policy_version == 5
+    assert not hasattr(command, "state")

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
 
 from server.training.ppo import PPOUpdateStats
 from server.training.runtime.state import RuntimeTrainingState
@@ -31,6 +30,16 @@ class ModelRankUpdateCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelRankSnapshotCommand:
+    """Capture this model rank state for checkpointing."""
+
+    policy_version: int
+
+    def __post_init__(self) -> None:
+        assert self.policy_version >= 0
+
+
+@dataclass(frozen=True, slots=True)
 class ModelRankStopCommand:
     """Command to stop a model-rank process."""
 
@@ -40,6 +49,7 @@ class ModelRankStopCommand:
 type ModelRankCommand = (
     ModelRankLoadStateCommand
     | ModelRankUpdateCommand
+    | ModelRankSnapshotCommand
     | ModelRankStopCommand
 )
 
@@ -58,8 +68,26 @@ class ModelRankUpdateCompleted:
 
     model_rank_index: int
     rank_index: int
+    policy_version: int
     update_stats: PPOUpdateStats
+
+    def __post_init__(self) -> None:
+        assert self.model_rank_index >= 0
+        assert self.rank_index >= 0
+        assert self.policy_version >= 0
+
+
+@dataclass(frozen=True, slots=True)
+class ModelRankSnapshotCompleted:
+    """Model-rank checkpoint state snapshot."""
+
+    model_rank_index: int
+    policy_version: int
     state: RuntimeTrainingState
+
+    def __post_init__(self) -> None:
+        assert self.model_rank_index >= 0
+        assert self.policy_version >= 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,35 +99,8 @@ class ModelRankRejected:
 
 
 type ModelRankResponse = (
-    ModelRankStateLoaded | ModelRankUpdateCompleted | ModelRankRejected
+    ModelRankStateLoaded
+    | ModelRankUpdateCompleted
+    | ModelRankSnapshotCompleted
+    | ModelRankRejected
 )
-
-
-class ModelRankCommandReceiver(Protocol):
-    """Receive commands in a model-rank process."""
-
-    def poll(self, timeout: float = 0.0) -> bool: ...
-
-    def recv(self) -> ModelRankCommand: ...
-
-
-class ModelRankCommandSender(Protocol):
-    """Send commands to one model-rank process."""
-
-    def send(self, item: ModelRankCommand) -> None: ...
-
-
-class ModelRankResponseReceiver(Protocol):
-    """Receive model-rank responses in the coordinator."""
-
-    def get(
-        self,
-        block: bool = True,
-        timeout: float | None = None,
-    ) -> ModelRankResponse: ...
-
-
-class ModelRankResponseSender(Protocol):
-    """Send model-rank responses from a model-rank process."""
-
-    def put(self, item: ModelRankResponse) -> None: ...

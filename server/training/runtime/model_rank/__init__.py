@@ -14,16 +14,12 @@ from server.training.runtime.model_rank.process import (
 from server.training.runtime.model_rank.remote import (
     FramedPolicyClient,
 )
-from server.training.runtime.model_rank.update import (
-    ModelUpdateResult,
-)
 
 __all__ = [
     "DirectPolicyClient",
     "FramedPolicyClient",
     "LocalModelRank",
     "ModelReplica",
-    "ModelUpdateResult",
     "create_model_replica",
     "run_model_rank_process",
 ]

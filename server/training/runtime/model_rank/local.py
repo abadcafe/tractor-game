@@ -16,10 +16,11 @@ from server.training.policy_inference_wire import (
     build_policy_request_wire,
     decode_policy_response,
 )
-from server.training.policy_sampling import ModelRankPolicyDecision
+from server.training.policy_sampling import (
+    ModelRankPolicyDecision,
+    RankReturnBatch,
+)
 from server.training.ppo import PPOUpdateStats
-from server.training.returns import ReturnCommit
-from server.training.runtime.model_rank.update import ModelUpdateResult
 from server.training.runtime.state import RuntimeTrainingState
 from server.training.sampling import PolicyDecisionKey
 
@@ -35,8 +36,8 @@ class ModelReplicaProtocol(Protocol):
         _result.Ok[ModelRankPolicyDecision] | _result.Rejected, ...
     ]: ...
 
-    def update_commit(
-        self, *, commit: ReturnCommit
+    def update_returns(
+        self, *, returns: RankReturnBatch
     ) -> _result.Ok[PPOUpdateStats] | _result.Rejected: ...
 
     def snapshot(self) -> RuntimeTrainingState: ...
@@ -45,8 +46,15 @@ class ModelReplicaProtocol(Protocol):
 class DirectPolicyClient:
     """Policy client that calls a same-process model replica."""
 
-    def __init__(self, *, replica: ModelReplicaProtocol) -> None:
+    def __init__(
+        self,
+        *,
+        replica: ModelReplicaProtocol,
+        max_observation_tokens: int,
+    ) -> None:
+        assert max_observation_tokens > 0
         self._replica = replica
+        self._max_observation_tokens = max_observation_tokens
 
     async def decide(
         self,
@@ -55,6 +63,7 @@ class DirectPolicyClient:
         decision_key: PolicyDecisionKey,
     ) -> Ok[PolicyDecision] | Rejected:
         request_result = build_policy_request_wire(
+            max_observation_tokens=self._max_observation_tokens,
             worker_index=0,
             request_id=decision_key.decision_index,
             observation=observation,
@@ -112,20 +121,15 @@ class LocalModelRank:
     def update(
         self,
         *,
-        commit: ReturnCommit,
+        returns: RankReturnBatch,
         policy_version: int,
-    ) -> _result.Ok[ModelUpdateResult] | _result.Rejected:
+    ) -> _result.Ok[PPOUpdateStats] | _result.Rejected:
         assert policy_version >= 0
-        assert commit.policy_version == policy_version
-        update_result = self._replica.update_commit(commit=commit)
+        assert returns.policy_version == policy_version
+        update_result = self._replica.update_returns(returns=returns)
         if isinstance(update_result, Rejected):
             return update_result
-        return Ok(
-            value=ModelUpdateResult(
-                update_stats=update_result.value,
-                state=self._replica.snapshot(),
-            )
-        )
+        return Ok(value=update_result.value)
 
     def snapshot(
         self,

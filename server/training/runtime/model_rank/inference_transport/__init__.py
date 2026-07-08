@@ -5,7 +5,6 @@ from .connection import (
     ConnectionPolicyRequestSender,
     ConnectionPolicyResponseReceiver,
     send_policy_response,
-    wait_for_ready_receivers,
 )
 
 __all__ = (
@@ -13,5 +12,4 @@ __all__ = (
     "ConnectionPolicyRequestSender",
     "ConnectionPolicyResponseReceiver",
     "send_policy_response",
-    "wait_for_ready_receivers",
 )

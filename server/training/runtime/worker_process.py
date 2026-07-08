@@ -27,12 +27,12 @@ from server.training.runtime.distributed import (
 from server.training.runtime.messages import (
     StopWorkerCommand,
     WorkerCommand,
-    WorkerCommandReceiver,
     WorkerLoadStateCommand,
     WorkerRejected,
     WorkerResponse,
-    WorkerResponseSender,
     WorkerSamplingStopped,
+    WorkerSnapshotCommand,
+    WorkerSnapshotCompleted,
     WorkerStartSamplingCommand,
     WorkerStateLoaded,
     WorkerUpdateCommand,
@@ -48,6 +48,7 @@ from server.training.runtime.model_rank.inference_transport import (
     ConnectionPolicyRequestSender,
     ConnectionPolicyResponseReceiver,
 )
+from server.training.runtime.process_control import ChildControlEndpoint
 from server.training.runtime.shared_rollout_arena import (
     RolloutArenaHandle,
     RolloutRoundMetrics,
@@ -93,8 +94,7 @@ def run_training_worker_process(
     train_config: TrainConfig,
     execution_config: ExecutionConfig,
     worker_cpus: CpuSet,
-    command_receiver: WorkerCommandReceiver,
-    response_sender: WorkerResponseSender,
+    control: ChildControlEndpoint[WorkerCommand, WorkerResponse],
     telemetry_sink: TelemetrySink,
     inference_request_sender: ConnectionPolicyRequestSender | None,
     inference_response_receiver: (
@@ -111,7 +111,7 @@ def run_training_worker_process(
         worker_cpus=worker_cpus,
     )
     if isinstance(setup_result, Rejected):
-        response_sender.put(
+        control.send_response(
             WorkerRejected(
                 worker_index=worker_index,
                 reason=setup_result.reason,
@@ -120,7 +120,7 @@ def run_training_worker_process(
         return
     sync_result = initialize_distributed_rank(distributed_rank_config)
     if isinstance(sync_result, Rejected):
-        response_sender.put(
+        control.send_response(
             WorkerRejected(
                 worker_index=worker_index,
                 reason=sync_result.reason,
@@ -139,7 +139,7 @@ def run_training_worker_process(
         distributed_rank_config=distributed_rank_config,
     )
     if isinstance(runtime_result, Rejected):
-        response_sender.put(
+        control.send_response(
             WorkerRejected(
                 worker_index=worker_index,
                 reason=runtime_result.reason,
@@ -150,7 +150,10 @@ def run_training_worker_process(
     runtime = runtime_result.value
     try:
         while True:
-            command = command_receiver.get()
+            command_result = control.recv_command()
+            if isinstance(command_result, Rejected):
+                return
+            command = command_result.value
             response = _handle_worker_command(
                 worker_index=worker_index,
                 run_id=run_id,
@@ -162,7 +165,9 @@ def run_training_worker_process(
             )
             if response is None:
                 return
-            response_sender.put(response)
+            send_result = control.send_response(response)
+            if isinstance(send_result, Rejected):
+                return
     finally:
         runtime.arena_writer.close()
         runtime.arena_reader.close()
@@ -223,6 +228,7 @@ def _create_worker_runtime(
         assert inference_response_receiver is not None
         policy = FramedPolicyClient(
             worker_index=worker_index,
+            max_observation_tokens=model_config.max_tokens,
             request_sender=inference_request_sender,
             response_receiver=inference_response_receiver,
             timeout_seconds=(execution_config.timeouts.round_seconds),
@@ -250,7 +256,10 @@ def _create_worker_runtime(
         ),
     )
     local_model_rank = LocalModelRank(replica=core)
-    policy = DirectPolicyClient(replica=core)
+    policy = DirectPolicyClient(
+        replica=core,
+        max_observation_tokens=model_config.max_tokens,
+    )
     return Ok(
         value=_WorkerRuntime(
             policy=policy,
@@ -310,6 +319,12 @@ def _handle_worker_command(
             runtime=runtime,
             command=command,
             telemetry_sink=telemetry_sink,
+        )
+    if isinstance(command, WorkerSnapshotCommand):
+        return _snapshot_worker_state(
+            worker_index=worker_index,
+            runtime=runtime,
+            command=command,
         )
     return _run_worker_update(
         worker_index=worker_index,
@@ -376,17 +391,17 @@ def _run_worker_update(
             worker_index=worker_index,
             reason=update_telemetry.reason,
         )
-    commit_result = runtime.arena_reader.read_commit_for_rank(
+    returns_result = runtime.arena_reader.read_rank_batch(
         policy_version=command.policy_version,
         model_rank_index=worker_index,
     )
-    if isinstance(commit_result, Rejected):
+    if isinstance(returns_result, Rejected):
         return WorkerRejected(
             worker_index=worker_index,
-            reason=commit_result.reason,
+            reason=returns_result.reason,
         )
     update_result = runtime.local_model_rank.update(
-        commit=commit_result.value,
+        returns=returns_result.value,
         policy_version=command.policy_version,
     )
     if isinstance(update_result, Rejected):
@@ -396,8 +411,32 @@ def _run_worker_update(
         )
     return WorkerUpdateCompleted(
         worker_index=worker_index,
-        update_stats=update_result.value.update_stats,
-        state=update_result.value.state,
+        policy_version=command.policy_version,
+        update_stats=update_result.value,
+    )
+
+
+def _snapshot_worker_state(
+    *,
+    worker_index: int,
+    runtime: _WorkerRuntime,
+    command: WorkerSnapshotCommand,
+) -> WorkerResponse:
+    if runtime.local_model_rank is None:
+        return WorkerRejected(
+            worker_index=worker_index,
+            reason="worker does not own a local model rank",
+        )
+    snapshot_result = runtime.local_model_rank.snapshot()
+    if isinstance(snapshot_result, Rejected):
+        return WorkerRejected(
+            worker_index=worker_index,
+            reason=snapshot_result.reason,
+        )
+    return WorkerSnapshotCompleted(
+        worker_index=worker_index,
+        policy_version=command.policy_version,
+        state=snapshot_result.value,
     )
 
 

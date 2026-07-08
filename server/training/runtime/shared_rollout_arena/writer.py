@@ -10,9 +10,8 @@ from server.result import Ok, Rejected
 from server.training.returns import ReturnCommit
 from server.training.runtime.shared_rollout_arena.schema import (
     RolloutArenaHeader,
-    RolloutArenaRow,
     pack_header,
-    pack_row,
+    pack_sample_reference,
     unpack_header,
 )
 from server.training.runtime.shared_rollout_arena.types import (
@@ -66,6 +65,7 @@ class SharedRolloutArenaWriter:
             dropped = commit.sample_count() - accepted
             _write_commit_rows(
                 buffer=buffer,
+                capacity=header.capacity,
                 start_index=header.sample_count,
                 commit=commit,
                 accepted_count=accepted,
@@ -146,10 +146,12 @@ def _segment_buffer(
 def _write_commit_rows(
     *,
     buffer: memoryview,
+    capacity: int,
     start_index: int,
     commit: ReturnCommit,
     accepted_count: int,
 ) -> None:
+    assert capacity > 0
     assert start_index >= 0
     assert accepted_count >= 0
     for offset, (handle, return_value) in enumerate(
@@ -159,15 +161,14 @@ def _write_commit_rows(
             strict=True,
         )
     ):
-        pack_row(
-            buffer,
+        pack_sample_reference(
+            buffer=buffer,
+            capacity=capacity,
             index=start_index + offset,
-            row=RolloutArenaRow(
-                model_rank_index=handle.model_rank_index,
-                slot_index=handle.slot_index,
-                slot_generation=handle.slot_generation,
-                return_value=return_value,
-            ),
+            model_rank_index=handle.model_rank_index,
+            slot_index=handle.slot_index,
+            slot_generation=handle.slot_generation,
+            return_value=return_value,
         )
 
 

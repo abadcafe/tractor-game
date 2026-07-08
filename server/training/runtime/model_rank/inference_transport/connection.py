@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from multiprocessing.connection import Connection, wait
+from multiprocessing.connection import Connection
 from multiprocessing.context import BufferTooShort
 
 from server import result as _result
@@ -87,21 +87,6 @@ def send_policy_response(
             reason=f"model-rank inference response send failed: {exc}"
         )
     return Ok(value=None)
-
-
-def wait_for_ready_receivers(
-    *,
-    receivers: tuple[ConnectionPolicyRequestReceiver, ...],
-    extra_connections: tuple[Connection, ...] = (),
-    timeout_seconds: float | None,
-) -> tuple[Connection, ...]:
-    """Wait until request or extra connections become readable."""
-    connections = tuple(receiver.connection for receiver in receivers)
-    ready = wait(
-        connections + extra_connections,
-        timeout=timeout_seconds,
-    )
-    return tuple(item for item in ready if isinstance(item, Connection))
 
 
 def _receive_response(

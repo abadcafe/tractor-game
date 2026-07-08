@@ -38,11 +38,13 @@ class FramedPolicyClient:
         self,
         *,
         worker_index: int,
+        max_observation_tokens: int,
         request_sender: ConnectionPolicyRequestSender,
         response_receiver: ConnectionPolicyResponseReceiver,
         timeout_seconds: float,
     ) -> None:
         self._worker_index = worker_index
+        self._max_observation_tokens = max_observation_tokens
         self._request_sender = request_sender
         self._response_receiver = response_receiver
         self._timeout_seconds = timeout_seconds
@@ -63,6 +65,7 @@ class FramedPolicyClient:
             loop.create_future()
         )
         request_result = build_policy_request_wire(
+            max_observation_tokens=self._max_observation_tokens,
             worker_index=self._worker_index,
             request_id=request_id,
             observation=observation,
@@ -76,7 +79,9 @@ class FramedPolicyClient:
             future=future,
         )
         self._ensure_reader_task()
-        send_result = self._request_sender.send(request_result.value)
+        send_result = await asyncio.to_thread(
+            self._request_sender.send, request_result.value
+        )
         if isinstance(send_result, Rejected):
             self._pending.pop(request_id, None)
             return send_result

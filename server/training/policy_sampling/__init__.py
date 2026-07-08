@@ -2,14 +2,14 @@
 
 from server.training.policy_sampling.records import (
     DecisionHandle,
-    DeviceDecisionReplayRecord,
     ModelRankPolicyDecision,
-    SampledPolicyDecision,
+    RankReturnBatch,
+    SampledPolicyBatch,
 )
 
 __all__ = (
     "DecisionHandle",
-    "DeviceDecisionReplayRecord",
     "ModelRankPolicyDecision",
-    "SampledPolicyDecision",
+    "RankReturnBatch",
+    "SampledPolicyBatch",
 )

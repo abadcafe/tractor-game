@@ -13,7 +13,10 @@ from server.training.policy_inference_wire import (
     DevicePolicyRequestBatch,
     PolicyRequestWireBatch,
 )
-from server.training.policy_sampling import ModelRankPolicyDecision
+from server.training.policy_sampling import (
+    ModelRankPolicyDecision,
+    RankReturnBatch,
+)
 from server.training.policy_sampling.model_rank_sample_arena import (
     ModelRankSampleArena,
 )
@@ -26,7 +29,6 @@ from server.training.ppo.distributed import (
     PPOUpdatePartition,
     single_update_partition,
 )
-from server.training.returns import ReturnCommit
 from server.training.runtime.config import ExecutionConfig
 from server.training.runtime.model_rank.staging import (
     stage_policy_request_wires,
@@ -37,7 +39,7 @@ from server.training.runtime.state import (
     capture_runtime_training_state,
     load_runtime_training_state,
 )
-from server.training.torch_sampler import sample_policy_decisions
+from server.training.torch_sampler import sample_policy_batch
 from server.training.training_state import (
     LoadedTrainingState,
     create_model,
@@ -85,69 +87,43 @@ class ModelReplica:
         _result.Ok[ModelRankPolicyDecision] | _result.Rejected, ...
     ]:
         """Run batched policy inference on this core's device."""
-        sampled = sample_policy_decisions(
+        sampled = sample_policy_batch(
             model=self.state.model,
             config=self.model_config,
             device=self.device,
             requests=requests,
         )
-        records = tuple(
-            sample_result.value.replay_record
-            for sample_result in sampled
-            if not isinstance(sample_result, Rejected)
+        if isinstance(sampled, Rejected):
+            return tuple(sampled for _ in requests.policy_versions)
+        return self.sample_arena.store_sampled_batch(
+            batch=sampled.value
         )
-        handles = (
-            self.sample_arena.store_batch(records=records)
-            if records
-            else ()
-        )
-        handle_index = 0
-        decisions: list[
-            _result.Ok[ModelRankPolicyDecision] | _result.Rejected
-        ] = []
-        for sample_result in sampled:
-            if isinstance(sample_result, Rejected):
-                decisions.append(sample_result)
-                continue
-            sample = sample_result.value
-            handle = handles[handle_index]
-            handle_index += 1
-            decisions.append(
-                _result.Ok(
-                    value=ModelRankPolicyDecision(
-                        trace_token_ids=sample.trace_token_ids,
-                        decision_handle=handle,
-                        choice_count=sample.choice_count,
-                    )
-                )
-            )
-        return tuple(decisions)
 
-    def update_commit(
-        self, *, commit: ReturnCommit
+    def update_returns(
+        self, *, returns: RankReturnBatch
     ) -> _result.Ok[PPOUpdateStats] | _result.Rejected:
         """Resolve return targets on-device and apply PPO update."""
-        if commit.is_empty():
+        if returns.is_empty():
             update_input = PPOUpdateInput(
-                policy_version=commit.policy_version,
+                policy_version=returns.policy_version,
                 local_batch=None,
             )
         else:
-            batch_result = self.sample_arena.materialize_return_commit(
-                commit=commit
+            batch_result = self.sample_arena.materialize_return_batch(
+                returns=returns
             )
             if isinstance(batch_result, Rejected):
                 return batch_result
             update_input = PPOUpdateInput(
-                policy_version=commit.policy_version,
+                policy_version=returns.policy_version,
                 local_batch=batch_result.value,
             )
         update_result = self.state.trainer.update(update_input)
         if isinstance(update_result, Rejected):
             return update_result
-        self.sample_arena.discard_commit(commit=commit)
+        self.sample_arena.discard_return_batch(returns=returns)
         self.sample_arena.discard_uncommitted_policy_version(
-            policy_version=commit.policy_version
+            policy_version=returns.policy_version
         )
         return _result.Ok(value=update_result.value)
 

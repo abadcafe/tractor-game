@@ -45,6 +45,8 @@ _CHOICE_COUNT_INDEX = 9
 _TRACE_COUNT_INDEX = 10
 _REASON_BYTES_INDEX = 11
 
+type ModelRankDecisionResult = Ok[ModelRankPolicyDecision] | Rejected
+
 
 def build_completed_policy_response_wire(
     *,
@@ -100,6 +102,30 @@ def build_rejected_policy_response_wire(
     return PolicyResponseWire(data=bytes(data))
 
 
+def build_policy_response_wire_batch(
+    *,
+    routes: tuple[PolicyRequestRoute, ...],
+    decisions: tuple[ModelRankDecisionResult, ...],
+) -> Ok[tuple[PolicyResponseWire, ...]] | Rejected:
+    """Build response wires for one model-rank inference batch."""
+    if len(routes) != len(decisions):
+        return Rejected(reason="policy response batch route mismatch")
+    return Ok(
+        value=tuple(
+            build_rejected_policy_response_wire(
+                route=route,
+                reason=decision.reason,
+            )
+            if isinstance(decision, Rejected)
+            else build_completed_policy_response_wire(
+                route=route,
+                decision=decision.value,
+            )
+            for route, decision in zip(routes, decisions, strict=True)
+        )
+    )
+
+
 def decode_policy_response_wire(
     data: bytes,
 ) -> _result.Ok[PolicyResponse] | _result.Rejected:
@@ -111,9 +137,13 @@ def decode_policy_response_wire(
     total_bytes = _read_i64(data, _TOTAL_BYTES_INDEX)
     if total_bytes != len(data):
         return Rejected(reason="policy response wire length mismatch")
+    worker_index = _read_i64(data, _WORKER_INDEX_INDEX)
+    request_id = _read_i64(data, _REQUEST_ID_INDEX)
+    if worker_index < 0 or request_id < 0:
+        return Rejected(reason="policy response route is invalid")
     route = PolicyRequestRoute(
-        worker_index=_read_i64(data, _WORKER_INDEX_INDEX),
-        request_id=_read_i64(data, _REQUEST_ID_INDEX),
+        worker_index=worker_index,
+        request_id=request_id,
     )
     status = _read_i64(data, _STATUS_INDEX)
     if status == _STATUS_REJECTED:

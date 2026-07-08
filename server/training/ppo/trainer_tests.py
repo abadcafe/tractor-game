@@ -24,7 +24,8 @@ from server.training.model import (
 from server.training.observation import build_observation
 from server.training.policy_sampling import (
     DecisionHandle,
-    DeviceDecisionReplayRecord,
+    RankReturnBatch,
+    SampledPolicyBatch,
 )
 from server.training.policy_sampling.model_rank_sample_arena import (
     ModelRankSampleArena,
@@ -38,7 +39,6 @@ from server.training.ppo.distributed import PPOUpdatePartition
 from server.training.ppo.replay_tensors import (
     ReadyPPOBatch,
 )
-from server.training.returns import ReturnCommit
 from server.training.semantic_action_plan import (
     advance_action_state,
     compile_legal_action_frame,
@@ -50,7 +50,10 @@ from server.training.semantic_actions import (
     SemanticArgument,
     SemanticArgumentTrace,
 )
-from server.training.semantic_actions.codec import semantic_argument_id
+from server.training.semantic_actions.codec import (
+    SEMANTIC_CODEC,
+    semantic_argument_id,
+)
 from server.training.tensorize import (
     ArgumentPrefixTensorBatch,
     ObservationTensorBatch,
@@ -470,14 +473,21 @@ def _single_card_batch(*, count: int) -> ReadyPPOBatch:
         )
         handles.append(handle)
         return_values.append(1.0 if player_index in (0, 2) else -1.0)
-    commit = ReturnCommit(
+    returns = RankReturnBatch(
         policy_version=0,
-        first_episode_id=0,
-        episode_count=1,
-        decision_handles=tuple(handles),
-        return_values=tuple(return_values),
+        model_rank_index=0,
+        slot_indices=torch.tensor(
+            tuple(handle.slot_index for handle in handles),
+            dtype=torch.long,
+        ),
+        slot_generations=torch.tensor(
+            tuple(handle.slot_generation for handle in handles),
+            dtype=torch.long,
+        ),
+        return_values=torch.tensor(return_values, dtype=torch.float32),
+        round_count=1,
     )
-    batch_result = store.materialize_return_commit(commit=commit)
+    batch_result = store.materialize_return_batch(returns=returns)
     assert isinstance(batch_result, Ok)
     return batch_result.value
 
@@ -544,23 +554,63 @@ def _store_single_card_decision(
     replay_trace = _replay_trace_for(
         legal_actions=legal_actions, trace=trace, device=device
     )
-    return store.store(
-        record=DeviceDecisionReplayRecord(
-            policy_version=0,
-            observation_batch=tensorize_observations(
-                observations=(observation,),
-                max_observation_tokens=64,
-                device=device,
-            ),
-            selected_token_ids=replay_trace.selected_token_ids,
-            legal_token_masks=replay_trace.legal_token_masks,
-            old_log_probability=torch.zeros(
-                (), dtype=torch.float32, device=device
-            ),
-            old_value=torch.zeros(
-                (), dtype=torch.float32, device=device
-            ),
-        )
+    sample_batch = _sampled_policy_batch(
+        observation_batch=tensorize_observations(
+            observations=(observation,),
+            max_observation_tokens=64,
+            device=device,
+        ),
+        replay_trace=replay_trace,
+        device=device,
+    )
+    stored = store.store_sampled_batch(batch=sample_batch)
+    assert len(stored) == 1
+    stored_decision = stored[0]
+    assert isinstance(stored_decision, Ok)
+    return stored_decision.value.decision_handle
+
+
+def _sampled_policy_batch(
+    *,
+    observation_batch: ObservationTensorBatch,
+    replay_trace: _ReplayTrace,
+    device: torch.device,
+) -> SampledPolicyBatch:
+    selected = torch.zeros(
+        (1, SEMANTIC_CODEC.max_argument_tokens),
+        dtype=torch.long,
+        device=device,
+    )
+    step_count = int(replay_trace.selected_token_ids.shape[0])
+    selected[0, :step_count] = replay_trace.selected_token_ids
+    masks = torch.zeros(
+        (
+            1,
+            SEMANTIC_CODEC.max_argument_tokens,
+            SEMANTIC_CODEC.argument_vocab_size,
+        ),
+        dtype=torch.bool,
+        device=device,
+    )
+    masks[0, :step_count, :] = replay_trace.legal_token_masks
+    return SampledPolicyBatch(
+        policy_versions=(0,),
+        status_codes=torch.zeros((1,), dtype=torch.long, device=device),
+        observation_batch=observation_batch,
+        selected_token_ids_padded=selected,
+        legal_token_masks_padded=masks,
+        step_counts=torch.tensor(
+            (step_count,), dtype=torch.long, device=device
+        ),
+        choice_counts=torch.tensor(
+            (1,), dtype=torch.long, device=device
+        ),
+        old_log_probabilities=torch.zeros(
+            (1,), dtype=torch.float32, device=device
+        ),
+        old_values=torch.zeros(
+            (1,), dtype=torch.float32, device=device
+        ),
     )
 
 

@@ -24,7 +24,7 @@ from server.training.runtime.model_rank.staging import (
     stage_policy_request_wires,
 )
 from server.training.sampling import PolicyDecisionKey
-from server.training.torch_sampler import sample_policy_decisions
+from server.training.torch_sampler import sample_policy_batch
 
 
 class TorchTrainingPolicy:
@@ -52,6 +52,7 @@ class TorchTrainingPolicy:
         decision_key: PolicyDecisionKey,
     ) -> Ok[PolicyDecision] | Rejected:
         request_result = build_policy_request_wire(
+            max_observation_tokens=self.config.max_tokens,
             worker_index=0,
             request_id=decision_key.decision_index,
             observation=observation,
@@ -69,18 +70,22 @@ class TorchTrainingPolicy:
         )
         if isinstance(staged_result, Rejected):
             return staged_result
-        results = sample_policy_decisions(
+        sampled_result = sample_policy_batch(
             model=self.model,
             config=self.config,
             device=self.device,
             requests=staged_result.value.device_batch,
         )
-        assert len(results) == 1
-        result = results[0]
-        if isinstance(result, Rejected):
-            return result
-        sample = result.value
-        handle = self.sample_arena.store(record=sample.replay_record)
+        if isinstance(sampled_result, Rejected):
+            return sampled_result
+        decisions = self.sample_arena.store_sampled_batch(
+            batch=sampled_result.value
+        )
+        assert len(decisions) == 1
+        decision_result = decisions[0]
+        if isinstance(decision_result, Rejected):
+            return decision_result
+        decision = decision_result.value
         return decode_policy_response(
             legal_actions=legal_actions,
             response=CompletedPolicyResponse(
@@ -88,11 +93,19 @@ class TorchTrainingPolicy:
                     worker_index=0,
                     request_id=decision_key.decision_index,
                 ),
-                trace_token_ids=sample.trace_token_ids,
-                decision_handle_model_rank=handle.model_rank_index,
-                decision_handle_policy_version=handle.policy_version,
-                decision_handle_slot_index=handle.slot_index,
-                decision_handle_slot_generation=handle.slot_generation,
-                choice_count=sample.choice_count,
+                trace_token_ids=decision.trace_token_ids,
+                decision_handle_model_rank=(
+                    decision.decision_handle.model_rank_index
+                ),
+                decision_handle_policy_version=(
+                    decision.decision_handle.policy_version
+                ),
+                decision_handle_slot_index=(
+                    decision.decision_handle.slot_index
+                ),
+                decision_handle_slot_generation=(
+                    decision.decision_handle.slot_generation
+                ),
+                choice_count=decision.choice_count,
             ),
         )

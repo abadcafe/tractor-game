@@ -12,12 +12,10 @@ from server.training.policy_inference_wire import (
     DevicePolicyRequestBatch,
 )
 from server.training.policy_sampling import (
-    DeviceDecisionReplayRecord,
-    SampledPolicyDecision,
+    SampledPolicyBatch,
 )
 from server.training.semantic_action_plan import (
     action_prefix_batch,
-    action_trace_ids,
     advance_action_state,
     initial_action_state,
     legal_token_mask,
@@ -29,21 +27,19 @@ from server.training.tensor_finiteness import (
     NamedTensorCheck,
     reject_if_non_finite,
 )
-from server.training.tensor_staging import staged_tensor
-from server.training.tensorize import ObservationTensorBatch
 
-type PolicySamplingResult = Ok[SampledPolicyDecision] | Rejected
+type PolicySamplingResult = Ok[SampledPolicyBatch] | Rejected
 
 _ERROR_UNTERMINATED = 1000
 
 
-def sample_policy_decisions(
+def sample_policy_batch(
     *,
     model: TractorPolicyModel,
     config: ModelConfig,
     device: torch.device,
     requests: DevicePolicyRequestBatch,
-) -> tuple[PolicySamplingResult, ...]:
+) -> PolicySamplingResult:
     """Sample policy decisions for a staged request batch."""
     batch_size = len(requests.policy_versions)
     model.eval()
@@ -61,7 +57,7 @@ def sample_policy_decisions(
             )
         )
         if isinstance(value_check, Rejected):
-            return tuple(value_check for _ in range(batch_size))
+            return value_check
         state = initial_action_state(action_batch)
         log_probabilities = torch.zeros(
             (batch_size,), dtype=values.dtype, device=device
@@ -106,83 +102,33 @@ def sample_policy_decisions(
         )
         error_value = _error_code_value(error_code)
         if error_value != 0:
-            rejection = Rejected(reason=_error_reason(error_value))
-            return tuple(rejection for _ in range(batch_size))
-        mask_stack = torch.stack(legal_masks, dim=1)
-        trace_ids = action_trace_ids(state)
-        choice_counts = _int_tensor_values(state.choice_counts)
-        return tuple(
-            _finish_sample(
+            return Rejected(reason=_error_reason(error_value))
+        mask_stack = _padded_legal_masks(
+            legal_masks=tuple(legal_masks),
+            batch_size=batch_size,
+            device=device,
+        )
+        status_codes = torch.zeros(
+            (batch_size,), dtype=torch.long, device=device
+        )
+        return Ok(
+            value=SampledPolicyBatch(
+                policy_versions=requests.policy_versions,
+                status_codes=status_codes,
                 observation_batch=observation_batch,
-                state_index=index,
-                policy_version=requests.policy_versions[index],
-                trace_token_ids=trace_ids[index],
-                legal_masks=mask_stack[index, : len(trace_ids[index])],
-                old_log_probability=log_probabilities[index],
-                old_value=values[index],
-                choice_count=choice_counts[index],
+                selected_token_ids_padded=state.selected_token_ids,
+                legal_token_masks_padded=mask_stack,
+                step_counts=state.step_counts,
+                choice_counts=state.choice_counts,
+                old_log_probabilities=log_probabilities,
+                old_values=values,
             )
-            for index in range(batch_size)
         )
-
-
-def _finish_sample(
-    *,
-    observation_batch: ObservationTensorBatch,
-    state_index: int,
-    policy_version: int,
-    trace_token_ids: tuple[int, ...],
-    legal_masks: Tensor,
-    old_log_probability: Tensor,
-    old_value: Tensor,
-    choice_count: int,
-) -> PolicySamplingResult:
-    if choice_count <= 0:
-        return Rejected(reason="policy action has no legal choices")
-    return Ok(
-        value=SampledPolicyDecision(
-            trace_token_ids=trace_token_ids,
-            replay_record=DeviceDecisionReplayRecord(
-                policy_version=policy_version,
-                observation_batch=_observation_row(
-                    observation_batch, index=state_index
-                ),
-                selected_token_ids=staged_tensor(
-                    trace_token_ids,
-                    dtype=torch.long,
-                    device=old_value.device,
-                ),
-                legal_token_masks=legal_masks,
-                old_log_probability=old_log_probability,
-                old_value=old_value,
-            ),
-            choice_count=choice_count,
-        )
-    )
-
-
-def _int_tensor_values(values: Tensor) -> tuple[int, ...]:
-    cpu_values = values.detach().cpu()
-    return tuple(
-        int(cpu_values[index].item())
-        for index in range(int(cpu_values.shape[0]))
-    )
 
 
 def _cpu_all_done(done: Tensor) -> bool:
     assert done.device.type == "cpu"
     return bool(done.all().item())
-
-
-def _observation_row(
-    batch: ObservationTensorBatch, *, index: int
-) -> ObservationTensorBatch:
-    assert index >= 0
-    return ObservationTensorBatch(
-        component_ids=batch.component_ids[index : index + 1],
-        numeric_values=batch.numeric_values[index : index + 1],
-        numeric_masks=batch.numeric_masks[index : index + 1],
-    )
 
 
 def _set_error_if(
@@ -218,3 +164,27 @@ def _error_reason(error_code: int) -> str:
     if sampling_reason is not None:
         return sampling_reason
     return "policy sampling failed"
+
+
+def _padded_legal_masks(
+    *,
+    legal_masks: tuple[Tensor, ...],
+    batch_size: int,
+    device: torch.device,
+) -> Tensor:
+    assert legal_masks
+    mask_stack = torch.stack(legal_masks, dim=1)
+    width = int(mask_stack.shape[1])
+    if width == SEMANTIC_CODEC.max_argument_tokens:
+        return mask_stack
+    result = torch.zeros(
+        (
+            batch_size,
+            SEMANTIC_CODEC.max_argument_tokens,
+            SEMANTIC_CODEC.argument_vocab_size,
+        ),
+        dtype=torch.bool,
+        device=device,
+    )
+    result[:, :width, :] = mask_stack
+    return result

@@ -6,7 +6,8 @@ import struct
 from dataclasses import dataclass
 
 HEADER_STRUCT = struct.Struct("<qqqqqqqqqqqddd")
-ROW_STRUCT = struct.Struct("<qqqd")
+_I64 = struct.Struct("<q")
+_F32 = struct.Struct("<f")
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,31 +43,49 @@ class RolloutArenaHeader:
         assert self.cancelled_env_count >= 0
 
 
-@dataclass(frozen=True, slots=True)
-class RolloutArenaRow:
-    """One accepted training sample reference."""
-
-    model_rank_index: int
-    slot_index: int
-    slot_generation: int
-    return_value: float
-
-    def __post_init__(self) -> None:
-        assert self.model_rank_index >= 0
-        assert self.slot_index >= 0
-        assert self.slot_generation >= 0
-
-
 def arena_byte_size(*, capacity: int) -> int:
     """Return the shared memory bytes needed for one arena."""
     assert capacity > 0
-    return HEADER_STRUCT.size + capacity * ROW_STRUCT.size
+    return _return_values_offset(capacity) + capacity * _F32.size
 
 
-def row_offset(index: int) -> int:
-    """Return the byte offset for one row index."""
+def pack_sample_reference(
+    *,
+    buffer: memoryview,
+    capacity: int,
+    index: int,
+    model_rank_index: int,
+    slot_index: int,
+    slot_generation: int,
+    return_value: float,
+) -> None:
+    """Write one sample reference into the columnar arena."""
+    assert capacity > 0
     assert index >= 0
-    return HEADER_STRUCT.size + index * ROW_STRUCT.size
+    assert index < capacity
+    assert model_rank_index >= 0
+    assert slot_index >= 0
+    assert slot_generation >= 0
+    _I64.pack_into(
+        buffer,
+        _model_rank_indices_offset() + index * _I64.size,
+        model_rank_index,
+    )
+    _I64.pack_into(
+        buffer,
+        _slot_indices_offset(capacity) + index * _I64.size,
+        slot_index,
+    )
+    _I64.pack_into(
+        buffer,
+        _slot_generations_offset(capacity) + index * _I64.size,
+        slot_generation,
+    )
+    _F32.pack_into(
+        buffer,
+        _return_values_offset(capacity) + index * _F32.size,
+        return_value,
+    )
 
 
 def pack_header(
@@ -136,26 +155,51 @@ def empty_header(
     )
 
 
-def pack_row(
-    buffer: memoryview, *, index: int, row: RolloutArenaRow
-) -> None:
-    """Write one sample row into a shared memory buffer."""
-    ROW_STRUCT.pack_into(
-        buffer,
-        row_offset(index),
-        row.model_rank_index,
-        row.slot_index,
-        row.slot_generation,
-        row.return_value,
-    )
+def unpack_model_rank_index(*, buffer: memoryview, index: int) -> int:
+    """Read one model-rank index from the arena columns."""
+    return _read_i64(buffer, _model_rank_indices_offset(), index)
 
 
-def unpack_row(buffer: memoryview, *, index: int) -> RolloutArenaRow:
-    """Read one sample row from a shared memory buffer."""
-    values = ROW_STRUCT.unpack_from(buffer, row_offset(index))
-    return RolloutArenaRow(
-        model_rank_index=values[0],
-        slot_index=values[1],
-        slot_generation=values[2],
-        return_value=values[3],
+def unpack_slot_index(
+    *, buffer: memoryview, capacity: int, index: int
+) -> int:
+    """Read one slot index from the arena columns."""
+    return _read_i64(buffer, _slot_indices_offset(capacity), index)
+
+
+def unpack_slot_generation(
+    *, buffer: memoryview, capacity: int, index: int
+) -> int:
+    """Read one slot generation from the arena columns."""
+    return _read_i64(buffer, _slot_generations_offset(capacity), index)
+
+
+def unpack_return_value(
+    *, buffer: memoryview, capacity: int, index: int
+) -> float:
+    """Read one return value from the arena columns."""
+    values = _F32.unpack_from(
+        buffer, _return_values_offset(capacity) + index * _F32.size
     )
+    return float(values[0])
+
+
+def _read_i64(buffer: memoryview, offset: int, index: int) -> int:
+    values = _I64.unpack_from(buffer, offset + index * _I64.size)
+    return int(values[0])
+
+
+def _model_rank_indices_offset() -> int:
+    return HEADER_STRUCT.size
+
+
+def _slot_indices_offset(capacity: int) -> int:
+    return _model_rank_indices_offset() + capacity * _I64.size
+
+
+def _slot_generations_offset(capacity: int) -> int:
+    return _slot_indices_offset(capacity) + capacity * _I64.size
+
+
+def _return_values_offset(capacity: int) -> int:
+    return _slot_generations_offset(capacity) + capacity * _I64.size

@@ -12,12 +12,14 @@ from server import result as _result
 from server.result import Ok, Rejected
 from server.training.policy_inference_wire import (
     DevicePolicyRequestBatch,
+    DevicePolicyRequestBuffer,
     PolicyRequestMetadata,
     PolicyRequestRoute,
     PolicyRequestWireBatch,
+    allocate_device_policy_request_buffer,
     decode_policy_request_metadata,
-    device_policy_request_batch_from_wire,
     max_policy_request_wire_bytes,
+    unpack_policy_request_batch_into,
 )
 from server.training.runtime.model_rank.inference_transport import (
     ConnectionPolicyRequestReceiver,
@@ -52,13 +54,21 @@ class StagedPolicyRequestBatch:
 
 @dataclass(slots=True)
 class PolicyRequestStager:
-    """Receive request wires into reusable host slots."""
+    """Stage caller-selected request wires into reusable host slots."""
 
     batch_size: int
     max_observation_tokens: int
     device: torch.device
     _max_wire_bytes: int = field(init=False)
     _host_slots: Tensor = field(init=False)
+    _device_slots: tuple[Tensor, Tensor] | None = field(init=False)
+    _device_request_buffers: tuple[
+        DevicePolicyRequestBuffer, DevicePolicyRequestBuffer
+    ] = field(init=False)
+    _device_slot_index: int = field(init=False)
+    _device_buffer_index: int = field(init=False)
+    _metadata: list[PolicyRequestMetadata] = field(init=False)
+    _recv_start: float = field(init=False)
 
     def __post_init__(self) -> None:
         assert self.batch_size > 0
@@ -71,67 +81,94 @@ class PolicyRequestStager:
             max_wire_bytes=self._max_wire_bytes,
             device=self.device,
         )
+        self._device_slots = _allocate_device_slots(
+            batch_size=self.batch_size,
+            max_wire_bytes=self._max_wire_bytes,
+            device=self.device,
+        )
+        self._device_request_buffers = _allocate_device_request_buffers(
+            batch_size=self.batch_size,
+            max_observation_tokens=self.max_observation_tokens,
+            device=self.device,
+        )
+        self._device_slot_index = 0
+        self._device_buffer_index = 0
+        self._metadata = []
+        self._recv_start = 0.0
 
-    def receive_ready_batch(
+    def begin_batch(self) -> None:
+        """Start receiving one data-plane batch."""
+        assert not self._metadata
+        self._recv_start = time.perf_counter()
+
+    def can_receive(self) -> bool:
+        """Return whether this batch has an unused host slot."""
+        return len(self._metadata) < self.batch_size
+
+    def receive_from(
+        self, receiver: ConnectionPolicyRequestReceiver
+    ) -> _result.Ok[None] | _result.Rejected:
+        """Receive one ready request into the next host slot."""
+        assert self.can_receive()
+        row_index = len(self._metadata)
+        row_view = _host_slot_view(self._host_slots[row_index])
+        byte_count_result = receiver.receive_bytes_into(row_view)
+        if isinstance(byte_count_result, Rejected):
+            return byte_count_result
+        byte_count = byte_count_result.value
+        if byte_count > self._max_wire_bytes:
+            return Rejected(reason="policy request wire exceeds slot")
+        metadata_result = decode_policy_request_metadata(
+            row_view[:byte_count]
+        )
+        if isinstance(metadata_result, Rejected):
+            return metadata_result
+        if (
+            metadata_result.value.token_count
+            > self.max_observation_tokens
+        ):
+            return Rejected(
+                reason="policy request observation exceeds token budget"
+            )
+        self._metadata.append(metadata_result.value)
+        return Ok(value=None)
+
+    def finish_batch(
         self,
-        receivers: tuple[ConnectionPolicyRequestReceiver, ...],
-    ) -> _result.Ok[StagedPolicyRequestBatch | None] | _result.Rejected:
-        """Drain ready request connections into host slots."""
-        if not receivers:
-            return Ok(value=None)
-        recv_start = time.perf_counter()
-        metadata: list[PolicyRequestMetadata] = []
-        while len(metadata) < self.batch_size:
-            drained = False
-            for receiver in receivers:
-                if len(metadata) >= self.batch_size:
-                    break
-                if not receiver.connection.poll():
-                    continue
-                row_index = len(metadata)
-                row_view = _host_slot_view(self._host_slots[row_index])
-                byte_count_result = receiver.receive_bytes_into(
-                    row_view
-                )
-                if isinstance(byte_count_result, Rejected):
-                    return byte_count_result
-                byte_count = byte_count_result.value
-                if byte_count > self._max_wire_bytes:
-                    return Rejected(
-                        reason="policy request wire exceeds slot"
-                    )
-                metadata_result = decode_policy_request_metadata(
-                    row_view[:byte_count]
-                )
-                if isinstance(metadata_result, Rejected):
-                    return metadata_result
-                if (
-                    metadata_result.value.token_count
-                    > self.max_observation_tokens
-                ):
-                    return Rejected(
-                        reason=(
-                            "policy request observation exceeds "
-                            "token budget"
-                        )
-                    )
-                metadata.append(metadata_result.value)
-                drained = True
-            if not drained:
-                break
-        if not metadata:
-            return Ok(value=None)
-        recv_seconds = time.perf_counter() - recv_start
+    ) -> _result.Ok[StagedPolicyRequestBatch] | _result.Rejected:
+        """Stage the received host slots into device tensors."""
+        assert self._metadata
+        metadata = tuple(self._metadata)
+        self._metadata.clear()
+        recv_seconds = time.perf_counter() - self._recv_start
         staged_result = _stage_host_slots(
             host_slots=self._host_slots,
-            metadata=tuple(metadata),
-            max_observation_tokens=self.max_observation_tokens,
+            device_slot=self._next_device_slot(),
+            output_buffer=self._next_device_request_buffer(),
+            metadata=metadata,
             device=self.device,
             recv_seconds=recv_seconds,
         )
         if isinstance(staged_result, Rejected):
             return staged_result
         return Ok(value=staged_result.value)
+
+    def discard_batch(self) -> None:
+        """Drop partially received metadata after a staging error."""
+        self._metadata.clear()
+
+    def _next_device_slot(self) -> Tensor | None:
+        slots = self._device_slots
+        if slots is None:
+            return None
+        slot = slots[self._device_slot_index]
+        self._device_slot_index = 1 - self._device_slot_index
+        return slot
+
+    def _next_device_request_buffer(self) -> DevicePolicyRequestBuffer:
+        buffer = self._device_request_buffers[self._device_buffer_index]
+        self._device_buffer_index = 1 - self._device_buffer_index
+        return buffer
 
 
 def stage_policy_request_wires(
@@ -147,6 +184,16 @@ def stage_policy_request_wires(
     host_slots = _allocate_host_slots(
         batch_size=requests.batch_size(),
         max_wire_bytes=max_wire_bytes,
+        device=device,
+    )
+    device_slots = _allocate_device_slots(
+        batch_size=requests.batch_size(),
+        max_wire_bytes=max_wire_bytes,
+        device=device,
+    )
+    output_buffer = allocate_device_policy_request_buffer(
+        batch_size=requests.batch_size(),
+        max_observation_tokens=max_observation_tokens,
         device=device,
     )
     metadata: list[PolicyRequestMetadata] = []
@@ -167,8 +214,9 @@ def stage_policy_request_wires(
         metadata.append(metadata_result.value)
     return _stage_host_slots(
         host_slots=host_slots,
+        device_slot=None if device_slots is None else device_slots[0],
+        output_buffer=output_buffer,
         metadata=tuple(metadata),
-        max_observation_tokens=max_observation_tokens,
         device=device,
         recv_seconds=0.0,
     )
@@ -177,8 +225,9 @@ def stage_policy_request_wires(
 def _stage_host_slots(
     *,
     host_slots: Tensor,
+    device_slot: Tensor | None,
+    output_buffer: DevicePolicyRequestBuffer,
     metadata: tuple[PolicyRequestMetadata, ...],
-    max_observation_tokens: int,
     device: torch.device,
     recv_seconds: float,
 ) -> _result.Ok[StagedPolicyRequestBatch] | _result.Rejected:
@@ -188,14 +237,19 @@ def _stage_host_slots(
     h2d_start = time.perf_counter()
     device_bytes = _copy_host_to_device(
         host_slots=host_slots[:row_count, :max_received_bytes],
+        device_slot=(
+            None
+            if device_slot is None
+            else device_slot[:row_count, :max_received_bytes]
+        ),
         device=device,
     )
     h2d_seconds = time.perf_counter() - h2d_start
     decode_start = time.perf_counter()
-    device_batch_result = device_policy_request_batch_from_wire(
+    device_batch_result = unpack_policy_request_batch_into(
         device_bytes=device_bytes,
         metadata=metadata,
-        max_observation_tokens=max_observation_tokens,
+        output=output_buffer,
     )
     device_decode_seconds = time.perf_counter() - decode_start
     if isinstance(device_batch_result, Rejected):
@@ -234,20 +288,72 @@ def _allocate_host_slots(
     )
 
 
+def _allocate_device_slots(
+    *,
+    batch_size: int,
+    max_wire_bytes: int,
+    device: torch.device,
+) -> tuple[Tensor, Tensor] | None:
+    assert batch_size > 0
+    assert max_wire_bytes > 0
+    if device.type == "cpu":
+        return None
+    return (
+        torch.empty(
+            (batch_size, max_wire_bytes),
+            dtype=torch.uint8,
+            device=device,
+        ),
+        torch.empty(
+            (batch_size, max_wire_bytes),
+            dtype=torch.uint8,
+            device=device,
+        ),
+    )
+
+
+def _allocate_device_request_buffers(
+    *,
+    batch_size: int,
+    max_observation_tokens: int,
+    device: torch.device,
+) -> tuple[DevicePolicyRequestBuffer, DevicePolicyRequestBuffer]:
+    assert batch_size > 0
+    assert max_observation_tokens > 0
+    return (
+        allocate_device_policy_request_buffer(
+            batch_size=batch_size,
+            max_observation_tokens=max_observation_tokens,
+            device=device,
+        ),
+        allocate_device_policy_request_buffer(
+            batch_size=batch_size,
+            max_observation_tokens=max_observation_tokens,
+            device=device,
+        ),
+    )
+
+
 def _copy_host_to_device(
-    *, host_slots: Tensor, device: torch.device
+    *,
+    host_slots: Tensor,
+    device_slot: Tensor | None,
+    device: torch.device,
 ) -> Tensor:
     if device.type == "cpu":
         return host_slots
     if device.type != "cuda":
-        return host_slots.to(device=device)
+        assert device_slot is not None
+        device_slot.copy_(host_slots)
+        return device_slot
+    assert device_slot is not None
     stream = torch.cuda.Stream(device=device)
     with torch.cuda.stream(stream):
-        device_slots = host_slots.to(device=device, non_blocking=True)
+        device_slot.copy_(host_slots, non_blocking=True)
     event = torch.cuda.Event()
     event.record(stream)
     torch.cuda.current_stream(device).wait_event(event)
-    return device_slots
+    return device_slot
 
 
 def _host_slot_view(slot: Tensor) -> memoryview:
