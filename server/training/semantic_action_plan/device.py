@@ -7,6 +7,10 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
+from server.training.semantic_action_plan.choices import (
+    DeviceLegalChoices,
+    compact_legal_choices,
+)
 from server.training.semantic_action_plan.frame import (
     ACTION_KIND_DISCARD,
     ACTION_KIND_EMPTY,
@@ -332,24 +336,32 @@ def action_prefix_batch(
     )
 
 
-def legal_token_mask(
+def legal_token_choices(
     *,
     batch: DeviceActionPlanBatch,
     state: DeviceActionState,
-) -> Tensor:
-    """Return full-vocab legal token masks for the current state."""
-    mask = torch.zeros(
-        (batch.batch_size(), SEMANTIC_CODEC.argument_vocab_size),
-        dtype=torch.bool,
+) -> DeviceLegalChoices:
+    """Return compact legal semantic token ids for the current state."""
+    done_tokens = torch.full(
+        (batch.batch_size(), 1),
+        SEMANTIC_CODEC.argument_pass_id,
+        dtype=torch.long,
         device=batch.device,
     )
-    mask = mask | _trace_set_mask(batch=batch, state=state)
-    mask = mask | _selection_mask(batch=batch, state=state)
-    done_mask = state.done.unsqueeze(1)
-    done_tokens = torch.zeros_like(mask)
-    done_tokens[:, SEMANTIC_CODEC.argument_pass_id] = True
-    mask = torch.where(done_mask, done_tokens, mask)
-    return mask
+    trace_ids, trace_mask = _trace_set_candidates(
+        batch=batch, state=state
+    )
+    selection_ids, selection_mask = _selection_candidates(
+        batch=batch, state=state
+    )
+    return compact_legal_choices(
+        candidate_token_ids=torch.cat(
+            (done_tokens, trace_ids, selection_ids), dim=1
+        ),
+        candidate_mask=torch.cat(
+            (state.done.unsqueeze(1), trace_mask, selection_mask), dim=1
+        ),
+    )
 
 
 def advance_action_state(
@@ -357,10 +369,11 @@ def advance_action_state(
     batch: DeviceActionPlanBatch,
     state: DeviceActionState,
     selected_token_ids: Tensor,
-    legal_mask: Tensor,
+    choice_counts: Tensor,
 ) -> DeviceActionState:
     """Advance device state after one sampled semantic token."""
     assert selected_token_ids.ndim == 1
+    assert choice_counts.shape == state.step_counts.shape
     active = ~state.done
     token_tables = _token_tables(batch.device)
     token_face = token_tables.face_indices.index_select(
@@ -417,9 +430,8 @@ def advance_action_state(
     next_done = state.done | (
         active & (terminal_token | exact_done | trace_done)
     )
-    choice_add = legal_mask.sum(dim=1).to(dtype=torch.long)
     next_choice_counts = state.choice_counts + torch.where(
-        active, choice_add, torch.zeros_like(choice_add)
+        active, choice_counts, torch.zeros_like(choice_counts)
     )
     return DeviceActionState(
         selected_counts=next_counts,
@@ -456,6 +468,9 @@ class _TokenTables:
     is_select: Tensor
     face_indices: Tensor
     counts: Tensor
+    select_token_ids: Tensor
+    select_face_indices: Tensor
+    select_counts: Tensor
 
 
 _TOKEN_TABLE_CACHE: dict[torch.device, _TokenTables] = {}
@@ -472,6 +487,9 @@ def _token_tables(device: torch.device) -> _TokenTables:
     is_select = [
         False for _ in range(SEMANTIC_CODEC.argument_vocab_size)
     ]
+    select_token_ids: list[int] = []
+    select_face_indices: list[int] = []
+    select_counts: list[int] = []
     for face_index in range(ACTION_FACE_COUNT):
         for count in (1, 2):
             token_id = (
@@ -483,6 +501,9 @@ def _token_tables(device: torch.device) -> _TokenTables:
             face_indices[token_id] = face_index
             counts[token_id] = count
             is_select[token_id] = True
+            select_token_ids.append(token_id)
+            select_face_indices.append(face_index)
+            select_counts.append(count)
     tables = _TokenTables(
         is_select=staged_tensor(
             is_select, dtype=torch.bool, device=device
@@ -491,24 +512,36 @@ def _token_tables(device: torch.device) -> _TokenTables:
             face_indices, dtype=torch.long, device=device
         ),
         counts=staged_tensor(counts, dtype=torch.long, device=device),
+        select_token_ids=staged_tensor(
+            select_token_ids, dtype=torch.long, device=device
+        ),
+        select_face_indices=staged_tensor(
+            select_face_indices, dtype=torch.long, device=device
+        ),
+        select_counts=staged_tensor(
+            select_counts, dtype=torch.long, device=device
+        ),
     )
     _TOKEN_TABLE_CACHE[device] = tables
     return tables
 
 
-def _trace_set_mask(
+def _trace_set_candidates(
     *,
     batch: DeviceActionPlanBatch,
     state: DeviceActionState,
-) -> Tensor:
+) -> tuple[Tensor, Tensor]:
     batch_size = batch.batch_size()
     trace_count = int(batch.trace_tokens.shape[1])
     step_count = int(batch.trace_tokens.shape[2])
     if trace_count == 0:
-        return torch.zeros(
-            (batch_size, SEMANTIC_CODEC.argument_vocab_size),
-            dtype=torch.bool,
-            device=batch.device,
+        return (
+            torch.zeros(
+                (batch_size, 0), dtype=torch.long, device=batch.device
+            ),
+            torch.zeros(
+                (batch_size, 0), dtype=torch.bool, device=batch.device
+            ),
         )
     positions = torch.arange(
         step_count, dtype=torch.long, device=batch.device
@@ -535,45 +568,66 @@ def _trace_set_mask(
     next_tokens = batch.trace_tokens.gather(
         dim=2, index=gather_index
     ).squeeze(2)
-    one_hot = torch.nn.functional.one_hot(
-        next_tokens.clamp(min=0),
-        num_classes=SEMANTIC_CODEC.argument_vocab_size,
-    ).to(dtype=torch.bool)
-    return (one_hot & valid_traces.unsqueeze(2)).any(dim=1)
+    sentinel = torch.full_like(
+        next_tokens, SEMANTIC_CODEC.argument_vocab_size
+    )
+    candidates = torch.where(valid_traces, next_tokens, sentinel)
+    sorted_candidates = torch.sort(candidates, dim=1).values
+    previous = torch.cat(
+        (
+            torch.full(
+                (batch_size, 1),
+                -1,
+                dtype=torch.long,
+                device=batch.device,
+            ),
+            sorted_candidates[:, :-1],
+        ),
+        dim=1,
+    )
+    unique_valid = (sorted_candidates != sentinel) & (
+        sorted_candidates != previous
+    )
+    deduplicated = torch.where(
+        unique_valid, sorted_candidates, sentinel
+    )
+    packed = torch.sort(deduplicated, dim=1).values
+    packed_mask = packed != sentinel
+    return torch.where(
+        packed_mask, packed, torch.zeros_like(packed)
+    ), packed_mask
 
 
-def _selection_mask(
+def _selection_candidates(
     *,
     batch: DeviceActionPlanBatch,
     state: DeviceActionState,
-) -> Tensor:
+) -> tuple[Tensor, Tensor]:
     token_tables = _token_tables(batch.device)
-    face_indices = token_tables.face_indices.clamp(min=0).unsqueeze(0)
-    counts = token_tables.counts.unsqueeze(0)
+    batch_size = batch.batch_size()
+    face_indices = token_tables.select_face_indices.unsqueeze(0).expand(
+        batch_size, -1
+    )
+    counts = token_tables.select_counts.unsqueeze(0).expand(
+        batch_size, -1
+    )
     available = batch.available_counts.gather(
         dim=1,
-        index=face_indices.expand(batch.batch_size(), -1),
+        index=face_indices,
     )
     face_suits = batch.effective_suits.gather(
         dim=1,
-        index=face_indices.expand(batch.batch_size(), -1),
+        index=face_indices,
     )
     already_selected = (
-        state.selected_counts.gather(
-            dim=1,
-            index=face_indices.expand(batch.batch_size(), -1),
-        )
-        > 0
+        state.selected_counts.gather(dim=1, index=face_indices) > 0
     )
     new_width = state.selected_width.unsqueeze(1) + counts
     generic_select = (
-        token_tables.is_select.unsqueeze(0)
+        torch.ones_like(counts, dtype=torch.bool)
         & ~already_selected
         & (counts <= available)
-        & (
-            token_tables.face_indices.unsqueeze(0)
-            > state.last_face_indices.unsqueeze(1)
-        )
+        & (face_indices > state.last_face_indices.unsqueeze(1))
         & (new_width <= batch.max_select.unsqueeze(1))
         & ~state.done.unsqueeze(1)
     )
@@ -583,10 +637,8 @@ def _selection_mask(
         & _has_remaining_capacity(
             batch=batch,
             state=state,
-            candidate_faces=token_tables.face_indices.unsqueeze(
-                0
-            ).expand(batch.batch_size(), -1),
-            candidate_widths=counts.expand(batch.batch_size(), -1),
+            candidate_faces=face_indices,
+            candidate_widths=counts,
             target_width=batch.exact_select,
             allowed_face_mask=torch.ones_like(
                 batch.available_counts, dtype=torch.bool
@@ -612,15 +664,24 @@ def _selection_mask(
         & _follow_can_complete_mask(
             batch=batch,
             state=state,
-            candidate_faces=token_tables.face_indices.unsqueeze(
-                0
-            ).expand(batch.batch_size(), -1),
-            candidate_counts=counts.expand(batch.batch_size(), -1),
+            candidate_faces=face_indices,
+            candidate_counts=counts,
         )
     )
-    mask = discard | lead_select | follow_select
-    mask[:, SEMANTIC_CODEC.argument_stop_id] = lead_stop
-    return mask
+    selection_mask = discard | lead_select | follow_select
+    stop_ids = torch.full(
+        (batch_size, 1),
+        SEMANTIC_CODEC.argument_stop_id,
+        dtype=torch.long,
+        device=batch.device,
+    )
+    selection_ids = token_tables.select_token_ids.unsqueeze(0).expand(
+        batch_size, -1
+    )
+    return (
+        torch.cat((stop_ids, selection_ids), dim=1),
+        torch.cat((lead_stop.unsqueeze(1), selection_mask), dim=1),
+    )
 
 
 def _has_remaining_capacity(

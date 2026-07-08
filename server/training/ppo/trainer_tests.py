@@ -43,7 +43,7 @@ from server.training.semantic_action_plan import (
     advance_action_state,
     compile_legal_action_frame,
     initial_action_state,
-    legal_token_mask,
+    legal_token_choices,
     plan_batch_to_device,
 )
 from server.training.semantic_actions import (
@@ -583,27 +583,46 @@ def _sampled_policy_batch(
     )
     step_count = int(replay_trace.selected_token_ids.shape[0])
     selected[0, :step_count] = replay_trace.selected_token_ids
-    masks = torch.zeros(
+    choice_width = int(replay_trace.legal_choice_ids.shape[1])
+    choice_ids = torch.zeros(
         (
             1,
             SEMANTIC_CODEC.max_argument_tokens,
-            SEMANTIC_CODEC.argument_vocab_size,
+            choice_width,
         ),
+        dtype=torch.int16,
+        device=device,
+    )
+    choice_masks = torch.zeros(
+        choice_ids.shape,
         dtype=torch.bool,
         device=device,
     )
-    masks[0, :step_count, :] = replay_trace.legal_token_masks
+    selected_offsets = torch.zeros(
+        (1, SEMANTIC_CODEC.max_argument_tokens),
+        dtype=torch.long,
+        device=device,
+    )
+    choice_ids[0, :step_count, :] = replay_trace.legal_choice_ids
+    choice_masks[0, :step_count, :] = replay_trace.legal_choice_masks
+    selected_offsets[0, :step_count] = (
+        replay_trace.selected_choice_offsets
+    )
     return SampledPolicyBatch(
         policy_versions=(0,),
         status_codes=torch.zeros((1,), dtype=torch.long, device=device),
         observation_batch=observation_batch,
         selected_token_ids_padded=selected,
-        legal_token_masks_padded=masks,
+        legal_choice_ids_padded=choice_ids,
+        legal_choice_masks_padded=choice_masks,
+        selected_choice_offsets_padded=selected_offsets,
         step_counts=torch.tensor(
             (step_count,), dtype=torch.long, device=device
         ),
         choice_counts=torch.tensor(
-            (1,), dtype=torch.long, device=device
+            (int(replay_trace.legal_choice_masks.sum().item()),),
+            dtype=torch.long,
+            device=device,
         ),
         old_log_probabilities=torch.zeros(
             (1,), dtype=torch.float32, device=device
@@ -617,7 +636,9 @@ def _sampled_policy_batch(
 @dataclass(frozen=True, slots=True)
 class _ReplayTrace:
     selected_token_ids: Tensor
-    legal_token_masks: Tensor
+    legal_choice_ids: Tensor
+    legal_choice_masks: Tensor
+    selected_choice_offsets: Tensor
 
 
 def _replay_trace_for(
@@ -630,12 +651,24 @@ def _replay_trace_for(
         (compile_legal_action_frame(legal_actions),), device=device
     )
     state = initial_action_state(batch)
-    legal_masks: list[Tensor] = []
+    legal_choice_ids: list[Tensor] = []
+    legal_choice_masks: list[Tensor] = []
+    selected_choice_offsets: list[int] = []
     selected_token_ids: list[int] = []
     for argument in trace.arguments:
-        mask = legal_token_mask(batch=batch, state=state)
+        choices = legal_token_choices(batch=batch, state=state)
         token_id = semantic_argument_id(argument)
-        legal_masks.append(mask[0])
+        row_width = int(choices.choice_counts[0].item())
+        row_tokens = choices.token_ids[:row_width]
+        legal_choice_ids.append(row_tokens.to(dtype=torch.int16))
+        legal_choice_masks.append(
+            torch.ones((row_width,), dtype=torch.bool, device=device)
+        )
+        selected_choice_offsets.append(
+            _selected_choice_offset(
+                token_ids=row_tokens, selected_token_id=token_id
+            )
+        )
         selected_token_ids.append(token_id)
         state = advance_action_state(
             batch=batch,
@@ -643,11 +676,51 @@ def _replay_trace_for(
             selected_token_ids=torch.tensor(
                 (token_id,), dtype=torch.long, device=device
             ),
-            legal_mask=mask,
+            choice_counts=choices.choice_counts,
         )
+    max_choice_count = max(
+        int(row.shape[0]) for row in legal_choice_ids
+    )
     return _ReplayTrace(
         selected_token_ids=torch.tensor(
             tuple(selected_token_ids), dtype=torch.long, device=device
         ),
-        legal_token_masks=torch.stack(legal_masks),
+        legal_choice_ids=torch.stack(
+            [
+                _pad_choice_row(row, width=max_choice_count)
+                for row in legal_choice_ids
+            ]
+        ),
+        legal_choice_masks=torch.stack(
+            [
+                _pad_choice_row(row, width=max_choice_count)
+                for row in legal_choice_masks
+            ]
+        ),
+        selected_choice_offsets=torch.tensor(
+            tuple(selected_choice_offsets),
+            dtype=torch.long,
+            device=device,
+        ),
     )
+
+
+def _selected_choice_offset(
+    *, token_ids: Tensor, selected_token_id: int
+) -> int:
+    cpu_tokens = token_ids.detach().cpu()
+    for index in range(int(cpu_tokens.shape[0])):
+        if int(cpu_tokens[index].item()) == selected_token_id:
+            return index
+    assert False
+
+
+def _pad_choice_row(row: Tensor, *, width: int) -> Tensor:
+    if int(row.shape[0]) == width:
+        return row
+    padding = torch.zeros(
+        (width - int(row.shape[0]),),
+        dtype=row.dtype,
+        device=row.device,
+    )
+    return torch.cat((row, padding), dim=0)

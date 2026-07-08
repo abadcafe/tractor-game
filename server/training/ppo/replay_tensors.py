@@ -22,7 +22,9 @@ class PPOReplayTensorBatch:
     step_count: int
     max_step_count: int
     selected_token_ids_padded: Tensor
-    legal_token_masks_padded: Tensor
+    legal_choice_ids_padded: Tensor
+    legal_choice_masks_padded: Tensor
+    selected_choice_offsets_padded: Tensor
     step_mask: Tensor
     step_counts: Tensor
 
@@ -34,10 +36,17 @@ class PPOReplayTensorBatch:
             self.sample_count,
             self.max_step_count,
         )
-        assert self.legal_token_masks_padded.shape == (
+        assert self.legal_choice_ids_padded.ndim == 3
+        assert self.legal_choice_ids_padded.shape[:2] == (
             self.sample_count,
             self.max_step_count,
-            SEMANTIC_CODEC.argument_vocab_size,
+        )
+        assert self.legal_choice_masks_padded.shape == (
+            self.legal_choice_ids_padded.shape
+        )
+        assert self.selected_choice_offsets_padded.shape == (
+            self.sample_count,
+            self.max_step_count,
         )
         assert self.step_mask.shape == (
             self.sample_count,
@@ -45,7 +54,9 @@ class PPOReplayTensorBatch:
         )
         assert self.step_counts.shape == (self.sample_count,)
         assert self.selected_token_ids_padded.dtype == torch.long
-        assert self.legal_token_masks_padded.dtype == torch.bool
+        assert self.legal_choice_ids_padded.dtype == torch.int16
+        assert self.legal_choice_masks_padded.dtype == torch.bool
+        assert self.selected_choice_offsets_padded.dtype == torch.long
         assert self.step_mask.dtype == torch.bool
         assert self.step_counts.dtype == torch.long
 
@@ -93,7 +104,9 @@ class ReplayPrefixTensorBatch:
     active_positions: Tensor
     prefix_lengths: Tensor
     prefix_batch: ArgumentPrefixTensorBatch
-    legal_token_masks: Tensor
+    legal_choice_ids: Tensor
+    legal_choice_masks: Tensor
+    selected_choice_offsets: Tensor
     selected_token_ids: Tensor
 
     def __post_init__(self) -> None:
@@ -103,10 +116,12 @@ class ReplayPrefixTensorBatch:
         assert self.prefix_lengths.ndim == 1
         assert self.prefix_batch.argument_ids.ndim == 2
         assert self.prefix_batch.argument_masks.ndim == 2
-        assert self.legal_token_masks.shape == (
-            row_count,
-            SEMANTIC_CODEC.argument_vocab_size,
+        assert self.legal_choice_ids.ndim == 2
+        assert int(self.legal_choice_ids.shape[0]) == row_count
+        assert (
+            self.legal_choice_masks.shape == self.legal_choice_ids.shape
         )
+        assert self.selected_choice_offsets.shape == (row_count,)
         assert self.selected_token_ids.shape == (row_count,)
         assert int(self.prefix_lengths.shape[0]) == row_count
         assert int(self.prefix_batch.argument_ids.shape[0]) == row_count
@@ -115,7 +130,9 @@ class ReplayPrefixTensorBatch:
         )
         assert self.active_positions.dtype == torch.long
         assert self.prefix_lengths.dtype == torch.long
-        assert self.legal_token_masks.dtype == torch.bool
+        assert self.legal_choice_ids.dtype == torch.int16
+        assert self.legal_choice_masks.dtype == torch.bool
+        assert self.selected_choice_offsets.dtype == torch.long
         assert self.selected_token_ids.dtype == torch.long
 
 
@@ -192,7 +209,13 @@ def replay_prefix_tensor_batch(
             argument_indices=argument_indices,
             max_step_count=replay.max_step_count,
         ),
-        legal_token_masks=replay.legal_token_masks_padded[
+        legal_choice_ids=replay.legal_choice_ids_padded[
+            active_sample_indices, argument_indices
+        ],
+        legal_choice_masks=replay.legal_choice_masks_padded[
+            active_sample_indices, argument_indices
+        ],
+        selected_choice_offsets=replay.selected_choice_offsets_padded[
             active_sample_indices, argument_indices
         ],
         selected_token_ids=selected_rows.gather(
@@ -250,6 +273,9 @@ def _merge_replay_batches(
 ) -> PPOReplayTensorBatch:
     assert batches
     max_steps = max(batch.max_step_count for batch in batches)
+    max_choices = max(
+        int(batch.legal_choice_ids_padded.shape[2]) for batch in batches
+    )
     return PPOReplayTensorBatch(
         sample_count=sum(batch.sample_count for batch in batches),
         step_count=sum(batch.step_count for batch in batches),
@@ -264,10 +290,32 @@ def _merge_replay_batches(
             ],
             dim=0,
         ),
-        legal_token_masks_padded=torch.cat(
+        legal_choice_ids_padded=torch.cat(
             [
-                _pad_step_mask_columns(
-                    batch.legal_token_masks_padded,
+                _pad_step_choice_columns(
+                    batch.legal_choice_ids_padded,
+                    max_steps=max_steps,
+                    max_choices=max_choices,
+                )
+                for batch in batches
+            ],
+            dim=0,
+        ),
+        legal_choice_masks_padded=torch.cat(
+            [
+                _pad_step_choice_columns(
+                    batch.legal_choice_masks_padded,
+                    max_steps=max_steps,
+                    max_choices=max_choices,
+                )
+                for batch in batches
+            ],
+            dim=0,
+        ),
+        selected_choice_offsets_padded=torch.cat(
+            [
+                _pad_step_columns(
+                    batch.selected_choice_offsets_padded,
                     max_steps=max_steps,
                 )
                 for batch in batches
@@ -354,17 +402,21 @@ def _pad_step_columns(values: Tensor, *, max_steps: int) -> Tensor:
     return torch.cat((values, padding), dim=1)
 
 
-def _pad_step_mask_columns(values: Tensor, *, max_steps: int) -> Tensor:
-    current = int(values.shape[1])
-    if current == max_steps:
+def _pad_step_choice_columns(
+    values: Tensor, *, max_steps: int, max_choices: int
+) -> Tensor:
+    current_steps = int(values.shape[1])
+    current_choices = int(values.shape[2])
+    if current_steps == max_steps and current_choices == max_choices:
         return values
-    padding = torch.zeros(
+    result = torch.zeros(
         (
             int(values.shape[0]),
-            max_steps - current,
-            int(values.shape[2]),
+            max_steps,
+            max_choices,
         ),
         dtype=values.dtype,
         device=values.device,
     )
-    return torch.cat((values, padding), dim=1)
+    result[:, :current_steps, :current_choices] = values
+    return result

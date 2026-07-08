@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 from torch import Tensor
 
@@ -15,12 +17,13 @@ from server.training.policy_sampling import (
     SampledPolicyBatch,
 )
 from server.training.semantic_action_plan import (
+    DeviceLegalChoices,
     action_prefix_batch,
     advance_action_state,
     initial_action_state,
-    legal_token_mask,
+    legal_token_choices,
+    sample_legal_choices,
     sample_legal_token_error_reason,
-    sample_legal_tokens,
 )
 from server.training.semantic_actions.codec import SEMANTIC_CODEC
 from server.training.tensor_finiteness import (
@@ -63,9 +66,12 @@ def sample_policy_batch(
             (batch_size,), dtype=values.dtype, device=device
         )
         error_code = torch.zeros((), dtype=torch.long, device=device)
-        legal_masks: list[Tensor] = []
+        legal_choice_batches: list[DeviceLegalChoices] = []
+        selected_choice_offsets: list[Tensor] = []
         for argument_index in range(SEMANTIC_CODEC.max_argument_tokens):
-            mask = legal_token_mask(batch=action_batch, state=state)
+            choices = legal_token_choices(
+                batch=action_batch, state=state
+            )
             active = ~state.done
             scores = model.score_argument_prefixes(
                 encoding,
@@ -73,9 +79,9 @@ def sample_policy_batch(
                     state, generated_token_count=argument_index
                 ),
             )
-            sampled = sample_legal_tokens(
+            sampled = sample_legal_choices(
                 argument_logits=scores.argument_logits,
-                legal_token_mask=mask,
+                legal_choices=choices,
                 thresholds=requests.sampling_thresholds[
                     :, argument_index
                 ],
@@ -88,12 +94,15 @@ def sample_policy_batch(
                 sampled.selected_log_probabilities,
                 torch.zeros_like(sampled.selected_log_probabilities),
             )
-            legal_masks.append(mask)
+            legal_choice_batches.append(choices)
+            selected_choice_offsets.append(
+                sampled.selected_choice_offsets
+            )
             state = advance_action_state(
                 batch=action_batch,
                 state=state,
                 selected_token_ids=sampled.token_ids,
-                legal_mask=mask,
+                choice_counts=choices.choice_counts,
             )
             if device.type == "cpu" and _cpu_all_done(state.done):
                 break
@@ -103,8 +112,9 @@ def sample_policy_batch(
         error_value = _error_code_value(error_code)
         if error_value != 0:
             return Rejected(reason=_error_reason(error_value))
-        mask_stack = _padded_legal_masks(
-            legal_masks=tuple(legal_masks),
+        replay_choices = _padded_legal_choices(
+            legal_choices=tuple(legal_choice_batches),
+            selected_choice_offsets=tuple(selected_choice_offsets),
             batch_size=batch_size,
             device=device,
         )
@@ -117,7 +127,11 @@ def sample_policy_batch(
                 status_codes=status_codes,
                 observation_batch=observation_batch,
                 selected_token_ids_padded=state.selected_token_ids,
-                legal_token_masks_padded=mask_stack,
+                legal_choice_ids_padded=replay_choices.choice_ids,
+                legal_choice_masks_padded=replay_choices.choice_masks,
+                selected_choice_offsets_padded=(
+                    replay_choices.selected_offsets
+                ),
                 step_counts=state.step_counts,
                 choice_counts=state.choice_counts,
                 old_log_probabilities=log_probabilities,
@@ -166,25 +180,93 @@ def _error_reason(error_code: int) -> str:
     return "policy sampling failed"
 
 
-def _padded_legal_masks(
+@dataclass(frozen=True, slots=True)
+class _PaddedLegalChoices:
+    choice_ids: Tensor
+    choice_masks: Tensor
+    selected_offsets: Tensor
+
+
+def _padded_legal_choices(
     *,
-    legal_masks: tuple[Tensor, ...],
+    legal_choices: tuple[DeviceLegalChoices, ...],
+    selected_choice_offsets: tuple[Tensor, ...],
     batch_size: int,
     device: torch.device,
-) -> Tensor:
-    assert legal_masks
-    mask_stack = torch.stack(legal_masks, dim=1)
-    width = int(mask_stack.shape[1])
-    if width == SEMANTIC_CODEC.max_argument_tokens:
-        return mask_stack
-    result = torch.zeros(
+) -> _PaddedLegalChoices:
+    assert legal_choices
+    assert len(legal_choices) == len(selected_choice_offsets)
+    max_choice_count = max(
+        _max_choice_count(choices.choice_counts)
+        for choices in legal_choices
+    )
+    step_ids: list[Tensor] = []
+    step_masks: list[Tensor] = []
+    for choices in legal_choices:
+        ids, masks = _padded_choice_step(
+            choices=choices,
+            batch_size=batch_size,
+            max_choice_count=max_choice_count,
+            device=device,
+        )
+        step_ids.append(ids)
+        step_masks.append(masks)
+    width = len(legal_choices)
+    choice_ids = torch.zeros(
         (
             batch_size,
             SEMANTIC_CODEC.max_argument_tokens,
-            SEMANTIC_CODEC.argument_vocab_size,
+            max_choice_count,
         ),
-        dtype=torch.bool,
+        dtype=torch.int16,
         device=device,
     )
-    result[:, :width, :] = mask_stack
+    choice_masks = torch.zeros(
+        choice_ids.shape, dtype=torch.bool, device=device
+    )
+    selected_offsets = torch.zeros(
+        (batch_size, SEMANTIC_CODEC.max_argument_tokens),
+        dtype=torch.long,
+        device=device,
+    )
+    choice_ids[:, :width, :] = torch.stack(step_ids, dim=1)
+    choice_masks[:, :width, :] = torch.stack(step_masks, dim=1)
+    selected_offsets[:, :width] = torch.stack(
+        selected_choice_offsets, dim=1
+    )
+    return _PaddedLegalChoices(
+        choice_ids=choice_ids,
+        choice_masks=choice_masks,
+        selected_offsets=selected_offsets,
+    )
+
+
+def _padded_choice_step(
+    *,
+    choices: DeviceLegalChoices,
+    batch_size: int,
+    max_choice_count: int,
+    device: torch.device,
+) -> tuple[Tensor, Tensor]:
+    ids = torch.zeros(
+        (batch_size, max_choice_count), dtype=torch.int16, device=device
+    )
+    masks = torch.zeros(
+        (batch_size, max_choice_count), dtype=torch.bool, device=device
+    )
+    if int(choices.token_ids.shape[0]) == 0:
+        return ids, masks
+    local_offsets = torch.arange(
+        int(choices.token_ids.shape[0]), dtype=torch.long, device=device
+    ) - choices.choice_offsets.index_select(0, choices.row_indices)
+    ids[choices.row_indices, local_offsets] = choices.token_ids.to(
+        dtype=torch.int16
+    )
+    masks[choices.row_indices, local_offsets] = True
+    return ids, masks
+
+
+def _max_choice_count(choice_counts: Tensor) -> int:
+    result = int(choice_counts.detach().cpu().max().item())
+    assert result > 0
     return result

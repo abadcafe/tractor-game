@@ -1,5 +1,8 @@
 """Compiled semantic action plans for policy sampling."""
 
+from server.training.semantic_action_plan.choices import (
+    DeviceLegalChoices,
+)
 from server.training.semantic_action_plan.device import (
     DeviceActionPlanBatch,
     DeviceActionState,
@@ -7,7 +10,7 @@ from server.training.semantic_action_plan.device import (
     action_trace_ids,
     advance_action_state,
     initial_action_state,
-    legal_token_mask,
+    legal_token_choices,
     plan_batch_to_device,
 )
 from server.training.semantic_action_plan.frame import (
@@ -16,8 +19,8 @@ from server.training.semantic_action_plan.frame import (
 )
 from server.training.semantic_action_plan.sampling import (
     SampledActionTokens,
+    sample_legal_choices,
     sample_legal_token_error_reason,
-    sample_legal_tokens,
 )
 from server.training.semantic_action_plan.spec import (
     ACTION_FACE_COUNT,
@@ -32,16 +35,17 @@ __all__ = (
     "ActionPlanFrame",
     "DeviceActionPlanBatch",
     "DeviceActionState",
+    "DeviceLegalChoices",
     "SampledActionTokens",
     "action_prefix_batch",
     "action_trace_ids",
     "advance_action_state",
     "compile_legal_action_frame",
     "initial_action_state",
-    "legal_token_mask",
+    "legal_token_choices",
     "plan_batch_to_device",
     "sample_legal_token_error_reason",
-    "sample_legal_tokens",
+    "sample_legal_choices",
     "semantic_trace_from_token_ids",
     "semantic_trace_token_ids",
 )

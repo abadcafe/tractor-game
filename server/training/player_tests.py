@@ -26,7 +26,7 @@ from server.training.semantic_action_plan import (
     advance_action_state,
     compile_legal_action_frame,
     initial_action_state,
-    legal_token_mask,
+    legal_token_choices,
     plan_batch_to_device,
     semantic_trace_from_token_ids,
 )
@@ -85,14 +85,13 @@ def _first_legal_trace(
                 for index in range(int(state.step_counts[0].item()))
             )
             return semantic_trace_from_token_ids(trace_ids)
-        mask = legal_token_mask(batch=batch, state=state)
-        legal_ids = torch.nonzero(mask[0], as_tuple=False).squeeze(1)
-        assert int(legal_ids.shape[0]) > 0
+        choices = legal_token_choices(batch=batch, state=state)
+        assert int(choices.choice_counts[0].item()) > 0
         state = advance_action_state(
             batch=batch,
             state=state,
-            selected_token_ids=legal_ids[0].view(1),
-            legal_mask=mask,
+            selected_token_ids=choices.token_ids[0].view(1),
+            choice_counts=choices.choice_counts,
         )
     assert False
 

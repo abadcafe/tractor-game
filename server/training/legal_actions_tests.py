@@ -23,7 +23,7 @@ from server.training.semantic_action_plan import (
     advance_action_state,
     compile_legal_action_frame,
     initial_action_state,
-    legal_token_mask,
+    legal_token_choices,
     plan_batch_to_device,
 )
 from server.training.semantic_actions import (
@@ -331,7 +331,7 @@ def _allowed_arguments(
     )
     state = initial_action_state(batch)
     for argument in prefix.arguments:
-        mask = legal_token_mask(batch=batch, state=state)
+        choices = legal_token_choices(batch=batch, state=state)
         state = advance_action_state(
             batch=batch,
             state=state,
@@ -340,13 +340,12 @@ def _allowed_arguments(
                 dtype=torch.long,
                 device=device,
             ),
-            legal_mask=mask,
+            choice_counts=choices.choice_counts,
         )
     if bool(state.done[0].item()):
         return ()
-    token_ids = torch.nonzero(
-        legal_token_mask(batch=batch, state=state)[0], as_tuple=False
-    ).squeeze(1)
+    choices = legal_token_choices(batch=batch, state=state)
+    token_ids = choices.token_ids
     arguments: list[SemanticArgument] = []
     for index in range(int(token_ids.shape[0])):
         argument_result = semantic_argument_from_id(

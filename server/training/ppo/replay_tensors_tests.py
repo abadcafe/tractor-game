@@ -46,8 +46,19 @@ def test_replay_prefix_tensor_batch_flattens_all_prefixes() -> None:
         torch.tensor((20, 22, 11), dtype=torch.long),
     )
     assert torch.equal(
-        result.legal_token_masks,
-        torch.stack((_mask(20), _mask(21, 22), _mask(10, 11))),
+        result.legal_choice_ids,
+        torch.tensor(((20, 0), (21, 22), (10, 11)), dtype=torch.int16),
+    )
+    assert torch.equal(
+        result.legal_choice_masks,
+        torch.tensor(
+            ((True, False), (True, True), (True, True)),
+            dtype=torch.bool,
+        ),
+    )
+    assert torch.equal(
+        result.selected_choice_offsets,
+        torch.tensor((0, 1, 1), dtype=torch.long),
     )
 
 
@@ -70,11 +81,20 @@ def _two_sample_replay() -> PPOReplayTensorBatch:
         selected_token_ids_padded=torch.tensor(
             ((11, 0), (20, 22)), dtype=torch.long
         ),
-        legal_token_masks_padded=torch.stack(
+        legal_choice_ids_padded=torch.stack(
             (
-                torch.stack((_mask(10, 11), _mask())),
-                torch.stack((_mask(20), _mask(21, 22))),
+                torch.stack((_choices(10, 11), _choices())),
+                torch.stack((_choices(20), _choices(21, 22))),
             )
+        ),
+        legal_choice_masks_padded=torch.stack(
+            (
+                torch.stack((_choice_mask(2), _choice_mask(0))),
+                torch.stack((_choice_mask(1), _choice_mask(2))),
+            )
+        ),
+        selected_choice_offsets_padded=torch.tensor(
+            ((1, 0), (0, 1)), dtype=torch.long
         ),
         step_mask=torch.tensor(
             ((True, False), (True, True)), dtype=torch.bool
@@ -83,10 +103,12 @@ def _two_sample_replay() -> PPOReplayTensorBatch:
     )
 
 
-def _mask(*token_ids: int) -> Tensor:
-    result = torch.zeros(
-        (SEMANTIC_CODEC.argument_vocab_size,), dtype=torch.bool
+def _choices(*token_ids: int) -> Tensor:
+    padded = (*token_ids, *(0 for _ in range(2 - len(token_ids))))
+    return torch.tensor(padded, dtype=torch.int16)
+
+
+def _choice_mask(count: int) -> Tensor:
+    return torch.tensor(
+        tuple(index < count for index in range(2)), dtype=torch.bool
     )
-    for token_id in token_ids:
-        result[token_id] = True
-    return result

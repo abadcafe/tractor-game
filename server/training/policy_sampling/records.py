@@ -35,7 +35,9 @@ class SampledPolicyBatch:
     status_codes: Tensor
     observation_batch: ObservationTensorBatch
     selected_token_ids_padded: Tensor
-    legal_token_masks_padded: Tensor
+    legal_choice_ids_padded: Tensor
+    legal_choice_masks_padded: Tensor
+    selected_choice_offsets_padded: Tensor
     step_counts: Tensor
     choice_counts: Tensor
     old_log_probabilities: Tensor
@@ -52,12 +54,21 @@ class SampledPolicyBatch:
             SEMANTIC_CODEC.max_argument_tokens,
         )
         assert self.selected_token_ids_padded.dtype == torch.long
-        assert self.legal_token_masks_padded.shape == (
+        assert self.legal_choice_ids_padded.ndim == 3
+        assert self.legal_choice_ids_padded.shape[:2] == (
             batch_size,
             SEMANTIC_CODEC.max_argument_tokens,
-            SEMANTIC_CODEC.argument_vocab_size,
         )
-        assert self.legal_token_masks_padded.dtype == torch.bool
+        assert self.legal_choice_ids_padded.dtype == torch.int16
+        assert self.legal_choice_masks_padded.shape == (
+            self.legal_choice_ids_padded.shape
+        )
+        assert self.legal_choice_masks_padded.dtype == torch.bool
+        assert self.selected_choice_offsets_padded.shape == (
+            batch_size,
+            SEMANTIC_CODEC.max_argument_tokens,
+        )
+        assert self.selected_choice_offsets_padded.dtype == torch.long
         assert self.step_counts.shape == (batch_size,)
         assert self.step_counts.dtype == torch.long
         assert self.choice_counts.shape == (batch_size,)
@@ -70,7 +81,9 @@ class SampledPolicyBatch:
         device = self.observation_batch.component_ids.device
         assert self.status_codes.device == device
         assert self.selected_token_ids_padded.device == device
-        assert self.legal_token_masks_padded.device == device
+        assert self.legal_choice_ids_padded.device == device
+        assert self.legal_choice_masks_padded.device == device
+        assert self.selected_choice_offsets_padded.device == device
         assert self.step_counts.device == device
         assert self.choice_counts.device == device
         assert self.old_log_probabilities.device == device

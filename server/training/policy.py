@@ -20,7 +20,7 @@ from server.training.semantic_action_plan import (
     advance_action_state,
     compile_legal_action_frame,
     initial_action_state,
-    legal_token_mask,
+    legal_token_choices,
     plan_batch_to_device,
     semantic_trace_from_token_ids,
 )
@@ -68,11 +68,8 @@ class RandomTrainingPolicy:
         for _ in range(SEMANTIC_CODEC.max_argument_tokens):
             if bool(state.done.detach().cpu().item()):
                 break
-            mask = legal_token_mask(batch=batch, state=state)
-            legal_ids = torch.nonzero(mask[0], as_tuple=False).squeeze(
-                1
-            )
-            choice_count = int(legal_ids.shape[0])
+            choices = legal_token_choices(batch=batch, state=state)
+            choice_count = int(choices.choice_counts[0].item())
             if choice_count <= 0:
                 return Rejected(
                     reason="random policy has no legal token"
@@ -82,12 +79,14 @@ class RandomTrainingPolicy:
                 argument_index=int(state.step_counts[0].item()),
                 choice_count=choice_count,
             )
-            selected_token = legal_ids[selected_argument_offset].view(1)
+            selected_token = choices.token_ids[
+                selected_argument_offset
+            ].view(1)
             state = advance_action_state(
                 batch=batch,
                 state=state,
                 selected_token_ids=selected_token,
-                legal_mask=mask,
+                choice_counts=choices.choice_counts,
             )
         else:
             assert False

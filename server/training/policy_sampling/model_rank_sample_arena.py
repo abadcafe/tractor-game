@@ -72,7 +72,9 @@ class ModelRankSampleArena:
     _numeric_values: Tensor | None = None
     _numeric_masks: Tensor | None = None
     _selected_token_ids: Tensor | None = None
-    _legal_token_masks: Tensor | None = None
+    _legal_choice_ids: Tensor | None = None
+    _legal_choice_masks: Tensor | None = None
+    _selected_choice_offsets: Tensor | None = None
     _step_counts: Tensor | None = None
     _old_log_probabilities: Tensor | None = None
     _old_values: Tensor | None = None
@@ -159,6 +161,12 @@ class ModelRankSampleArena:
         old_values = self._old_values_tensor().index_select(
             dim=0, index=slot_tensor
         )
+        legal_choice_masks = (
+            self._legal_choice_masks_tensor().index_select(
+                dim=0, index=slot_tensor
+            )[:, :max_step_count, :]
+        )
+        max_choice_count = _positive_choice_width(legal_choice_masks)
         return_values = returns.return_values.to(
             dtype=torch.float32, device=self.device
         )
@@ -185,10 +193,18 @@ class ModelRankSampleArena:
                             dim=0, index=slot_tensor
                         )[:, :max_step_count]
                     ),
-                    legal_token_masks_padded=(
-                        self._legal_token_masks_tensor().index_select(
+                    legal_choice_ids_padded=(
+                        self._legal_choice_ids_tensor().index_select(
                             dim=0, index=slot_tensor
-                        )[:, :max_step_count, :]
+                        )[:, :max_step_count, :max_choice_count]
+                    ),
+                    legal_choice_masks_padded=(
+                        legal_choice_masks[:, :, :max_choice_count]
+                    ),
+                    selected_choice_offsets_padded=(
+                        self._selected_choice_offsets_tensor().index_select(
+                            dim=0, index=slot_tensor
+                        )[:, :max_step_count]
                     ),
                     step_mask=_step_mask(
                         step_counts=step_counts,
@@ -247,6 +263,7 @@ class ModelRankSampleArena:
         if self._capacity == 0:
             self._initialize_tensors(batch=batch)
         self._ensure_observation_token_capacity(batch)
+        self._ensure_choice_capacity(batch)
         while len(self._free_slots) < sample_count:
             self._grow()
 
@@ -276,13 +293,23 @@ class ModelRankSampleArena:
             dtype=torch.long,
             device=self.device,
         )
-        self._legal_token_masks = torch.zeros(
+        self._legal_choice_ids = torch.zeros(
             (
                 self._capacity,
                 SEMANTIC_CODEC.max_argument_tokens,
-                SEMANTIC_CODEC.argument_vocab_size,
+                int(batch.legal_choice_ids_padded.shape[2]),
             ),
+            dtype=torch.int16,
+            device=self.device,
+        )
+        self._legal_choice_masks = torch.zeros(
+            self._legal_choice_ids.shape,
             dtype=torch.bool,
+            device=self.device,
+        )
+        self._selected_choice_offsets = torch.zeros(
+            (self._capacity, SEMANTIC_CODEC.max_argument_tokens),
+            dtype=torch.long,
             device=self.device,
         )
         self._step_counts = torch.zeros(
@@ -316,8 +343,15 @@ class ModelRankSampleArena:
         self._selected_token_ids = _grow_rows(
             self._selected_token_ids_tensor(), new_capacity=new_capacity
         )
-        self._legal_token_masks = _grow_rows(
-            self._legal_token_masks_tensor(), new_capacity=new_capacity
+        self._legal_choice_ids = _grow_rows(
+            self._legal_choice_ids_tensor(), new_capacity=new_capacity
+        )
+        self._legal_choice_masks = _grow_rows(
+            self._legal_choice_masks_tensor(), new_capacity=new_capacity
+        )
+        self._selected_choice_offsets = _grow_rows(
+            self._selected_choice_offsets_tensor(),
+            new_capacity=new_capacity,
         )
         self._step_counts = _grow_rows(
             self._step_counts_tensor(), new_capacity=new_capacity
@@ -362,12 +396,34 @@ class ModelRankSampleArena:
             self._numeric_masks_tensor(), token_count=token_count
         )
 
+    def _ensure_choice_capacity(
+        self, batch: SampledPolicyBatch
+    ) -> None:
+        choice_count = int(batch.legal_choice_ids_padded.shape[2])
+        current_choice_count = int(
+            self._legal_choice_ids_tensor().shape[2]
+        )
+        if choice_count <= current_choice_count:
+            return
+        self._legal_choice_ids = _grow_choices(
+            self._legal_choice_ids_tensor(), choice_count=choice_count
+        )
+        self._legal_choice_masks = _grow_choices(
+            self._legal_choice_masks_tensor(), choice_count=choice_count
+        )
+
     def _validate_batch_shape(self, batch: SampledPolicyBatch) -> None:
         assert batch.selected_token_ids_padded.shape[1] == (
             SEMANTIC_CODEC.max_argument_tokens
         )
-        assert batch.legal_token_masks_padded.shape[2] == (
-            SEMANTIC_CODEC.argument_vocab_size
+        assert batch.legal_choice_ids_padded.shape[1] == (
+            SEMANTIC_CODEC.max_argument_tokens
+        )
+        assert batch.legal_choice_masks_padded.shape == (
+            batch.legal_choice_ids_padded.shape
+        )
+        assert batch.selected_choice_offsets_padded.shape[1] == (
+            SEMANTIC_CODEC.max_argument_tokens
         )
         assert (
             batch.observation_batch.component_ids.shape[2:]
@@ -436,10 +492,31 @@ class ModelRankSampleArena:
                 dim=0, index=selected_rows
             ),
         )
-        self._legal_token_masks_tensor().index_copy_(
+        choice_width = int(batch.legal_choice_ids_padded.shape[2])
+        self._legal_choice_ids_tensor().index_fill_(0, slots, 0)
+        self._legal_choice_masks_tensor().index_fill_(0, slots, False)
+        self._legal_choice_ids_tensor()[
+            :, :, :choice_width
+        ].index_copy_(
             0,
             slots,
-            batch.legal_token_masks_padded.index_select(
+            batch.legal_choice_ids_padded.index_select(
+                dim=0, index=selected_rows
+            ),
+        )
+        self._legal_choice_masks_tensor()[
+            :, :, :choice_width
+        ].index_copy_(
+            0,
+            slots,
+            batch.legal_choice_masks_padded.index_select(
+                dim=0, index=selected_rows
+            ),
+        )
+        self._selected_choice_offsets_tensor().index_copy_(
+            0,
+            slots,
+            batch.selected_choice_offsets_padded.index_select(
                 dim=0, index=selected_rows
             ),
         )
@@ -518,9 +595,17 @@ class ModelRankSampleArena:
         assert self._selected_token_ids is not None
         return self._selected_token_ids
 
-    def _legal_token_masks_tensor(self) -> Tensor:
-        assert self._legal_token_masks is not None
-        return self._legal_token_masks
+    def _legal_choice_ids_tensor(self) -> Tensor:
+        assert self._legal_choice_ids is not None
+        return self._legal_choice_ids
+
+    def _legal_choice_masks_tensor(self) -> Tensor:
+        assert self._legal_choice_masks is not None
+        return self._legal_choice_masks
+
+    def _selected_choice_offsets_tensor(self) -> Tensor:
+        assert self._selected_choice_offsets is not None
+        return self._selected_choice_offsets
 
     def _step_counts_tensor(self) -> Tensor:
         assert self._step_counts is not None
@@ -567,6 +652,21 @@ def _grow_observation_tokens(
     return result
 
 
+def _grow_choices(values: Tensor, *, choice_count: int) -> Tensor:
+    assert choice_count > int(values.shape[2])
+    result = torch.zeros(
+        (
+            int(values.shape[0]),
+            int(values.shape[1]),
+            choice_count,
+        ),
+        dtype=values.dtype,
+        device=values.device,
+    )
+    result[:, :, : int(values.shape[2])].copy_(values)
+    return result
+
+
 def _step_mask(*, step_counts: Tensor, max_step_count: int) -> Tensor:
     positions = torch.arange(
         max_step_count, dtype=torch.long, device=step_counts.device
@@ -582,6 +682,13 @@ def _positive_tensor_max(values: Tensor) -> int:
 
 def _positive_tensor_sum(values: Tensor) -> int:
     result = int(values.detach().cpu().sum().item())
+    assert result > 0
+    return result
+
+
+def _positive_choice_width(choice_masks: Tensor) -> int:
+    choice_counts = choice_masks.to(dtype=torch.long).sum(dim=2)
+    result = int(choice_counts.detach().cpu().max().item())
     assert result > 0
     return result
 

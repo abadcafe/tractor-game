@@ -90,10 +90,11 @@ def test_decide_scores_sampled_argument_with_distribution() -> None:
     assert isinstance(sample_result, Ok)
     sample = sample_result.value
     first_token_id = int(sample.selected_token_ids_padded[0, 0])
-    first_legal_token_ids = _legal_token_ids(
-        sample.legal_token_masks_padded[0, 0]
+    first_legal_token_ids = _legal_choice_ids(
+        sample.legal_choice_ids_padded[0, 0],
+        sample.legal_choice_masks_padded[0, 0],
     )
-    selected_offset = first_legal_token_ids.index(first_token_id)
+    selected_offset = int(sample.selected_choice_offsets_padded[0, 0])
     expected_first_log_probabilities = torch.log_softmax(
         torch.tensor([1.0, 3.0], dtype=torch.float32), dim=0
     )
@@ -160,7 +161,7 @@ async def test_decide_rejects_non_finite_argument_logits() -> None:
     assert "logits must be finite" in result.reason
 
 
-def test_sample_policy_batch_rejects_empty_legal_token_mask() -> None:
+def test_sample_policy_batch_rejects_empty_legal_choices() -> None:
     model = _FixedArgumentModel(
         argument_logits=torch.zeros(
             (SEMANTIC_CODEC.argument_vocab_size,), dtype=torch.float32
@@ -411,11 +412,11 @@ def _request_batch(
     return staged_result.value.device_batch
 
 
-def _legal_token_ids(mask: Tensor) -> tuple[int, ...]:
-    positions = torch.nonzero(
-        mask.detach().cpu(), as_tuple=False
-    ).squeeze(1)
+def _legal_choice_ids(ids: Tensor, mask: Tensor) -> tuple[int, ...]:
+    cpu_ids = ids.detach().cpu()
+    cpu_mask = mask.detach().cpu()
     return tuple(
-        int(positions[index].item())
-        for index in range(int(positions.shape[0]))
+        int(cpu_ids[index].item())
+        for index in range(int(cpu_ids.shape[0]))
+        if bool(cpu_mask[index].item())
     )

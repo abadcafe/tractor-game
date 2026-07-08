@@ -124,8 +124,9 @@ def _argument_batch_eval(
     distribution_start = profile.mark()
     distribution_result = _evaluate_recorded_token_batch(
         argument_logits=scores.argument_logits,
-        legal_token_masks=replay_prefixes.legal_token_masks,
-        selected_token_ids=replay_prefixes.selected_token_ids,
+        legal_choice_ids=replay_prefixes.legal_choice_ids,
+        legal_choice_masks=replay_prefixes.legal_choice_masks,
+        selected_choice_offsets=replay_prefixes.selected_choice_offsets,
     )
     if isinstance(distribution_result, _result.Rejected):
         return distribution_result
@@ -150,12 +151,22 @@ class _RecordedTokenEval:
 def _evaluate_recorded_token_batch(
     *,
     argument_logits: Tensor,
-    legal_token_masks: Tensor,
-    selected_token_ids: Tensor,
+    legal_choice_ids: Tensor,
+    legal_choice_masks: Tensor,
+    selected_choice_offsets: Tensor,
 ) -> _result.Ok[_RecordedTokenEval] | _result.Rejected:
-    assert argument_logits.shape == legal_token_masks.shape
-    assert selected_token_ids.shape == (int(argument_logits.shape[0]),)
-    valid_logits = argument_logits[legal_token_masks]
+    assert legal_choice_ids.ndim == 2
+    assert legal_choice_masks.shape == legal_choice_ids.shape
+    assert int(legal_choice_ids.shape[0]) == int(
+        argument_logits.shape[0]
+    )
+    assert selected_choice_offsets.shape == (
+        int(argument_logits.shape[0]),
+    )
+    legal_logits = argument_logits.gather(
+        dim=1, index=legal_choice_ids.to(dtype=torch.long)
+    )
+    valid_logits = legal_logits[legal_choice_masks]
     logits_check = reject_if_non_finite(
         (
             NamedTensorCheck(
@@ -166,17 +177,17 @@ def _evaluate_recorded_token_batch(
     )
     if isinstance(logits_check, _result.Rejected):
         return logits_check
-    masked_logits = argument_logits.masked_fill(
-        ~legal_token_masks, -torch.inf
+    masked_logits = legal_logits.masked_fill(
+        ~legal_choice_masks, -torch.inf
     )
     probabilities = torch.softmax(masked_logits, dim=1).masked_fill(
-        ~legal_token_masks, 0.0
+        ~legal_choice_masks, 0.0
     )
     log_probabilities = torch.log_softmax(
         masked_logits, dim=1
-    ).masked_fill(~legal_token_masks, 0.0)
+    ).masked_fill(~legal_choice_masks, 0.0)
     selected = log_probabilities.gather(
-        dim=1, index=selected_token_ids.unsqueeze(1)
+        dim=1, index=selected_choice_offsets.unsqueeze(1)
     ).squeeze(1)
     entropies = -(probabilities * log_probabilities).sum(dim=1)
     distribution_check = reject_if_non_finite(
