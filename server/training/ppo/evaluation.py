@@ -110,17 +110,26 @@ def _argument_batch_eval(
         step_counts=replay.step_counts,
     )
     profile.record_elapsed("argument_decode_seconds", decode_start)
-    active_positions = _active_sample_positions(
-        step_mask=replay.step_mask
-    )
+    active_positions = replay.active_sample_indices
+    if replay.active_step_count == 0:
+        empty = torch.empty(
+            (0,), dtype=torch.float32, device=active_positions.device
+        )
+        return _result.Ok(
+            value=ArgumentBatchEval(
+                active_positions=active_positions,
+                log_probabilities=empty,
+                entropies=empty,
+            )
+        )
     distribution_start = profile.mark()
     distribution_result = _evaluate_recorded_token_batch(
-        argument_logits=scores.argument_logits[replay.step_mask],
-        choice_token_ids=replay.choice_token_ids[replay.step_mask],
-        choice_masks=replay.choice_masks[replay.step_mask],
-        selected_choice_offsets=replay.selected_choice_offsets[
-            replay.step_mask
+        argument_logits=scores.argument_logits[
+            replay.active_sample_indices, replay.active_step_indices
         ],
+        choice_token_ids=replay.choice_token_ids,
+        choice_masks=replay.choice_masks,
+        selected_choice_offsets=replay.selected_choice_offsets,
     )
     if isinstance(distribution_result, _result.Rejected):
         return distribution_result
@@ -135,16 +144,6 @@ def _argument_batch_eval(
             entropies=distribution.entropies,
         )
     )
-
-
-def _active_sample_positions(*, step_mask: Tensor) -> Tensor:
-    assert step_mask.ndim == 2
-    sample_positions = torch.arange(
-        int(step_mask.shape[0]),
-        dtype=torch.long,
-        device=step_mask.device,
-    ).unsqueeze(1)
-    return sample_positions.expand_as(step_mask)[step_mask]
 
 
 @dataclass(frozen=True, slots=True)

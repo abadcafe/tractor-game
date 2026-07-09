@@ -5,7 +5,7 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 
-HEADER_STRUCT = struct.Struct("<qqqqqqqqqqqqqqddd")
+HEADER_STRUCT = struct.Struct("<qqqqqqqqqqqqddd")
 _I64 = struct.Struct("<q")
 _F32 = struct.Struct("<f")
 
@@ -17,8 +17,6 @@ class RolloutArenaHeader:
     policy_version: int
     sample_count: int
     capacity: int
-    target_sample_count: int
-    full: bool
     round_count: int
     generated_action_count: int
     accepted_action_count: int
@@ -36,8 +34,6 @@ class RolloutArenaHeader:
         assert self.policy_version >= 0
         assert self.sample_count >= 0
         assert self.capacity > 0
-        assert self.target_sample_count > 0
-        assert self.target_sample_count <= self.capacity
         assert self.sample_count <= self.capacity
         assert self.round_count >= 0
         assert self.generated_action_count >= 0
@@ -172,8 +168,6 @@ def pack_header(
         header.policy_version,
         header.sample_count,
         header.capacity,
-        header.target_sample_count,
-        1 if header.full else 0,
         header.round_count,
         header.generated_action_count,
         header.accepted_action_count,
@@ -196,33 +190,29 @@ def unpack_header(buffer: memoryview) -> RolloutArenaHeader:
         policy_version=values[0],
         sample_count=values[1],
         capacity=values[2],
-        target_sample_count=values[3],
-        full=values[4] != 0,
-        round_count=values[5],
-        generated_action_count=values[6],
-        accepted_action_count=values[7],
-        action_choice_count=values[8],
-        game_over_count=values[9],
-        dropped_sample_count=values[10],
-        cancelled_env_count=values[11],
-        total_step_count=values[12],
-        max_step_count=values[13],
-        team0_reward_sum=values[14],
-        team1_reward_sum=values[15],
-        elapsed_seconds_max=values[16],
+        round_count=values[3],
+        generated_action_count=values[4],
+        accepted_action_count=values[5],
+        action_choice_count=values[6],
+        game_over_count=values[7],
+        dropped_sample_count=values[8],
+        cancelled_env_count=values[9],
+        total_step_count=values[10],
+        max_step_count=values[11],
+        team0_reward_sum=values[12],
+        team1_reward_sum=values[13],
+        elapsed_seconds_max=values[14],
     )
 
 
 def empty_header(
-    *, policy_version: int, capacity: int, target_sample_count: int
+    *, policy_version: int, capacity: int
 ) -> RolloutArenaHeader:
     """Return an empty arena header for one policy version."""
     return RolloutArenaHeader(
         policy_version=policy_version,
         sample_count=0,
         capacity=capacity,
-        target_sample_count=target_sample_count,
-        full=False,
         round_count=0,
         generated_action_count=0,
         accepted_action_count=0,

@@ -24,9 +24,10 @@ from server.training.model import (
 from server.training.observation import Observation, build_observation
 from server.training.policy_inference_batch import (
     DevicePolicyRequestBatch,
+    PolicyRequestCompiler,
     PolicyRequestInput,
     PolicyRequestRoute,
-    materialize_policy_request_inputs,
+    materialize_compiled_policy_request_batch,
 )
 from server.training.sampling import PolicyDecisionKey
 from server.training.semantic_action_plan import (
@@ -91,14 +92,14 @@ def test_decide_scores_sampled_argument_with_distribution() -> None:
     sample = sample_result.value
     first_token_id = int(sample.selected_token_ids_padded[0, 0])
     first_legal_token_ids = _legal_choice_ids(
-        sample.choice_token_ids[0, 0],
-        sample.choice_masks[0, 0],
+        sample.choice_token_ids[0],
+        sample.choice_masks[0],
     )
-    selected_offset = int(sample.selected_choice_offsets[0, 0])
+    selected_offset = int(sample.selected_choice_offsets[0])
     expected_first_log_probabilities = _masked_candidate_log_probs(
         logits=logits,
-        candidate_ids=sample.choice_token_ids[0, 0],
-        candidate_mask=sample.choice_masks[0, 0],
+        candidate_ids=sample.choice_token_ids[0],
+        candidate_mask=sample.choice_masks[0],
     )
     expected_log_probability = float(
         expected_first_log_probabilities[selected_offset]
@@ -425,8 +426,12 @@ def _request_batch(
     *,
     batch_size: int = 1,
 ) -> DevicePolicyRequestBatch:
-    result = materialize_policy_request_inputs(
-        requests=tuple(
+    compiler = PolicyRequestCompiler(
+        batch_capacity=batch_size,
+        max_observation_tokens=512,
+    )
+    compiled_result = compiler.compile_batch(
+        tuple(
             PolicyRequestInput(
                 route=PolicyRequestRoute(
                     worker_index=0,
@@ -438,8 +443,10 @@ def _request_batch(
             )
             for index in range(batch_size)
         ),
-        batch_capacity=batch_size,
-        max_observation_tokens=512,
+    )
+    assert isinstance(compiled_result, Ok)
+    result = materialize_compiled_policy_request_batch(
+        batch=compiled_result.value,
         device=torch.device("cpu"),
     )
     assert isinstance(result, Ok)

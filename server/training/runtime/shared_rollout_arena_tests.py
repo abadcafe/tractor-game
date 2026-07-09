@@ -9,6 +9,7 @@ import torch
 from server.result import Ok, Rejected
 from server.training.returns import ReturnCommit
 from server.training.runtime.shared_rollout_arena import (
+    RolloutArenaHandle,
     SharedRolloutArenaGroup,
     attach_rollout_arena_reader,
     attach_rollout_arena_writer,
@@ -16,7 +17,7 @@ from server.training.runtime.shared_rollout_arena import (
     create_shared_rollout_arena_group,
     reset_rollout_arenas,
     snapshot_rollout_arenas,
-    wait_all_rollout_arenas_full,
+    wait_rollout_sample_target,
 )
 from server.training.runtime.shared_rollout_arena.types import (
     RolloutRoundMetrics,
@@ -56,11 +57,9 @@ def test_read_rank_batch_reads_assigned_worker_arenas() -> None:
             assert isinstance(first_append, Ok)
             assert first_append.value.accepted_sample_count == 1
             assert first_append.value.dropped_sample_count == 0
-            assert first_append.value.arena_full
             assert isinstance(second_append, Ok)
             assert second_append.value.accepted_sample_count == 1
             assert second_append.value.dropped_sample_count == 0
-            assert second_append.value.arena_full
 
             device = torch.device("cpu")
             rank0 = first_reader.read_rank_batch(
@@ -99,8 +98,8 @@ def test_read_rank_batch_reads_assigned_worker_arenas() -> None:
         close_shared_rollout_arenas(group)
 
 
-def test_wait_all_rollout_arenas_full_uses_predicate_state() -> None:
-    group_result = _arena_group(worker_count=2, capacity=1)
+def test_wait_rollout_sample_target_uses_aggregate_samples() -> None:
+    group_result = _arena_group(worker_count=2, capacity=2)
     assert isinstance(group_result, Ok)
     group = group_result.value
     try:
@@ -113,9 +112,10 @@ def test_wait_all_rollout_arenas_full_uses_predicate_state() -> None:
                 commit=_commit(policy_version=3, model_ranks=(0,)),
             )
             assert isinstance(first_append, Ok)
-            early_wait = wait_all_rollout_arenas_full(
+            early_wait = wait_rollout_sample_target(
                 group=group,
                 policy_version=3,
+                target_sample_count=2,
                 timeout_seconds=0.001,
             )
             assert isinstance(early_wait, Rejected)
@@ -126,9 +126,10 @@ def test_wait_all_rollout_arenas_full_uses_predicate_state() -> None:
                 commit=_commit(policy_version=3, model_ranks=(0,)),
             )
             assert isinstance(second_append, Ok)
-            full_wait = wait_all_rollout_arenas_full(
+            full_wait = wait_rollout_sample_target(
                 group=group,
                 policy_version=3,
+                target_sample_count=2,
                 timeout_seconds=1.0,
             )
             assert isinstance(full_wait, Ok)
@@ -143,8 +144,50 @@ def test_wait_all_rollout_arenas_full_uses_predicate_state() -> None:
         close_shared_rollout_arenas(group)
 
 
-def test_append_round_accepts_slack_after_target_full() -> None:
+def test_append_round_notifies_progress_after_arena_write() -> None:
     group_result = _arena_group(worker_count=1, capacity=1)
+    assert isinstance(group_result, Ok)
+    group = group_result.value
+    events: list[str] = []
+    arena_condition = _RecordingCondition(name="arena", events=events)
+    progress_condition = _RecordingCondition(
+        name="progress",
+        events=events,
+    )
+    real_handle = group.handles[0]
+    handle = RolloutArenaHandle(
+        worker_index=real_handle.worker_index,
+        shared_memory_name=real_handle.shared_memory_name,
+        capacity=real_handle.capacity,
+        condition=arena_condition,
+        progress_condition=progress_condition,
+    )
+    try:
+        writer = attach_rollout_arena_writer(handle)
+        try:
+            append = writer.append_round(
+                policy_version=3,
+                metrics=_metrics(decision_count=1),
+                commit=_commit(policy_version=3, model_ranks=(0,)),
+            )
+        finally:
+            writer.close()
+    finally:
+        close_shared_rollout_arenas(group)
+
+    assert isinstance(append, Ok)
+    assert events == [
+        "arena.acquire",
+        "arena.notify_all",
+        "arena.release",
+        "progress.acquire",
+        "progress.notify_all",
+        "progress.release",
+    ]
+
+
+def test_append_round_drops_only_after_capacity() -> None:
+    group_result = _arena_group(worker_count=1, capacity=2)
     assert isinstance(group_result, Ok)
     group = group_result.value
     try:
@@ -160,6 +203,11 @@ def test_append_round_accepts_slack_after_target_full() -> None:
                 metrics=_metrics(decision_count=1),
                 commit=_commit(policy_version=3, model_ranks=(0,)),
             )
+            third_append = writer.append_round(
+                policy_version=3,
+                metrics=_metrics(decision_count=1),
+                commit=_commit(policy_version=3, model_ranks=(0,)),
+            )
             snapshot = snapshot_rollout_arenas(
                 group=group,
                 policy_version=3,
@@ -170,15 +218,51 @@ def test_append_round_accepts_slack_after_target_full() -> None:
         close_shared_rollout_arenas(group)
 
     assert isinstance(first_append, Ok)
-    assert first_append.value.arena_full
+    assert not first_append.value.capacity_reached
     assert isinstance(second_append, Ok)
     assert second_append.value.accepted_sample_count == 1
     assert second_append.value.dropped_sample_count == 0
-    assert second_append.value.arena_full
+    assert second_append.value.capacity_reached
+    assert isinstance(third_append, Ok)
+    assert third_append.value.accepted_sample_count == 0
+    assert third_append.value.dropped_sample_count == 1
+    assert third_append.value.capacity_reached
     assert isinstance(snapshot, Ok)
-    assert snapshot.value.target_sample_count == 1
+    assert snapshot.value.capacity == 2
     assert snapshot.value.sample_count == 2
-    assert snapshot.value.dropped_sample_count == 0
+    assert snapshot.value.dropped_sample_count == 1
+
+
+def test_read_rank_batch_allows_partial_assigned_arena() -> None:
+    group_result = _arena_group(worker_count=1, capacity=4)
+    assert isinstance(group_result, Ok)
+    group = group_result.value
+    try:
+        writer = attach_rollout_arena_writer(group.handles[0])
+        reader = attach_rollout_arena_reader((group.handles[0],))
+        try:
+            append = writer.append_round(
+                policy_version=3,
+                metrics=_metrics(decision_count=1),
+                commit=_commit(policy_version=3, model_ranks=(0,)),
+            )
+            assert isinstance(append, Ok)
+            assert not append.value.capacity_reached
+            result = reader.read_rank_batch(
+                policy_version=3,
+                model_rank_index=0,
+                device=torch.device("cpu"),
+            )
+        finally:
+            writer.close()
+            reader.close()
+    finally:
+        close_shared_rollout_arenas(group)
+
+    assert isinstance(result, Ok)
+    assert int(result.value.row_indices.shape[0]) == 1
+    assert result.value.round_count == 1
+    assert result.value.total_step_count == 1
 
 
 def test_read_rank_batch_allows_empty_assigned_shard() -> None:
@@ -248,8 +332,8 @@ def _arena_group(
     return create_shared_rollout_arena_group(
         context=context,
         worker_count=worker_count,
-        samples_per_worker_update=capacity,
-        slack_sample_count=capacity,
+        samples_per_update=capacity,
+        slack_sample_count=0,
         policy_version=3,
     )
 
@@ -294,3 +378,23 @@ def _commit(
         step_counts=counts,
         return_values=values,
     )
+
+
+class _RecordingCondition:
+    def __init__(self, *, name: str, events: list[str]) -> None:
+        self._name = name
+        self._events = events
+
+    def acquire(self) -> bool:
+        self._events.append(f"{self._name}.acquire")
+        return True
+
+    def release(self) -> None:
+        self._events.append(f"{self._name}.release")
+
+    def wait(self, timeout: float | None = None) -> bool:
+        self._events.append(f"{self._name}.wait")
+        return True
+
+    def notify_all(self) -> None:
+        self._events.append(f"{self._name}.notify_all")

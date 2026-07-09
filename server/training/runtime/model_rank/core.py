@@ -13,7 +13,7 @@ from server.training.policy_inference_batch import (
     DevicePolicyRequestBatch,
 )
 from server.training.policy_sampling import (
-    ModelRankPolicyDecision,
+    CompactPolicyDecisionBatch,
     RankReturnTargets,
 )
 from server.training.policy_sampling.model_rank_sample_arena import (
@@ -68,9 +68,7 @@ class ModelReplica:
 
     def decide_batch(
         self, requests: DevicePolicyRequestBatch
-    ) -> tuple[
-        _result.Ok[ModelRankPolicyDecision] | _result.Rejected, ...
-    ]:
+    ) -> _result.Ok[CompactPolicyDecisionBatch] | _result.Rejected:
         """Run batched policy inference on this core's device."""
         return sample_policy_batch_into_arena(
             model=self.state.model,

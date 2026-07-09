@@ -19,9 +19,9 @@ from server.training.observation import (
     build_observation,
 )
 from server.training.policy_inference_batch import (
+    CompiledPolicyRequestBatch,
     CompletedPolicyResponse,
     DevicePolicyRequestBatch,
-    PolicyRequestBatch,
     PolicyRequestRoute,
     PolicyResponse,
     build_policy_response_batch_wire,
@@ -36,9 +36,9 @@ from server.training.policy_inference_batch.types import (
     PolicyRequestFrameMetadata,
 )
 from server.training.policy_sampling import (
+    CompactPolicyDecisionBatch,
+    CompactTraceTokenBatch,
     CompactTraceTokenIds,
-    DecisionHandle,
-    ModelRankPolicyDecision,
     RankReturnTargets,
 )
 from server.training.ppo import PPOUpdateProfile, PPOUpdateStats
@@ -78,10 +78,7 @@ class _PolicyPeerPair:
 async def test_local_policy_client_batches_same_loop() -> None:
     observation = _observation()
     legal_actions = _legal_actions(observation)
-    rank_decision = _model_rank_policy_decision()
-    replica = _FakeReplica(
-        state=_runtime_state(), decision=rank_decision
-    )
+    replica = _FakeReplica(state=_runtime_state())
 
     client = BatchedPolicyClient(
         worker_index=2,
@@ -105,26 +102,17 @@ async def test_local_policy_client_batches_same_loop() -> None:
     assert isinstance(second_result, Ok)
     assert first_result.value.action.semantic_trace == _pass_trace()
     assert second_result.value.action.semantic_trace == _pass_trace()
-    assert first_result.value.decision_handle == (
-        rank_decision.decision_handle
-    )
-    assert second_result.value.decision_handle == (
-        rank_decision.decision_handle
-    )
-    assert first_result.value.choice_count == rank_decision.choice_count
-    assert (
-        second_result.value.choice_count == rank_decision.choice_count
-    )
+    assert first_result.value.decision_handle.row_index == 0
+    assert second_result.value.decision_handle.row_index == 1
+    assert first_result.value.choice_count == 1
+    assert second_result.value.choice_count == 1
     assert replica.calls == ("decide_batch",)
     assert replica.batch_sizes == (2,)
 
 
 def test_local_model_rank_loads_updates_and_snapshots_replica() -> None:
     state = _runtime_state()
-    replica = _FakeReplica(
-        state=state,
-        decision=_model_rank_policy_decision(),
-    )
+    replica = _FakeReplica(state=state)
     rank = LocalModelRank(replica=replica)
 
     load_result = rank.load_state(state=state, policy_version=3)
@@ -149,7 +137,6 @@ def test_local_model_rank_loads_updates_and_snapshots_replica() -> None:
 @pytest.mark.asyncio
 async def test_remote_policy_client_roundtrips_async_payload() -> None:
     peers = _policy_peer_pair(worker_index=2)
-    rank_decision = _model_rank_policy_decision()
     try:
         observation = _observation()
         legal_actions = _legal_actions(observation)
@@ -177,7 +164,7 @@ async def test_remote_policy_client_roundtrips_async_payload() -> None:
         assert route.request_id == 0
         response_wire = build_policy_response_batch_wire(
             routes=(route,),
-            decisions=(Ok(value=rank_decision),),
+            decisions=_compact_policy_decision_batch(row_count=1),
         )
         assert isinstance(response_wire, Ok)
         send_result = await peers.model_rank_peer.send_response(
@@ -189,11 +176,8 @@ async def test_remote_policy_client_roundtrips_async_payload() -> None:
 
         assert isinstance(result, Ok)
         assert result.value.action.semantic_trace == _pass_trace()
-        assert (
-            result.value.decision_handle
-            == rank_decision.decision_handle
-        )
-        assert result.value.choice_count == rank_decision.choice_count
+        assert result.value.decision_handle.row_index == 0
+        assert result.value.choice_count == 1
     finally:
         peers.close()
 
@@ -230,7 +214,7 @@ async def test_remote_policy_client_rejects_response_mismatch() -> None:
         )
         response_wire = build_policy_response_batch_wire(
             routes=(mismatch_route,),
-            decisions=(Ok(value=_model_rank_policy_decision()),),
+            decisions=_compact_policy_decision_batch(row_count=1),
         )
         assert isinstance(response_wire, Ok)
         send_result = await peers.model_rank_peer.send_response(
@@ -280,12 +264,10 @@ async def test_remote_policy_client_sends_concurrent_frames() -> None:
         await _send_decision_response(
             peer=peers.model_rank_peer,
             route=first_route,
-            decision=_model_rank_policy_decision(),
         )
         await _send_decision_response(
             peer=peers.model_rank_peer,
             route=second_route,
-            decision=_model_rank_policy_decision(),
         )
         first_result, second_result = await asyncio.gather(
             first, second
@@ -372,11 +354,10 @@ async def _send_decision_response(
     *,
     peer: AsyncPolicyPeer,
     route: PolicyRequestRoute,
-    decision: ModelRankPolicyDecision,
 ) -> None:
     response_wire = build_policy_response_batch_wire(
         routes=(route,),
-        decisions=(Ok(value=decision),),
+        decisions=_compact_policy_decision_batch(row_count=1),
     )
     assert isinstance(response_wire, Ok)
     send_result = await peer.send_response(response_wire.value)
@@ -419,7 +400,7 @@ class _MismatchedFirstResponseTransport:
         self._release_first_response.set()
 
     async def submit_batch(
-        self, *, batch: PolicyRequestBatch
+        self, *, batch: CompiledPolicyRequestBatch
     ) -> Ok[None]:
         assert batch.row_count() == 1
         route = batch.routes[0]
@@ -470,10 +451,8 @@ class _FakeReplica:
         self,
         *,
         state: RuntimeTrainingState,
-        decision: ModelRankPolicyDecision,
     ) -> None:
         self._state = state
-        self._decision = decision
         self._calls: list[str] = []
         self._batch_sizes: list[int] = []
 
@@ -495,11 +474,12 @@ class _FakeReplica:
 
     def decide_batch(
         self, requests: DevicePolicyRequestBatch
-    ) -> tuple[Ok[ModelRankPolicyDecision], ...]:
+    ) -> Ok[CompactPolicyDecisionBatch]:
         self._calls.append("decide_batch")
-        self._batch_sizes.append(len(requests.policy_versions))
-        return tuple(
-            Ok(value=self._decision) for _ in requests.policy_versions
+        batch_size = len(requests.policy_versions)
+        self._batch_sizes.append(batch_size)
+        return Ok(
+            value=_compact_policy_decision_batch(row_count=batch_size)
         )
 
     def update_returns(
@@ -514,32 +494,37 @@ class _FakeReplica:
         return self._state
 
 
-def _model_rank_policy_decision() -> ModelRankPolicyDecision:
-    return ModelRankPolicyDecision(
-        trace_token_ids=CompactTraceTokenIds.from_tuple(
-            (semantic_argument_id(SemanticArgument("pass")),)
+def _compact_policy_decision_batch(
+    *, row_count: int
+) -> CompactPolicyDecisionBatch:
+    trace_token_ids = CompactTraceTokenIds.from_tuple(
+        (semantic_argument_id(SemanticArgument("pass")),)
+    )
+    return CompactPolicyDecisionBatch(
+        model_rank_index=0,
+        policy_versions=tuple(0 for _ in range(row_count)),
+        row_indices=tuple(range(row_count)),
+        choice_counts=tuple(1 for _ in range(row_count)),
+        trace_token_batch=CompactTraceTokenBatch(
+            encoded_i64_rows=trace_token_ids.encoded_i64 * row_count,
+            row_count=row_count,
+            max_trace_count=1,
+            trace_counts=tuple(1 for _ in range(row_count)),
         ),
-        decision_handle=DecisionHandle(
-            model_rank_index=0,
-            policy_version=0,
-            row_index=0,
-        ),
-        choice_count=1,
     )
 
 
 def _completed_policy_response(
     route: PolicyRequestRoute,
 ) -> CompletedPolicyResponse:
-    decision = _model_rank_policy_decision()
-    handle = decision.decision_handle
+    decisions = _compact_policy_decision_batch(row_count=1)
     return CompletedPolicyResponse(
         route=route,
-        trace_token_ids=decision.trace_token_ids,
-        decision_handle_model_rank=handle.model_rank_index,
-        decision_handle_policy_version=handle.policy_version,
-        decision_handle_row_index=handle.row_index,
-        choice_count=decision.choice_count,
+        trace_token_ids=decisions.trace_token_batch.compact_row(0),
+        decision_handle_model_rank=decisions.model_rank_index,
+        decision_handle_policy_version=decisions.policy_versions[0],
+        decision_handle_row_index=decisions.row_indices[0],
+        choice_count=decisions.choice_counts[0],
     )
 
 

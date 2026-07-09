@@ -6,7 +6,7 @@ from server.training.runtime.shared_rollout_arena.group import (
     create_shared_rollout_arena_group,
     reset_rollout_arenas,
     snapshot_rollout_arenas,
-    wait_all_rollout_arenas_full,
+    wait_rollout_sample_target,
 )
 from server.training.runtime.shared_rollout_arena.reader import (
     SharedRolloutArenaReader,
@@ -37,5 +37,5 @@ __all__ = (
     "create_shared_rollout_arena_group",
     "reset_rollout_arenas",
     "snapshot_rollout_arenas",
-    "wait_all_rollout_arenas_full",
+    "wait_rollout_sample_target",
 )

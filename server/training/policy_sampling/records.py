@@ -89,6 +89,8 @@ class PolicySampleColumns:
     policy_versions: tuple[int, ...]
     observation_batch: ObservationTensorBatch
     selected_token_ids_padded: Tensor
+    active_sample_indices: Tensor
+    active_step_indices: Tensor
     choice_token_ids: Tensor
     choice_masks: Tensor
     selected_choice_offsets: Tensor
@@ -113,17 +115,21 @@ class PolicySampleColumns:
             max_generation_steps,
         )
         assert self.selected_token_ids_padded.dtype == torch.long
-        assert self.choice_token_ids.ndim == 3
-        assert self.choice_token_ids.shape[:2] == (
-            batch_size,
-            max_generation_steps,
+        assert self.active_sample_indices.ndim == 1
+        assert self.active_step_indices.shape == (
+            int(self.active_sample_indices.shape[0]),
+        )
+        assert self.active_sample_indices.dtype == torch.long
+        assert self.active_step_indices.dtype == torch.long
+        assert self.choice_token_ids.ndim == 2
+        assert int(self.choice_token_ids.shape[0]) == int(
+            self.active_sample_indices.shape[0]
         )
         assert self.choice_token_ids.dtype == torch.int16
         assert self.choice_masks.shape == self.choice_token_ids.shape
         assert self.choice_masks.dtype == torch.bool
         assert self.selected_choice_offsets.shape == (
-            batch_size,
-            max_generation_steps,
+            int(self.active_sample_indices.shape[0]),
         )
         assert self.selected_choice_offsets.dtype == torch.long
         assert self.step_counts.shape == (batch_size,)
@@ -137,6 +143,8 @@ class PolicySampleColumns:
         )
         device = self.observation_batch.component_ids.device
         assert self.selected_token_ids_padded.device == device
+        assert self.active_sample_indices.device == device
+        assert self.active_step_indices.device == device
         assert self.choice_token_ids.device == device
         assert self.choice_masks.device == device
         assert self.selected_choice_offsets.device == device
@@ -147,16 +155,104 @@ class PolicySampleColumns:
 
 
 @dataclass(frozen=True, slots=True)
-class ModelRankPolicyDecision:
-    """Model-rank response before worker-side action decoding."""
+class CompactTraceTokenBatch:
+    """Padded CPU int64 traces for one compact response batch."""
 
-    trace_token_ids: CompactTraceTokenIds
-    decision_handle: DecisionHandle
-    choice_count: int
+    encoded_i64_rows: bytes
+    row_count: int
+    max_trace_count: int
+    trace_counts: tuple[int, ...]
 
     def __post_init__(self) -> None:
-        assert len(self.trace_token_ids) > 0
-        assert self.choice_count > 0
+        assert self.row_count > 0
+        assert self.max_trace_count > 0
+        assert len(self.trace_counts) == self.row_count
+        assert all(
+            0 < count <= self.max_trace_count
+            for count in self.trace_counts
+        )
+        expected_bytes = (
+            self.row_count * self.max_trace_count * _TRACE_TOKEN.size
+        )
+        assert len(self.encoded_i64_rows) == expected_bytes
+
+    @classmethod
+    def from_cpu_tensor(
+        cls, *, tokens: Tensor, trace_counts: tuple[int, ...]
+    ) -> CompactTraceTokenBatch:
+        """Copy padded CPU token rows into response-ready bytes."""
+        assert tokens.device.type == "cpu"
+        assert tokens.dtype == torch.long
+        row_count = len(trace_counts)
+        assert row_count > 0
+        max_trace_count = max(trace_counts)
+        assert max_trace_count > 0
+        assert tokens.shape[0] == row_count
+        assert int(tokens.shape[1]) >= max_trace_count
+        compact = tokens[:, :max_trace_count].contiguous()
+        return cls(
+            encoded_i64_rows=compact.numpy().tobytes(),
+            row_count=row_count,
+            max_trace_count=max_trace_count,
+            trace_counts=trace_counts,
+        )
+
+    def row_bytes(self, row_index: int) -> bytes:
+        """Return one padded token row."""
+        assert 0 <= row_index < self.row_count
+        row_byte_count = self.max_trace_count * _TRACE_TOKEN.size
+        start = row_index * row_byte_count
+        return self.encoded_i64_rows[start : start + row_byte_count]
+
+    def compact_row(self, row_index: int) -> CompactTraceTokenIds:
+        """Return one compact trace for worker-side rule decoding."""
+        trace_count = self.trace_counts[row_index]
+        return CompactTraceTokenIds.from_i64_bytes(
+            data=self.row_bytes(row_index)[
+                : trace_count * _TRACE_TOKEN.size
+            ],
+            count=trace_count,
+        )
+
+    def select_rows(
+        self, rows: tuple[int, ...]
+    ) -> CompactTraceTokenBatch:
+        """Return a compact batch containing selected rows."""
+        assert rows
+        row_bytes = b"".join(self.row_bytes(row) for row in rows)
+        return CompactTraceTokenBatch(
+            encoded_i64_rows=row_bytes,
+            row_count=len(rows),
+            max_trace_count=self.max_trace_count,
+            trace_counts=tuple(self.trace_counts[row] for row in rows),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CompactPolicyDecisionBatch:
+    """Model-rank policy decisions encoded as response columns."""
+
+    model_rank_index: int
+    policy_versions: tuple[int, ...]
+    row_indices: tuple[int, ...]
+    choice_counts: tuple[int, ...]
+    trace_token_batch: CompactTraceTokenBatch
+
+    def __post_init__(self) -> None:
+        row_count = self.trace_token_batch.row_count
+        assert self.model_rank_index >= 0
+        assert len(self.policy_versions) == row_count
+        assert len(self.row_indices) == row_count
+        assert len(self.choice_counts) == row_count
+        assert all(version >= 0 for version in self.policy_versions)
+        assert all(row_index >= 0 for row_index in self.row_indices)
+        assert all(
+            choice_count > 0 for choice_count in self.choice_counts
+        )
+
+    def row_count(self) -> int:
+        """Return decision row count."""
+        return self.trace_token_batch.row_count
 
 
 @dataclass(frozen=True, slots=True)

@@ -9,12 +9,8 @@ from torch import Tensor
 
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
-from server.training.packed_observation import PackedObservation
 from server.training.sampling import PolicyDecisionKey
-from server.training.semantic_action_plan import (
-    ActionPlanFrame,
-    DeviceActionPlanBatch,
-)
+from server.training.semantic_action_plan import DeviceActionPlanBatch
 from server.training.tensorize import ObservationTensorBatch
 
 
@@ -41,52 +37,6 @@ class PolicyRequestInput:
 
     def __post_init__(self) -> None:
         assert self.decision_key.policy_version >= 0
-
-
-@dataclass(frozen=True, slots=True)
-class PolicyRequestBatch:
-    """Columnar policy requests prepared by a worker."""
-
-    routes: tuple[PolicyRequestRoute, ...]
-    policy_versions: tuple[int, ...]
-    packed_observations: tuple[PackedObservation, ...]
-    action_plans: tuple[ActionPlanFrame, ...]
-    generation_step_counts: tuple[int, ...]
-    sampling_threshold_rows: tuple[tuple[float, ...], ...]
-    max_observation_tokens: int
-    padded_generation_steps: int
-
-    def __post_init__(self) -> None:
-        row_count = len(self.routes)
-        assert row_count > 0
-        assert len(self.policy_versions) == row_count
-        assert len(self.packed_observations) == row_count
-        assert len(self.action_plans) == row_count
-        assert len(self.generation_step_counts) == row_count
-        assert len(self.sampling_threshold_rows) == row_count
-        assert self.max_observation_tokens > 0
-        assert self.padded_generation_steps > 0
-        assert all(version >= 0 for version in self.policy_versions)
-        assert all(
-            0 < count <= self.padded_generation_steps
-            for count in self.generation_step_counts
-        )
-        assert all(
-            len(thresholds) == count
-            for thresholds, count in zip(
-                self.sampling_threshold_rows,
-                self.generation_step_counts,
-                strict=True,
-            )
-        )
-        assert all(
-            observation.token_count() <= self.max_observation_tokens
-            for observation in self.packed_observations
-        )
-
-    def row_count(self) -> int:
-        """Return request count."""
-        return len(self.routes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +84,46 @@ class PolicyRequestFrameMetadata:
         assert len(self.policy_versions) == self.row_count
         assert all(version >= 0 for version in self.policy_versions)
         assert self.byte_count > 0
+
+
+@dataclass(frozen=True, slots=True)
+class CompiledPolicyRequestBatch:
+    """Transport-ready worker request batch with hidden row layout."""
+
+    frame: PolicyRequestWireFrame
+    metadata: PolicyRequestFrameMetadata
+
+    def __post_init__(self) -> None:
+        assert self.frame.byte_count == self.metadata.byte_count
+
+    @property
+    def routes(self) -> tuple[PolicyRequestRoute, ...]:
+        """Return response routes for this compiled batch."""
+        return self.metadata.routes
+
+    @property
+    def policy_versions(self) -> tuple[int, ...]:
+        """Return request policy versions."""
+        return self.metadata.policy_versions
+
+    @property
+    def generation_step_counts(self) -> tuple[int, ...]:
+        """Return semantic generation step counts."""
+        return self.metadata.generation_step_counts
+
+    @property
+    def max_observation_tokens(self) -> int:
+        """Return the observation token capacity."""
+        return self.metadata.max_observation_tokens
+
+    @property
+    def padded_generation_steps(self) -> int:
+        """Return the padded semantic generation width."""
+        return self.metadata.padded_generation_steps
+
+    def row_count(self) -> int:
+        """Return request count."""
+        return self.metadata.row_count
 
 
 @dataclass(frozen=True, slots=True)

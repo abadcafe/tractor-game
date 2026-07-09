@@ -16,9 +16,9 @@ from server.training.policy_inference_batch.response_types import (
     RejectedPolicyResponse,
 )
 from server.training.policy_sampling import (
+    CompactPolicyDecisionBatch,
     CompactTraceTokenIds,
     DecisionHandle,
-    ModelRankPolicyDecision,
 )
 from server.training.semantic_action_plan import (
     semantic_trace_from_token_ids,
@@ -38,38 +38,115 @@ _ROW_COUNT_INDEX = 2
 _MAX_TRACE_COUNT_INDEX = 3
 _REASON_BYTES_INDEX = 4
 
-type ModelRankDecisionResult = Ok[ModelRankPolicyDecision] | Rejected
-
 
 def build_policy_response_batch_wire(
     *,
     routes: tuple[PolicyRequestRoute, ...],
-    decisions: tuple[ModelRankDecisionResult, ...],
+    decisions: CompactPolicyDecisionBatch,
 ) -> Ok[PolicyResponseBatchWire] | Rejected:
-    """Build one columnar response batch frame."""
-    if len(routes) != len(decisions):
-        return Rejected(reason="policy response batch route mismatch")
-    if not routes:
-        return Rejected(reason="policy response batch is empty")
-    max_trace_count = _max_trace_count(decisions)
-    reasons = tuple(_reason_bytes(decision) for decision in decisions)
-    reason_offsets = _reason_offsets(reasons)
-    reason_bytes = b"".join(reasons)
+    """Build one completed columnar response batch frame."""
+    responses_result = build_completed_policy_responses(
+        routes=routes,
+        decisions=decisions,
+    )
+    if isinstance(responses_result, Rejected):
+        return responses_result
+    responses = responses_result.value
     layout = _response_layout(
         row_count=len(routes),
-        max_trace_count=max_trace_count,
-        reason_byte_count=len(reason_bytes),
+        max_trace_count=decisions.trace_token_batch.max_trace_count,
+        reason_byte_count=0,
     )
     data = bytearray(layout.total_bytes)
     _write_header(
         data=data,
         row_count=len(routes),
-        max_trace_count=max_trace_count,
-        reason_byte_count=len(reason_bytes),
+        max_trace_count=decisions.trace_token_batch.max_trace_count,
+        reason_byte_count=0,
     )
     trace_base = layout.trace_tokens_offset
+    for row_index, response in enumerate(responses):
+        _write_i64_column(
+            data,
+            layout.worker_indices_offset,
+            row_index,
+            response.route.worker_index,
+        )
+        _write_i64_column(
+            data,
+            layout.request_ids_offset,
+            row_index,
+            response.route.request_id,
+        )
+        _write_completed_row(
+            data=data,
+            layout=layout,
+            row_index=row_index,
+            response=response,
+        )
+        trace_start = trace_base + (
+            row_index
+            * decisions.trace_token_batch.max_trace_count
+            * _I64.size
+        )
+        trace_bytes = response.trace_token_ids.encoded_i64
+        data[trace_start : trace_start + len(trace_bytes)] = trace_bytes
+    return Ok(value=PolicyResponseBatchWire(data=bytes(data)))
+
+
+def build_completed_policy_responses(
+    *,
+    routes: tuple[PolicyRequestRoute, ...],
+    decisions: CompactPolicyDecisionBatch,
+) -> Ok[tuple[CompletedPolicyResponse, ...]] | Rejected:
+    """Build in-process response rows from compact decisions."""
+    if len(routes) != decisions.row_count():
+        return Rejected(reason="policy response batch route mismatch")
+    if not routes:
+        return Rejected(reason="policy response batch is empty")
+    responses: list[CompletedPolicyResponse] = []
     for row_index, route in enumerate(routes):
-        decision = decisions[row_index]
+        responses.append(
+            CompletedPolicyResponse(
+                route=route,
+                trace_token_ids=(
+                    decisions.trace_token_batch.compact_row(row_index)
+                ),
+                decision_handle_model_rank=decisions.model_rank_index,
+                decision_handle_policy_version=(
+                    decisions.policy_versions[row_index]
+                ),
+                decision_handle_row_index=decisions.row_indices[
+                    row_index
+                ],
+                choice_count=decisions.choice_counts[row_index],
+            )
+        )
+    return Ok(value=tuple(responses))
+
+
+def build_rejected_policy_response_batch_wire(
+    *, routes: tuple[PolicyRequestRoute, ...], reason: str
+) -> Ok[PolicyResponseBatchWire] | Rejected:
+    """Build one rejected response batch for all routes."""
+    assert reason
+    if not routes:
+        return Rejected(reason="policy response batch is empty")
+    reason_bytes = reason.encode("utf-8")
+    layout = _response_layout(
+        row_count=len(routes),
+        max_trace_count=0,
+        reason_byte_count=len(reason_bytes) * len(routes),
+    )
+    data = bytearray(layout.total_bytes)
+    _write_header(
+        data=data,
+        row_count=len(routes),
+        max_trace_count=0,
+        reason_byte_count=len(reason_bytes) * len(routes),
+    )
+    offset = 0
+    for row_index, route in enumerate(routes):
         _write_i64_column(
             data,
             layout.worker_indices_offset,
@@ -79,40 +156,17 @@ def build_policy_response_batch_wire(
         _write_i64_column(
             data, layout.request_ids_offset, row_index, route.request_id
         )
-        if isinstance(decision, Rejected):
-            _write_rejected_row(
-                data=data,
-                layout=layout,
-                row_index=row_index,
-                reason_offset=reason_offsets[row_index],
-                reason_length=len(reasons[row_index]),
-            )
-            continue
-        value = decision.value
-        _write_completed_row(
+        _write_rejected_row(
             data=data,
             layout=layout,
             row_index=row_index,
-            decision=value,
+            reason_offset=offset,
+            reason_length=len(reason_bytes),
         )
-        trace_start = (
-            trace_base + row_index * max_trace_count * _I64.size
-        )
-        trace_bytes = value.trace_token_ids.encoded_i64
-        data[trace_start : trace_start + len(trace_bytes)] = trace_bytes
-    data[layout.reason_bytes_offset :] = reason_bytes
+        start = layout.reason_bytes_offset + offset
+        data[start : start + len(reason_bytes)] = reason_bytes
+        offset += len(reason_bytes)
     return Ok(value=PolicyResponseBatchWire(data=bytes(data)))
-
-
-def build_rejected_policy_response_batch_wire(
-    *, routes: tuple[PolicyRequestRoute, ...], reason: str
-) -> Ok[PolicyResponseBatchWire] | Rejected:
-    """Build one rejected response batch for all routes."""
-    assert reason
-    return build_policy_response_batch_wire(
-        routes=routes,
-        decisions=tuple(Rejected(reason=reason) for _ in routes),
-    )
 
 
 def decode_policy_response_batch_wire(
@@ -263,9 +317,8 @@ def _write_completed_row(
     data: bytearray,
     layout: _ResponseLayout,
     row_index: int,
-    decision: ModelRankPolicyDecision,
+    response: CompletedPolicyResponse,
 ) -> None:
-    handle = decision.decision_handle
     _write_i64_column(
         data, layout.statuses_offset, row_index, _STATUS_COMPLETED
     )
@@ -273,28 +326,31 @@ def _write_completed_row(
         data,
         layout.model_rank_indices_offset,
         row_index,
-        handle.model_rank_index,
+        response.decision_handle_model_rank,
     )
     _write_i64_column(
         data,
         layout.policy_versions_offset,
         row_index,
-        handle.policy_version,
+        response.decision_handle_policy_version,
     )
     _write_i64_column(
-        data, layout.row_indices_offset, row_index, handle.row_index
+        data,
+        layout.row_indices_offset,
+        row_index,
+        response.decision_handle_row_index,
     )
     _write_i64_column(
         data,
         layout.choice_counts_offset,
         row_index,
-        decision.choice_count,
+        response.choice_count,
     )
     _write_i64_column(
         data,
         layout.trace_counts_offset,
         row_index,
-        len(decision.trace_token_ids),
+        len(response.trace_token_ids),
     )
 
 
@@ -450,32 +506,6 @@ def _decode_completed_response(
             choice_count=choice_count,
         )
     )
-
-
-def _max_trace_count(
-    decisions: tuple[ModelRankDecisionResult, ...],
-) -> int:
-    max_count = 0
-    for decision in decisions:
-        if isinstance(decision, Rejected):
-            continue
-        max_count = max(max_count, len(decision.value.trace_token_ids))
-    return max_count
-
-
-def _reason_bytes(decision: ModelRankDecisionResult) -> bytes:
-    if isinstance(decision, Rejected):
-        return decision.reason.encode("utf-8")
-    return b""
-
-
-def _reason_offsets(reasons: tuple[bytes, ...]) -> tuple[int, ...]:
-    offsets: list[int] = []
-    offset = 0
-    for reason in reasons:
-        offsets.append(offset)
-        offset += len(reason)
-    return tuple(offsets)
 
 
 def _write_i64_column(

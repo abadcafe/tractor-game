@@ -14,33 +14,34 @@ from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
 from server.training.policy import PolicyDecision
 from server.training.policy_inference_batch import (
+    CompiledPolicyRequestBatch,
     CompletedPolicyResponse,
     DevicePolicyRequestBatch,
-    PolicyRequestBatch,
-    PolicyRequestBatchBuilder,
+    PolicyRequestCompiler,
     PolicyRequestInput,
     PolicyRequestRoute,
     PolicyResponse,
     RejectedPolicyResponse,
+    build_completed_policy_responses,
     decode_policy_response,
     decode_policy_response_batch_wire,
-    materialize_policy_request_batch,
+    materialize_compiled_policy_request_batch,
 )
-from server.training.policy_sampling import ModelRankPolicyDecision
+from server.training.policy_sampling import CompactPolicyDecisionBatch
 from server.training.runtime.model_rank.inference_transport import (
     AsyncPolicyPeer,
 )
 from server.training.sampling import PolicyDecisionKey
 
 type PolicyDecisionResult = Ok[PolicyDecision] | Rejected
-type ModelRankDecisionResult = Ok[ModelRankPolicyDecision] | Rejected
+type ModelRankDecisionResult = Ok[CompactPolicyDecisionBatch] | Rejected
 
 
 class PolicyBatchTransport(Protocol):
     """Transport one request frame through a model-rank boundary."""
 
     async def submit_batch(
-        self, *, batch: PolicyRequestBatch
+        self, *, batch: CompiledPolicyRequestBatch
     ) -> Ok[None] | Rejected: ...
 
     async def receive(
@@ -56,7 +57,7 @@ class ModelReplicaProtocol(Protocol):
 
     def decide_batch(
         self, requests: DevicePolicyRequestBatch
-    ) -> tuple[ModelRankDecisionResult, ...]: ...
+    ) -> ModelRankDecisionResult: ...
 
 
 @dataclass(slots=True)
@@ -64,17 +65,12 @@ class AsyncRemotePolicyBatchTransport:
     """Async socket-backed remote inference transport."""
 
     peer: AsyncPolicyPeer
-    _encoder: PolicyRequestBatchBuilder | None = None
-    _encoder_capacity: int = 0
-    _encoder_max_observation_tokens: int = 0
 
     async def submit_batch(
-        self, *, batch: PolicyRequestBatch
+        self, *, batch: CompiledPolicyRequestBatch
     ) -> Ok[None] | Rejected:
-        """Encode and send one request batch to the model rank."""
-        encoder = self._encoder_for(batch)
-        frame = encoder.encode_wire_frame(batch)
-        return await self.peer.send_request(frame)
+        """Send one compiled request batch to the model rank."""
+        return await self.peer.send_request(batch.frame)
 
     async def receive(
         self, *, timeout_seconds: float
@@ -89,28 +85,6 @@ class AsyncRemotePolicyBatchTransport:
             response_result.value.data
         )
 
-    def _encoder_for(
-        self, batch: PolicyRequestBatch
-    ) -> PolicyRequestBatchBuilder:
-        row_count = batch.row_count()
-        if (
-            self._encoder is None
-            or self._encoder_capacity < row_count
-            or self._encoder_max_observation_tokens
-            != batch.max_observation_tokens
-        ):
-            self._encoder_capacity = row_count
-            self._encoder_max_observation_tokens = (
-                batch.max_observation_tokens
-            )
-            self._encoder = PolicyRequestBatchBuilder(
-                batch_capacity=self._encoder_capacity,
-                max_observation_tokens=(
-                    self._encoder_max_observation_tokens
-                ),
-            )
-        return self._encoder
-
 
 @dataclass(slots=True)
 class LocalPolicyBatchTransport:
@@ -120,27 +94,36 @@ class LocalPolicyBatchTransport:
     _pending_response: tuple[PolicyResponse, ...] | None = None
 
     async def submit_batch(
-        self, *, batch: PolicyRequestBatch
+        self, *, batch: CompiledPolicyRequestBatch
     ) -> Ok[None] | Rejected:
         """Submit one prepared batch to the local model rank."""
-        request_result = materialize_policy_request_batch(
+        request_result = materialize_compiled_policy_request_batch(
             batch=batch, device=self.replica.device
         )
         if isinstance(request_result, Rejected):
             return request_result
-        decisions = self.replica.decide_batch(request_result.value)
-        if len(decisions) != batch.row_count():
-            return Rejected(
-                reason="local policy response batch mismatch"
-            )
-        responses = tuple(
-            _policy_response_from_decision(
-                route=route, decision=decision
-            )
-            for route, decision in zip(
-                batch.routes, decisions, strict=True
-            )
+        decision_result = self.replica.decide_batch(
+            request_result.value
         )
+        if isinstance(decision_result, Rejected):
+            responses = tuple(
+                RejectedPolicyResponse(
+                    route=route, reason=decision_result.reason
+                )
+                for route in batch.routes
+            )
+        else:
+            if decision_result.value.row_count() != batch.row_count():
+                return Rejected(
+                    reason="local policy response batch mismatch"
+                )
+            responses_result = build_completed_policy_responses(
+                routes=batch.routes,
+                decisions=decision_result.value,
+            )
+            if isinstance(responses_result, Rejected):
+                return responses_result
+            responses = responses_result.value
         if self._pending_response is not None:
             return Rejected(
                 reason="local policy response is still pending"
@@ -178,7 +161,7 @@ class _QueuedPolicyRequest:
 
 @dataclass(frozen=True, slots=True)
 class _BuiltPolicyBatch:
-    batch: PolicyRequestBatch
+    batch: CompiledPolicyRequestBatch
     requests: tuple[_QueuedPolicyRequest, ...]
 
 
@@ -232,7 +215,7 @@ class BatchedPolicyClient:
     _deferred_responses: list[PolicyResponse] = field(
         default_factory=_policy_response_list
     )
-    _preparer: PolicyRequestBatchBuilder = field(init=False)
+    _compiler: PolicyRequestCompiler = field(init=False)
     _send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _state_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _send_task: asyncio.Task[None] | None = None
@@ -246,7 +229,7 @@ class BatchedPolicyClient:
         assert self.max_observation_tokens > 0
         assert self.timeout_seconds > 0.0
         assert self.batch_size > 0
-        self._preparer = PolicyRequestBatchBuilder(
+        self._compiler = PolicyRequestCompiler(
             batch_capacity=self.batch_size,
             max_observation_tokens=self.max_observation_tokens,
         )
@@ -406,18 +389,15 @@ class BatchedPolicyClient:
         self, active: tuple[_QueuedPolicyRequest, ...]
     ) -> Ok[_BuiltPolicyBatch] | Rejected:
         assert active
-        self._preparer.reset()
-        accepted: list[_QueuedPolicyRequest] = []
-        for request in active:
-            append_result = self._preparer.push_request(request.request)
-            if isinstance(append_result, Rejected):
-                return append_result
-            accepted.append(request)
-        assert accepted
-        sent_requests = tuple(accepted)
+        sent_requests = active
+        batch_result = self._compiler.compile_batch(
+            tuple(request.request for request in sent_requests)
+        )
+        if isinstance(batch_result, Rejected):
+            return batch_result
         return Ok(
             value=_BuiltPolicyBatch(
-                batch=self._preparer.finish_batch(),
+                batch=batch_result.value,
                 requests=sent_requests,
             )
         )
@@ -543,23 +523,3 @@ def _validate_response_routes(
             )
         seen_ids.add(route.request_id)
     return Ok(value=None)
-
-
-def _policy_response_from_decision(
-    *,
-    route: PolicyRequestRoute,
-    decision: ModelRankDecisionResult,
-) -> PolicyResponse:
-    if isinstance(decision, Rejected):
-        return RejectedPolicyResponse(
-            route=route, reason=decision.reason
-        )
-    handle = decision.value.decision_handle
-    return CompletedPolicyResponse(
-        route=route,
-        trace_token_ids=decision.value.trace_token_ids,
-        decision_handle_model_rank=handle.model_rank_index,
-        decision_handle_policy_version=handle.policy_version,
-        decision_handle_row_index=handle.row_index,
-        choice_count=decision.value.choice_count,
-    )

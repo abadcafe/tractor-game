@@ -28,13 +28,14 @@ from server.training.runtime.distributed import (
 from server.training.runtime.messages import (
     StopWorkerCommand,
     WorkerCommand,
+    WorkerCommandRejected,
     WorkerLoadStateCommand,
-    WorkerRejected,
     WorkerResponse,
+    WorkerSamplingAlreadyStopped,
+    WorkerSamplingStarted,
     WorkerSamplingStopped,
     WorkerSnapshotCommand,
     WorkerSnapshotCompleted,
-    WorkerStartSamplingCommand,
     WorkerStateLoaded,
     WorkerUpdateCommand,
     WorkerUpdateCompleted,
@@ -67,7 +68,8 @@ from server.training.runtime.shared_rollout_arena import (
     close_shared_rollout_arenas,
     create_shared_rollout_arena_group,
     reset_rollout_arenas,
-    wait_all_rollout_arenas_full,
+    snapshot_rollout_arenas,
+    wait_rollout_sample_target,
 )
 from server.training.runtime.state import RuntimeTrainingState
 from server.training.runtime.telemetry import (
@@ -77,6 +79,11 @@ from server.training.runtime.telemetry import (
 )
 from server.training.runtime.worker_process import (
     run_training_worker_process,
+)
+from server.training.runtime.worker_sampling_lifecycle import (
+    reject_after_sampling_cleanup,
+    start_worker_sampling_session,
+    stop_worker_sampling_session,
 )
 
 _GRACEFUL_PROCESS_STOP_SECONDS = 1.0
@@ -268,9 +275,7 @@ def _start_runtime_pools(
     arena_group_result = create_shared_rollout_arena_group(
         context=context,
         worker_count=execution_config.worker_process_count(),
-        samples_per_worker_update=(
-            execution_config.samples_per_worker_update
-        ),
+        samples_per_update=execution_config.samples_per_update,
         slack_sample_count=_rollout_arena_slack_sample_count(
             execution_config
         ),
@@ -591,23 +596,30 @@ async def _run_training_update(
     )
     if isinstance(reset_result, Rejected):
         return reset_result
-    start_result = await _start_worker_sampling(
-        worker_pool=pools.worker_pool,
+    session_result = await start_worker_sampling_session(
+        handles=pools.worker_pool.handles,
         execution_config=execution_config,
         policy_version=policy_version,
     )
-    if isinstance(start_result, Rejected):
-        return start_result
-    snapshot_result = wait_all_rollout_arenas_full(
+    if isinstance(session_result, Rejected):
+        return session_result
+    session = session_result.value
+    target_snapshot_result = wait_rollout_sample_target(
         group=pools.rollout_arena_group,
         policy_version=policy_version,
+        target_sample_count=execution_config.samples_per_update,
         timeout_seconds=execution_config.timeouts.rollout_response_seconds,
     )
-    if isinstance(snapshot_result, Rejected):
-        return snapshot_result
-    stopped_result = await _receive_worker_sampling_stopped(
-        worker_pool=pools.worker_pool,
-        policy_version=policy_version,
+    if isinstance(target_snapshot_result, Rejected):
+        return await reject_after_sampling_cleanup(
+            session=session,
+            timeout_seconds=(
+                execution_config.timeouts.rollout_response_seconds
+            ),
+            failure=target_snapshot_result,
+        )
+    stopped_result = await stop_worker_sampling_session(
+        session=session,
         timeout_seconds=execution_config.timeouts.rollout_response_seconds,
     )
     if isinstance(stopped_result, Rejected):
@@ -620,6 +632,12 @@ async def _run_training_update(
     )
     if isinstance(update_result, Rejected):
         return update_result
+    snapshot_result = snapshot_rollout_arenas(
+        group=pools.rollout_arena_group,
+        policy_version=policy_version,
+    )
+    if isinstance(snapshot_result, Rejected):
+        return snapshot_result
     return Ok(
         value=TrainingUpdateResult(
             snapshot=snapshot_result.value,
@@ -649,25 +667,6 @@ async def _sync_compute_rank_states(
         policy_version=policy_version,
         state_sync_timeout_seconds=state_sync_timeout_seconds,
     )
-
-
-async def _start_worker_sampling(
-    *,
-    worker_pool: _WorkerPool,
-    execution_config: ExecutionConfig,
-    policy_version: int,
-) -> _result.Ok[None] | _result.Rejected:
-    assert worker_pool.handles
-    for handle in worker_pool.handles:
-        send_result = await handle.control.send_command(
-            WorkerStartSamplingCommand(
-                policy_version=policy_version,
-                game_env_count=execution_config.game_envs_per_worker,
-            )
-        )
-        if isinstance(send_result, Rejected):
-            return send_result
-    return Ok(value=None)
 
 
 async def _run_compute_updates(
@@ -772,55 +771,11 @@ def _worker_handle_for_control(
     raise AssertionError("ready worker control endpoint is unknown")
 
 
-async def _receive_worker_sampling_stopped(
-    *,
-    worker_pool: _WorkerPool,
-    policy_version: int,
-    timeout_seconds: float,
-) -> _result.Ok[tuple[WorkerSamplingStopped, ...]] | _result.Rejected:
-    responses: list[WorkerSamplingStopped] = []
-    pending = list(worker_pool.handles)
-    while pending:
-        ready_result = await _wait_worker_responses(
-            handles=tuple(pending),
-            timeout_seconds=timeout_seconds,
-        )
-        if isinstance(ready_result, Rejected):
-            return ready_result
-        for handle in ready_result.value:
-            response_result = await handle.control.recv_response()
-            if isinstance(response_result, Rejected):
-                return response_result
-            response = response_result.value
-            pending.remove(handle)
-            if isinstance(response, WorkerRejected):
-                reason = (
-                    f"worker-{response.worker_index}: {response.reason}"
-                )
-                return Rejected(reason=reason)
-            if isinstance(response, WorkerUpdateCompleted):
-                return Rejected(
-                    reason="worker returned update during sampling"
-                )
-            if isinstance(response, WorkerStateLoaded):
-                return Rejected(
-                    reason="worker returned state sync during sampling"
-                )
-            if isinstance(response, WorkerSnapshotCompleted):
-                return Rejected(
-                    reason="worker returned snapshot during sampling"
-                )
-            if response.policy_version != policy_version:
-                return Rejected(
-                    reason=(
-                        "worker returned stale sampling policy version"
-                    )
-                )
-            responses.append(response)
-    return Ok(
-        value=tuple(
-            sorted(responses, key=lambda item: item.worker_index)
-        )
+def _worker_command_rejection(
+    response: WorkerCommandRejected,
+) -> Rejected:
+    return Rejected(
+        reason=f"worker-{response.worker_index}: {response.reason}"
     )
 
 
@@ -846,12 +801,14 @@ async def _receive_worker_updates(
                 return response_result
             response = response_result.value
             pending.remove(handle)
-            if isinstance(response, WorkerRejected):
-                reason = (
-                    f"worker-{response.worker_index}: {response.reason}"
-                )
-                return Rejected(reason=reason)
-            if isinstance(response, WorkerSamplingStopped):
+            if isinstance(response, WorkerCommandRejected):
+                return _worker_command_rejection(response)
+            if isinstance(response, WorkerSamplingStarted):
+                return Rejected(reason=unexpected_sampling_reason)
+            if isinstance(
+                response,
+                WorkerSamplingStopped | WorkerSamplingAlreadyStopped,
+            ):
                 return Rejected(reason=unexpected_sampling_reason)
             if isinstance(response, WorkerStateLoaded):
                 return Rejected(
@@ -911,14 +868,14 @@ async def _sync_worker_states(
                 return response_result
             response = response_result.value
             pending.remove(handle)
-            if isinstance(response, WorkerRejected):
-                return Rejected(
-                    reason=(
-                        f"worker-{response.worker_index}: "
-                        f"{response.reason}"
-                    )
-                )
-            if isinstance(response, WorkerSamplingStopped):
+            if isinstance(response, WorkerCommandRejected):
+                return _worker_command_rejection(response)
+            if isinstance(
+                response,
+                WorkerSamplingStarted
+                | WorkerSamplingStopped
+                | WorkerSamplingAlreadyStopped,
+            ):
                 return Rejected(
                     reason="worker returned sampling during state sync"
                 )
@@ -1052,11 +1009,14 @@ async def _snapshot_worker_state(
     if isinstance(response_result, Rejected):
         return response_result
     response = response_result.value
-    if isinstance(response, WorkerRejected):
-        return Rejected(
-            reason=f"worker-{response.worker_index}: {response.reason}"
-        )
-    if isinstance(response, WorkerSamplingStopped):
+    if isinstance(response, WorkerCommandRejected):
+        return _worker_command_rejection(response)
+    if isinstance(
+        response,
+        WorkerSamplingStarted
+        | WorkerSamplingStopped
+        | WorkerSamplingAlreadyStopped,
+    ):
         return Rejected(
             reason="worker returned sampling during snapshot"
         )

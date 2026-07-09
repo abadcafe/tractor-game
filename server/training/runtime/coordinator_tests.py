@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from server.result import Ok
+from server.result import Ok, Rejected
 from server.training.config import ModelConfig, TrainConfig
 from server.training.metrics import read_metrics
 from server.training.run_setup import initialize_training_run
@@ -16,10 +16,16 @@ from server.training.runtime.checkpoint_state import (
     create_initial_runtime_checkpoint_state,
     save_runtime_checkpoint_state,
 )
-from server.training.runtime.config import ExecutionConfig
+from server.training.runtime.config import (
+    ExecutionConfig,
+    ExecutionTimeouts,
+)
 from server.training.runtime.coordinator import run_training_coordinator
 from server.training.runtime.state import RuntimeTrainingState
 from server.training.runtime.telemetry import telemetry_path
+from server.training.runtime.training_runtime import (
+    open_training_runtime,
+)
 from server.training.torch_checkpoints import (
     read_torch_checkpoint_metadata,
 )
@@ -40,7 +46,7 @@ def test_run_training_coordinator_spawns_worker_and_commits_progress(
         ppo_epochs=1,
         minibatch_size=512,
     )
-    execution_config = ExecutionConfig(samples_per_worker_update=32)
+    execution_config = ExecutionConfig(samples_per_update=32)
     initialized = initialize_training_run(
         run_dir=tmp_path,
         run_id=tmp_path.name,
@@ -104,7 +110,7 @@ def test_run_training_coordinator_synchronizes_cpu_arena_update(
         pytest.skip("multi-rank CPU update requires two available CPUs")
     execution_config = ExecutionConfig(
         worker_cpus=worker_cpus,
-        samples_per_worker_update=32,
+        samples_per_update=32,
     )
     initial = create_initial_runtime_checkpoint_state(
         model_config=model_config,
@@ -146,3 +152,57 @@ def test_run_training_coordinator_synchronizes_cpu_arena_update(
     assert result.value.total_rounds >= 2
     assert result.value.total_samples > 17
     assert result.value.total_updates == 2
+
+
+@pytest.mark.asyncio
+async def test_runtime_stops_sampling_after_rollout_wait_failure(
+    tmp_path: Path,
+) -> None:
+    model_config = ModelConfig(
+        d_model=2,
+        layers=1,
+        heads=1,
+        max_tokens=512,
+    )
+    train_config = TrainConfig(
+        ppo_epochs=1,
+        minibatch_size=512,
+    )
+    execution_config = ExecutionConfig(
+        samples_per_update=4096,
+        timeouts=ExecutionTimeouts(
+            round_seconds=120.0,
+            rollout_response_seconds=0.2,
+            state_sync_seconds=10.0,
+            update_seconds=2.0,
+        ),
+    )
+    runtime_result = open_training_runtime(
+        run_dir=tmp_path,
+        run_id=tmp_path.name,
+        model_config=model_config,
+        train_config=train_config,
+        execution_config=execution_config,
+    )
+    assert isinstance(runtime_result, Ok)
+    runtime = runtime_result.value
+    try:
+        initial = create_initial_runtime_checkpoint_state(
+            model_config=model_config,
+            train_config=train_config,
+            execution_config=execution_config,
+        )
+        load_result = await runtime.load_state(
+            state=initial.state,
+            policy_version=0,
+        )
+        assert isinstance(load_result, Ok)
+
+        update_result = await runtime.run_update(policy_version=0)
+
+        assert isinstance(update_result, Rejected)
+        assert "rollout sample target timed out" in update_result.reason
+        snapshot_result = await runtime.snapshot(policy_version=0)
+        assert isinstance(snapshot_result, Ok)
+    finally:
+        await runtime.close()

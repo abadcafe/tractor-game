@@ -11,23 +11,25 @@ from server.training.legal_actions import (
     LegalActionIndex,
     build_legal_action_index,
 )
+from server.training.numeric_features import PAD_NUMERIC_FEATURES
 from server.training.observation import Observation, build_observation
 from server.training.policy_inference_batch import (
-    PolicyRequestBatch,
-    PolicyRequestBatchBuilder,
+    CompiledPolicyRequestBatch,
+    PolicyRequestCompiler,
     PolicyRequestInput,
     PolicyRequestRoute,
-    materialize_policy_request_batch,
+    materialize_compiled_policy_request_batch,
 )
 from server.training.sampling import PolicyDecisionKey
 from server.training.tensorize import OBSERVATION_COMPONENT_COUNT
+from server.training.vocab_schema import PAD_COMPONENT_IDS, VOCAB_SCHEMA
 
 
 def test_compile_request_batch_materializes_device_batch() -> None:
     batch_result = _request_batch((_request_input(),))
     assert isinstance(batch_result, Ok)
 
-    device_result = materialize_policy_request_batch(
+    device_result = materialize_compiled_policy_request_batch(
         batch=batch_result.value,
         device=torch.device("cpu"),
     )
@@ -77,11 +79,11 @@ def test_compile_request_batch_accepts_mixed_generation_widths() -> (
 
 
 def test_compile_request_batch_rejects_token_over_budget() -> None:
-    preparer = PolicyRequestBatchBuilder(
+    compiler = PolicyRequestCompiler(
         batch_capacity=4,
         max_observation_tokens=1,
     )
-    result = preparer.push_request(_request_input())
+    result = compiler.compile_batch((_request_input(),))
 
     assert isinstance(result, Rejected)
     assert (
@@ -90,14 +92,67 @@ def test_compile_request_batch_rejects_token_over_budget() -> None:
     )
 
 
+def test_compile_request_batch_leaves_padding_columns_zero() -> None:
+    observation = _observation()
+    batch_result = _request_batch((_request_input(),))
+    assert isinstance(batch_result, Ok)
+
+    device_result = materialize_compiled_policy_request_batch(
+        batch=batch_result.value,
+        device=torch.device("cpu"),
+    )
+
+    assert isinstance(device_result, Ok)
+    token_count = len(observation.tokens)
+    component_padding = (
+        device_result.value.observation_batch.component_ids[
+            0, token_count:
+        ]
+    )
+    numeric_value_padding = (
+        device_result.value.observation_batch.numeric_values[
+            0, token_count:
+        ]
+    )
+    numeric_mask_padding = (
+        device_result.value.observation_batch.numeric_masks[
+            0, token_count:
+        ]
+    )
+    assert int(torch.count_nonzero(component_padding).item()) == 0
+    assert int(torch.count_nonzero(numeric_value_padding).item()) == 0
+    assert int(torch.count_nonzero(numeric_mask_padding).item()) == 0
+
+
+def test_padding_token_schema_is_zero_initialized() -> None:
+    assert VOCAB_SCHEMA.obs_pad_id == 0
+    assert PAD_COMPONENT_IDS.token_type == 0
+    assert PAD_COMPONENT_IDS.segment == 0
+    assert PAD_COMPONENT_IDS.field == 0
+    assert PAD_COMPONENT_IDS.value == 0
+    assert PAD_COMPONENT_IDS.suit == 0
+    assert PAD_COMPONENT_IDS.rank == 0
+    assert PAD_COMPONENT_IDS.points == 0
+    assert PAD_COMPONENT_IDS.color == 0
+    assert PAD_COMPONENT_IDS.role == 0
+    assert PAD_COMPONENT_IDS.trick_age == 0
+    assert PAD_COMPONENT_IDS.trick_state == 0
+    assert PAD_COMPONENT_IDS.play_order == 0
+    assert PAD_COMPONENT_IDS.count == 0
+    assert PAD_COMPONENT_IDS.play_width == 0
+    assert PAD_COMPONENT_IDS.event_age == 0
+    assert all(value == 0.0 for value in PAD_NUMERIC_FEATURES.values)
+    assert all(mask == 0.0 for mask in PAD_NUMERIC_FEATURES.masks)
+
+
 def _request_batch(
     requests: tuple[PolicyRequestInput, ...],
-) -> Ok[PolicyRequestBatch] | Rejected:
-    preparer = PolicyRequestBatchBuilder(
+) -> Ok[CompiledPolicyRequestBatch] | Rejected:
+    compiler = PolicyRequestCompiler(
         batch_capacity=4,
         max_observation_tokens=512,
     )
-    return preparer.compile_batch(requests)
+    return compiler.compile_batch(requests)
 
 
 def _request_input() -> PolicyRequestInput:

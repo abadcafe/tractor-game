@@ -15,7 +15,7 @@ from server.training.legal_actions import (
 )
 from server.training.observation import Observation, build_observation
 from server.training.policy_inference_batch import (
-    PolicyRequestBatchBuilder,
+    PolicyRequestCompiler,
     PolicyRequestInput,
     PolicyRequestRoute,
 )
@@ -439,14 +439,14 @@ def _request_frame(
     batch_capacity: int,
     max_observation_tokens: int,
 ) -> Ok[PolicyRequestWireFrame] | Rejected:
-    preparer = PolicyRequestBatchBuilder(
+    compiler = PolicyRequestCompiler(
         batch_capacity=batch_capacity,
         max_observation_tokens=max_observation_tokens,
     )
-    batch_result = preparer.compile_batch(requests)
+    batch_result = compiler.compile_batch(requests)
     if isinstance(batch_result, Rejected):
         return batch_result
-    return Ok(value=preparer.encode_wire_frame(batch_result.value))
+    return Ok(value=batch_result.value.frame)
 
 
 def _request_input(

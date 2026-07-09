@@ -11,7 +11,7 @@ from server.training.policy_inference_batch import (
     DevicePolicyRequestBatch,
 )
 from server.training.policy_sampling import (
-    ModelRankPolicyDecision,
+    CompactPolicyDecisionBatch,
     PolicySampleColumns,
 )
 from server.training.policy_sampling.model_rank_sample_arena import (
@@ -27,7 +27,7 @@ from server.training.tensor_finiteness import (
 
 type PolicySamplingResult = Ok[PolicySampleColumns] | Rejected
 type PolicySamplingDecisionResult = (
-    Ok[ModelRankPolicyDecision] | Rejected
+    Ok[CompactPolicyDecisionBatch] | Rejected
 )
 
 
@@ -77,6 +77,8 @@ def sample_policy_batch(
                 selected_token_ids_padded=(
                     semantic.selected_token_ids_padded
                 ),
+                active_sample_indices=semantic.active_sample_indices,
+                active_step_indices=semantic.active_step_indices,
                 choice_token_ids=semantic.choice_token_ids,
                 choice_masks=semantic.choice_masks,
                 selected_choice_offsets=(
@@ -98,9 +100,8 @@ def sample_policy_batch_into_arena(
     requests: DevicePolicyRequestBatch,
     sampler: SemanticActionSampler,
     sample_arena: ModelRankSampleArena,
-) -> tuple[PolicySamplingDecisionResult, ...]:
+) -> PolicySamplingDecisionResult:
     """Sample policy decisions and append replay tensors to an arena."""
-    batch_size = len(requests.policy_versions)
     model.eval()
     with torch.no_grad():
         observation_batch = requests.observation_batch
@@ -115,7 +116,7 @@ def sample_policy_batch_into_arena(
             )
         )
         if isinstance(value_check, Rejected):
-            return tuple(value_check for _ in range(batch_size))
+            return value_check
 
         logit_decoder = model.begin_argument_decode_session(
             encoding,
@@ -129,7 +130,7 @@ def sample_policy_batch_into_arena(
             logit_decoder=logit_decoder,
         )
         if isinstance(semantic_result, Rejected):
-            return tuple(semantic_result for _ in range(batch_size))
+            return semantic_result
         return sample_arena.store_sampled_result(
             policy_versions=requests.policy_versions,
             observation_batch=observation_batch,

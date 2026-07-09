@@ -10,10 +10,6 @@ from server.result import Ok, Rejected
 from server.training.feature_schema import NUMERIC_FEATURE_COUNT
 from server.training.packed_observation import (
     OBSERVATION_COMPONENT_COUNT,
-    padded_packed_observation,
-)
-from server.training.policy_inference_batch.compiler import (
-    PolicyRequestBatchBuilder,
 )
 from server.training.policy_inference_batch.frame import (
     decode_policy_request_frame_metadata,
@@ -28,330 +24,30 @@ from server.training.policy_inference_batch.schema import (
     policy_request_batch_layout,
 )
 from server.training.policy_inference_batch.types import (
+    CompiledPolicyRequestBatch,
     DevicePolicyRequestBatch,
-    PolicyRequestBatch,
     PolicyRequestFrameMetadata,
-    PolicyRequestInput,
     PolicyRequestWireFrame,
 )
 from server.training.semantic_action_plan import DeviceActionPlanBatch
-from server.training.semantic_action_plan.frame import ActionPlanFrame
 from server.training.semantic_action_plan.spec import ACTION_FACE_COUNT
-from server.training.tensor_staging import staged_tensor
 from server.training.tensorize import ObservationTensorBatch
 
 
-def materialize_policy_request_inputs(
-    *,
-    requests: tuple[PolicyRequestInput, ...],
-    batch_capacity: int,
-    max_observation_tokens: int,
-    device: torch.device,
+def materialize_compiled_policy_request_batch(
+    *, batch: CompiledPolicyRequestBatch, device: torch.device
 ) -> _result.Ok[DevicePolicyRequestBatch] | _result.Rejected:
-    """Compile raw inputs and materialize them on one torch device."""
-    assert requests
-    assert len(requests) <= batch_capacity
-    preparer = PolicyRequestBatchBuilder(
-        batch_capacity=batch_capacity,
-        max_observation_tokens=max_observation_tokens,
+    """Materialize one compiled request frame on one torch device."""
+    host_frame = _host_frame_tensor(batch.frame.view(), device=device)
+    device_frame = copy_policy_request_host_frame_to_device(
+        host_frame=host_frame,
+        device_slot=None,
+        device=device,
     )
-    batch_result = preparer.compile_batch(requests)
-    if isinstance(batch_result, Rejected):
-        return batch_result
-    return materialize_policy_request_batch(
-        batch=batch_result.value, device=device
+    return materialize_policy_request_frame(
+        device_frame=device_frame,
+        metadata=batch.metadata,
     )
-
-
-def materialize_policy_request_batch(
-    *, batch: PolicyRequestBatch, device: torch.device
-) -> _result.Ok[DevicePolicyRequestBatch] | _result.Rejected:
-    """Materialize one compiled request batch without wire framing."""
-    padded_observations = tuple(
-        padded_packed_observation(
-            observation,
-            max_observation_tokens=batch.max_observation_tokens,
-        )
-        for observation in batch.packed_observations
-    )
-    return Ok(
-        value=DevicePolicyRequestBatch(
-            observation_batch=ObservationTensorBatch(
-                component_ids=staged_tensor(
-                    tuple(
-                        observation.component_rows
-                        for observation in padded_observations
-                    ),
-                    dtype=torch.long,
-                    device=device,
-                ),
-                numeric_values=staged_tensor(
-                    tuple(
-                        observation.numeric_value_rows
-                        for observation in padded_observations
-                    ),
-                    dtype=torch.float32,
-                    device=device,
-                ),
-                numeric_masks=staged_tensor(
-                    tuple(
-                        observation.numeric_mask_rows
-                        for observation in padded_observations
-                    ),
-                    dtype=torch.float32,
-                    device=device,
-                ),
-            ),
-            action_plan_batch=_materialize_action_plan_batch(
-                plans=batch.action_plans,
-                padded_generation_steps=batch.padded_generation_steps,
-                device=device,
-            ),
-            sampling_thresholds=staged_tensor(
-                tuple(
-                    _padded_thresholds(
-                        thresholds,
-                        padded_generation_steps=(
-                            batch.padded_generation_steps
-                        ),
-                    )
-                    for thresholds in batch.sampling_threshold_rows
-                ),
-                dtype=torch.float64,
-                device=device,
-            ),
-            generation_step_counts=staged_tensor(
-                batch.generation_step_counts,
-                dtype=torch.long,
-                device=device,
-            ),
-            policy_versions=batch.policy_versions,
-            padded_generation_steps=batch.padded_generation_steps,
-        )
-    )
-
-
-def _materialize_action_plan_batch(
-    *,
-    plans: tuple[ActionPlanFrame, ...],
-    padded_generation_steps: int,
-    device: torch.device,
-) -> DeviceActionPlanBatch:
-    assert plans
-    return DeviceActionPlanBatch(
-        kind_codes=staged_tensor(
-            tuple(plan.kind_code for plan in plans),
-            dtype=torch.long,
-            device=device,
-        ),
-        available_counts=staged_tensor(
-            tuple(plan.available_counts for plan in plans),
-            dtype=torch.long,
-            device=device,
-        ),
-        effective_suits=staged_tensor(
-            tuple(plan.effective_suits for plan in plans),
-            dtype=torch.long,
-            device=device,
-        ),
-        same_suit_mask=staged_tensor(
-            tuple(plan.same_suit_mask for plan in plans),
-            dtype=torch.bool,
-            device=device,
-        ),
-        off_suit_mask=staged_tensor(
-            tuple(plan.off_suit_mask for plan in plans),
-            dtype=torch.bool,
-            device=device,
-        ),
-        pair_face_mask=staged_tensor(
-            tuple(plan.pair_face_mask for plan in plans),
-            dtype=torch.bool,
-            device=device,
-        ),
-        min_select=staged_tensor(
-            tuple(plan.min_select for plan in plans),
-            dtype=torch.long,
-            device=device,
-        ),
-        max_select=staged_tensor(
-            tuple(plan.max_select for plan in plans),
-            dtype=torch.long,
-            device=device,
-        ),
-        exact_select=staged_tensor(
-            tuple(plan.exact_select for plan in plans),
-            dtype=torch.long,
-            device=device,
-        ),
-        required_same_suit_count=staged_tensor(
-            tuple(plan.required_same_suit_count for plan in plans),
-            dtype=torch.long,
-            device=device,
-        ),
-        pair_floor=staged_tensor(
-            tuple(plan.pair_floor for plan in plans),
-            dtype=torch.long,
-            device=device,
-        ),
-        has_tractor=staged_tensor(
-            tuple(plan.has_tractor for plan in plans),
-            dtype=torch.bool,
-            device=device,
-        ),
-        trace_tokens=staged_tensor(
-            tuple(
-                _padded_trace_tokens(
-                    plan.trace_tokens,
-                    padded_generation_steps=padded_generation_steps,
-                )
-                for plan in plans
-            ),
-            dtype=torch.long,
-            device=device,
-        ),
-        trace_token_mask=staged_tensor(
-            tuple(
-                _padded_trace_token_mask(
-                    plan.trace_tokens,
-                    padded_generation_steps=padded_generation_steps,
-                )
-                for plan in plans
-            ),
-            dtype=torch.bool,
-            device=device,
-        ),
-        trace_lengths=staged_tensor(
-            tuple(
-                _padded_trace_lengths(plan.trace_tokens)
-                for plan in plans
-            ),
-            dtype=torch.long,
-            device=device,
-        ),
-        trace_row_mask=staged_tensor(
-            tuple(
-                _padded_trace_row_mask(plan.trace_tokens)
-                for plan in plans
-            ),
-            dtype=torch.bool,
-            device=device,
-        ),
-        pair_plan_masks=staged_tensor(
-            tuple(
-                _padded_pair_plan_masks(plan.pair_plan_masks)
-                for plan in plans
-            ),
-            dtype=torch.bool,
-            device=device,
-        ),
-        pair_plan_row_mask=staged_tensor(
-            tuple(
-                _padded_pair_plan_row_mask(plan.pair_plan_masks)
-                for plan in plans
-            ),
-            dtype=torch.bool,
-            device=device,
-        ),
-    )
-
-
-def _padded_thresholds(
-    values: tuple[float, ...], *, padded_generation_steps: int
-) -> tuple[float, ...]:
-    assert len(values) <= padded_generation_steps
-    padding = padded_generation_steps - len(values)
-    return (*values, *(0.0 for _ in range(padding)))
-
-
-def _padded_trace_tokens(
-    traces: tuple[tuple[int, ...], ...],
-    *,
-    padded_generation_steps: int,
-) -> tuple[tuple[int, ...], ...]:
-    assert len(traces) <= MAX_TRACE_COUNT
-    return tuple(
-        _padded_i64_row(trace, width=padded_generation_steps)
-        for trace in _pad_tuple(traces, count=MAX_TRACE_COUNT, empty=())
-    )
-
-
-def _padded_trace_token_mask(
-    traces: tuple[tuple[int, ...], ...],
-    *,
-    padded_generation_steps: int,
-) -> tuple[tuple[bool, ...], ...]:
-    assert len(traces) <= MAX_TRACE_COUNT
-    return tuple(
-        _padded_bool_row(
-            tuple(True for _ in trace),
-            width=padded_generation_steps,
-        )
-        for trace in _pad_tuple(traces, count=MAX_TRACE_COUNT, empty=())
-    )
-
-
-def _padded_trace_lengths(
-    traces: tuple[tuple[int, ...], ...],
-) -> tuple[int, ...]:
-    assert len(traces) <= MAX_TRACE_COUNT
-    return _padded_i64_row(
-        tuple(len(trace) for trace in traces), width=MAX_TRACE_COUNT
-    )
-
-
-def _padded_trace_row_mask(
-    traces: tuple[tuple[int, ...], ...],
-) -> tuple[bool, ...]:
-    assert len(traces) <= MAX_TRACE_COUNT
-    return _padded_bool_row(
-        tuple(True for _ in traces), width=MAX_TRACE_COUNT
-    )
-
-
-def _padded_pair_plan_masks(
-    pair_plans: tuple[tuple[bool, ...], ...],
-) -> tuple[tuple[bool, ...], ...]:
-    assert len(pair_plans) <= MAX_PAIR_PLAN_COUNT
-    return tuple(
-        _padded_bool_row(row, width=ACTION_FACE_COUNT)
-        for row in _pad_tuple(
-            pair_plans,
-            count=MAX_PAIR_PLAN_COUNT,
-            empty=tuple(False for _ in range(ACTION_FACE_COUNT)),
-        )
-    )
-
-
-def _padded_pair_plan_row_mask(
-    pair_plans: tuple[tuple[bool, ...], ...],
-) -> tuple[bool, ...]:
-    assert len(pair_plans) <= MAX_PAIR_PLAN_COUNT
-    return _padded_bool_row(
-        tuple(True for _ in pair_plans),
-        width=MAX_PAIR_PLAN_COUNT,
-    )
-
-
-def _padded_i64_row(
-    values: tuple[int, ...], *, width: int
-) -> tuple[int, ...]:
-    assert len(values) <= width
-    return (*values, *(0 for _ in range(width - len(values))))
-
-
-def _padded_bool_row(
-    values: tuple[bool, ...], *, width: int
-) -> tuple[bool, ...]:
-    assert len(values) <= width
-    return (*values, *(False for _ in range(width - len(values))))
-
-
-def _pad_tuple[T](
-    values: tuple[T, ...], *, count: int, empty: T
-) -> tuple[T, ...]:
-    assert len(values) <= count
-    return (*values, *(empty for _ in range(count - len(values))))
 
 
 def materialize_policy_request_batch_frame(

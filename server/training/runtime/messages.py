@@ -3,14 +3,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from server.training.ppo import PPOUpdateStats
 from server.training.runtime.state import RuntimeTrainingState
 
+type WorkerCommandKind = Literal[
+    "load_state",
+    "start_sampling",
+    "stop_sampling",
+    "update",
+    "snapshot",
+    "setup",
+]
+
 
 @dataclass(frozen=True, slots=True)
 class WorkerStartSamplingCommand:
-    """Run worker game envs until the worker arena is full."""
+    """Start worker game envs for one policy version."""
 
     policy_version: int
     game_env_count: int
@@ -52,6 +62,16 @@ class WorkerSnapshotCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkerStopSamplingCommand:
+    """Stop active worker game envs for one policy version."""
+
+    policy_version: int
+
+    def __post_init__(self) -> None:
+        assert self.policy_version >= 0
+
+
+@dataclass(frozen=True, slots=True)
 class StopWorkerCommand:
     """Command to stop a worker process."""
 
@@ -61,6 +81,7 @@ class StopWorkerCommand:
 type WorkerCommand = (
     WorkerLoadStateCommand
     | WorkerStartSamplingCommand
+    | WorkerStopSamplingCommand
     | WorkerUpdateCommand
     | WorkerSnapshotCommand
     | StopWorkerCommand
@@ -73,12 +94,25 @@ def decode_worker_command(value: object) -> WorkerCommand | None:
         value,
         WorkerLoadStateCommand
         | WorkerStartSamplingCommand
+        | WorkerStopSamplingCommand
         | WorkerUpdateCommand
         | WorkerSnapshotCommand
         | StopWorkerCommand,
     ):
         return value
     return None
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerSamplingStarted:
+    """Worker response after sampling tasks are running."""
+
+    worker_index: int
+    policy_version: int
+
+    def __post_init__(self) -> None:
+        assert self.worker_index >= 0
+        assert self.policy_version >= 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,7 +155,21 @@ class WorkerSnapshotCompleted:
 
 @dataclass(frozen=True, slots=True)
 class WorkerSamplingStopped:
-    """Worker response after its rollout arena becomes full."""
+    """Worker response after active game envs have stopped."""
+
+    worker_index: int
+    policy_version: int
+    cancelled_env_count: int
+
+    def __post_init__(self) -> None:
+        assert self.worker_index >= 0
+        assert self.policy_version >= 0
+        assert self.cancelled_env_count >= 0
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerSamplingAlreadyStopped:
+    """Worker response when stop finds no active sampling task."""
 
     worker_index: int
     policy_version: int
@@ -132,19 +180,29 @@ class WorkerSamplingStopped:
 
 
 @dataclass(frozen=True, slots=True)
-class WorkerRejected:
-    """Business rejection from one worker."""
+class WorkerCommandRejected:
+    """Business rejection from one worker command."""
 
     worker_index: int
+    command: WorkerCommandKind
+    policy_version: int | None
     reason: str
+
+    def __post_init__(self) -> None:
+        assert self.worker_index >= 0
+        if self.policy_version is not None:
+            assert self.policy_version >= 0
+        assert self.reason
 
 
 type WorkerResponse = (
     WorkerStateLoaded
+    | WorkerSamplingStarted
     | WorkerUpdateCompleted
     | WorkerSnapshotCompleted
     | WorkerSamplingStopped
-    | WorkerRejected
+    | WorkerSamplingAlreadyStopped
+    | WorkerCommandRejected
 )
 
 
@@ -153,10 +211,12 @@ def decode_worker_response(value: object) -> WorkerResponse | None:
     if isinstance(
         value,
         WorkerStateLoaded
+        | WorkerSamplingStarted
         | WorkerUpdateCompleted
         | WorkerSnapshotCompleted
         | WorkerSamplingStopped
-        | WorkerRejected,
+        | WorkerSamplingAlreadyStopped
+        | WorkerCommandRejected,
     ):
         return value
     return None

@@ -38,18 +38,19 @@ def create_shared_rollout_arena_group(
     *,
     context: SpawnContext,
     worker_count: int,
-    samples_per_worker_update: int,
+    samples_per_update: int,
     slack_sample_count: int,
     policy_version: int = 0,
 ) -> _result.Ok[SharedRolloutArenaGroup] | _result.Rejected:
     """Create one fixed-capacity rollout arena per worker."""
     assert worker_count > 0
-    assert samples_per_worker_update > 0
+    assert samples_per_update > 0
     assert slack_sample_count >= 0
     assert policy_version >= 0
-    capacity = samples_per_worker_update + slack_sample_count
+    capacity = samples_per_update + slack_sample_count
     handles: list[RolloutArenaHandle] = []
     segments: list[shared_memory.SharedMemory] = []
+    progress_condition = context.Condition()
     try:
         for worker_index in range(worker_count):
             segment = shared_memory.SharedMemory(
@@ -60,7 +61,6 @@ def create_shared_rollout_arena_group(
                 segment=segment,
                 policy_version=policy_version,
                 capacity=capacity,
-                target_sample_count=samples_per_worker_update,
             )
             condition = context.Condition()
             handles.append(
@@ -68,8 +68,8 @@ def create_shared_rollout_arena_group(
                     worker_index=worker_index,
                     shared_memory_name=segment.name,
                     capacity=capacity,
-                    target_sample_count=samples_per_worker_update,
                     condition=condition,
+                    progress_condition=progress_condition,
                 )
             )
             segments.append(segment)
@@ -86,27 +86,40 @@ def create_shared_rollout_arena_group(
     )
 
 
-def wait_all_rollout_arenas_full(
+def wait_rollout_sample_target(
     *,
     group: SharedRolloutArenaGroup,
     policy_version: int,
+    target_sample_count: int,
     timeout_seconds: float,
 ) -> _result.Ok[RolloutArenaSnapshot] | _result.Rejected:
-    """Block until every arena is full for one policy version."""
+    """Block until aggregate committed samples reach a target."""
     assert policy_version >= 0
+    assert target_sample_count > 0
     assert timeout_seconds > 0.0
     deadline = time.monotonic() + timeout_seconds
-    for handle in group.handles:
-        wait_result = _wait_arena_full(
-            handle=handle,
-            policy_version=policy_version,
-            deadline=deadline,
-        )
-        if isinstance(wait_result, Rejected):
-            return wait_result
-    return snapshot_rollout_arenas(
-        group=group, policy_version=policy_version
-    )
+    progress_condition = group.handles[0].progress_condition
+    progress_condition.acquire()
+    try:
+        while True:
+            snapshot_result = snapshot_rollout_arenas(
+                group=group, policy_version=policy_version
+            )
+            if isinstance(snapshot_result, Rejected):
+                return snapshot_result
+            if (
+                snapshot_result.value.sample_count
+                >= target_sample_count
+            ):
+                return snapshot_result
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                return Rejected(
+                    reason="rollout sample target timed out"
+                )
+            progress_condition.wait(remaining)
+    finally:
+        progress_condition.release()
 
 
 def snapshot_rollout_arenas(
@@ -118,7 +131,7 @@ def snapshot_rollout_arenas(
     assert policy_version >= 0
     snapshot = RolloutArenaSnapshot(
         policy_version=policy_version,
-        target_sample_count=0,
+        capacity=0,
         round_count=0,
         sample_count=0,
         generated_action_count=0,
@@ -158,22 +171,27 @@ def reset_rollout_arenas(
 ) -> _result.Ok[None] | _result.Rejected:
     """Reset every arena to accept a new policy version."""
     assert policy_version >= 0
-    for handle in group.handles:
-        segment = _attach_segment(handle)
-        try:
-            handle.condition.acquire()
+    progress_condition = group.handles[0].progress_condition
+    progress_condition.acquire()
+    try:
+        for handle in group.handles:
+            segment = _attach_segment(handle)
             try:
-                _write_empty_header(
-                    segment=segment,
-                    policy_version=policy_version,
-                    capacity=handle.capacity,
-                    target_sample_count=handle.target_sample_count,
-                )
-                handle.condition.notify_all()
+                handle.condition.acquire()
+                try:
+                    _write_empty_header(
+                        segment=segment,
+                        policy_version=policy_version,
+                        capacity=handle.capacity,
+                    )
+                    handle.condition.notify_all()
+                finally:
+                    handle.condition.release()
             finally:
-                handle.condition.release()
-        finally:
-            segment.close()
+                segment.close()
+        progress_condition.notify_all()
+    finally:
+        progress_condition.release()
     return Ok(value=None)
 
 
@@ -192,7 +210,7 @@ def header_snapshot(header: RolloutArenaHeader) -> RolloutArenaSnapshot:
     """Convert a header-like object into an aggregate snapshot."""
     return RolloutArenaSnapshot(
         policy_version=header.policy_version,
-        target_sample_count=header.target_sample_count,
+        capacity=header.capacity,
         round_count=header.round_count,
         sample_count=header.sample_count,
         generated_action_count=header.generated_action_count,
@@ -209,52 +227,17 @@ def header_snapshot(header: RolloutArenaHeader) -> RolloutArenaSnapshot:
     )
 
 
-def _wait_arena_full(
-    *,
-    handle: RolloutArenaHandle,
-    policy_version: int,
-    deadline: float,
-) -> _result.Ok[None] | _result.Rejected:
-    segment = _attach_segment(handle)
-    try:
-        handle.condition.acquire()
-        try:
-            while True:
-                header = unpack_header(_segment_buffer(segment))
-                if (
-                    header.policy_version == policy_version
-                    and header.full
-                ):
-                    return Ok(value=None)
-                if header.policy_version != policy_version:
-                    return Rejected(
-                        reason="rollout arena policy version mismatch"
-                    )
-                remaining = deadline - time.monotonic()
-                if remaining <= 0.0:
-                    return Rejected(
-                        reason="rollout arena fill timed out"
-                    )
-                handle.condition.wait(remaining)
-        finally:
-            handle.condition.release()
-    finally:
-        segment.close()
-
-
 def _write_empty_header(
     *,
     segment: shared_memory.SharedMemory,
     policy_version: int,
     capacity: int,
-    target_sample_count: int,
 ) -> None:
     pack_header(
         _segment_buffer(segment),
         header=empty_header(
             policy_version=policy_version,
             capacity=capacity,
-            target_sample_count=target_sample_count,
         ),
     )
 
@@ -280,9 +263,7 @@ def _merge_snapshot(
     assert first.policy_version == second.policy_version
     return RolloutArenaSnapshot(
         policy_version=first.policy_version,
-        target_sample_count=(
-            first.target_sample_count + second.target_sample_count
-        ),
+        capacity=first.capacity + second.capacity,
         round_count=first.round_count + second.round_count,
         sample_count=first.sample_count + second.sample_count,
         generated_action_count=(

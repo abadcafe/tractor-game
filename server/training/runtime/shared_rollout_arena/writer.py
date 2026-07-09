@@ -41,54 +41,63 @@ class SharedRolloutArenaWriter:
             return Rejected(
                 reason="return commit policy version mismatch"
             )
+        notify_progress = False
+        result: _result.Ok[RolloutArenaAppendResult] | _result.Rejected
         self.handle.condition.acquire()
         try:
             buffer = _segment_buffer(self._segment)
             header = unpack_header(buffer)
             if header.policy_version != policy_version:
-                return Rejected(
+                result = Rejected(
                     reason="rollout arena policy version mismatch"
                 )
-            if header.sample_count >= header.capacity:
+            elif header.sample_count >= header.capacity:
                 dropped = commit.sample_count()
                 updated = _add_dropped_samples(header, dropped)
                 pack_header(buffer, header=updated)
-                return Ok(
+                self.handle.condition.notify_all()
+                notify_progress = True
+                result = Ok(
                     value=RolloutArenaAppendResult(
                         accepted_sample_count=0,
                         dropped_sample_count=dropped,
-                        arena_full=True,
+                        capacity_reached=True,
                     )
                 )
-            remaining = header.capacity - header.sample_count
-            accepted = min(remaining, commit.sample_count())
-            dropped = commit.sample_count() - accepted
-            _write_commit_rows(
-                buffer=buffer,
-                capacity=header.capacity,
-                start_index=header.sample_count,
-                commit=commit,
-                accepted_count=accepted,
-            )
-            updated = _advance_header(
-                header=header,
-                metrics=metrics,
-                accepted_step_counts=commit.step_counts[:accepted],
-                accepted_sample_count=accepted,
-                dropped_sample_count=dropped,
-            )
-            pack_header(buffer, header=updated)
-            if updated.full:
-                self.handle.condition.notify_all()
-            return Ok(
-                value=RolloutArenaAppendResult(
+            else:
+                remaining = header.capacity - header.sample_count
+                accepted = min(remaining, commit.sample_count())
+                dropped = commit.sample_count() - accepted
+                _write_commit_rows(
+                    buffer=buffer,
+                    capacity=header.capacity,
+                    start_index=header.sample_count,
+                    commit=commit,
+                    accepted_count=accepted,
+                )
+                updated = _advance_header(
+                    header=header,
+                    metrics=metrics,
+                    accepted_step_counts=commit.step_counts[:accepted],
                     accepted_sample_count=accepted,
                     dropped_sample_count=dropped,
-                    arena_full=updated.full,
                 )
-            )
+                pack_header(buffer, header=updated)
+                self.handle.condition.notify_all()
+                notify_progress = True
+                result = Ok(
+                    value=RolloutArenaAppendResult(
+                        accepted_sample_count=accepted,
+                        dropped_sample_count=dropped,
+                        capacity_reached=updated.sample_count
+                        >= updated.capacity,
+                    )
+                )
         finally:
             self.handle.condition.release()
+        if notify_progress:
+            _notify_progress(self.handle)
+        return result
 
     def record_cancelled_envs(self, count: int) -> None:
         """Add cancelled game-env count after an arena reaches full."""
@@ -103,8 +112,6 @@ class SharedRolloutArenaWriter:
                 policy_version=header.policy_version,
                 sample_count=header.sample_count,
                 capacity=header.capacity,
-                target_sample_count=header.target_sample_count,
-                full=header.full,
                 round_count=header.round_count,
                 generated_action_count=header.generated_action_count,
                 accepted_action_count=header.accepted_action_count,
@@ -121,6 +128,7 @@ class SharedRolloutArenaWriter:
             pack_header(buffer, header=updated)
         finally:
             self.handle.condition.release()
+        _notify_progress(self.handle)
 
     def close(self) -> None:
         """Detach this process from the shared memory segment."""
@@ -145,6 +153,14 @@ def _segment_buffer(
     buffer = segment.buf
     assert buffer is not None
     return buffer
+
+
+def _notify_progress(handle: RolloutArenaHandle) -> None:
+    handle.progress_condition.acquire()
+    try:
+        handle.progress_condition.notify_all()
+    finally:
+        handle.progress_condition.release()
 
 
 def _write_commit_rows(
@@ -184,13 +200,10 @@ def _advance_header(
     accepted_round = accepted_sample_count > 0
     accepted_total_steps = sum(accepted_step_counts)
     accepted_max_steps = max(accepted_step_counts, default=0)
-    full = header.full or new_count >= header.target_sample_count
     return RolloutArenaHeader(
         policy_version=header.policy_version,
         sample_count=new_count,
         capacity=header.capacity,
-        target_sample_count=header.target_sample_count,
-        full=full,
         round_count=header.round_count + (1 if accepted_round else 0),
         generated_action_count=(
             header.generated_action_count
@@ -239,8 +252,6 @@ def _add_dropped_samples(
         policy_version=header.policy_version,
         sample_count=header.sample_count,
         capacity=header.capacity,
-        target_sample_count=header.target_sample_count,
-        full=header.full,
         round_count=header.round_count,
         generated_action_count=header.generated_action_count,
         accepted_action_count=header.accepted_action_count,

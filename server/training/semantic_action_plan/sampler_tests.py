@@ -53,7 +53,7 @@ def test_semantic_action_sampler_zero_threshold_selects_first() -> None:
 
     assert isinstance(result, Ok)
     assert _token_ids(result.value) == (pass_id,)
-    assert int(result.value.selected_choice_offsets[0, 0].item()) == 0
+    assert int(result.value.selected_choice_offsets[0].item()) == 0
 
 
 def test_semantic_action_sampler_ignores_invalid_vocab_logit() -> None:
@@ -112,7 +112,7 @@ def test_semantic_action_sampler_reuses_workspace() -> None:
     assert isinstance(second, Ok)
     assert first_token_ids == (pass_id,)
     assert _token_ids(second.value) == (stop_id,)
-    assert int(second.value.choice_masks[0, 0].sum().item()) == 1
+    assert int(second.value.choice_masks[0].sum().item()) == 1
 
 
 def _sample_trace_set(

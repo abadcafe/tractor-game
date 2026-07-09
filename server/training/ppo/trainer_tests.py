@@ -488,6 +488,35 @@ def test_update_rejects_non_finite_gradients_before_optimizer_step(
         assert torch.equal(parameter.detach(), before[index])
 
 
+def test_arena_minibatch_reuses_active_replay_capacity() -> None:
+    batch = _single_card_batch(count=3)
+    first = batch.select_minibatch(
+        indices=torch.tensor((0, 1), dtype=torch.long),
+        advantages=batch.raw_advantages,
+        global_count=torch.tensor(2, dtype=torch.long),
+    )
+    assert first.replay is not None
+    assert first.replay.active_step_count == 4
+    first_choice_ptr = first.replay.choice_token_ids.data_ptr()
+    first_mask_ptr = first.replay.choice_masks.data_ptr()
+    first_offset_ptr = first.replay.selected_choice_offsets.data_ptr()
+
+    second = batch.select_minibatch(
+        indices=torch.tensor((2,), dtype=torch.long),
+        advantages=batch.raw_advantages,
+        global_count=torch.tensor(1, dtype=torch.long),
+    )
+
+    assert second.replay is not None
+    assert second.replay.active_step_count == 2
+    assert second.replay.choice_token_ids.data_ptr() == first_choice_ptr
+    assert second.replay.choice_masks.data_ptr() == first_mask_ptr
+    assert (
+        second.replay.selected_choice_offsets.data_ptr()
+        == first_offset_ptr
+    )
+
+
 def _single_card_batch(*, count: int) -> PPOBatchSource:
     assert count > 0
     device = torch.device("cpu")
@@ -595,10 +624,13 @@ def _store_single_card_decision(
             (1,), dtype=torch.float32, device=device
         ),
     )
-    assert len(stored) == 1
-    stored_decision = stored[0]
-    assert isinstance(stored_decision, Ok)
-    return stored_decision.value.decision_handle
+    assert isinstance(stored, Ok)
+    assert stored.value.row_count() == 1
+    return DecisionHandle(
+        model_rank_index=stored.value.model_rank_index,
+        policy_version=stored.value.policy_versions[0],
+        row_index=stored.value.row_indices[0],
+    )
 
 
 def _semantic_sample_for_trace(

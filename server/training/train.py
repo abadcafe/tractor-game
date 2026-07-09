@@ -74,7 +74,7 @@ class ExecutionConfigOverrides:
     telemetry_interval_seconds: float | None = None
     model_inference_batch_size: int | None = None
     game_envs_per_worker: int | None = None
-    samples_per_worker_update: int | None = None
+    samples_per_update: int | None = None
 
 
 def resolve_model_config(
@@ -196,10 +196,10 @@ def resolve_execution_config(
         if overrides.game_envs_per_worker is None
         else overrides.game_envs_per_worker
     )
-    samples_per_worker_update = (
-        base.samples_per_worker_update
-        if overrides.samples_per_worker_update is None
-        else overrides.samples_per_worker_update
+    samples_per_update = (
+        base.samples_per_update
+        if overrides.samples_per_update is None
+        else overrides.samples_per_update
     )
     return _result.Ok(
         value=ExecutionConfig(
@@ -214,7 +214,7 @@ def resolve_execution_config(
             else overrides.telemetry_interval_seconds,
             model_inference_batch_size=model_inference_batch_size,
             game_envs_per_worker=game_envs_per_worker,
-            samples_per_worker_update=samples_per_worker_update,
+            samples_per_update=samples_per_update,
         )
     )
 
@@ -441,7 +441,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         default=None,
     )
     parser.add_argument(
-        "--samples-per-worker-update",
+        "--samples-per-update",
         type=_positive_int_arg,
         default=None,
     )
@@ -559,7 +559,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 args.model_inference_batch_size
             ),
             game_envs_per_worker=args.game_envs_per_worker,
-            samples_per_worker_update=args.samples_per_worker_update,
+            samples_per_update=args.samples_per_update,
         )
     )
     if isinstance(execution_config_result, _result.Rejected):

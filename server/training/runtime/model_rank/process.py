@@ -16,7 +16,7 @@ from server.training.policy_inference_batch import (
     build_policy_response_batch_wire,
     build_rejected_policy_response_batch_wire,
 )
-from server.training.policy_sampling import ModelRankPolicyDecision
+from server.training.policy_sampling import CompactPolicyDecisionBatch
 from server.training.ppo.distributed import (
     PPOUpdatePartition,
     single_update_partition,
@@ -65,14 +65,12 @@ from server.training.runtime.telemetry import (
     TelemetrySink,
 )
 
-type ModelRankDecisionResult = Ok[ModelRankPolicyDecision] | Rejected
-
 
 @dataclass(slots=True)
 class _WorkerResponseBucket:
     worker_index: int
     routes: list[PolicyRequestRoute]
-    decisions: list[ModelRankDecisionResult]
+    row_indices: list[int]
 
     def __post_init__(self) -> None:
         assert self.worker_index >= 0
@@ -587,10 +585,16 @@ async def _process_inference_batch(
     staged_batch: ModelRankInferenceBatch,
     response_peers: tuple[AsyncPolicyPeer, ...],
 ) -> _result.Ok[None] | _result.Rejected:
-    decisions = core.decide_batch(staged_batch.device_batch)
+    decision_result = core.decide_batch(staged_batch.device_batch)
+    if isinstance(decision_result, Rejected):
+        return await _send_rejected_inference_batch(
+            routes=staged_batch.routes,
+            reason=decision_result.reason,
+            response_peers=response_peers,
+        )
     return await _send_response_batches(
         routes=staged_batch.routes,
-        decisions=decisions,
+        decisions=decision_result.value,
         response_peers=response_peers,
     )
 
@@ -598,10 +602,10 @@ async def _process_inference_batch(
 async def _send_response_batches(
     *,
     routes: tuple[PolicyRequestRoute, ...],
-    decisions: tuple[ModelRankDecisionResult, ...],
+    decisions: CompactPolicyDecisionBatch,
     response_peers: tuple[AsyncPolicyPeer, ...],
 ) -> _result.Ok[None] | _result.Rejected:
-    assert len(routes) == len(decisions)
+    assert len(routes) == decisions.row_count()
     route_validation = _validate_response_routes(
         routes=routes, response_peers=response_peers
     )
@@ -616,7 +620,10 @@ async def _send_response_batches(
             continue
         batch_result = build_policy_response_batch_wire(
             routes=tuple(bucket.routes),
-            decisions=tuple(bucket.decisions),
+            decisions=_select_compact_decision_rows(
+                decisions=decisions,
+                rows=tuple(bucket.row_indices),
+            ),
         )
         if isinstance(batch_result, Rejected):
             return batch_result
@@ -629,22 +636,41 @@ async def _send_response_batches(
 def _group_response_batches_by_worker(
     *,
     routes: tuple[PolicyRequestRoute, ...],
-    decisions: tuple[ModelRankDecisionResult, ...],
+    decisions: CompactPolicyDecisionBatch,
 ) -> dict[int, _WorkerResponseBucket]:
-    assert len(routes) == len(decisions)
+    assert len(routes) == decisions.row_count()
     buckets: dict[int, _WorkerResponseBucket] = {}
-    for route, decision in zip(routes, decisions, strict=True):
+    for row_index, route in enumerate(routes):
         bucket = buckets.get(route.worker_index)
         if bucket is None:
             bucket = _WorkerResponseBucket(
                 worker_index=route.worker_index,
                 routes=[],
-                decisions=[],
+                row_indices=[],
             )
             buckets[route.worker_index] = bucket
         bucket.routes.append(route)
-        bucket.decisions.append(decision)
+        bucket.row_indices.append(row_index)
     return buckets
+
+
+def _select_compact_decision_rows(
+    *, decisions: CompactPolicyDecisionBatch, rows: tuple[int, ...]
+) -> CompactPolicyDecisionBatch:
+    assert rows
+    if rows == tuple(range(decisions.row_count())):
+        return decisions
+    return CompactPolicyDecisionBatch(
+        model_rank_index=decisions.model_rank_index,
+        policy_versions=tuple(
+            decisions.policy_versions[row] for row in rows
+        ),
+        row_indices=tuple(decisions.row_indices[row] for row in rows),
+        choice_counts=tuple(
+            decisions.choice_counts[row] for row in rows
+        ),
+        trace_token_batch=decisions.trace_token_batch.select_rows(rows),
+    )
 
 
 def _validate_response_routes(

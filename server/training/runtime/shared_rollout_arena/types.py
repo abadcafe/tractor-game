@@ -25,15 +25,13 @@ class RolloutArenaHandle:
     worker_index: int
     shared_memory_name: str
     capacity: int
-    target_sample_count: int
     condition: RolloutArenaCondition
+    progress_condition: RolloutArenaCondition
 
     def __post_init__(self) -> None:
         assert self.worker_index >= 0
         assert self.shared_memory_name
         assert self.capacity > 0
-        assert self.target_sample_count > 0
-        assert self.target_sample_count <= self.capacity
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,7 +61,7 @@ class RolloutArenaAppendResult:
 
     accepted_sample_count: int
     dropped_sample_count: int
-    arena_full: bool
+    capacity_reached: bool
 
     def __post_init__(self) -> None:
         assert self.accepted_sample_count >= 0
@@ -75,7 +73,7 @@ class RolloutArenaSnapshot:
     """Coordinator-visible aggregate of filled rollout arenas."""
 
     policy_version: int
-    target_sample_count: int
+    capacity: int
     round_count: int
     sample_count: int
     generated_action_count: int
@@ -92,7 +90,7 @@ class RolloutArenaSnapshot:
 
     def __post_init__(self) -> None:
         assert self.policy_version >= 0
-        assert self.target_sample_count >= 0
+        assert self.capacity >= 0
         assert self.round_count >= 0
         assert self.sample_count >= 0
         assert self.generated_action_count >= 0

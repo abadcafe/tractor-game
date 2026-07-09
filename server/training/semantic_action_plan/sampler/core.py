@@ -59,6 +59,8 @@ class SemanticActionSampleBatch:
     """Workspace-backed semantic traces and PPO replay tensors."""
 
     selected_token_ids_padded: Tensor
+    active_sample_indices: Tensor
+    active_step_indices: Tensor
     choice_token_ids: Tensor
     choice_masks: Tensor
     selected_choice_offsets: Tensor
@@ -76,19 +78,23 @@ class SemanticActionSampleBatch:
             batch_size,
             max_steps,
         )
+        assert self.active_sample_indices.ndim == 1
+        assert self.active_step_indices.shape == (
+            int(self.active_sample_indices.shape[0]),
+        )
         assert self.choice_token_ids.shape == (
-            batch_size,
-            max_steps,
+            int(self.active_sample_indices.shape[0]),
             MAX_LEGAL_CANDIDATE_COUNT,
         )
         assert self.choice_masks.shape == self.choice_token_ids.shape
         assert self.selected_choice_offsets.shape == (
-            batch_size,
-            max_steps,
+            int(self.active_sample_indices.shape[0]),
         )
         assert self.choice_counts.shape == (batch_size,)
         assert self.log_probabilities.shape == (batch_size,)
         assert self.selected_token_ids_padded.dtype == torch.long
+        assert self.active_sample_indices.dtype == torch.long
+        assert self.active_step_indices.dtype == torch.long
         assert self.choice_token_ids.dtype == torch.int16
         assert self.choice_masks.dtype == torch.bool
         assert self.selected_choice_offsets.dtype == torch.long
@@ -96,6 +102,8 @@ class SemanticActionSampleBatch:
         assert self.choice_counts.dtype == torch.long
         device = self.step_counts.device
         assert self.selected_token_ids_padded.device == device
+        assert self.active_sample_indices.device == device
+        assert self.active_step_indices.device == device
         assert self.choice_token_ids.device == device
         assert self.choice_masks.device == device
         assert self.selected_choice_offsets.device == device
@@ -104,6 +112,15 @@ class SemanticActionSampleBatch:
 
 
 type SemanticSamplingResult = Ok[SemanticActionSampleBatch] | Rejected
+
+
+@dataclass(frozen=True, slots=True)
+class _FlatReplay:
+    active_sample_indices: Tensor
+    active_step_indices: Tensor
+    choice_token_ids: Tensor
+    choice_masks: Tensor
+    selected_choice_offsets: Tensor
 
 
 @dataclass(slots=True)
@@ -416,6 +433,11 @@ def _sample_semantic_actions(
     error_value = _error_code_value(error_code)
     if error_value != 0:
         return Rejected(reason=_error_reason(error_value))
+    flat_replay = _flat_active_replay(
+        workspace=workspace,
+        batch_size=batch_size,
+        padded_generation_steps=padded_generation_steps,
+    )
     return _result.Ok(
         value=SemanticActionSampleBatch(
             selected_token_ids_padded=(
@@ -423,27 +445,55 @@ def _sample_semantic_actions(
                     :batch_size, :padded_generation_steps
                 ]
             ),
-            choice_token_ids=(
-                workspace.replay_choice_ids[
-                    :batch_size, :padded_generation_steps, :
-                ]
-            ),
-            choice_masks=(
-                workspace.replay_choice_masks[
-                    :batch_size, :padded_generation_steps, :
-                ]
-            ),
-            selected_choice_offsets=(
-                workspace.replay_selected_offsets[
-                    :batch_size, :padded_generation_steps
-                ]
-            ),
+            active_sample_indices=flat_replay.active_sample_indices,
+            active_step_indices=flat_replay.active_step_indices,
+            choice_token_ids=flat_replay.choice_token_ids,
+            choice_masks=flat_replay.choice_masks,
+            selected_choice_offsets=flat_replay.selected_choice_offsets,
             step_counts=workspace.step_counts[:batch_size],
             choice_counts=workspace.choice_counts[:batch_size],
             log_probabilities=(
                 workspace.log_probabilities[:batch_size]
             ),
         )
+    )
+
+
+def _flat_active_replay(
+    *,
+    workspace: SemanticActionSamplerWorkspace,
+    batch_size: int,
+    padded_generation_steps: int,
+) -> _FlatReplay:
+    positions = torch.arange(
+        padded_generation_steps,
+        dtype=torch.long,
+        device=workspace.device,
+    ).unsqueeze(0)
+    step_positions = positions.expand(batch_size, -1)
+    sample_positions = torch.arange(
+        batch_size,
+        dtype=torch.long,
+        device=workspace.device,
+    ).unsqueeze(1)
+    sample_positions = sample_positions.expand(
+        -1, padded_generation_steps
+    )
+    active_mask = step_positions < workspace.step_counts[
+        :batch_size
+    ].unsqueeze(1)
+    return _FlatReplay(
+        active_sample_indices=sample_positions[active_mask],
+        active_step_indices=step_positions[active_mask],
+        choice_token_ids=workspace.replay_choice_ids[
+            :batch_size, :padded_generation_steps, :
+        ][active_mask],
+        choice_masks=workspace.replay_choice_masks[
+            :batch_size, :padded_generation_steps, :
+        ][active_mask],
+        selected_choice_offsets=workspace.replay_selected_offsets[
+            :batch_size, :padded_generation_steps
+        ][active_mask],
     )
 
 

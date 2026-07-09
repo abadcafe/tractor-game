@@ -12,10 +12,13 @@ from server.training.observation import Observation
 from server.training.policy import PolicyDecision
 from server.training.policy_inference_batch import (
     CompletedPolicyResponse,
+    PolicyRequestCompiler,
     PolicyRequestInput,
     PolicyRequestRoute,
+    build_policy_response_batch_wire,
     decode_policy_response,
-    materialize_policy_request_inputs,
+    decode_policy_response_batch_wire,
+    materialize_compiled_policy_request_batch,
 )
 from server.training.policy_sampling.model_rank_sample_arena import (
     ModelRankSampleArena,
@@ -55,25 +58,33 @@ class TorchTrainingPolicy:
         legal_actions: LegalActionIndex,
         decision_key: PolicyDecisionKey,
     ) -> Ok[PolicyDecision] | Rejected:
-        request_result = materialize_policy_request_inputs(
-            requests=(
+        route = PolicyRequestRoute(
+            worker_index=0,
+            request_id=decision_key.decision_index,
+        )
+        compiler = PolicyRequestCompiler(
+            batch_capacity=1,
+            max_observation_tokens=self.config.max_tokens,
+        )
+        compiled_result = compiler.compile_batch(
+            (
                 PolicyRequestInput(
-                    route=PolicyRequestRoute(
-                        worker_index=0,
-                        request_id=decision_key.decision_index,
-                    ),
+                    route=route,
                     observation=observation,
                     legal_actions=legal_actions,
                     decision_key=decision_key,
                 ),
             ),
-            batch_capacity=1,
-            max_observation_tokens=self.config.max_tokens,
+        )
+        if isinstance(compiled_result, Rejected):
+            return compiled_result
+        request_result = materialize_compiled_policy_request_batch(
+            batch=compiled_result.value,
             device=self.device,
         )
         if isinstance(request_result, Rejected):
             return request_result
-        decisions = sample_policy_batch_into_arena(
+        decision_result = sample_policy_batch_into_arena(
             model=self.model,
             config=self.config,
             device=self.device,
@@ -81,28 +92,21 @@ class TorchTrainingPolicy:
             sampler=self.sampler,
             sample_arena=self.sample_arena,
         )
-        assert len(decisions) == 1
-        decision_result = decisions[0]
         if isinstance(decision_result, Rejected):
             return decision_result
-        decision = decision_result.value
+        wire_result = build_policy_response_batch_wire(
+            routes=(route,), decisions=decision_result.value
+        )
+        if isinstance(wire_result, Rejected):
+            return wire_result
+        response_result = decode_policy_response_batch_wire(
+            wire_result.value.data
+        )
+        if isinstance(response_result, Rejected):
+            return response_result
+        assert len(response_result.value) == 1
+        response = response_result.value[0]
+        assert isinstance(response, CompletedPolicyResponse)
         return decode_policy_response(
-            legal_actions=legal_actions,
-            response=CompletedPolicyResponse(
-                route=PolicyRequestRoute(
-                    worker_index=0,
-                    request_id=decision_key.decision_index,
-                ),
-                trace_token_ids=decision.trace_token_ids,
-                decision_handle_model_rank=(
-                    decision.decision_handle.model_rank_index
-                ),
-                decision_handle_policy_version=(
-                    decision.decision_handle.policy_version
-                ),
-                decision_handle_row_index=(
-                    decision.decision_handle.row_index
-                ),
-                choice_count=decision.choice_count,
-            ),
+            legal_actions=legal_actions, response=response
         )

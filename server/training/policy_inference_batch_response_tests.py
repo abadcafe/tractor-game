@@ -15,14 +15,15 @@ from server.training.policy_inference_batch import (
     CompletedPolicyResponse,
     PolicyRequestRoute,
     PolicyResponseBatchWire,
+    build_completed_policy_responses,
     build_policy_response_batch_wire,
     decode_policy_response,
     decode_policy_response_batch_wire,
 )
 from server.training.policy_sampling import (
+    CompactPolicyDecisionBatch,
+    CompactTraceTokenBatch,
     CompactTraceTokenIds,
-    DecisionHandle,
-    ModelRankPolicyDecision,
 )
 from server.training.semantic_actions import SemanticArgument
 from server.training.semantic_actions.codec import semantic_argument_id
@@ -31,7 +32,7 @@ from server.training.semantic_actions.codec import semantic_argument_id
 def test_policy_response_batch_wire_decodes_rule_action() -> None:
     response_wire = build_policy_response_batch_wire(
         routes=(_route(),),
-        decisions=(Ok(value=_model_rank_policy_decision()),),
+        decisions=_compact_policy_decision_batch(),
     )
     assert isinstance(response_wire, Ok)
 
@@ -54,6 +55,27 @@ def test_policy_response_batch_wire_decodes_rule_action() -> None:
     assert isinstance(decoded_decision, Ok)
     assert decoded_decision.value.decision_handle.model_rank_index == 1
     assert decoded_decision.value.decision_handle.policy_version == 3
+
+
+def test_build_completed_policy_responses_uses_compact_decisions() -> (
+    None
+):
+    result = build_completed_policy_responses(
+        routes=(_route(),),
+        decisions=_compact_policy_decision_batch(),
+    )
+
+    assert isinstance(result, Ok)
+    assert len(result.value) == 1
+    response = result.value[0]
+    assert response.route == _route()
+    assert response.decision_handle_model_rank == 1
+    assert response.decision_handle_policy_version == 3
+    assert response.decision_handle_row_index == 7
+    assert response.choice_count == 1
+    assert response.trace_token_ids.to_tuple() == (
+        semantic_argument_id(SemanticArgument("pass")),
+    )
 
 
 def test_policy_response_batch_wire_rejects_negative_worker_route() -> (
@@ -83,23 +105,27 @@ def test_decode_response_batch_rejects_negative_request_route() -> None:
 def _completed_response_wire() -> PolicyResponseBatchWire:
     result = build_policy_response_batch_wire(
         routes=(_route(),),
-        decisions=(Ok(value=_model_rank_policy_decision()),),
+        decisions=_compact_policy_decision_batch(),
     )
     assert isinstance(result, Ok)
     return result.value
 
 
-def _model_rank_policy_decision() -> ModelRankPolicyDecision:
-    return ModelRankPolicyDecision(
-        trace_token_ids=CompactTraceTokenIds.from_tuple(
-            (semantic_argument_id(SemanticArgument("pass")),)
+def _compact_policy_decision_batch() -> CompactPolicyDecisionBatch:
+    trace_token_ids = CompactTraceTokenIds.from_tuple(
+        (semantic_argument_id(SemanticArgument("pass")),)
+    )
+    return CompactPolicyDecisionBatch(
+        model_rank_index=1,
+        policy_versions=(3,),
+        row_indices=(7,),
+        choice_counts=(1,),
+        trace_token_batch=CompactTraceTokenBatch(
+            encoded_i64_rows=trace_token_ids.encoded_i64,
+            row_count=1,
+            max_trace_count=1,
+            trace_counts=(1,),
         ),
-        decision_handle=DecisionHandle(
-            model_rank_index=1,
-            policy_version=3,
-            row_index=7,
-        ),
-        choice_count=1,
     )
 
 

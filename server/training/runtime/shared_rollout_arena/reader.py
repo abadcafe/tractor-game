@@ -58,10 +58,6 @@ class SharedRolloutArenaReader:
                     return Rejected(
                         reason="rollout arena policy version mismatch"
                     )
-                if not header.full:
-                    return Rejected(
-                        reason="rollout arena is not full for update"
-                    )
                 round_count += header.round_count
                 total_step_count += header.total_step_count
                 max_step_count = max(

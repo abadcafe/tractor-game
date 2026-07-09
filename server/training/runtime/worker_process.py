@@ -28,14 +28,18 @@ from server.training.runtime.distributed import (
 from server.training.runtime.messages import (
     StopWorkerCommand,
     WorkerCommand,
+    WorkerCommandKind,
+    WorkerCommandRejected,
     WorkerLoadStateCommand,
-    WorkerRejected,
     WorkerResponse,
+    WorkerSamplingAlreadyStopped,
+    WorkerSamplingStarted,
     WorkerSamplingStopped,
     WorkerSnapshotCommand,
     WorkerSnapshotCompleted,
     WorkerStartSamplingCommand,
     WorkerStateLoaded,
+    WorkerStopSamplingCommand,
     WorkerUpdateCommand,
     WorkerUpdateCompleted,
 )
@@ -73,6 +77,8 @@ class _WorkerRuntime:
     arena_writer: SharedRolloutArenaWriter
     arena_reader: SharedRolloutArenaReader
     next_episode_id: int = 0
+    sampling_task: asyncio.Task[_SamplingTaskResult] | None = None
+    sampling_policy_version: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +107,11 @@ class _SamplingTelemetry:
         assert self.round_seconds >= 0.0
         assert self.append_seconds >= 0.0
         assert self.cancelled_envs >= 0
+
+
+type _SamplingTaskResult = (
+    _result.Ok[_SamplingTelemetry] | _result.Rejected
+)
 
 
 def run_training_worker_process(
@@ -158,8 +169,10 @@ async def _run_training_worker_process_async(
     )
     if isinstance(setup_result, Rejected):
         await control.send_response(
-            WorkerRejected(
+            _worker_rejection(
                 worker_index=worker_index,
+                command="setup",
+                policy_version=None,
                 reason=setup_result.reason,
             )
         )
@@ -167,8 +180,10 @@ async def _run_training_worker_process_async(
     sync_result = initialize_distributed_rank(distributed_rank_config)
     if isinstance(sync_result, Rejected):
         await control.send_response(
-            WorkerRejected(
+            _worker_rejection(
                 worker_index=worker_index,
+                command="setup",
+                policy_version=None,
                 reason=sync_result.reason,
             )
         )
@@ -185,8 +200,10 @@ async def _run_training_worker_process_async(
     )
     if isinstance(runtime_result, Rejected):
         await control.send_response(
-            WorkerRejected(
+            _worker_rejection(
                 worker_index=worker_index,
+                command="setup",
+                policy_version=None,
                 reason=runtime_result.reason,
             )
         )
@@ -214,6 +231,7 @@ async def _run_training_worker_process_async(
             if isinstance(send_result, Rejected):
                 return
     finally:
+        await _cancel_active_sampling(runtime=runtime)
         runtime.arena_writer.close()
         runtime.arena_reader.close()
         destroy_distributed_rank()
@@ -352,11 +370,19 @@ async def _handle_worker_command(
             command=command,
         )
     if isinstance(command, WorkerStartSamplingCommand):
-        return await _run_worker_sampling(
+        return _start_worker_sampling(
             worker_index=worker_index,
             run_id=run_id,
             train_config=train_config,
             execution_config=execution_config,
+            runtime=runtime,
+            command=command,
+            telemetry_sink=telemetry_sink,
+        )
+    if isinstance(command, WorkerStopSamplingCommand):
+        return await _stop_worker_sampling(
+            worker_index=worker_index,
+            run_id=run_id,
             runtime=runtime,
             command=command,
             telemetry_sink=telemetry_sink,
@@ -384,9 +410,18 @@ def _load_worker_state(
     runtime: _WorkerRuntime,
     command: WorkerLoadStateCommand,
 ) -> WorkerResponse:
-    if runtime.local_model_rank is None:
-        return WorkerRejected(
+    if _sampling_is_active(runtime):
+        return _worker_rejection(
             worker_index=worker_index,
+            command="load_state",
+            policy_version=command.policy_version,
+            reason="worker cannot load state while sampling is active",
+        )
+    if runtime.local_model_rank is None:
+        return _worker_rejection(
+            worker_index=worker_index,
+            command="load_state",
+            policy_version=command.policy_version,
             reason="worker does not own a local model rank",
         )
     load_result = runtime.local_model_rank.load_state(
@@ -394,8 +429,10 @@ def _load_worker_state(
         policy_version=command.policy_version,
     )
     if isinstance(load_result, Rejected):
-        return WorkerRejected(
+        return _worker_rejection(
             worker_index=worker_index,
+            command="load_state",
+            policy_version=command.policy_version,
             reason=load_result.reason,
         )
     return WorkerStateLoaded(
@@ -414,9 +451,18 @@ def _run_worker_update(
     command: WorkerUpdateCommand,
     telemetry_sink: TelemetrySink,
 ) -> WorkerResponse:
-    if runtime.local_model_rank is None:
-        return WorkerRejected(
+    if _sampling_is_active(runtime):
+        return _worker_rejection(
             worker_index=worker_index,
+            command="update",
+            policy_version=command.policy_version,
+            reason="worker cannot update while sampling is active",
+        )
+    if runtime.local_model_rank is None:
+        return _worker_rejection(
+            worker_index=worker_index,
+            command="update",
+            policy_version=command.policy_version,
             reason="worker does not own a local model rank",
         )
     update_telemetry = _record_worker_stage(
@@ -428,8 +474,10 @@ def _run_worker_update(
         total_updates=command.policy_version,
     )
     if isinstance(update_telemetry, Rejected):
-        return WorkerRejected(
+        return _worker_rejection(
             worker_index=worker_index,
+            command="update",
+            policy_version=command.policy_version,
             reason=update_telemetry.reason,
         )
     returns_result = runtime.arena_reader.read_rank_batch(
@@ -438,8 +486,10 @@ def _run_worker_update(
         device=torch.device("cpu"),
     )
     if isinstance(returns_result, Rejected):
-        return WorkerRejected(
+        return _worker_rejection(
             worker_index=worker_index,
+            command="update",
+            policy_version=command.policy_version,
             reason=returns_result.reason,
         )
     update_result = runtime.local_model_rank.update(
@@ -447,8 +497,10 @@ def _run_worker_update(
         policy_version=command.policy_version,
     )
     if isinstance(update_result, Rejected):
-        return WorkerRejected(
+        return _worker_rejection(
             worker_index=worker_index,
+            command="update",
+            policy_version=command.policy_version,
             reason=update_result.reason,
         )
     return WorkerUpdateCompleted(
@@ -464,15 +516,26 @@ def _snapshot_worker_state(
     runtime: _WorkerRuntime,
     command: WorkerSnapshotCommand,
 ) -> WorkerResponse:
-    if runtime.local_model_rank is None:
-        return WorkerRejected(
+    if _sampling_is_active(runtime):
+        return _worker_rejection(
             worker_index=worker_index,
+            command="snapshot",
+            policy_version=command.policy_version,
+            reason="worker cannot snapshot while sampling is active",
+        )
+    if runtime.local_model_rank is None:
+        return _worker_rejection(
+            worker_index=worker_index,
+            command="snapshot",
+            policy_version=command.policy_version,
             reason="worker does not own a local model rank",
         )
     snapshot_result = runtime.local_model_rank.snapshot()
     if isinstance(snapshot_result, Rejected):
-        return WorkerRejected(
+        return _worker_rejection(
             worker_index=worker_index,
+            command="snapshot",
+            policy_version=command.policy_version,
             reason=snapshot_result.reason,
         )
     return WorkerSnapshotCompleted(
@@ -482,7 +545,24 @@ def _snapshot_worker_state(
     )
 
 
-async def _run_worker_sampling(
+def _sampling_telemetry(
+    *,
+    active_game_envs: int,
+    completed_rounds: int,
+    round_seconds: float,
+    append_seconds: float,
+    cancelled_envs: int,
+) -> _SamplingTelemetry:
+    return _SamplingTelemetry(
+        active_game_envs=active_game_envs,
+        completed_rounds=completed_rounds,
+        round_seconds=round_seconds,
+        append_seconds=append_seconds,
+        cancelled_envs=cancelled_envs,
+    )
+
+
+def _start_worker_sampling(
     *,
     worker_index: int,
     run_id: str,
@@ -492,6 +572,20 @@ async def _run_worker_sampling(
     command: WorkerStartSamplingCommand,
     telemetry_sink: TelemetrySink,
 ) -> WorkerResponse:
+    if runtime.sampling_task is not None:
+        return _worker_rejection(
+            worker_index=worker_index,
+            command="start_sampling",
+            policy_version=command.policy_version,
+            reason="worker sampling is already active",
+        )
+    if command.game_env_count > len(runtime.sessions):
+        return _worker_rejection(
+            worker_index=worker_index,
+            command="start_sampling",
+            policy_version=command.policy_version,
+            reason="worker game env count exceeds configured capacity",
+        )
     telemetry_result = _record_worker_stage(
         telemetry_sink=telemetry_sink,
         run_id=run_id,
@@ -501,20 +595,78 @@ async def _run_worker_sampling(
         total_updates=command.policy_version,
     )
     if isinstance(telemetry_result, Rejected):
-        return WorkerRejected(
+        return _worker_rejection(
             worker_index=worker_index,
+            command="start_sampling",
+            policy_version=command.policy_version,
             reason=telemetry_result.reason,
         )
-    sampling_result = await _run_sampling_until_full(
-        worker_index=worker_index,
-        train_config=train_config,
-        execution_config=execution_config,
-        runtime=runtime,
-        command=command,
-    )
-    if isinstance(sampling_result, Rejected):
-        return WorkerRejected(
+    runtime.sampling_policy_version = command.policy_version
+    runtime.sampling_task = asyncio.create_task(
+        _run_sampling_until_stopped(
             worker_index=worker_index,
+            train_config=train_config,
+            execution_config=execution_config,
+            runtime=runtime,
+            command=command,
+        )
+    )
+    return WorkerSamplingStarted(
+        worker_index=worker_index,
+        policy_version=command.policy_version,
+    )
+
+
+def _sampling_is_active(runtime: _WorkerRuntime) -> bool:
+    return runtime.sampling_task is not None
+
+
+def _worker_rejection(
+    *,
+    worker_index: int,
+    command: WorkerCommandKind,
+    policy_version: int | None,
+    reason: str,
+) -> WorkerCommandRejected:
+    return WorkerCommandRejected(
+        worker_index=worker_index,
+        command=command,
+        policy_version=policy_version,
+        reason=reason,
+    )
+
+
+async def _stop_worker_sampling(
+    *,
+    worker_index: int,
+    run_id: str,
+    runtime: _WorkerRuntime,
+    command: WorkerStopSamplingCommand,
+    telemetry_sink: TelemetrySink,
+) -> WorkerResponse:
+    task = runtime.sampling_task
+    if task is None:
+        return WorkerSamplingAlreadyStopped(
+            worker_index=worker_index,
+            policy_version=command.policy_version,
+        )
+    if runtime.sampling_policy_version != command.policy_version:
+        return _worker_rejection(
+            worker_index=worker_index,
+            command="stop_sampling",
+            policy_version=command.policy_version,
+            reason="worker sampling policy version mismatch",
+        )
+    if not task.done():
+        task.cancel()
+    sampling_result = await task
+    runtime.sampling_task = None
+    runtime.sampling_policy_version = None
+    if isinstance(sampling_result, Rejected):
+        return _worker_rejection(
+            worker_index=worker_index,
+            command="stop_sampling",
+            policy_version=command.policy_version,
             reason=sampling_result.reason,
         )
     policy_stats = runtime.policy.drain_stats()
@@ -557,17 +709,31 @@ async def _run_worker_sampling(
         ),
     )
     if isinstance(summary_telemetry, Rejected):
-        return WorkerRejected(
+        return _worker_rejection(
             worker_index=worker_index,
+            command="stop_sampling",
+            policy_version=command.policy_version,
             reason=summary_telemetry.reason,
         )
     return WorkerSamplingStopped(
         worker_index=worker_index,
         policy_version=command.policy_version,
+        cancelled_env_count=sampling_result.value.cancelled_envs,
     )
 
 
-async def _run_sampling_until_full(
+async def _cancel_active_sampling(*, runtime: _WorkerRuntime) -> None:
+    task = runtime.sampling_task
+    if task is None:
+        return
+    if not task.done():
+        task.cancel()
+    await task
+    runtime.sampling_task = None
+    runtime.sampling_policy_version = None
+
+
+async def _run_sampling_until_stopped(
     *,
     worker_index: int,
     train_config: TrainConfig,
@@ -581,7 +747,6 @@ async def _run_sampling_until_full(
     round_seconds = 0.0
     append_seconds = 0.0
     cancelled_envs = 0
-    draining = False
     pending: dict[asyncio.Task[_EnvRoundTaskResult], int] = {}
     for game_env_index in range(command.game_env_count):
         task = _schedule_round(
@@ -597,61 +762,72 @@ async def _run_sampling_until_full(
         )
         runtime.next_episode_id += 1
         pending[task] = game_env_index
-    while pending:
-        done, _pending_tasks = await asyncio.wait(
-            pending.keys(),
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        for task in done:
-            game_env_index = pending.pop(task)
-            round_result = task.result()
-            if isinstance(round_result, Rejected):
-                cancelled_count = len(pending)
-                await _cancel_pending_rounds(
-                    pending=pending,
-                    sessions=sessions,
-                    policy=runtime.policy,
-                )
-                cancelled_envs += cancelled_count
-                runtime.arena_writer.record_cancelled_envs(
-                    cancelled_count
-                )
-                return round_result
-            env_round = round_result.value
-            round_data = env_round.round_data
-            completed_rounds += 1
-            round_seconds += round_data.elapsed_seconds
-            if round_data.game_over:
-                sessions[game_env_index] = SelfPlaySession(
-                    policy=runtime.policy
-                )
-            append_start = time.perf_counter()
-            append_result = runtime.arena_writer.append_round(
-                policy_version=command.policy_version,
-                metrics=_round_metrics(round_data),
-                commit=round_data.returns,
+    try:
+        while pending:
+            done, _pending_tasks = await asyncio.wait(
+                pending.keys(),
+                return_when=asyncio.FIRST_COMPLETED,
             )
-            append_seconds += max(
-                time.perf_counter() - append_start, 0.0
-            )
-            if isinstance(append_result, Rejected):
-                cancelled_count = len(pending)
-                await _cancel_pending_rounds(
-                    pending=pending,
-                    sessions=sessions,
-                    policy=runtime.policy,
+            for task in done:
+                game_env_index = pending.pop(task)
+                round_result = task.result()
+                if isinstance(round_result, Rejected):
+                    cancelled_count = len(pending)
+                    await _cancel_pending_rounds(
+                        pending=pending,
+                        sessions=sessions,
+                        policy=runtime.policy,
+                    )
+                    cancelled_envs += cancelled_count
+                    runtime.arena_writer.record_cancelled_envs(
+                        cancelled_count
+                    )
+                    runtime.sessions = tuple(sessions)
+                    return round_result
+                env_round = round_result.value
+                round_data = env_round.round_data
+                completed_rounds += 1
+                round_seconds += round_data.elapsed_seconds
+                if round_data.game_over:
+                    sessions[game_env_index] = SelfPlaySession(
+                        policy=runtime.policy
+                    )
+                append_start = time.perf_counter()
+                append_result = runtime.arena_writer.append_round(
+                    policy_version=command.policy_version,
+                    metrics=_round_metrics(round_data),
+                    commit=round_data.returns,
                 )
-                cancelled_envs += cancelled_count
-                runtime.arena_writer.record_cancelled_envs(
-                    cancelled_count
+                append_seconds += max(
+                    time.perf_counter() - append_start, 0.0
                 )
-                return append_result
-            if append_result.value.arena_full:
-                draining = True
-                if not pending:
+                if isinstance(append_result, Rejected):
+                    cancelled_count = len(pending)
+                    await _cancel_pending_rounds(
+                        pending=pending,
+                        sessions=sessions,
+                        policy=runtime.policy,
+                    )
+                    cancelled_envs += cancelled_count
+                    runtime.arena_writer.record_cancelled_envs(
+                        cancelled_count
+                    )
+                    runtime.sessions = tuple(sessions)
+                    return append_result
+                if append_result.value.capacity_reached:
+                    cancelled_count = len(pending)
+                    await _cancel_pending_rounds(
+                        pending=pending,
+                        sessions=sessions,
+                        policy=runtime.policy,
+                    )
+                    cancelled_envs += cancelled_count
+                    runtime.arena_writer.record_cancelled_envs(
+                        cancelled_count
+                    )
                     runtime.sessions = tuple(sessions)
                     return Ok(
-                        value=_SamplingTelemetry(
+                        value=_sampling_telemetry(
                             active_game_envs=command.game_env_count,
                             completed_rounds=completed_rounds,
                             round_seconds=round_seconds,
@@ -659,25 +835,41 @@ async def _run_sampling_until_full(
                             cancelled_envs=cancelled_envs,
                         )
                     )
-                continue
-            if draining:
-                continue
-            task = _schedule_round(
-                session=sessions[game_env_index],
-                game_env_index=game_env_index,
-                episode_id=_next_worker_episode_id(
-                    worker_index=worker_index,
-                    local_episode_id=runtime.next_episode_id,
-                ),
-                train_config=train_config,
-                execution_config=execution_config,
-                policy_version=command.policy_version,
+                task = _schedule_round(
+                    session=sessions[game_env_index],
+                    game_env_index=game_env_index,
+                    episode_id=_next_worker_episode_id(
+                        worker_index=worker_index,
+                        local_episode_id=runtime.next_episode_id,
+                    ),
+                    train_config=train_config,
+                    execution_config=execution_config,
+                    policy_version=command.policy_version,
+                )
+                runtime.next_episode_id += 1
+                pending[task] = game_env_index
+    except asyncio.CancelledError:
+        cancelled_count = len(pending)
+        await _cancel_pending_rounds(
+            pending=pending,
+            sessions=sessions,
+            policy=runtime.policy,
+        )
+        cancelled_envs += cancelled_count
+        runtime.arena_writer.record_cancelled_envs(cancelled_count)
+        runtime.sessions = tuple(sessions)
+        return Ok(
+            value=_sampling_telemetry(
+                active_game_envs=command.game_env_count,
+                completed_rounds=completed_rounds,
+                round_seconds=round_seconds,
+                append_seconds=append_seconds,
+                cancelled_envs=cancelled_envs,
             )
-            runtime.next_episode_id += 1
-            pending[task] = game_env_index
+        )
     runtime.sessions = tuple(sessions)
     return Ok(
-        value=_SamplingTelemetry(
+        value=_sampling_telemetry(
             active_game_envs=command.game_env_count,
             completed_rounds=completed_rounds,
             round_seconds=round_seconds,

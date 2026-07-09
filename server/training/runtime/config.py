@@ -76,7 +76,7 @@ class ExecutionConfig:
     telemetry_interval_seconds: float = 1.0
     model_inference_batch_size: int = 64
     game_envs_per_worker: int = 1
-    samples_per_worker_update: int = 1024
+    samples_per_update: int = 1024
 
     def __post_init__(self) -> None:
         assert _cpu_set_is_valid(self.worker_cpus)
@@ -85,7 +85,7 @@ class ExecutionConfig:
         assert self.telemetry_interval_seconds > 0.0
         assert self.model_inference_batch_size > 0
         assert self.game_envs_per_worker > 0
-        assert self.samples_per_worker_update > 0
+        assert self.samples_per_update > 0
 
     def worker_process_count(self) -> int:
         """Return OS worker process count."""
