@@ -38,7 +38,7 @@ from server.training.runtime.state import (
 from server.training.semantic_action_plan import (
     SemanticActionSampler,
 )
-from server.training.torch_sampler import sample_policy_batch
+from server.training.torch_sampler import sample_policy_batch_into_arena
 from server.training.training_state import (
     LoadedTrainingState,
     create_model,
@@ -72,17 +72,13 @@ class ModelReplica:
         _result.Ok[ModelRankPolicyDecision] | _result.Rejected, ...
     ]:
         """Run batched policy inference on this core's device."""
-        sampled = sample_policy_batch(
+        return sample_policy_batch_into_arena(
             model=self.state.model,
             config=self.model_config,
             device=self.device,
             requests=requests,
             sampler=self.sampler,
-        )
-        if isinstance(sampled, Rejected):
-            return tuple(sampled for _ in requests.policy_versions)
-        return self.sample_arena.store_sampled_batch(
-            batch=sampled.value
+            sample_arena=self.sample_arena,
         )
 
     def update_returns(

@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import multiprocessing as mp
-import queue
-import threading
-from multiprocessing.connection import Connection
+from dataclasses import dataclass
 
 import pytest
 import torch
@@ -27,7 +24,6 @@ from server.training.policy_inference_batch import (
     PolicyRequestBatch,
     PolicyRequestRoute,
     PolicyResponse,
-    PolicyResponseBatchWire,
     build_policy_response_batch_wire,
 )
 from server.training.policy_inference_batch.frame import (
@@ -38,7 +34,6 @@ from server.training.policy_inference_batch.schema import (
 )
 from server.training.policy_inference_batch.types import (
     PolicyRequestFrameMetadata,
-    PolicyRequestWireFrame,
 )
 from server.training.policy_sampling import (
     CompactTraceTokenIds,
@@ -47,18 +42,15 @@ from server.training.policy_sampling import (
     RankReturnTargets,
 )
 from server.training.ppo import PPOUpdateProfile, PPOUpdateStats
+from server.training.runtime.async_ipc import create_async_socket_pair
 from server.training.runtime.model_rank import (
+    AsyncRemotePolicyBatchTransport,
     BatchedPolicyClient,
-    ConnectionPolicyBatchTransport,
     LocalModelRank,
     LocalPolicyBatchTransport,
 )
 from server.training.runtime.model_rank.inference_transport import (
-    ConnectionPolicyRequestReceiver,
-    ConnectionPolicyRequestSender,
-    ConnectionPolicyResponseReceiver,
-    ConnectionPolicyResponseSender,
-    send_policy_response_batch,
+    AsyncPolicyPeer,
 )
 from server.training.runtime.state import RuntimeTrainingState
 from server.training.sampling import PolicyDecisionKey
@@ -70,6 +62,16 @@ from server.training.semantic_actions.codec import (
     SEMANTIC_CODEC,
     semantic_argument_id,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class _PolicyPeerPair:
+    worker_peer: AsyncPolicyPeer
+    model_rank_peer: AsyncPolicyPeer
+
+    def close(self) -> None:
+        self.worker_peer.close()
+        self.model_rank_peer.close()
 
 
 @pytest.mark.asyncio
@@ -145,12 +147,8 @@ def test_local_model_rank_loads_updates_and_snapshots_replica() -> None:
 
 
 @pytest.mark.asyncio
-async def test_remote_policy_client_roundtrips_connection_payload() -> (
-    None
-):
-    context = mp.get_context("spawn")
-    request_receiver, request_sender = context.Pipe(duplex=False)
-    response_receiver, response_sender = context.Pipe(duplex=False)
+async def test_remote_policy_client_roundtrips_async_payload() -> None:
+    peers = _policy_peer_pair(worker_index=2)
     rank_decision = _model_rank_policy_decision()
     try:
         observation = _observation()
@@ -160,13 +158,8 @@ async def test_remote_policy_client_roundtrips_connection_payload() -> (
             BatchedPolicyClient(
                 worker_index=2,
                 max_observation_tokens=512,
-                transport=ConnectionPolicyBatchTransport(
-                    request_sender=ConnectionPolicyRequestSender(
-                        connection=request_sender
-                    ),
-                    response_receiver=ConnectionPolicyResponseReceiver(
-                        response_receiver
-                    ),
+                transport=AsyncRemotePolicyBatchTransport(
+                    peer=peers.worker_peer,
                 ),
                 timeout_seconds=1.0,
                 batch_size=4,
@@ -177,7 +170,7 @@ async def test_remote_policy_client_roundtrips_connection_payload() -> (
             )
         )
         metadata = await _receive_request_metadata(
-            request_receiver=request_receiver
+            peer=peers.model_rank_peer
         )
         route = metadata.routes[0]
         assert route.worker_index == 2
@@ -187,11 +180,8 @@ async def test_remote_policy_client_roundtrips_connection_payload() -> (
             decisions=(Ok(value=rank_decision),),
         )
         assert isinstance(response_wire, Ok)
-        send_result = send_policy_response_batch(
-            sender=ConnectionPolicyResponseSender(
-                worker_index=2, connection=response_sender
-            ),
-            response=response_wire.value,
+        send_result = await peers.model_rank_peer.send_response(
+            response_wire.value
         )
         assert isinstance(send_result, Ok)
 
@@ -205,17 +195,12 @@ async def test_remote_policy_client_roundtrips_connection_payload() -> (
         )
         assert result.value.choice_count == rank_decision.choice_count
     finally:
-        request_receiver.close()
-        request_sender.close()
-        response_receiver.close()
-        response_sender.close()
+        peers.close()
 
 
 @pytest.mark.asyncio
 async def test_remote_policy_client_rejects_response_mismatch() -> None:
-    context = mp.get_context("spawn")
-    request_receiver, request_sender = context.Pipe(duplex=False)
-    response_receiver, response_sender = context.Pipe(duplex=False)
+    peers = _policy_peer_pair(worker_index=2)
     try:
         observation = _observation()
         legal_actions = _legal_actions(observation)
@@ -223,13 +208,8 @@ async def test_remote_policy_client_rejects_response_mismatch() -> None:
             BatchedPolicyClient(
                 worker_index=2,
                 max_observation_tokens=512,
-                transport=ConnectionPolicyBatchTransport(
-                    request_sender=ConnectionPolicyRequestSender(
-                        connection=request_sender
-                    ),
-                    response_receiver=ConnectionPolicyResponseReceiver(
-                        response_receiver
-                    ),
+                transport=AsyncRemotePolicyBatchTransport(
+                    peer=peers.worker_peer,
                 ),
                 timeout_seconds=1.0,
                 batch_size=4,
@@ -240,7 +220,7 @@ async def test_remote_policy_client_rejects_response_mismatch() -> None:
             )
         )
         metadata = await _receive_request_metadata(
-            request_receiver=request_receiver
+            peer=peers.model_rank_peer
         )
         route = metadata.routes[0]
         assert route.request_id == 0
@@ -253,11 +233,8 @@ async def test_remote_policy_client_rejects_response_mismatch() -> None:
             decisions=(Ok(value=_model_rank_policy_decision()),),
         )
         assert isinstance(response_wire, Ok)
-        send_result = send_policy_response_batch(
-            sender=ConnectionPolicyResponseSender(
-                worker_index=2, connection=response_sender
-            ),
-            response=response_wire.value,
+        send_result = await peers.model_rank_peer.send_response(
+            response_wire.value
         )
         assert isinstance(send_result, Ok)
         result = await task
@@ -267,54 +244,65 @@ async def test_remote_policy_client_rejects_response_mismatch() -> None:
             == "model rank inference response worker mismatch"
         )
     finally:
-        request_receiver.close()
-        request_sender.close()
-        response_receiver.close()
-        response_sender.close()
+        peers.close()
 
 
 @pytest.mark.asyncio
-async def test_remote_policy_client_serializes_request_writes() -> None:
+async def test_remote_policy_client_sends_concurrent_frames() -> None:
     observation = _observation()
     legal_actions = _legal_actions(observation)
-    response_receiver = _QueuedPolicyResponseReceiver()
-    request_sender = _BlockingPolicyRequestSender(
-        response_receiver=response_receiver
-    )
-    client = BatchedPolicyClient(
-        worker_index=2,
-        max_observation_tokens=512,
-        transport=ConnectionPolicyBatchTransport(
-            request_sender=request_sender,
-            response_receiver=response_receiver,
-        ),
-        timeout_seconds=1.0,
-        batch_size=4,
-    )
+    peers = _policy_peer_pair(worker_index=2)
+    try:
+        client = BatchedPolicyClient(
+            worker_index=2,
+            max_observation_tokens=512,
+            transport=AsyncRemotePolicyBatchTransport(
+                peer=peers.worker_peer
+            ),
+            timeout_seconds=1.0,
+            batch_size=1,
+        )
+        first = asyncio.create_task(
+            client.decide(observation, legal_actions, _decision_key())
+        )
+        second = asyncio.create_task(
+            client.decide(observation, legal_actions, _decision_key())
+        )
 
-    first = asyncio.create_task(
-        client.decide(observation, legal_actions, _decision_key())
-    )
-    first_started = await asyncio.to_thread(
-        request_sender.wait_first_started
-    )
-    assert first_started
-    second = asyncio.create_task(
-        client.decide(observation, legal_actions, _decision_key())
-    )
-    await asyncio.sleep(0.05)
-    started_before_release = request_sender.started_request_ids
+        first_metadata = await _receive_request_metadata(
+            peer=peers.model_rank_peer
+        )
+        second_metadata = await _receive_request_metadata(
+            peer=peers.model_rank_peer
+        )
+        first_route = first_metadata.routes[0]
+        second_route = second_metadata.routes[0]
+        await _send_decision_response(
+            peer=peers.model_rank_peer,
+            route=first_route,
+            decision=_model_rank_policy_decision(),
+        )
+        await _send_decision_response(
+            peer=peers.model_rank_peer,
+            route=second_route,
+            decision=_model_rank_policy_decision(),
+        )
+        first_result, second_result = await asyncio.gather(
+            first, second
+        )
 
-    request_sender.release_first()
-    first_result, second_result = await asyncio.gather(first, second)
-
-    assert started_before_release == (0,)
-    assert request_sender.started_request_ids == (0, 1)
-    assert not request_sender.overlap_detected
-    assert isinstance(first_result, Ok)
-    assert isinstance(second_result, Ok)
-    assert first_result.value.action.semantic_trace == _pass_trace()
-    assert second_result.value.action.semantic_trace == _pass_trace()
+        assert (first_route.request_id, second_route.request_id) == (
+            0,
+            1,
+        )
+        assert isinstance(first_result, Ok)
+        assert isinstance(second_result, Ok)
+        assert first_result.value.action.semantic_trace == _pass_trace()
+        assert (
+            second_result.value.action.semantic_trace == _pass_trace()
+        )
+    finally:
+        peers.close()
 
 
 @pytest.mark.asyncio
@@ -335,7 +323,7 @@ async def test_remote_policy_client_rejects_unsent_route_response() -> (
     first = asyncio.create_task(
         client.decide(observation, legal_actions, _decision_key())
     )
-    first_sent = await asyncio.to_thread(transport.wait_first_sent)
+    first_sent = await transport.wait_first_sent()
     assert first_sent
     second = asyncio.create_task(
         client.decide(observation, legal_actions, _decision_key())
@@ -359,7 +347,7 @@ async def test_remote_policy_client_rejects_unsent_route_response() -> (
 
 async def _receive_request_metadata(
     *,
-    request_receiver: Connection,
+    peer: AsyncPolicyPeer,
 ) -> PolicyRequestFrameMetadata:
     request_buffer = bytearray(
         max_policy_request_batch_frame_bytes(
@@ -368,11 +356,8 @@ async def _receive_request_metadata(
             padded_generation_steps=SEMANTIC_CODEC.max_argument_tokens,
         )
     )
-    request_result = await asyncio.to_thread(
-        ConnectionPolicyRequestReceiver(
-            connection=request_receiver
-        ).receive_batch_bytes_into,
-        memoryview(request_buffer),
+    request_result = await peer.receive_request_into(
+        memoryview(request_buffer)
     )
     assert isinstance(request_result, Ok)
     metadata_result = decode_policy_request_frame_metadata(
@@ -383,136 +368,80 @@ async def _receive_request_metadata(
     return metadata_result.value
 
 
-class _QueuedPolicyResponseReceiver:
-    def __init__(self) -> None:
-        self._responses: queue.Queue[PolicyResponseBatchWire] = (
-            queue.Queue()
-        )
-
-    def push(
-        self,
-        *,
-        route: PolicyRequestRoute,
-        decision: ModelRankPolicyDecision,
-    ) -> None:
-        response = build_policy_response_batch_wire(
-            routes=(route,),
-            decisions=(Ok(value=decision),),
-        )
-        assert isinstance(response, Ok)
-        self._responses.put(response.value)
-
-    def receive(
-        self, *, timeout_seconds: float
-    ) -> Ok[PolicyResponseBatchWire] | Rejected:
-        try:
-            return Ok(
-                value=self._responses.get(timeout=timeout_seconds)
-            )
-        except queue.Empty:
-            return Rejected(
-                reason="model rank policy inference timed out"
-            )
+async def _send_decision_response(
+    *,
+    peer: AsyncPolicyPeer,
+    route: PolicyRequestRoute,
+    decision: ModelRankPolicyDecision,
+) -> None:
+    response_wire = build_policy_response_batch_wire(
+        routes=(route,),
+        decisions=(Ok(value=decision),),
+    )
+    assert isinstance(response_wire, Ok)
+    send_result = await peer.send_response(response_wire.value)
+    assert isinstance(send_result, Ok)
 
 
-class _BlockingPolicyRequestSender:
-    def __init__(
-        self, *, response_receiver: _QueuedPolicyResponseReceiver
-    ) -> None:
-        self._response_receiver = response_receiver
-        self._lock = threading.Lock()
-        self._first_started = threading.Event()
-        self._release_first = threading.Event()
-        self._active_count = 0
-        self._started_request_ids: list[int] = []
-        self._overlap_detected = False
-
-    @property
-    def started_request_ids(self) -> tuple[int, ...]:
-        with self._lock:
-            return tuple(self._started_request_ids)
-
-    @property
-    def overlap_detected(self) -> bool:
-        with self._lock:
-            return self._overlap_detected
-
-    def wait_first_started(self) -> bool:
-        return self._first_started.wait(timeout=5.0)
-
-    def release_first(self) -> None:
-        self._release_first.set()
-
-    def send(
-        self, request: PolicyRequestWireFrame
-    ) -> Ok[None] | Rejected:
-        metadata_result = decode_policy_request_frame_metadata(
-            request.view()
-        )
-        assert isinstance(metadata_result, Ok)
-        assert len(metadata_result.value.routes) == 1
-        route = metadata_result.value.routes[0]
-        with self._lock:
-            if self._active_count > 0:
-                self._overlap_detected = True
-            self._active_count += 1
-            self._started_request_ids.append(route.request_id)
-            is_first_request = len(self._started_request_ids) == 1
-            if is_first_request:
-                self._first_started.set()
-        try:
-            if is_first_request and not self._release_first.wait(
-                timeout=5.0
-            ):
-                return Rejected(reason="test request sender timed out")
-            self._response_receiver.push(
-                route=route,
-                decision=_model_rank_policy_decision(),
-            )
-            return Ok(value=None)
-        finally:
-            with self._lock:
-                self._active_count -= 1
+def _policy_peer_pair(*, worker_index: int) -> _PolicyPeerPair:
+    pair = create_async_socket_pair()
+    return _PolicyPeerPair(
+        worker_peer=AsyncPolicyPeer(
+            worker_index=worker_index,
+            endpoint=pair.first,
+        ),
+        model_rank_peer=AsyncPolicyPeer(
+            worker_index=worker_index,
+            endpoint=pair.second,
+        ),
+    )
 
 
 class _MismatchedFirstResponseTransport:
     def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._first_sent = threading.Event()
-        self._release_first_response = threading.Event()
+        self._first_sent = asyncio.Event()
+        self._release_first_response = asyncio.Event()
         self._sent_request_ids: list[int] = []
         self._receive_count = 0
 
     @property
     def sent_request_ids(self) -> tuple[int, ...]:
-        with self._lock:
-            return tuple(self._sent_request_ids)
+        return tuple(self._sent_request_ids)
 
-    def wait_first_sent(self) -> bool:
-        return self._first_sent.wait(timeout=5.0)
+    async def wait_first_sent(self) -> bool:
+        try:
+            await asyncio.wait_for(self._first_sent.wait(), timeout=5.0)
+        except TimeoutError:
+            return False
+        return True
 
     def release_first_response(self) -> None:
         self._release_first_response.set()
 
-    def submit_batch(self, *, batch: PolicyRequestBatch) -> Ok[None]:
+    async def submit_batch(
+        self, *, batch: PolicyRequestBatch
+    ) -> Ok[None]:
         assert batch.row_count() == 1
         route = batch.routes[0]
-        with self._lock:
-            self._sent_request_ids.append(route.request_id)
-            if len(self._sent_request_ids) == 1:
-                self._first_sent.set()
+        self._sent_request_ids.append(route.request_id)
+        if len(self._sent_request_ids) == 1:
+            self._first_sent.set()
         return Ok(value=None)
 
-    def receive(
+    async def receive(
         self, *, timeout_seconds: float
     ) -> Ok[tuple[PolicyResponse, ...]] | Rejected:
         assert timeout_seconds > 0.0
-        with self._lock:
-            self._receive_count += 1
-            receive_index = self._receive_count
-            sent_request_id = self._sent_request_ids[-1]
+        self._receive_count += 1
+        receive_index = self._receive_count
+        sent_request_id = self._sent_request_ids[-1]
         if receive_index == 1:
-            if not self._release_first_response.wait(timeout=5.0):
+            try:
+                await asyncio.wait_for(
+                    self._release_first_response.wait(),
+                    timeout=timeout_seconds,
+                )
+            except TimeoutError:
                 return Rejected(reason="test response timed out")
             return Ok(
                 value=(

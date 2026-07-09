@@ -23,7 +23,6 @@ from server.training.observation import build_observation
 from server.training.policy_sampling import (
     DecisionHandle,
     RankReturnTargets,
-    SampledPolicyBatch,
 )
 from server.training.policy_sampling.model_rank_sample_arena import (
     ModelRankSampleArena,
@@ -583,47 +582,23 @@ def _store_single_card_decision(
     semantic_sample = _semantic_sample_for_trace(
         legal_actions=legal_actions, trace=trace, device=device
     )
-    sample_batch = _sampled_policy_batch(
-        observation_batch=tensorize_observations(
-            observations=(observation,),
-            max_observation_tokens=64,
-            device=device,
-        ),
-        semantic_sample=semantic_sample,
+    observation_batch = tensorize_observations(
+        observations=(observation,),
+        max_observation_tokens=64,
         device=device,
     )
-    stored = store.store_sampled_batch(batch=sample_batch)
-    assert len(stored) == 1
-    stored_decision = stored[0]
-    assert isinstance(stored_decision, Ok)
-    return stored_decision.value.decision_handle
-
-
-def _sampled_policy_batch(
-    *,
-    observation_batch: ObservationTensorBatch,
-    semantic_sample: SemanticActionSampleBatch,
-    device: torch.device,
-) -> SampledPolicyBatch:
-    return SampledPolicyBatch(
+    stored = store.store_sampled_result(
         policy_versions=(0,),
-        status_codes=torch.zeros((1,), dtype=torch.long, device=device),
         observation_batch=observation_batch,
-        selected_token_ids_padded=(
-            semantic_sample.selected_token_ids_padded
-        ),
-        choice_token_ids=semantic_sample.choice_token_ids,
-        choice_masks=semantic_sample.choice_masks,
-        selected_choice_offsets=semantic_sample.selected_choice_offsets,
-        step_counts=semantic_sample.step_counts,
-        choice_counts=semantic_sample.choice_counts,
-        old_log_probabilities=torch.zeros(
-            (1,), dtype=torch.float32, device=device
-        ),
+        semantic_sample=semantic_sample,
         old_values=torch.zeros(
             (1,), dtype=torch.float32, device=device
         ),
     )
+    assert len(stored) == 1
+    stored_decision = stored[0]
+    assert isinstance(stored_decision, Ok)
+    return stored_decision.value.decision_handle
 
 
 def _semantic_sample_for_trace(

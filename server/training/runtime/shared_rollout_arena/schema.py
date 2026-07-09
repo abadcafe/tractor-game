@@ -59,6 +59,75 @@ class SampleReferenceColumnViews:
     return_values: memoryview[int]
 
 
+@dataclass(frozen=True, slots=True)
+class SampleReferenceColumnWriter:
+    """Append sample reference columns into one arena range."""
+
+    buffer: memoryview[int]
+    capacity: int
+    start_index: int
+    count: int
+
+    def __post_init__(self) -> None:
+        assert self.capacity > 0
+        assert self.start_index >= 0
+        assert self.count >= 0
+        assert self.start_index + self.count <= self.capacity
+
+    def write(
+        self,
+        *,
+        row_indices: tuple[int, ...],
+        step_counts: tuple[int, ...],
+        return_values: tuple[float, ...],
+    ) -> None:
+        """Write all sample reference columns for this range."""
+        assert len(row_indices) == self.count
+        assert len(step_counts) == self.count
+        assert len(return_values) == self.count
+        assert all(value >= 0 for value in row_indices)
+        assert all(value > 0 for value in step_counts)
+        self.write_row_indices(row_indices)
+        self.write_step_counts(step_counts)
+        self.write_return_values(return_values)
+
+    def write_row_indices(self, values: tuple[int, ...]) -> None:
+        """Write replay row indices."""
+        assert len(values) == self.count
+        _pack_i64_values(
+            buffer=self.buffer,
+            offset=(
+                _row_indices_offset(self.capacity)
+                + self.start_index * _I64.size
+            ),
+            values=values,
+        )
+
+    def write_step_counts(self, values: tuple[int, ...]) -> None:
+        """Write replay step counts."""
+        assert len(values) == self.count
+        _pack_i64_values(
+            buffer=self.buffer,
+            offset=(
+                _step_counts_offset(self.capacity)
+                + self.start_index * _I64.size
+            ),
+            values=values,
+        )
+
+    def write_return_values(self, values: tuple[float, ...]) -> None:
+        """Write return values."""
+        assert len(values) == self.count
+        _pack_f32_values(
+            buffer=self.buffer,
+            offset=(
+                _return_values_offset(self.capacity)
+                + self.start_index * _F32.size
+            ),
+            values=values,
+        )
+
+
 def arena_byte_size(*, capacity: int) -> int:
     """Return the shared memory bytes needed for one arena."""
     assert capacity > 0
@@ -81,26 +150,15 @@ def pack_sample_references(
     assert len(row_indices) == count
     assert len(step_counts) == count
     assert start_index + count <= capacity
-    assert all(value >= 0 for value in row_indices)
-    assert all(value > 0 for value in step_counts)
-    _pack_i64_values(
+    SampleReferenceColumnWriter(
         buffer=buffer,
-        offset=_row_indices_offset(capacity) + start_index * _I64.size,
-        values=row_indices,
-    )
-    _pack_i64_values(
-        buffer=buffer,
-        offset=(
-            _step_counts_offset(capacity) + start_index * _I64.size
-        ),
-        values=step_counts,
-    )
-    _pack_f32_values(
-        buffer=buffer,
-        offset=(
-            _return_values_offset(capacity) + start_index * _F32.size
-        ),
-        values=return_values,
+        capacity=capacity,
+        start_index=start_index,
+        count=count,
+    ).write(
+        row_indices=row_indices,
+        step_counts=step_counts,
+        return_values=return_values,
     )
 
 

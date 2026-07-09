@@ -15,6 +15,7 @@ from server.training.policy_inference_batch import (
     PolicyRequestRoute,
 )
 from server.training.policy_inference_batch.device import (
+    copy_policy_request_host_frame_to_device,
     materialize_policy_request_frame,
 )
 from server.training.policy_inference_batch.frame import (
@@ -27,7 +28,7 @@ from server.training.policy_inference_batch.types import (
     PolicyRequestFrameMetadata,
 )
 from server.training.runtime.model_rank.inference_transport import (
-    ConnectionPolicyRequestReceiver,
+    AsyncPolicyPeer,
 )
 from server.training.semantic_action_plan import DeviceActionPlanBatch
 from server.training.semantic_actions.codec import SEMANTIC_CODEC
@@ -71,6 +72,7 @@ class ModelRankInferenceBatch:
 @dataclass(frozen=True, slots=True)
 class _ReceivedPolicyRequestFrame:
     slot: _PinnedHostFrameSlot
+    metadata: PolicyRequestFrameMetadata
     routes: tuple[PolicyRequestRoute, ...]
     device_batch: DevicePolicyRequestBatch
     generation_step_counts: tuple[int, ...]
@@ -134,6 +136,9 @@ class PolicyRequestIngress:
     _pending_frame: _ReceivedPolicyRequestFrame | None = field(
         init=False
     )
+    _single_frame: _ReceivedPolicyRequestFrame | None = field(
+        init=False
+    )
     _recv_start: float = field(init=False)
 
     def __post_init__(self) -> None:
@@ -148,11 +153,13 @@ class PolicyRequestIngress:
         self._builder = None
         self._workspace = None
         self._pending_frame = None
+        self._single_frame = None
         self._recv_start = 0.0
 
     def begin_batch(self) -> None:
         """Start receiving one data-plane batch."""
         assert self._builder is None
+        assert self._single_frame is None
         self._next_slot_index = 0
         self._recv_start = time.perf_counter()
 
@@ -166,8 +173,8 @@ class PolicyRequestIngress:
         """Return whether a previously received frame still has rows."""
         return self._pending_frame is not None
 
-    def receive_from(
-        self, receiver: ConnectionPolicyRequestReceiver
+    async def receive_from(
+        self, peer: AsyncPolicyPeer
     ) -> _result.Ok[None] | _result.Rejected:
         """Receive one ready request frame and append active rows."""
         assert self.can_receive()
@@ -175,9 +182,7 @@ class PolicyRequestIngress:
             return self.drain_pending_rows()
         slot = self._acquire_slot()
         frame_view = _host_frame_view(slot.tensor)
-        byte_count_result = receiver.receive_batch_bytes_into(
-            frame_view
-        )
+        byte_count_result = await peer.receive_request_into(frame_view)
         if isinstance(byte_count_result, Rejected):
             return byte_count_result
         byte_count = byte_count_result.value
@@ -223,9 +228,14 @@ class PolicyRequestIngress:
     ) -> _result.Ok[ModelRankInferenceBatch] | _result.Rejected:
         """Return the assembled final inference batch."""
         builder = self._builder
-        assert builder is not None
+        single_frame = self._single_frame
+        assert builder is not None or single_frame is not None
         self._builder = None
-        return Ok(value=builder.finish())
+        self._single_frame = None
+        if builder is not None:
+            return Ok(value=builder.finish())
+        assert single_frame is not None
+        return self._finish_single_frame(single_frame)
 
     def _stage_host_frame(
         self,
@@ -248,6 +258,7 @@ class PolicyRequestIngress:
         return Ok(
             value=_ReceivedPolicyRequestFrame(
                 slot=slot,
+                metadata=metadata,
                 routes=metadata.routes,
                 device_batch=device_batch_result.value,
                 generation_step_counts=metadata.generation_step_counts,
@@ -287,15 +298,80 @@ class PolicyRequestIngress:
     def _append_frame(
         self, frame: _ReceivedPolicyRequestFrame
     ) -> Ok[None] | Rejected:
+        single_frame = self._single_frame
         builder = self._builder
+        if builder is None and single_frame is None:
+            self._single_frame = frame
+            return Ok(value=None)
         if builder is None:
-            builder = self._workspace_for(frame.device_batch)
+            assert single_frame is not None
+            builder = self._workspace_for(single_frame.device_batch)
             builder.reset()
             self._builder = builder
+            first_h2d_seconds = builder.append(single_frame)
+            _record_slot_copy_event(
+                slot=single_frame.slot, device=self.device
+            )
+            builder.h2d_seconds += first_h2d_seconds
+            self._single_frame = None
         h2d_seconds = builder.append(frame)
         _record_slot_copy_event(slot=frame.slot, device=self.device)
         builder.h2d_seconds += h2d_seconds
         return Ok(value=None)
+
+    def _finish_single_frame(
+        self, frame: _ReceivedPolicyRequestFrame
+    ) -> _result.Ok[ModelRankInferenceBatch] | _result.Rejected:
+        h2d_start = time.perf_counter()
+        if self.device.type == "cpu":
+            device_batch = frame.device_batch
+            h2d_seconds = 0.0
+        else:
+            host_frame = frame.slot.tensor[: frame.wire_byte_count]
+            device_frame = copy_policy_request_host_frame_to_device(
+                host_frame=host_frame,
+                device_slot=None,
+                device=self.device,
+            )
+            h2d_seconds = time.perf_counter() - h2d_start
+            decode_start = time.perf_counter()
+            batch_result = materialize_policy_request_frame(
+                device_frame=device_frame,
+                metadata=frame.metadata,
+            )
+            if isinstance(batch_result, Rejected):
+                return batch_result
+            device_decode_seconds = (
+                frame.device_decode_seconds
+                + time.perf_counter()
+                - decode_start
+            )
+            return Ok(
+                value=ModelRankInferenceBatch(
+                    routes=frame.routes,
+                    device_batch=batch_result.value,
+                    generation_step_counts=(
+                        frame.generation_step_counts
+                    ),
+                    wire_byte_count=frame.wire_byte_count,
+                    recv_seconds=frame.recv_seconds,
+                    h2d_seconds=h2d_seconds,
+                    device_decode_seconds=device_decode_seconds,
+                    frame_count=frame.frame_count,
+                )
+            )
+        return Ok(
+            value=ModelRankInferenceBatch(
+                routes=frame.routes,
+                device_batch=device_batch,
+                generation_step_counts=frame.generation_step_counts,
+                wire_byte_count=frame.wire_byte_count,
+                recv_seconds=frame.recv_seconds,
+                h2d_seconds=h2d_seconds,
+                device_decode_seconds=frame.device_decode_seconds,
+                frame_count=frame.frame_count,
+            )
+        )
 
     def _workspace_for(
         self, template: DevicePolicyRequestBatch
@@ -323,10 +399,14 @@ class PolicyRequestIngress:
         return True
 
     def _active_row_count(self) -> int:
+        single_frame = self._single_frame
+        single_count = (
+            0 if single_frame is None else single_frame.row_count()
+        )
         builder = self._builder
         if builder is None:
-            return 0
-        return builder.row_count
+            return single_count
+        return single_count + builder.row_count
 
     def _acquire_slot(self) -> _PinnedHostFrameSlot:
         index = self._next_slot_index

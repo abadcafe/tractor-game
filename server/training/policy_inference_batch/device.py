@@ -69,12 +69,11 @@ def materialize_policy_request_batch(
     """Materialize one compiled request batch without wire framing."""
     padded_observations = tuple(
         padded_packed_observation(
-            row.packed_observation,
+            observation,
             max_observation_tokens=batch.max_observation_tokens,
         )
-        for row in batch.rows
+        for observation in batch.packed_observations
     )
-    action_plans = tuple(row.action_plan for row in batch.rows)
     return Ok(
         value=DevicePolicyRequestBatch(
             observation_batch=ObservationTensorBatch(
@@ -104,25 +103,25 @@ def materialize_policy_request_batch(
                 ),
             ),
             action_plan_batch=_materialize_action_plan_batch(
-                plans=action_plans,
+                plans=batch.action_plans,
                 padded_generation_steps=batch.padded_generation_steps,
                 device=device,
             ),
             sampling_thresholds=staged_tensor(
                 tuple(
                     _padded_thresholds(
-                        row.sampling_thresholds,
+                        thresholds,
                         padded_generation_steps=(
                             batch.padded_generation_steps
                         ),
                     )
-                    for row in batch.rows
+                    for thresholds in batch.sampling_threshold_rows
                 ),
                 dtype=torch.float64,
                 device=device,
             ),
             generation_step_counts=staged_tensor(
-                tuple(row.generation_step_count for row in batch.rows),
+                batch.generation_step_counts,
                 dtype=torch.long,
                 device=device,
             ),

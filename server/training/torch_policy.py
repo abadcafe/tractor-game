@@ -24,7 +24,7 @@ from server.training.sampling import PolicyDecisionKey
 from server.training.semantic_action_plan import (
     SemanticActionSampler,
 )
-from server.training.torch_sampler import sample_policy_batch
+from server.training.torch_sampler import sample_policy_batch_into_arena
 
 
 class TorchTrainingPolicy:
@@ -73,17 +73,13 @@ class TorchTrainingPolicy:
         )
         if isinstance(request_result, Rejected):
             return request_result
-        sampled_result = sample_policy_batch(
+        decisions = sample_policy_batch_into_arena(
             model=self.model,
             config=self.config,
             device=self.device,
             requests=request_result.value,
             sampler=self.sampler,
-        )
-        if isinstance(sampled_result, Rejected):
-            return sampled_result
-        decisions = self.sample_arena.store_sampled_batch(
-            batch=sampled_result.value
+            sample_arena=self.sample_arena,
         )
         assert len(decisions) == 1
         decision_result = decisions[0]

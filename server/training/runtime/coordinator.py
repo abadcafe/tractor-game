@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 from typing import Literal
@@ -53,6 +54,30 @@ def run_training_coordinator(
     resume: Path | None,
 ) -> _result.Ok[TrainingLoopResult] | _result.Rejected:
     """Run synchronized worker training and commit canonical state."""
+    return asyncio.run(
+        _run_training_coordinator_async(
+            run_dir=run_dir,
+            run_id=run_id,
+            model_config=model_config,
+            train_config=train_config,
+            execution_config=execution_config,
+            max_samples=max_samples,
+            resume=resume,
+        )
+    )
+
+
+async def _run_training_coordinator_async(
+    *,
+    run_dir: Path,
+    run_id: str,
+    model_config: ModelConfig,
+    train_config: TrainConfig,
+    execution_config: ExecutionConfig,
+    max_samples: int,
+    resume: Path | None,
+) -> _result.Ok[TrainingLoopResult] | _result.Rejected:
+    """Run synchronized worker training inside the async runtime."""
     assert max_samples >= 0
     setup_result = _setup_coordinator_runtime(
         execution_config=execution_config
@@ -98,7 +123,7 @@ def run_training_coordinator(
         return runtime_result
     runtime = runtime_result.value
     try:
-        training_result = _run_synchronized_training(
+        training_result = await _run_synchronized_training(
             run_dir=run_dir,
             run_id=run_id,
             model_config=model_config,
@@ -110,7 +135,7 @@ def run_training_coordinator(
             runtime=runtime,
         )
     finally:
-        runtime.close()
+        await runtime.close()
     if isinstance(training_result, Rejected):
         return training_result
     complete_result = _record_coordinator_complete(
@@ -195,7 +220,7 @@ def _load_or_create_state(
     )
 
 
-def _run_synchronized_training(
+async def _run_synchronized_training(
     *,
     run_dir: Path,
     run_id: str,
@@ -213,7 +238,7 @@ def _run_synchronized_training(
     total_updates = state.total_updates
     start_total_rounds = total_rounds
     start_total_samples = total_samples
-    load_result = runtime.load_state(
+    load_result = await runtime.load_state(
         state=state.state,
         policy_version=total_updates,
     )
@@ -240,7 +265,7 @@ def _run_synchronized_training(
         if isinstance(stage_result, Rejected):
             return stage_result
         update_cycle_start = time.monotonic()
-        update_result = runtime.run_update(
+        update_result = await runtime.run_update(
             policy_version=total_updates,
         )
         if isinstance(update_result, Rejected):
@@ -272,7 +297,7 @@ def _run_synchronized_training(
         total_updates += 1
         total_rounds += update.snapshot.round_count
         total_samples += update.snapshot.sample_count
-        checkpoint_path_result = _maybe_save_checkpoint(
+        checkpoint_path_result = await _maybe_save_checkpoint(
             run_dir=run_dir,
             run_id=run_id,
             model_config=model_config,
@@ -315,7 +340,7 @@ def _run_synchronized_training(
     )
 
 
-def _maybe_save_checkpoint(
+async def _maybe_save_checkpoint(
     *,
     run_dir: Path,
     run_id: str,
@@ -349,7 +374,9 @@ def _maybe_save_checkpoint(
     )
     if isinstance(checkpoint_stage, Rejected):
         return checkpoint_stage
-    snapshot_result = runtime.snapshot(policy_version=total_updates)
+    snapshot_result = await runtime.snapshot(
+        policy_version=total_updates
+    )
     if isinstance(snapshot_result, Rejected):
         return snapshot_result
     save_result = _save_checkpoint(

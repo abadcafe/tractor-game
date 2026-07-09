@@ -4,14 +4,14 @@ from server.training.policy_sampling.records import (
     CompactTraceTokenIds,
     DecisionHandle,
     ModelRankPolicyDecision,
+    PolicySampleColumns,
     RankReturnTargets,
-    SampledPolicyBatch,
 )
 
 __all__ = (
     "CompactTraceTokenIds",
     "DecisionHandle",
     "ModelRankPolicyDecision",
+    "PolicySampleColumns",
     "RankReturnTargets",
-    "SampledPolicyBatch",
 )

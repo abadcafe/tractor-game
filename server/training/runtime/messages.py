@@ -67,6 +67,20 @@ type WorkerCommand = (
 )
 
 
+def decode_worker_command(value: object) -> WorkerCommand | None:
+    """Return a worker command when the payload type is valid."""
+    if isinstance(
+        value,
+        WorkerLoadStateCommand
+        | WorkerStartSamplingCommand
+        | WorkerUpdateCommand
+        | WorkerSnapshotCommand
+        | StopWorkerCommand,
+    ):
+        return value
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class WorkerStateLoaded:
     """Worker acknowledged loading a canonical state."""
@@ -132,3 +146,17 @@ type WorkerResponse = (
     | WorkerSamplingStopped
     | WorkerRejected
 )
+
+
+def decode_worker_response(value: object) -> WorkerResponse | None:
+    """Return a worker response when the payload type is valid."""
+    if isinstance(
+        value,
+        WorkerStateLoaded
+        | WorkerUpdateCompleted
+        | WorkerSnapshotCompleted
+        | WorkerSamplingStopped
+        | WorkerRejected,
+    ):
+        return value
+    return None

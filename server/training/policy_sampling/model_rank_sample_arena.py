@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 from torch import Tensor
@@ -14,10 +14,12 @@ from server.training.policy_sampling.records import (
     DecisionHandle,
     ModelRankPolicyDecision,
     RankReturnTargets,
-    SampledPolicyBatch,
 )
 from server.training.ppo.minibatch import TensorizedPPOMinibatch
 from server.training.ppo.replay_tensors import PPOReplayTensorBatch
+from server.training.semantic_action_plan import (
+    SemanticActionSampleBatch,
+)
 from server.training.semantic_actions.codec import SEMANTIC_CODEC
 from server.training.tensorize import ObservationTensorBatch
 
@@ -37,6 +39,10 @@ class _ResponseTraceCpuView:
         assert int(self.selected_token_ids.shape[0]) > 0
 
 
+def _arena_minibatch_workspace() -> "_ArenaMinibatchWorkspace":
+    return _ArenaMinibatchWorkspace()
+
+
 @dataclass(frozen=True, slots=True)
 class ArenaPPOBatchSource:
     """PPO minibatch source backed by one model-rank sample slab."""
@@ -51,6 +57,9 @@ class ArenaPPOBatchSource:
     return_values: Tensor
     raw_advantages: Tensor
     max_step_count: int
+    workspace: "_ArenaMinibatchWorkspace" = field(
+        default_factory=_arena_minibatch_workspace
+    )
 
     def __post_init__(self) -> None:
         assert self.policy_version >= 0
@@ -88,6 +97,353 @@ class ArenaPPOBatchSource:
 
 
 @dataclass(slots=True)
+class _ArenaMinibatchWorkspace:
+    _component_ids: Tensor | None = None
+    _numeric_values: Tensor | None = None
+    _numeric_masks: Tensor | None = None
+    _selected_token_ids: Tensor | None = None
+    _choice_token_ids: Tensor | None = None
+    _choice_masks: Tensor | None = None
+    _selected_choice_offsets: Tensor | None = None
+    _step_mask: Tensor | None = None
+    _step_counts: Tensor | None = None
+    _old_log_probabilities: Tensor | None = None
+    _old_values: Tensor | None = None
+    _advantages: Tensor | None = None
+    _return_values: Tensor | None = None
+
+    def materialize(
+        self,
+        *,
+        component_ids_source: Tensor,
+        numeric_values_source: Tensor,
+        numeric_masks_source: Tensor,
+        selected_token_ids_source: Tensor,
+        choice_token_ids_source: Tensor,
+        choice_masks_source: Tensor,
+        selected_choice_offsets_source: Tensor,
+        device: torch.device,
+        selected_rows: Tensor,
+        selected_step_counts: Tensor,
+        source: ArenaPPOBatchSource,
+        indices: Tensor,
+        advantages: Tensor,
+        global_count: Tensor,
+    ) -> TensorizedPPOMinibatch:
+        """Copy one shuffled minibatch into reusable tensor storage."""
+        local_count = int(indices.shape[0])
+        assert local_count > 0
+        self._ensure(
+            component_ids_source=component_ids_source,
+            numeric_values_source=numeric_values_source,
+            numeric_masks_source=numeric_masks_source,
+            choice_token_ids_source=choice_token_ids_source,
+            device=device,
+            local_count=local_count,
+            max_step_count=source.max_step_count,
+        )
+        component_ids = self._component_ids_tensor()[:local_count]
+        numeric_values = self._numeric_values_tensor()[:local_count]
+        numeric_masks = self._numeric_masks_tensor()[:local_count]
+        selected_token_ids = self._selected_token_ids_tensor()[
+            :local_count, : source.max_step_count
+        ]
+        choice_token_ids = self._choice_token_ids_tensor()[
+            :local_count, : source.max_step_count, :
+        ]
+        choice_masks = self._choice_masks_tensor()[
+            :local_count, : source.max_step_count, :
+        ]
+        selected_choice_offsets = (
+            self._selected_choice_offsets_tensor()[
+                :local_count, : source.max_step_count
+            ]
+        )
+        step_counts = self._step_counts_tensor()[:local_count]
+        old_log_probabilities = self._old_log_probabilities_tensor()[
+            :local_count
+        ]
+        old_values = self._old_values_tensor()[:local_count]
+        advantage_values = self._advantages_tensor()[:local_count]
+        return_values = self._return_values_tensor()[:local_count]
+
+        torch.index_select(
+            component_ids_source,
+            dim=0,
+            index=selected_rows,
+            out=component_ids,
+        )
+        torch.index_select(
+            numeric_values_source,
+            dim=0,
+            index=selected_rows,
+            out=numeric_values,
+        )
+        torch.index_select(
+            numeric_masks_source,
+            dim=0,
+            index=selected_rows,
+            out=numeric_masks,
+        )
+        torch.index_select(
+            selected_token_ids_source[:, : source.max_step_count],
+            dim=0,
+            index=selected_rows,
+            out=selected_token_ids,
+        )
+        torch.index_select(
+            choice_token_ids_source[:, : source.max_step_count, :],
+            dim=0,
+            index=selected_rows,
+            out=choice_token_ids,
+        )
+        torch.index_select(
+            choice_masks_source[:, : source.max_step_count, :],
+            dim=0,
+            index=selected_rows,
+            out=choice_masks,
+        )
+        torch.index_select(
+            selected_choice_offsets_source[:, : source.max_step_count],
+            dim=0,
+            index=selected_rows,
+            out=selected_choice_offsets,
+        )
+        step_counts.copy_(selected_step_counts)
+        self._write_step_mask(
+            step_counts=step_counts,
+            local_count=local_count,
+            max_step_count=source.max_step_count,
+        )
+        torch.index_select(
+            source.old_log_probabilities,
+            dim=0,
+            index=indices,
+            out=old_log_probabilities,
+        )
+        torch.index_select(
+            source.old_values,
+            dim=0,
+            index=indices,
+            out=old_values,
+        )
+        torch.index_select(
+            advantages,
+            dim=0,
+            index=indices,
+            out=advantage_values,
+        )
+        torch.index_select(
+            source.return_values,
+            dim=0,
+            index=indices,
+            out=return_values,
+        )
+        return TensorizedPPOMinibatch(
+            observation_batch=ObservationTensorBatch(
+                component_ids=component_ids,
+                numeric_values=numeric_values,
+                numeric_masks=numeric_masks,
+            ),
+            replay=PPOReplayTensorBatch(
+                sample_count=local_count,
+                max_step_count=source.max_step_count,
+                selected_token_ids_padded=selected_token_ids,
+                choice_token_ids=choice_token_ids,
+                choice_masks=choice_masks,
+                selected_choice_offsets=selected_choice_offsets,
+                step_mask=self._step_mask_tensor()[
+                    :local_count, : source.max_step_count
+                ],
+                step_counts=step_counts,
+            ),
+            sample_indices=indices,
+            old_log_probabilities=old_log_probabilities,
+            old_values=old_values,
+            advantages=advantage_values,
+            return_values=return_values,
+            local_count=local_count,
+            global_count=global_count,
+        )
+
+    def _ensure(
+        self,
+        *,
+        component_ids_source: Tensor,
+        numeric_values_source: Tensor,
+        numeric_masks_source: Tensor,
+        choice_token_ids_source: Tensor,
+        device: torch.device,
+        local_count: int,
+        max_step_count: int,
+    ) -> None:
+        assert local_count > 0
+        assert max_step_count > 0
+        component_shape = (
+            local_count,
+            int(component_ids_source.shape[1]),
+            int(component_ids_source.shape[2]),
+        )
+        numeric_shape = (
+            local_count,
+            int(numeric_values_source.shape[1]),
+            int(numeric_values_source.shape[2]),
+        )
+        token_shape = (local_count, max_step_count)
+        choice_shape = (
+            local_count,
+            max_step_count,
+            int(choice_token_ids_source.shape[2]),
+        )
+        self._component_ids = _ensure_tensor(
+            self._component_ids,
+            shape=component_shape,
+            dtype=component_ids_source.dtype,
+            device=device,
+        )
+        self._numeric_values = _ensure_tensor(
+            self._numeric_values,
+            shape=numeric_shape,
+            dtype=numeric_values_source.dtype,
+            device=device,
+        )
+        self._numeric_masks = _ensure_tensor(
+            self._numeric_masks,
+            shape=numeric_shape,
+            dtype=numeric_masks_source.dtype,
+            device=device,
+        )
+        self._selected_token_ids = _ensure_tensor(
+            self._selected_token_ids,
+            shape=token_shape,
+            dtype=torch.long,
+            device=device,
+        )
+        self._choice_token_ids = _ensure_tensor(
+            self._choice_token_ids,
+            shape=choice_shape,
+            dtype=torch.int16,
+            device=device,
+        )
+        self._choice_masks = _ensure_tensor(
+            self._choice_masks,
+            shape=choice_shape,
+            dtype=torch.bool,
+            device=device,
+        )
+        self._selected_choice_offsets = _ensure_tensor(
+            self._selected_choice_offsets,
+            shape=token_shape,
+            dtype=torch.long,
+            device=device,
+        )
+        self._step_mask = _ensure_tensor(
+            self._step_mask,
+            shape=token_shape,
+            dtype=torch.bool,
+            device=device,
+        )
+        self._step_counts = _ensure_tensor(
+            self._step_counts,
+            shape=(local_count,),
+            dtype=torch.long,
+            device=device,
+        )
+        self._old_log_probabilities = _ensure_tensor(
+            self._old_log_probabilities,
+            shape=(local_count,),
+            dtype=torch.float32,
+            device=device,
+        )
+        self._old_values = _ensure_tensor(
+            self._old_values,
+            shape=(local_count,),
+            dtype=torch.float32,
+            device=device,
+        )
+        self._advantages = _ensure_tensor(
+            self._advantages,
+            shape=(local_count,),
+            dtype=torch.float32,
+            device=device,
+        )
+        self._return_values = _ensure_tensor(
+            self._return_values,
+            shape=(local_count,),
+            dtype=torch.float32,
+            device=device,
+        )
+
+    def _write_step_mask(
+        self,
+        *,
+        step_counts: Tensor,
+        local_count: int,
+        max_step_count: int,
+    ) -> None:
+        positions = torch.arange(
+            max_step_count,
+            dtype=torch.long,
+            device=step_counts.device,
+        ).unsqueeze(0)
+        self._step_mask_tensor()[:local_count, :max_step_count].copy_(
+            positions < step_counts.unsqueeze(1)
+        )
+
+    def _component_ids_tensor(self) -> Tensor:
+        assert self._component_ids is not None
+        return self._component_ids
+
+    def _numeric_values_tensor(self) -> Tensor:
+        assert self._numeric_values is not None
+        return self._numeric_values
+
+    def _numeric_masks_tensor(self) -> Tensor:
+        assert self._numeric_masks is not None
+        return self._numeric_masks
+
+    def _selected_token_ids_tensor(self) -> Tensor:
+        assert self._selected_token_ids is not None
+        return self._selected_token_ids
+
+    def _choice_token_ids_tensor(self) -> Tensor:
+        assert self._choice_token_ids is not None
+        return self._choice_token_ids
+
+    def _choice_masks_tensor(self) -> Tensor:
+        assert self._choice_masks is not None
+        return self._choice_masks
+
+    def _selected_choice_offsets_tensor(self) -> Tensor:
+        assert self._selected_choice_offsets is not None
+        return self._selected_choice_offsets
+
+    def _step_mask_tensor(self) -> Tensor:
+        assert self._step_mask is not None
+        return self._step_mask
+
+    def _step_counts_tensor(self) -> Tensor:
+        assert self._step_counts is not None
+        return self._step_counts
+
+    def _old_log_probabilities_tensor(self) -> Tensor:
+        assert self._old_log_probabilities is not None
+        return self._old_log_probabilities
+
+    def _old_values_tensor(self) -> Tensor:
+        assert self._old_values is not None
+        return self._old_values
+
+    def _advantages_tensor(self) -> Tensor:
+        assert self._advantages is not None
+        return self._advantages
+
+    def _return_values_tensor(self) -> Tensor:
+        assert self._return_values is not None
+        return self._return_values
+
+
+@dataclass(slots=True)
 class ModelRankSampleArena:
     """Append sampled policy rows and expose committed PPO batches."""
 
@@ -116,14 +472,19 @@ class ModelRankSampleArena:
         self._row_count = 0
         self._policy_version = None
 
-    def store_sampled_batch(
-        self, *, batch: SampledPolicyBatch
+    def store_sampled_result(
+        self,
+        *,
+        policy_versions: tuple[int, ...],
+        observation_batch: ObservationTensorBatch,
+        semantic_sample: SemanticActionSampleBatch,
+        old_values: Tensor,
     ) -> tuple[ModelRankDecisionResult, ...]:
-        """Append sampled rows and return response-ready decisions."""
-        assert batch.old_values.device == self.device
-        sample_count = len(batch.policy_versions)
+        """Append sampled tensors and return decisions."""
+        assert old_values.device == self.device
+        sample_count = len(policy_versions)
         assert sample_count > 0
-        version_result = _single_policy_version(batch.policy_versions)
+        version_result = _single_policy_version(policy_versions)
         if isinstance(version_result, Rejected):
             return _rejected_decisions(
                 reason=version_result.reason, count=sample_count
@@ -139,24 +500,39 @@ class ModelRankSampleArena:
             )
         if self._policy_version is None:
             self._policy_version = policy_version
-        self._ensure_capacity_for_batch(
-            batch=batch, sample_count=sample_count
+        self._ensure_capacity_for_sample(
+            observation_batch=observation_batch,
+            semantic_sample=semantic_sample,
+            sample_count=sample_count,
         )
-        self._validate_batch_shape(batch)
+        self._validate_sample_shape(
+            observation_batch=observation_batch,
+            semantic_sample=semantic_sample,
+            old_values=old_values,
+        )
         start = self._row_count
         end = start + sample_count
-        self._write_sampled_batch(start=start, end=end, batch=batch)
+        self._write_sampled_result(
+            start=start,
+            end=end,
+            policy_versions=policy_versions,
+            observation_batch=observation_batch,
+            semantic_sample=semantic_sample,
+            old_values=old_values,
+        )
         self._row_count = end
-        step_counts = _int_tensor_tuple(batch.step_counts)
-        choice_counts = _int_tensor_tuple(batch.choice_counts)
+        step_counts = _int_tensor_tuple(semantic_sample.step_counts)
+        choice_counts = _int_tensor_tuple(semantic_sample.choice_counts)
         row_indices = tuple(range(start, end))
         return _stored_decisions(
             model_rank_index=self.model_rank_index,
-            policy_versions=batch.policy_versions,
+            policy_versions=policy_versions,
             step_counts=step_counts,
             choice_counts=choice_counts,
             traces=_response_trace_cpu_view(
-                batch=batch,
+                selected_token_ids=(
+                    semantic_sample.selected_token_ids_padded
+                ),
                 step_counts=step_counts,
             ),
             row_indices=row_indices,
@@ -242,87 +618,61 @@ class ModelRankSampleArena:
         selected_step_counts = source.step_counts.index_select(
             0, indices
         )
-        replay = PPOReplayTensorBatch(
-            sample_count=local_count,
-            max_step_count=source.max_step_count,
-            selected_token_ids_padded=(
-                self._selected_token_ids_tensor().index_select(
-                    dim=0, index=selected_rows
-                )[:, : source.max_step_count]
+        return source.workspace.materialize(
+            component_ids_source=self._component_ids_tensor(),
+            numeric_values_source=self._numeric_values_tensor(),
+            numeric_masks_source=self._numeric_masks_tensor(),
+            selected_token_ids_source=self._selected_token_ids_tensor(),
+            choice_token_ids_source=self._choice_token_ids_tensor(),
+            choice_masks_source=self._choice_masks_tensor(),
+            selected_choice_offsets_source=(
+                self._selected_choice_offsets_tensor()
             ),
-            choice_token_ids=(
-                self._choice_token_ids_tensor().index_select(
-                    dim=0, index=selected_rows
-                )[:, : source.max_step_count, :]
-            ),
-            choice_masks=(
-                self._choice_masks_tensor().index_select(
-                    dim=0, index=selected_rows
-                )[:, : source.max_step_count, :]
-            ),
-            selected_choice_offsets=(
-                self._selected_choice_offsets_tensor().index_select(
-                    dim=0, index=selected_rows
-                )[:, : source.max_step_count]
-            ),
-            step_mask=_step_mask(
-                step_counts=selected_step_counts,
-                max_step_count=source.max_step_count,
-            ),
-            step_counts=selected_step_counts,
-        )
-        return TensorizedPPOMinibatch(
-            observation_batch=ObservationTensorBatch(
-                component_ids=self._component_ids_tensor().index_select(
-                    dim=0, index=selected_rows
-                ),
-                numeric_values=self._numeric_values_tensor().index_select(
-                    dim=0, index=selected_rows
-                ),
-                numeric_masks=self._numeric_masks_tensor().index_select(
-                    dim=0, index=selected_rows
-                ),
-            ),
-            replay=replay,
-            sample_indices=indices,
-            old_log_probabilities=source.old_log_probabilities.index_select(
-                dim=0, index=indices
-            ),
-            old_values=source.old_values.index_select(
-                dim=0, index=indices
-            ),
-            advantages=advantages.index_select(dim=0, index=indices),
-            return_values=source.return_values.index_select(
-                dim=0, index=indices
-            ),
-            local_count=local_count,
+            device=self.device,
+            selected_rows=selected_rows,
+            selected_step_counts=selected_step_counts,
+            source=source,
+            indices=indices,
+            advantages=advantages,
             global_count=global_count,
         )
 
-    def _ensure_capacity_for_batch(
-        self, *, batch: SampledPolicyBatch, sample_count: int
+    def _ensure_capacity_for_sample(
+        self,
+        *,
+        observation_batch: ObservationTensorBatch,
+        semantic_sample: SemanticActionSampleBatch,
+        sample_count: int,
     ) -> None:
         assert sample_count > 0
         needed = self._row_count + sample_count
         if self._capacity == 0:
-            self._initialize_tensors(
-                batch=batch, capacity=max(_INITIAL_CAPACITY, needed)
+            self._initialize_tensors_from_sample(
+                observation_batch=observation_batch,
+                semantic_sample=semantic_sample,
+                capacity=max(_INITIAL_CAPACITY, needed),
             )
-        self._ensure_observation_token_capacity(batch)
-        self._ensure_choice_capacity(batch)
+        self._ensure_observation_token_capacity_for_sample(
+            observation_batch
+        )
+        self._ensure_choice_capacity_for_sample(semantic_sample)
         while self._capacity < needed:
             self._grow_rows()
 
-    def _initialize_tensors(
-        self, *, batch: SampledPolicyBatch, capacity: int
+    def _initialize_tensors_from_sample(
+        self,
+        *,
+        observation_batch: ObservationTensorBatch,
+        semantic_sample: SemanticActionSampleBatch,
+        capacity: int,
     ) -> None:
         assert capacity > 0
         self._capacity = capacity
-        observation = batch.observation_batch
+        observation = observation_batch
         token_count = int(observation.component_ids.shape[1])
         component_count = int(observation.component_ids.shape[2])
         numeric_count = int(observation.numeric_values.shape[2])
-        choice_width = int(batch.choice_token_ids.shape[2])
+        choice_width = int(semantic_sample.choice_token_ids.shape[2])
         self._row_policy_versions = torch.zeros(
             (capacity,), dtype=torch.long, device=self.device
         )
@@ -417,12 +767,10 @@ class ModelRankSampleArena:
         )
         self._capacity = new_capacity
 
-    def _ensure_observation_token_capacity(
-        self, batch: SampledPolicyBatch
+    def _ensure_observation_token_capacity_for_sample(
+        self, observation_batch: ObservationTensorBatch
     ) -> None:
-        token_count = int(
-            batch.observation_batch.component_ids.shape[1]
-        )
+        token_count = int(observation_batch.component_ids.shape[1])
         current_token_count = int(self._component_ids_tensor().shape[1])
         if token_count <= current_token_count:
             return
@@ -436,10 +784,10 @@ class ModelRankSampleArena:
             self._numeric_masks_tensor(), token_count=token_count
         )
 
-    def _ensure_choice_capacity(
-        self, batch: SampledPolicyBatch
+    def _ensure_choice_capacity_for_sample(
+        self, semantic_sample: SemanticActionSampleBatch
     ) -> None:
-        choice_width = int(batch.choice_token_ids.shape[2])
+        choice_width = int(semantic_sample.choice_token_ids.shape[2])
         current_width = int(self._choice_token_ids_tensor().shape[2])
         if choice_width <= current_width:
             return
@@ -450,91 +798,110 @@ class ModelRankSampleArena:
             self._choice_masks_tensor(), choice_width=choice_width
         )
 
-    def _validate_batch_shape(self, batch: SampledPolicyBatch) -> None:
+    def _validate_sample_shape(
+        self,
+        *,
+        observation_batch: ObservationTensorBatch,
+        semantic_sample: SemanticActionSampleBatch,
+        old_values: Tensor,
+    ) -> None:
         max_generation_steps = int(
-            batch.selected_token_ids_padded.shape[1]
+            semantic_sample.selected_token_ids_padded.shape[1]
         )
         assert max_generation_steps > 0
         assert (
             max_generation_steps <= SEMANTIC_CODEC.max_argument_tokens
         )
-        assert batch.choice_token_ids.ndim == 3
-        assert int(batch.choice_token_ids.shape[1]) == (
+        assert semantic_sample.choice_token_ids.ndim == 3
+        assert int(semantic_sample.choice_token_ids.shape[1]) == (
             max_generation_steps
         )
-        assert int(batch.choice_token_ids.shape[2]) <= int(
+        assert int(semantic_sample.choice_token_ids.shape[2]) <= int(
             self._choice_token_ids_tensor().shape[2]
         )
-        assert batch.choice_masks.shape == batch.choice_token_ids.shape
         assert (
-            int(batch.selected_choice_offsets.shape[1])
+            semantic_sample.choice_masks.shape
+            == semantic_sample.choice_token_ids.shape
+        )
+        assert (
+            int(semantic_sample.selected_choice_offsets.shape[1])
             == max_generation_steps
         )
         assert (
-            batch.observation_batch.component_ids.shape[2:]
+            observation_batch.component_ids.shape[2:]
             == (self._component_ids_tensor().shape[2:])
         )
         assert (
-            batch.observation_batch.numeric_values.shape[2:]
+            observation_batch.numeric_values.shape[2:]
             == (self._numeric_values_tensor().shape[2:])
         )
         assert (
-            batch.observation_batch.numeric_masks.shape[2:]
+            observation_batch.numeric_masks.shape[2:]
             == (self._numeric_masks_tensor().shape[2:])
         )
+        assert (
+            old_values.shape == semantic_sample.log_probabilities.shape
+        )
 
-    def _write_sampled_batch(
-        self, *, start: int, end: int, batch: SampledPolicyBatch
+    def _write_sampled_result(
+        self,
+        *,
+        start: int,
+        end: int,
+        policy_versions: tuple[int, ...],
+        observation_batch: ObservationTensorBatch,
+        semantic_sample: SemanticActionSampleBatch,
+        old_values: Tensor,
     ) -> None:
         assert 0 <= start < end <= self._capacity
         row_slice = slice(start, end)
         sample_count = end - start
-        assert sample_count == len(batch.policy_versions)
+        assert sample_count == len(policy_versions)
         max_generation_steps = int(
-            batch.selected_token_ids_padded.shape[1]
+            semantic_sample.selected_token_ids_padded.shape[1]
         )
-        choice_width = int(batch.choice_token_ids.shape[2])
+        choice_width = int(semantic_sample.choice_token_ids.shape[2])
         self._row_policy_versions_tensor()[row_slice] = torch.tensor(
-            batch.policy_versions, dtype=torch.long, device=self.device
+            policy_versions, dtype=torch.long, device=self.device
         )
         self._row_step_counts_tensor()[row_slice].copy_(
-            batch.step_counts
+            semantic_sample.step_counts
         )
         _write_observation_rows(
             destination=self._component_ids_tensor(),
             row_slice=row_slice,
-            source=batch.observation_batch.component_ids,
+            source=observation_batch.component_ids,
         )
         _write_observation_rows(
             destination=self._numeric_values_tensor(),
             row_slice=row_slice,
-            source=batch.observation_batch.numeric_values,
+            source=observation_batch.numeric_values,
         )
         _write_observation_rows(
             destination=self._numeric_masks_tensor(),
             row_slice=row_slice,
-            source=batch.observation_batch.numeric_masks,
+            source=observation_batch.numeric_masks,
         )
         self._selected_token_ids_tensor()[row_slice].zero_()
         self._selected_token_ids_tensor()[
             row_slice, :max_generation_steps
-        ].copy_(batch.selected_token_ids_padded)
+        ].copy_(semantic_sample.selected_token_ids_padded)
         self._choice_token_ids_tensor()[row_slice].zero_()
         self._choice_masks_tensor()[row_slice].fill_(False)
         self._choice_token_ids_tensor()[
             row_slice, :max_generation_steps, :choice_width
-        ].copy_(batch.choice_token_ids)
+        ].copy_(semantic_sample.choice_token_ids)
         self._choice_masks_tensor()[
             row_slice, :max_generation_steps, :choice_width
-        ].copy_(batch.choice_masks)
+        ].copy_(semantic_sample.choice_masks)
         self._selected_choice_offsets_tensor()[row_slice].zero_()
         self._selected_choice_offsets_tensor()[
             row_slice, :max_generation_steps
-        ].copy_(batch.selected_choice_offsets)
+        ].copy_(semantic_sample.selected_choice_offsets)
         self._old_log_probabilities_tensor()[row_slice].copy_(
-            batch.old_log_probabilities
+            semantic_sample.log_probabilities
         )
-        self._old_values_tensor()[row_slice].copy_(batch.old_values)
+        self._old_values_tensor()[row_slice].copy_(old_values)
 
     def _validate_return_rows(
         self,
@@ -695,11 +1062,21 @@ def _grow_choice_width(values: Tensor, *, choice_width: int) -> Tensor:
     return result
 
 
-def _step_mask(*, step_counts: Tensor, max_step_count: int) -> Tensor:
-    positions = torch.arange(
-        max_step_count, dtype=torch.long, device=step_counts.device
-    ).unsqueeze(0)
-    return positions < step_counts.unsqueeze(1)
+def _ensure_tensor(
+    value: Tensor | None,
+    *,
+    shape: tuple[int, ...],
+    dtype: torch.dtype,
+    device: torch.device,
+) -> Tensor:
+    if (
+        value is not None
+        and value.shape == shape
+        and value.dtype == dtype
+        and value.device == device
+    ):
+        return value
+    return torch.empty(shape, dtype=dtype, device=device)
 
 
 def _bool_tensor_value(value: Tensor) -> bool:
@@ -771,15 +1148,13 @@ def _stored_decision_for_position(
 
 def _response_trace_cpu_view(
     *,
-    batch: SampledPolicyBatch,
+    selected_token_ids: Tensor,
     step_counts: tuple[int, ...],
 ) -> _ResponseTraceCpuView:
     max_step_count = max(step_counts)
     assert max_step_count > 0
     selected_tokens = (
-        batch.selected_token_ids_padded[:, :max_step_count]
-        .detach()
-        .cpu()
+        selected_token_ids[:, :max_step_count].detach().cpu()
     )
     return _ResponseTraceCpuView(selected_token_ids=selected_tokens)
 

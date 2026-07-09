@@ -44,64 +44,49 @@ class PolicyRequestInput:
 
 
 @dataclass(frozen=True, slots=True)
-class PolicyRequestBatchRow:
-    """Tensor-ready policy request row hidden behind a batch."""
-
-    route: PolicyRequestRoute
-    policy_version: int
-    packed_observation: PackedObservation
-    action_plan: ActionPlanFrame
-    generation_step_count: int
-    sampling_thresholds: tuple[float, ...]
-
-    def __post_init__(self) -> None:
-        assert self.policy_version >= 0
-        assert self.generation_step_count > 0
-        assert (
-            len(self.sampling_thresholds) == self.generation_step_count
-        )
-
-
-@dataclass(frozen=True, slots=True)
 class PolicyRequestBatch:
-    """Transport-neutral policy request batch prepared by a worker."""
+    """Columnar policy requests prepared by a worker."""
 
-    rows: tuple[PolicyRequestBatchRow, ...]
+    routes: tuple[PolicyRequestRoute, ...]
+    policy_versions: tuple[int, ...]
+    packed_observations: tuple[PackedObservation, ...]
+    action_plans: tuple[ActionPlanFrame, ...]
+    generation_step_counts: tuple[int, ...]
+    sampling_threshold_rows: tuple[tuple[float, ...], ...]
     max_observation_tokens: int
     padded_generation_steps: int
 
     def __post_init__(self) -> None:
-        assert self.rows
+        row_count = len(self.routes)
+        assert row_count > 0
+        assert len(self.policy_versions) == row_count
+        assert len(self.packed_observations) == row_count
+        assert len(self.action_plans) == row_count
+        assert len(self.generation_step_counts) == row_count
+        assert len(self.sampling_threshold_rows) == row_count
         assert self.max_observation_tokens > 0
         assert self.padded_generation_steps > 0
+        assert all(version >= 0 for version in self.policy_versions)
         assert all(
-            row.generation_step_count <= self.padded_generation_steps
-            for row in self.rows
+            0 < count <= self.padded_generation_steps
+            for count in self.generation_step_counts
         )
         assert all(
-            row.packed_observation.token_count()
-            <= self.max_observation_tokens
-            for row in self.rows
+            len(thresholds) == count
+            for thresholds, count in zip(
+                self.sampling_threshold_rows,
+                self.generation_step_counts,
+                strict=True,
+            )
+        )
+        assert all(
+            observation.token_count() <= self.max_observation_tokens
+            for observation in self.packed_observations
         )
 
     def row_count(self) -> int:
         """Return request count."""
-        return len(self.rows)
-
-    @property
-    def routes(self) -> tuple[PolicyRequestRoute, ...]:
-        """Return request routes in batch order."""
-        return tuple(row.route for row in self.rows)
-
-    @property
-    def policy_versions(self) -> tuple[int, ...]:
-        """Return policy versions in batch order."""
-        return tuple(row.policy_version for row in self.rows)
-
-    @property
-    def generation_step_counts(self) -> tuple[int, ...]:
-        """Return semantic generation widths in batch order."""
-        return tuple(row.generation_step_count for row in self.rows)
+        return len(self.routes)
 
 
 @dataclass(frozen=True, slots=True)

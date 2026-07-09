@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass
-from multiprocessing.connection import Connection, wait
-from typing import Protocol, cast
+from typing import Protocol
 
 import torch
 from torch import Tensor
@@ -16,8 +14,13 @@ from server.training.policy_inference_batch import (
     DevicePolicyRequestBatch,
     PolicyRequestRoute,
 )
+from server.training.runtime.async_ipc import (
+    AsyncChildControlEndpoint,
+    AsyncFrameEndpoint,
+    wait_readable_frames,
+)
 from server.training.runtime.model_rank.inference_transport import (
-    ConnectionPolicyRequestReceiver,
+    AsyncPolicyPeer,
 )
 from server.training.runtime.model_rank.messages import (
     ModelRankCommand,
@@ -31,10 +34,6 @@ from server.training.runtime.model_rank.staging import (
     ModelRankInferenceBatch,
     PolicyRequestIngress,
 )
-from server.training.runtime.process_control import (
-    ChildControlEndpoint,
-    ControlReady,
-)
 from server.training.semantic_action_plan import DeviceActionPlanBatch
 from server.training.tensorize import ObservationTensorBatch
 
@@ -42,7 +41,7 @@ from server.training.tensorize import ObservationTensorBatch
 class ModelRankBatchHandler(Protocol):
     """Process one inference batch inside a data-plane transfer."""
 
-    def __call__(
+    async def __call__(
         self, batch: ModelRankInferenceBatch
     ) -> _result.Ok[None] | _result.Rejected: ...
 
@@ -50,7 +49,7 @@ class ModelRankBatchHandler(Protocol):
 class ModelRankRejectHandler(Protocol):
     """Reject one request batch inside a data-plane transfer."""
 
-    def __call__(
+    async def __call__(
         self, *, routes: tuple[PolicyRequestRoute, ...], reason: str
     ) -> _result.Ok[None] | _result.Rejected: ...
 
@@ -59,11 +58,13 @@ class ModelRankRejectHandler(Protocol):
 class ModelRankDataPlane:
     """Drain inference requests until the next coordinator command."""
 
-    control: ChildControlEndpoint[ModelRankCommand, ModelRankResponse]
-    request_receivers: tuple[ConnectionPolicyRequestReceiver, ...]
+    control: AsyncChildControlEndpoint[
+        ModelRankCommand, ModelRankResponse
+    ]
+    request_peers: tuple[AsyncPolicyPeer, ...]
     ingress: PolicyRequestIngress
 
-    def run_until_command(
+    async def run_until_command(
         self,
         *,
         policy_version: int,
@@ -74,7 +75,7 @@ class ModelRankDataPlane:
         assert policy_version >= 0
         while True:
             if self.ingress.has_pending_rows():
-                request_result = self._handle_ready_requests(
+                request_result = await self._handle_ready_requests(
                     initial_ready=(),
                     policy_version=policy_version,
                     process_batch=process_batch,
@@ -83,11 +84,13 @@ class ModelRankDataPlane:
                 if isinstance(request_result, Rejected):
                     return request_result
                 continue
-            ready_requests = self._ready_request_receivers(
+            ready_requests = self._ready_request_peers(
                 timeout_seconds=0.0
             )
+            if isinstance(ready_requests, Rejected):
+                return ready_requests
             if ready_requests:
-                request_result = self._handle_ready_requests(
+                request_result = await self._handle_ready_requests(
                     initial_ready=ready_requests,
                     policy_version=policy_version,
                     process_batch=process_batch,
@@ -96,17 +99,14 @@ class ModelRankDataPlane:
                 if isinstance(request_result, Rejected):
                     return request_result
                 continue
-            if self.control.poll_command(0.0):
-                return self.control.recv_command()
-            ready = self._wait_for_input()
+            if await self.control.command_ready(0.0):
+                return await self.control.recv_command()
+            ready = await self._wait_for_input()
             if isinstance(ready, Rejected):
                 return ready
-            ready_value = ready.value
-            ready_requests = self._request_receivers_from_ready(
-                ready_value.connections
-            )
+            ready_requests = self._request_peers_from_ready(ready.value)
             if ready_requests:
-                request_result = self._handle_ready_requests(
+                request_result = await self._handle_ready_requests(
                     initial_ready=ready_requests,
                     policy_version=policy_version,
                     process_batch=process_batch,
@@ -115,18 +115,17 @@ class ModelRankDataPlane:
                 if isinstance(request_result, Rejected):
                     return request_result
                 continue
-            assert ready_value.command_ready
-            return self.control.recv_command()
+            return await self.control.recv_command()
 
-    def _handle_ready_requests(
+    async def _handle_ready_requests(
         self,
         *,
-        initial_ready: tuple[ConnectionPolicyRequestReceiver, ...],
+        initial_ready: tuple[AsyncPolicyPeer, ...],
         policy_version: int,
         process_batch: ModelRankBatchHandler,
         reject_batch: ModelRankRejectHandler,
     ) -> _result.Ok[None] | _result.Rejected:
-        batch_result = self._receive_ready_batch(
+        batch_result = await self._receive_ready_batch(
             initial_ready=initial_ready
         )
         if isinstance(batch_result, Rejected):
@@ -137,7 +136,7 @@ class ModelRankDataPlane:
             policy_version=policy_version,
         )
         if rows.mismatched:
-            reject_result = reject_batch(
+            reject_result = await reject_batch(
                 routes=_select_routes(batch.routes, rows.mismatched),
                 reason="policy request version does not match command",
             )
@@ -145,16 +144,16 @@ class ModelRankDataPlane:
                 return reject_result
         if not rows.matched:
             return Ok(value=None)
-        return _process_shape_buckets(
+        return await _process_shape_buckets(
             batch=batch,
             rows=rows.matched,
             process_batch=process_batch,
         )
 
-    def _receive_ready_batch(
+    async def _receive_ready_batch(
         self,
         *,
-        initial_ready: tuple[ConnectionPolicyRequestReceiver, ...],
+        initial_ready: tuple[AsyncPolicyPeer, ...],
     ) -> _result.Ok[ModelRankInferenceBatch] | _result.Rejected:
         self.ingress.begin_batch()
         pending_result = self.ingress.drain_pending_rows()
@@ -163,71 +162,76 @@ class ModelRankDataPlane:
             return pending_result
         ready_receivers = initial_ready
         while ready_receivers and self.ingress.can_receive():
-            for receiver in ready_receivers:
+            for peer in ready_receivers:
                 if not self.ingress.can_receive():
                     break
-                receive_result = self.ingress.receive_from(receiver)
+                receive_result = await self.ingress.receive_from(peer)
                 if isinstance(receive_result, Rejected):
                     self.ingress.discard_batch()
                     return receive_result
             if self.ingress.can_receive():
-                ready_receivers = self._ready_request_receivers(
+                ready_result = self._ready_request_peers(
                     timeout_seconds=0.0
                 )
+                if isinstance(ready_result, Rejected):
+                    self.ingress.discard_batch()
+                    return ready_result
+                ready_receivers = ready_result
         return self.ingress.finish_batch()
 
-    def _ready_request_receivers(
+    def _ready_request_peers(
         self, *, timeout_seconds: float
-    ) -> tuple[ConnectionPolicyRequestReceiver, ...]:
-        if not self.request_receivers:
+    ) -> tuple[AsyncPolicyPeer, ...] | _result.Rejected:
+        if not self.request_peers:
             return ()
-        ready = wait(
-            tuple(
-                receiver.connection
-                for receiver in self.request_receivers
-            ),
-            timeout=timeout_seconds,
+        ready_result = _ready_endpoints_now(
+            peers=self.request_peers,
+            timeout_seconds=timeout_seconds,
         )
-        return self._request_receivers_from_ready(
-            _ready_connections(ready)
-        )
+        if isinstance(ready_result, Rejected):
+            return ready_result
+        return self._request_peers_from_ready(ready_result.value)
 
-    def _wait_for_input(
+    async def _wait_for_input(
         self,
-    ) -> _result.Ok[ControlReady] | _result.Rejected:
-        request_connections = tuple(
-            receiver.connection for receiver in self.request_receivers
-        )
-        return self.control.wait_command_or_connections(
-            connections=request_connections,
+    ) -> _result.Ok[tuple[AsyncFrameEndpoint, ...]] | _result.Rejected:
+        endpoints = tuple(
+            peer.endpoint for peer in self.request_peers
+        ) + (self.control.frame_endpoint,)
+        return await wait_readable_frames(
+            endpoints=endpoints,
             timeout_seconds=None,
         )
 
-    def _request_receivers_from_ready(
-        self, ready: tuple[Connection, ...]
-    ) -> tuple[ConnectionPolicyRequestReceiver, ...]:
+    def _request_peers_from_ready(
+        self, ready: tuple[AsyncFrameEndpoint, ...]
+    ) -> tuple[AsyncPolicyPeer, ...]:
         return tuple(
-            receiver
-            for receiver in self.request_receivers
-            if _connection_in_ready(receiver.connection, ready)
+            peer
+            for peer in self.request_peers
+            if _endpoint_in_ready(peer.endpoint, ready)
         )
 
 
-def _connection_in_ready(
-    connection: Connection, ready: tuple[Connection, ...]
+def _endpoint_in_ready(
+    endpoint: AsyncFrameEndpoint, ready: tuple[AsyncFrameEndpoint, ...]
 ) -> bool:
-    return any(connection is item for item in ready)
+    return any(endpoint is item for item in ready)
 
 
-def _ready_connections(
-    ready: Iterable[object],
-) -> tuple[Connection, ...]:
-    connections: list[Connection] = []
-    for item in ready:
-        if not isinstance(item, Connection):
-            continue
-        connections.append(cast(Connection, item))
-    return tuple(connections)
+def _ready_endpoints_now(
+    *,
+    peers: tuple[AsyncPolicyPeer, ...],
+    timeout_seconds: float,
+) -> _result.Ok[tuple[AsyncFrameEndpoint, ...]] | _result.Rejected:
+    assert timeout_seconds == 0.0
+    return Ok(
+        value=tuple(
+            peer.endpoint
+            for peer in peers
+            if peer.endpoint.is_readable()
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -416,7 +420,7 @@ def _slice_device_request_rows(
     )
 
 
-def _process_shape_buckets(
+async def _process_shape_buckets(
     *,
     batch: ModelRankInferenceBatch,
     rows: tuple[int, ...],
@@ -426,7 +430,7 @@ def _process_shape_buckets(
         batch.generation_step_counts, rows=rows
     )
     for bucket in plan.buckets:
-        process_result = process_batch(
+        process_result = await process_batch(
             _annotate_shape_plan(
                 _select_staged_rows(batch, bucket), plan
             )

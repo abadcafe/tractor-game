@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-import multiprocessing as mp
-import threading
 from dataclasses import dataclass, field
-from multiprocessing.connection import Connection
-from multiprocessing.context import SpawnContext
 
 import torch
 
@@ -26,56 +22,54 @@ from server.training.policy_inference_batch import (
 from server.training.policy_inference_batch.types import (
     PolicyRequestWireFrame,
 )
+from server.training.runtime.async_ipc import (
+    AsyncProcessControlLink,
+    ProcessControlProtocol,
+    create_async_process_control_link,
+    create_async_socket_pair,
+)
 from server.training.runtime.model_rank.data_plane import (
     ModelRankDataPlane,
 )
 from server.training.runtime.model_rank.inference_transport import (
-    ConnectionPolicyRequestReceiver,
-    ConnectionPolicyRequestSender,
+    AsyncPolicyPeer,
 )
 from server.training.runtime.model_rank.messages import (
     ModelRankCommand,
     ModelRankLoadStateCommand,
     ModelRankResponse,
+    decode_model_rank_command,
+    decode_model_rank_response,
 )
 from server.training.runtime.model_rank.staging import (
     ModelRankInferenceBatch,
     PolicyRequestIngress,
 )
-from server.training.runtime.process_control import (
-    ProcessControlLink,
-    ProcessControlProtocol,
-    create_process_control_link,
-)
 from server.training.runtime.state import RuntimeTrainingState
 from server.training.sampling import PolicyDecisionKey
 
-type _ModelRankControlLink = ProcessControlLink[
+type _ModelRankControlLink = AsyncProcessControlLink[
     ModelRankCommand, ModelRankResponse
 ]
 
 _MODEL_RANK_CONTROL_PROTOCOL: ProcessControlProtocol[
     ModelRankCommand, ModelRankResponse
-] = ProcessControlProtocol(name="model-rank-test")
+] = ProcessControlProtocol(
+    name="model-rank-test",
+    decode_command=decode_model_rank_command,
+    decode_response=decode_model_rank_response,
+)
 _TEST_MAX_OBSERVATION_TOKENS = 45
 
 
 @dataclass(frozen=True, slots=True)
 class _RequestLink:
-    receiver: Connection
-    sender: Connection
+    worker_peer: AsyncPolicyPeer
+    model_rank_peer: AsyncPolicyPeer
 
-
-@dataclass(slots=True)
-class _RequestSendTask:
-    thread: threading.Thread
-    result: list[Ok[None] | Rejected]
-
-
-@dataclass(frozen=True, slots=True)
-class _PendingRequest:
-    worker_index: int
-    policy_version: int
+    def close(self) -> None:
+        self.worker_peer.close()
+        self.model_rank_peer.close()
 
 
 def _worker_log() -> list[tuple[int, ...]]:
@@ -96,7 +90,7 @@ class _DataPlaneRecorder:
     )
     rejected_reasons: list[str] = field(default_factory=_reason_log)
 
-    def process(
+    async def process(
         self, batch: ModelRankInferenceBatch
     ) -> _result.Ok[None] | _result.Rejected:
         self.processed_workers.append(
@@ -104,7 +98,7 @@ class _DataPlaneRecorder:
         )
         return Ok(value=None)
 
-    def reject(
+    async def reject(
         self, *, routes: tuple[PolicyRequestRoute, ...], reason: str
     ) -> _result.Ok[None] | _result.Rejected:
         self.rejected_workers.append(
@@ -114,50 +108,43 @@ class _DataPlaneRecorder:
         return Ok(value=None)
 
 
-def test_run_until_command_drains_requests_before_ready_command() -> (
+async def test_run_until_command_drains_requests_before_command() -> (
     None
 ):
-    context = _spawn_context()
-    control_link = create_process_control_link(
-        context=context,
-        protocol=_MODEL_RANK_CONTROL_PROTOCOL,
-    )
-    link0 = _request_link(context)
-    link1 = _request_link(context)
+    control_link = _control_link()
+    link0 = _request_link(worker_index=0)
+    link1 = _request_link(worker_index=1)
     recorder = _DataPlaneRecorder()
     try:
-        command_sent = control_link.coordinator.send_command(
+        command_sent = await control_link.coordinator.send_command(
             ModelRankLoadStateCommand(
                 state=_runtime_state(), policy_version=8
             )
         )
         assert isinstance(command_sent, Ok)
-        send_tasks = (
-            _start_request_send(
-                link=link0, worker_index=0, policy_version=7
-            ),
-            _start_request_send(
-                link=link1, worker_index=1, policy_version=7
-            ),
+        await _send_request(
+            link=link0, worker_index=0, policy_version=7
+        )
+        await _send_request(
+            link=link1, worker_index=1, policy_version=7
         )
         data_plane = _data_plane(
             control_link=control_link,
-            request_receivers=(
-                ConnectionPolicyRequestReceiver(link0.receiver),
-                ConnectionPolicyRequestReceiver(link1.receiver),
+            request_peers=(
+                link0.model_rank_peer,
+                link1.model_rank_peer,
             ),
             batch_size=4,
             max_observation_tokens=_TEST_MAX_OBSERVATION_TOKENS,
         )
 
-        command_result = data_plane.run_until_command(
+        command_result = await data_plane.run_until_command(
             policy_version=7,
             process_batch=recorder.process,
             reject_batch=recorder.reject,
         )
 
         assert isinstance(command_result, Ok)
-        _finish_request_sends(send_tasks)
         assert isinstance(
             command_result.value, ModelRankLoadStateCommand
         )
@@ -168,25 +155,15 @@ def test_run_until_command_drains_requests_before_ready_command() -> (
     finally:
         control_link.coordinator.close()
         control_link.child.close()
-        _close_connections(
-            link0.receiver,
-            link0.sender,
-            link1.receiver,
-            link1.sender,
-        )
+        link0.close()
+        link1.close()
 
 
-def test_run_until_command_returns_command_when_data_channel_idle() -> (
-    None
-):
-    context = _spawn_context()
-    control_link = create_process_control_link(
-        context=context,
-        protocol=_MODEL_RANK_CONTROL_PROTOCOL,
-    )
+async def test_run_until_command_returns_idle_command() -> None:
+    control_link = _control_link()
     recorder = _DataPlaneRecorder()
     try:
-        command_sent = control_link.coordinator.send_command(
+        command_sent = await control_link.coordinator.send_command(
             ModelRankLoadStateCommand(
                 state=_runtime_state(), policy_version=2
             )
@@ -194,11 +171,11 @@ def test_run_until_command_returns_command_when_data_channel_idle() -> (
         assert isinstance(command_sent, Ok)
         data_plane = _data_plane(
             control_link=control_link,
-            request_receivers=(),
+            request_peers=(),
             batch_size=4,
         )
 
-        command_result = data_plane.run_until_command(
+        command_result = await data_plane.run_until_command(
             policy_version=1,
             process_batch=recorder.process,
             reject_batch=recorder.reject,
@@ -216,23 +193,19 @@ def test_run_until_command_returns_command_when_data_channel_idle() -> (
         control_link.child.close()
 
 
-def test_run_until_command_rejects_mismatched_policy_version() -> None:
-    context = _spawn_context()
-    control_link = create_process_control_link(
-        context=context,
-        protocol=_MODEL_RANK_CONTROL_PROTOCOL,
-    )
-    link = _request_link(context)
+async def test_run_until_command_rejects_stale_policy_version() -> None:
+    control_link = _control_link()
+    link = _request_link(worker_index=2)
     recorder = _DataPlaneRecorder()
     max_observation_tokens = 45
     try:
-        _send_request(
+        await _send_request(
             link=link,
             worker_index=2,
             policy_version=4,
             max_observation_tokens=max_observation_tokens,
         )
-        command_sent = control_link.coordinator.send_command(
+        command_sent = await control_link.coordinator.send_command(
             ModelRankLoadStateCommand(
                 state=_runtime_state(), policy_version=9
             )
@@ -240,14 +213,12 @@ def test_run_until_command_rejects_mismatched_policy_version() -> None:
         assert isinstance(command_sent, Ok)
         data_plane = _data_plane(
             control_link=control_link,
-            request_receivers=(
-                ConnectionPolicyRequestReceiver(link.receiver),
-            ),
+            request_peers=(link.model_rank_peer,),
             batch_size=4,
             max_observation_tokens=max_observation_tokens,
         )
 
-        command_result = data_plane.run_until_command(
+        command_result = await data_plane.run_until_command(
             policy_version=5,
             process_batch=recorder.process,
             reject_batch=recorder.reject,
@@ -266,42 +237,36 @@ def test_run_until_command_rejects_mismatched_policy_version() -> None:
     finally:
         control_link.coordinator.close()
         control_link.child.close()
-        _close_connections(link.receiver, link.sender)
+        link.close()
 
 
-def test_run_until_command_rejects_only_mismatched_policy_routes() -> (
-    None
-):
-    context = _spawn_context()
-    control_link = create_process_control_link(
-        context=context,
-        protocol=_MODEL_RANK_CONTROL_PROTOCOL,
-    )
-    link0 = _request_link(context)
-    link1 = _request_link(context)
-    link2 = _request_link(context)
+async def test_run_until_command_rejects_only_stale_routes() -> None:
+    control_link = _control_link()
+    link0 = _request_link(worker_index=0)
+    link1 = _request_link(worker_index=1)
+    link2 = _request_link(worker_index=2)
     recorder = _DataPlaneRecorder()
     max_observation_tokens = 45
     try:
-        command_sent = control_link.coordinator.send_command(
+        command_sent = await control_link.coordinator.send_command(
             ModelRankLoadStateCommand(
                 state=_runtime_state(), policy_version=9
             )
         )
         assert isinstance(command_sent, Ok)
-        _send_request(
+        await _send_request(
             link=link0,
             worker_index=0,
             policy_version=4,
             max_observation_tokens=max_observation_tokens,
         )
-        _send_request(
+        await _send_request(
             link=link1,
             worker_index=1,
             policy_version=5,
             max_observation_tokens=max_observation_tokens,
         )
-        _send_request(
+        await _send_request(
             link=link2,
             worker_index=2,
             policy_version=4,
@@ -309,16 +274,16 @@ def test_run_until_command_rejects_only_mismatched_policy_routes() -> (
         )
         data_plane = _data_plane(
             control_link=control_link,
-            request_receivers=(
-                ConnectionPolicyRequestReceiver(link0.receiver),
-                ConnectionPolicyRequestReceiver(link1.receiver),
-                ConnectionPolicyRequestReceiver(link2.receiver),
+            request_peers=(
+                link0.model_rank_peer,
+                link1.model_rank_peer,
+                link2.model_rank_peer,
             ),
             batch_size=4,
             max_observation_tokens=max_observation_tokens,
         )
 
-        command_result = data_plane.run_until_command(
+        command_result = await data_plane.run_until_command(
             policy_version=5,
             process_batch=recorder.process,
             reject_batch=recorder.reject,
@@ -337,47 +302,38 @@ def test_run_until_command_rejects_only_mismatched_policy_routes() -> (
     finally:
         control_link.coordinator.close()
         control_link.child.close()
-        _close_connections(
-            link0.receiver,
-            link0.sender,
-            link1.receiver,
-            link1.sender,
-            link2.receiver,
-            link2.sender,
-        )
+        link0.close()
+        link1.close()
+        link2.close()
 
 
-def test_run_until_command_batches_until_batch_size() -> None:
-    context = _spawn_context()
-    control_link = create_process_control_link(
-        context=context,
-        protocol=_MODEL_RANK_CONTROL_PROTOCOL,
-    )
-    link0 = _request_link(context)
-    link1 = _request_link(context)
-    link2 = _request_link(context)
+async def test_run_until_command_batches_until_batch_size() -> None:
+    control_link = _control_link()
+    link0 = _request_link(worker_index=0)
+    link1 = _request_link(worker_index=1)
+    link2 = _request_link(worker_index=2)
     recorder = _DataPlaneRecorder()
     max_observation_tokens = 45
     try:
-        command_sent = control_link.coordinator.send_command(
+        command_sent = await control_link.coordinator.send_command(
             ModelRankLoadStateCommand(
                 state=_runtime_state(), policy_version=6
             )
         )
         assert isinstance(command_sent, Ok)
-        _send_request(
+        await _send_request(
             link=link0,
             worker_index=0,
             policy_version=3,
             max_observation_tokens=max_observation_tokens,
         )
-        _send_request(
+        await _send_request(
             link=link1,
             worker_index=1,
             policy_version=3,
             max_observation_tokens=max_observation_tokens,
         )
-        _send_request(
+        await _send_request(
             link=link2,
             worker_index=2,
             policy_version=3,
@@ -385,16 +341,16 @@ def test_run_until_command_batches_until_batch_size() -> None:
         )
         data_plane = _data_plane(
             control_link=control_link,
-            request_receivers=(
-                ConnectionPolicyRequestReceiver(link0.receiver),
-                ConnectionPolicyRequestReceiver(link1.receiver),
-                ConnectionPolicyRequestReceiver(link2.receiver),
+            request_peers=(
+                link0.model_rank_peer,
+                link1.model_rank_peer,
+                link2.model_rank_peer,
             ),
             batch_size=2,
             max_observation_tokens=max_observation_tokens,
         )
 
-        command_result = data_plane.run_until_command(
+        command_result = await data_plane.run_until_command(
             policy_version=3,
             process_batch=recorder.process,
             reject_batch=recorder.reject,
@@ -410,35 +366,41 @@ def test_run_until_command_batches_until_batch_size() -> None:
     finally:
         control_link.coordinator.close()
         control_link.child.close()
-        _close_connections(
-            link0.receiver,
-            link0.sender,
-            link1.receiver,
-            link1.sender,
-            link2.receiver,
-            link2.sender,
-        )
+        link0.close()
+        link1.close()
+        link2.close()
 
 
-def _spawn_context() -> SpawnContext:
-    return mp.get_context("spawn")
+def _control_link() -> _ModelRankControlLink:
+    return create_async_process_control_link(
+        protocol=_MODEL_RANK_CONTROL_PROTOCOL
+    )
 
 
-def _request_link(context: SpawnContext) -> _RequestLink:
-    receiver, sender = context.Pipe(duplex=False)
-    return _RequestLink(receiver=receiver, sender=sender)
+def _request_link(*, worker_index: int) -> _RequestLink:
+    pair = create_async_socket_pair()
+    return _RequestLink(
+        worker_peer=AsyncPolicyPeer(
+            worker_index=worker_index,
+            endpoint=pair.first,
+        ),
+        model_rank_peer=AsyncPolicyPeer(
+            worker_index=worker_index,
+            endpoint=pair.second,
+        ),
+    )
 
 
 def _data_plane(
     *,
     control_link: _ModelRankControlLink,
-    request_receivers: tuple[ConnectionPolicyRequestReceiver, ...],
+    request_peers: tuple[AsyncPolicyPeer, ...],
     batch_size: int,
     max_observation_tokens: int = 512,
 ) -> ModelRankDataPlane:
     return ModelRankDataPlane(
         control=control_link.child,
-        request_receivers=request_receivers,
+        request_peers=request_peers,
         ingress=PolicyRequestIngress(
             batch_size=batch_size,
             max_observation_tokens=max_observation_tokens,
@@ -447,57 +409,13 @@ def _data_plane(
     )
 
 
-def _start_request_send(
-    *, link: _RequestLink, worker_index: int, policy_version: int
-) -> _RequestSendTask:
-    return _start_request_send_batch(
-        link=link,
-        requests=(
-            _PendingRequest(
-                worker_index=worker_index,
-                policy_version=policy_version,
-            ),
-        ),
-    )
-
-
-def _start_request_send_batch(
-    *, link: _RequestLink, requests: tuple[_PendingRequest, ...]
-) -> _RequestSendTask:
-    assert requests
-    inputs = tuple(
-        _request_input(
-            worker_index=request.worker_index,
-            policy_version=request.policy_version,
-        )
-        for request in requests
-    )
-    result: list[Ok[None] | Rejected] = []
-    sender = ConnectionPolicyRequestSender(link.sender)
-
-    def send_requests() -> None:
-        frame_result = _request_frame(
-            requests=inputs,
-            batch_capacity=len(inputs),
-            max_observation_tokens=_TEST_MAX_OBSERVATION_TOKENS,
-        )
-        assert isinstance(frame_result, Ok)
-        send_result = sender.send(frame_result.value)
-        result.append(send_result)
-
-    thread = threading.Thread(target=send_requests)
-    thread.start()
-    return _RequestSendTask(thread=thread, result=result)
-
-
-def _send_request(
+async def _send_request(
     *,
     link: _RequestLink,
     worker_index: int,
     policy_version: int,
-    max_observation_tokens: int,
+    max_observation_tokens: int = _TEST_MAX_OBSERVATION_TOKENS,
 ) -> None:
-    sender = ConnectionPolicyRequestSender(link.sender)
     frame_result = _request_frame(
         requests=(
             _request_input(
@@ -509,7 +427,9 @@ def _send_request(
         max_observation_tokens=max_observation_tokens,
     )
     assert isinstance(frame_result, Ok)
-    send_result = sender.send(frame_result.value)
+    send_result = await link.worker_peer.send_request(
+        frame_result.value
+    )
     assert isinstance(send_result, Ok)
 
 
@@ -544,14 +464,6 @@ def _request_input(
         legal_actions=_legal_actions(observation),
         decision_key=_decision_key(policy_version=policy_version),
     )
-
-
-def _finish_request_sends(tasks: tuple[_RequestSendTask, ...]) -> None:
-    for task in tasks:
-        task.thread.join(timeout=5.0)
-        assert not task.thread.is_alive()
-        assert task.result
-        assert all(isinstance(result, Ok) for result in task.result)
 
 
 def _observation() -> Observation:
@@ -602,8 +514,3 @@ def _runtime_state() -> RuntimeTrainingState:
             "exp_avg_sqs": [],
         },
     )
-
-
-def _close_connections(*connections: Connection) -> None:
-    for connection in connections:
-        connection.close()

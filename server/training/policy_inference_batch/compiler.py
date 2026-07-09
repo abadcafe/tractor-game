@@ -25,8 +25,8 @@ from server.training.policy_inference_batch.schema import (
 )
 from server.training.policy_inference_batch.types import (
     PolicyRequestBatch,
-    PolicyRequestBatchRow,
     PolicyRequestInput,
+    PolicyRequestRoute,
     PolicyRequestWireFrame,
 )
 from server.training.sampling import policy_choice_threshold
@@ -43,7 +43,24 @@ from server.training.semantic_action_plan.spec import (
 from server.training.semantic_actions.codec import SEMANTIC_CODEC
 
 
-def _request_row_list() -> list[PolicyRequestBatchRow]:
+@dataclass(frozen=True, slots=True)
+class _CompiledRequest:
+    route: PolicyRequestRoute
+    policy_version: int
+    packed_observation: PackedObservation
+    action_plan: ActionPlanFrame
+    generation_step_count: int
+    sampling_thresholds: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        assert self.policy_version >= 0
+        assert self.generation_step_count > 0
+        assert (
+            len(self.sampling_thresholds) == self.generation_step_count
+        )
+
+
+def _request_row_list() -> list[_CompiledRequest]:
     return []
 
 
@@ -53,7 +70,7 @@ class PolicyRequestBatchBuilder:
 
     batch_capacity: int
     max_observation_tokens: int
-    _rows: list[PolicyRequestBatchRow] = field(
+    _rows: list[_CompiledRequest] = field(
         default_factory=_request_row_list
     )
     _data: bytearray | None = field(init=False)
@@ -75,7 +92,7 @@ class PolicyRequestBatchBuilder:
 
     def _compile_request(
         self, request: PolicyRequestInput
-    ) -> _result.Ok[PolicyRequestBatchRow] | _result.Rejected:
+    ) -> _result.Ok[_CompiledRequest] | _result.Rejected:
         """Return a frame-ready row for a raw policy request."""
         packed = pack_observation(request.observation)
         action_plan = compile_legal_action_frame(request.legal_actions)
@@ -98,7 +115,7 @@ class PolicyRequestBatchBuilder:
             for argument_index in range(generation_step_count)
         )
         return Ok(
-            value=PolicyRequestBatchRow(
+            value=_CompiledRequest(
                 route=request.route,
                 policy_version=request.decision_key.policy_version,
                 packed_observation=packed,
@@ -132,7 +149,7 @@ class PolicyRequestBatchBuilder:
         return self._push_compiled(row_result.value)
 
     def _push_compiled(
-        self, request: PolicyRequestBatchRow
+        self, request: _CompiledRequest
     ) -> _result.Ok[None] | _result.Rejected:
         """Append one prepared row to the next emitted frame."""
         if len(self._rows) >= self.batch_capacity:
@@ -147,7 +164,20 @@ class PolicyRequestBatchBuilder:
             row.generation_step_count for row in self._rows
         )
         return PolicyRequestBatch(
-            rows=tuple(self._rows),
+            routes=tuple(row.route for row in self._rows),
+            policy_versions=tuple(
+                row.policy_version for row in self._rows
+            ),
+            packed_observations=tuple(
+                row.packed_observation for row in self._rows
+            ),
+            action_plans=tuple(row.action_plan for row in self._rows),
+            generation_step_counts=tuple(
+                row.generation_step_count for row in self._rows
+            ),
+            sampling_threshold_rows=tuple(
+                row.sampling_thresholds for row in self._rows
+            ),
             max_observation_tokens=self.max_observation_tokens,
             padded_generation_steps=padded_generation_steps,
         )
@@ -157,7 +187,32 @@ class PolicyRequestBatchBuilder:
     ) -> PolicyRequestWireFrame:
         """Encode one prepared batch for connection transport."""
         assert batch.row_count() <= self.batch_capacity
-        self._rows = list(batch.rows)
+        self._rows = [
+            _CompiledRequest(
+                route=route,
+                policy_version=policy_version,
+                packed_observation=packed_observation,
+                action_plan=action_plan,
+                generation_step_count=generation_step_count,
+                sampling_thresholds=sampling_thresholds,
+            )
+            for (
+                route,
+                policy_version,
+                packed_observation,
+                action_plan,
+                generation_step_count,
+                sampling_thresholds,
+            ) in zip(
+                batch.routes,
+                batch.policy_versions,
+                batch.packed_observations,
+                batch.action_plans,
+                batch.generation_step_counts,
+                batch.sampling_threshold_rows,
+                strict=True,
+            )
+        ]
         return self.finish_wire_frame()
 
     def finish_wire_frame(self) -> PolicyRequestWireFrame:
@@ -214,7 +269,7 @@ def _write_routes_and_versions(
     *,
     data: bytearray,
     layout: PolicyRequestBatchLayout,
-    rows: tuple[PolicyRequestBatchRow, ...],
+    rows: tuple[_CompiledRequest, ...],
 ) -> None:
     _pack_i64_values(
         data,
@@ -242,7 +297,7 @@ def _write_observations(
     *,
     data: bytearray,
     layout: PolicyRequestBatchLayout,
-    rows: tuple[PolicyRequestBatchRow, ...],
+    rows: tuple[_CompiledRequest, ...],
     max_observation_tokens: int,
 ) -> None:
     padded = tuple(
@@ -288,7 +343,7 @@ def _write_action_specs(
     *,
     data: bytearray,
     layout: PolicyRequestBatchLayout,
-    rows: tuple[PolicyRequestBatchRow, ...],
+    rows: tuple[_CompiledRequest, ...],
 ) -> None:
     plans = tuple(row.action_plan for row in rows)
     _pack_i64_values(
@@ -439,7 +494,7 @@ def _write_sampling_threshold_columns(
     *,
     data: bytearray,
     layout: PolicyRequestBatchLayout,
-    rows: tuple[PolicyRequestBatchRow, ...],
+    rows: tuple[_CompiledRequest, ...],
 ) -> None:
     threshold_values = [0.0] * (
         len(rows) * layout.padded_generation_steps

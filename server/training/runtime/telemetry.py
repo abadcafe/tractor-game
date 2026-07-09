@@ -175,6 +175,8 @@ def _should_emit(
         return True
     if current.stage != previous.stage:
         return True
+    if current.measurements and not previous.measurements:
+        return True
     return (
         current.unix_seconds - previous.unix_seconds
     ) >= min_interval_seconds

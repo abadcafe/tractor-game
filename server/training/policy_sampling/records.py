@@ -83,11 +83,10 @@ class DecisionHandle:
 
 
 @dataclass(frozen=True, slots=True)
-class SampledPolicyBatch:
-    """Device policy samples before model-rank slot assignment."""
+class PolicySampleColumns:
+    """Device policy sample columns before optional test inspection."""
 
     policy_versions: tuple[int, ...]
-    status_codes: Tensor
     observation_batch: ObservationTensorBatch
     selected_token_ids_padded: Tensor
     choice_token_ids: Tensor
@@ -109,8 +108,6 @@ class SampledPolicyBatch:
             max_generation_steps <= SEMANTIC_CODEC.max_argument_tokens
         )
         assert all(version >= 0 for version in self.policy_versions)
-        assert self.status_codes.shape == (batch_size,)
-        assert self.status_codes.dtype == torch.long
         assert self.selected_token_ids_padded.shape == (
             batch_size,
             max_generation_steps,
@@ -139,7 +136,6 @@ class SampledPolicyBatch:
             batch_size
         )
         device = self.observation_batch.component_ids.device
-        assert self.status_codes.device == device
         assert self.selected_token_ids_padded.device == device
         assert self.choice_token_ids.device == device
         assert self.choice_masks.device == device

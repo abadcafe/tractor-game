@@ -54,6 +54,21 @@ type ModelRankCommand = (
 )
 
 
+def decode_model_rank_command(
+    value: object,
+) -> ModelRankCommand | None:
+    """Return a model-rank command when the payload type is valid."""
+    if isinstance(
+        value,
+        ModelRankLoadStateCommand
+        | ModelRankUpdateCommand
+        | ModelRankSnapshotCommand
+        | ModelRankStopCommand,
+    ):
+        return value
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class ModelRankStateLoaded:
     """Model rank acknowledged loading a canonical state."""
@@ -104,3 +119,18 @@ type ModelRankResponse = (
     | ModelRankSnapshotCompleted
     | ModelRankRejected
 )
+
+
+def decode_model_rank_response(
+    value: object,
+) -> ModelRankResponse | None:
+    """Return a model-rank response when the payload type is valid."""
+    if isinstance(
+        value,
+        ModelRankStateLoaded
+        | ModelRankUpdateCompleted
+        | ModelRankSnapshotCompleted
+        | ModelRankRejected,
+    ):
+        return value
+    return None

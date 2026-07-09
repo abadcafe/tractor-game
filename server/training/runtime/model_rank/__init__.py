@@ -1,8 +1,8 @@
 """Unified model-compute boundary for training runtime."""
 
 from server.training.runtime.model_rank.client import (
+    AsyncRemotePolicyBatchTransport,
     BatchedPolicyClient,
-    ConnectionPolicyBatchTransport,
     LocalPolicyBatchTransport,
 )
 from server.training.runtime.model_rank.core import (
@@ -17,8 +17,8 @@ from server.training.runtime.model_rank.process import (
 )
 
 __all__ = [
+    "AsyncRemotePolicyBatchTransport",
     "BatchedPolicyClient",
-    "ConnectionPolicyBatchTransport",
     "LocalPolicyBatchTransport",
     "LocalModelRank",
     "ModelReplica",

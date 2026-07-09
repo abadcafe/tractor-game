@@ -21,16 +21,15 @@ from server.training.policy_inference_batch import (
     PolicyRequestInput,
     PolicyRequestRoute,
     PolicyResponse,
-    PolicyResponseBatchWire,
     RejectedPolicyResponse,
     decode_policy_response,
     decode_policy_response_batch_wire,
     materialize_policy_request_batch,
 )
-from server.training.policy_inference_batch.types import (
-    PolicyRequestWireFrame,
-)
 from server.training.policy_sampling import ModelRankPolicyDecision
+from server.training.runtime.model_rank.inference_transport import (
+    AsyncPolicyPeer,
+)
 from server.training.sampling import PolicyDecisionKey
 
 type PolicyDecisionResult = Ok[PolicyDecision] | Rejected
@@ -40,29 +39,13 @@ type ModelRankDecisionResult = Ok[ModelRankPolicyDecision] | Rejected
 class PolicyBatchTransport(Protocol):
     """Transport one request frame through a model-rank boundary."""
 
-    def submit_batch(
+    async def submit_batch(
         self, *, batch: PolicyRequestBatch
     ) -> Ok[None] | Rejected: ...
 
-    def receive(
+    async def receive(
         self, *, timeout_seconds: float
     ) -> Ok[tuple[PolicyResponse, ...]] | Rejected: ...
-
-
-class PolicyRequestSender(Protocol):
-    """Send raw policy request batch frames for this worker."""
-
-    def send(
-        self, request: PolicyRequestWireFrame
-    ) -> Ok[None] | Rejected: ...
-
-
-class PolicyResponseReceiver(Protocol):
-    """Receive raw policy response batch frames for this worker."""
-
-    def receive(
-        self, *, timeout_seconds: float
-    ) -> Ok[PolicyResponseBatchWire] | Rejected: ...
 
 
 class ModelReplicaProtocol(Protocol):
@@ -77,28 +60,27 @@ class ModelReplicaProtocol(Protocol):
 
 
 @dataclass(slots=True)
-class ConnectionPolicyBatchTransport:
-    """Connection-backed inference transport for remote model ranks."""
+class AsyncRemotePolicyBatchTransport:
+    """Async socket-backed remote inference transport."""
 
-    request_sender: PolicyRequestSender
-    response_receiver: PolicyResponseReceiver
+    peer: AsyncPolicyPeer
     _encoder: PolicyRequestBatchBuilder | None = None
     _encoder_capacity: int = 0
     _encoder_max_observation_tokens: int = 0
 
-    def submit_batch(
+    async def submit_batch(
         self, *, batch: PolicyRequestBatch
     ) -> Ok[None] | Rejected:
         """Encode and send one request batch to the model rank."""
         encoder = self._encoder_for(batch)
         frame = encoder.encode_wire_frame(batch)
-        return self.request_sender.send(frame)
+        return await self.peer.send_request(frame)
 
-    def receive(
+    async def receive(
         self, *, timeout_seconds: float
     ) -> Ok[tuple[PolicyResponse, ...]] | Rejected:
         """Receive and decode one response batch from the model rank."""
-        response_result = self.response_receiver.receive(
+        response_result = await self.peer.receive_response(
             timeout_seconds=timeout_seconds
         )
         if isinstance(response_result, Rejected):
@@ -137,7 +119,7 @@ class LocalPolicyBatchTransport:
     replica: ModelReplicaProtocol
     _pending_response: tuple[PolicyResponse, ...] | None = None
 
-    def submit_batch(
+    async def submit_batch(
         self, *, batch: PolicyRequestBatch
     ) -> Ok[None] | Rejected:
         """Submit one prepared batch to the local model rank."""
@@ -166,7 +148,7 @@ class LocalPolicyBatchTransport:
         self._pending_response = responses
         return Ok(value=None)
 
-    def receive(
+    async def receive(
         self, *, timeout_seconds: float
     ) -> Ok[tuple[PolicyResponse, ...]] | Rejected:
         """Return responses for the submitted local frame."""
@@ -352,6 +334,8 @@ class BatchedPolicyClient:
             async with self._send_lock:
                 while self._send_queue:
                     await asyncio.sleep(0)
+                    if not self._send_queue:
+                        break
                     queued = self._pop_send_batch()
                     active = tuple(
                         request
@@ -367,8 +351,7 @@ class BatchedPolicyClient:
                         )
                         return
                     sent_requests = batch_result.value.requests
-                    submit_result = await asyncio.to_thread(
-                        self.transport.submit_batch,
+                    submit_result = await self.transport.submit_batch(
                         batch=batch_result.value.batch,
                     )
                     if isinstance(submit_result, Rejected):
@@ -444,8 +427,7 @@ class BatchedPolicyClient:
             while True:
                 if not self._in_flight:
                     return
-                response_result = await asyncio.to_thread(
-                    self.transport.receive,
+                response_result = await self.transport.receive(
                     timeout_seconds=self.timeout_seconds,
                 )
                 if isinstance(response_result, Rejected):
@@ -455,7 +437,7 @@ class BatchedPolicyClient:
                     response_result.value,
                 )
                 if isinstance(dispatch_result, Rejected):
-                    self._reject_all(dispatch_result.reason)
+                    self._reject_in_flight(dispatch_result.reason)
                     return
         finally:
             if self._receive_task is asyncio.current_task():
@@ -516,6 +498,9 @@ class BatchedPolicyClient:
         queued = tuple(self._send_queue)
         self._send_queue.clear()
         self._reject_queued_requests(queued, reason)
+        self._reject_in_flight(reason)
+
+    def _reject_in_flight(self, reason: str) -> None:
         rejection = Rejected(reason=reason)
         for request_id, pending in tuple(self._in_flight.items()):
             if not pending.future.done():

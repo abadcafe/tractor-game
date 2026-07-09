@@ -18,6 +18,7 @@ from server.training.ppo.distributed import (
 )
 from server.training.runner import SelfPlaySession, TrainingRoundResult
 from server.training.runtime.affinity import apply_cpu_affinity
+from server.training.runtime.async_ipc import AsyncChildControlEndpoint
 from server.training.runtime.config import CpuSet, ExecutionConfig
 from server.training.runtime.distributed import (
     DistributedRankConfig,
@@ -39,17 +40,15 @@ from server.training.runtime.messages import (
     WorkerUpdateCompleted,
 )
 from server.training.runtime.model_rank import (
+    AsyncRemotePolicyBatchTransport,
     BatchedPolicyClient,
-    ConnectionPolicyBatchTransport,
     LocalModelRank,
     LocalPolicyBatchTransport,
     create_model_replica,
 )
 from server.training.runtime.model_rank.inference_transport import (
-    ConnectionPolicyRequestSender,
-    ConnectionPolicyResponseReceiver,
+    AsyncPolicyPeer,
 )
-from server.training.runtime.process_control import ChildControlEndpoint
 from server.training.runtime.shared_rollout_arena import (
     RolloutArenaHandle,
     RolloutRoundMetrics,
@@ -112,16 +111,45 @@ def run_training_worker_process(
     train_config: TrainConfig,
     execution_config: ExecutionConfig,
     worker_cpus: CpuSet,
-    control: ChildControlEndpoint[WorkerCommand, WorkerResponse],
+    control: AsyncChildControlEndpoint[WorkerCommand, WorkerResponse],
     telemetry_sink: TelemetrySink,
-    inference_request_sender: ConnectionPolicyRequestSender | None,
-    inference_response_receiver: (
-        ConnectionPolicyResponseReceiver | None
-    ),
+    inference_peer: AsyncPolicyPeer | None,
     rollout_arena_handle: RolloutArenaHandle,
     distributed_rank_config: DistributedRankConfig | None,
 ) -> None:
     """Worker process main loop."""
+    asyncio.run(
+        _run_training_worker_process_async(
+            worker_index=worker_index,
+            run_id=run_id,
+            model_config=model_config,
+            train_config=train_config,
+            execution_config=execution_config,
+            worker_cpus=worker_cpus,
+            control=control,
+            telemetry_sink=telemetry_sink,
+            inference_peer=inference_peer,
+            rollout_arena_handle=rollout_arena_handle,
+            distributed_rank_config=distributed_rank_config,
+        )
+    )
+
+
+async def _run_training_worker_process_async(
+    *,
+    worker_index: int,
+    run_id: str,
+    model_config: ModelConfig,
+    train_config: TrainConfig,
+    execution_config: ExecutionConfig,
+    worker_cpus: CpuSet,
+    control: AsyncChildControlEndpoint[WorkerCommand, WorkerResponse],
+    telemetry_sink: TelemetrySink,
+    inference_peer: AsyncPolicyPeer | None,
+    rollout_arena_handle: RolloutArenaHandle,
+    distributed_rank_config: DistributedRankConfig | None,
+) -> None:
+    """Async worker process main loop."""
     assert worker_index >= 0
     setup_result = _setup_worker_runtime(
         worker_index=worker_index,
@@ -129,7 +157,7 @@ def run_training_worker_process(
         worker_cpus=worker_cpus,
     )
     if isinstance(setup_result, Rejected):
-        control.send_response(
+        await control.send_response(
             WorkerRejected(
                 worker_index=worker_index,
                 reason=setup_result.reason,
@@ -138,7 +166,7 @@ def run_training_worker_process(
         return
     sync_result = initialize_distributed_rank(distributed_rank_config)
     if isinstance(sync_result, Rejected):
-        control.send_response(
+        await control.send_response(
             WorkerRejected(
                 worker_index=worker_index,
                 reason=sync_result.reason,
@@ -151,13 +179,12 @@ def run_training_worker_process(
         train_config=train_config,
         execution_config=execution_config,
         device=setup_result.value,
-        inference_request_sender=inference_request_sender,
-        inference_response_receiver=inference_response_receiver,
+        inference_peer=inference_peer,
         rollout_arena_handle=rollout_arena_handle,
         distributed_rank_config=distributed_rank_config,
     )
     if isinstance(runtime_result, Rejected):
-        control.send_response(
+        await control.send_response(
             WorkerRejected(
                 worker_index=worker_index,
                 reason=runtime_result.reason,
@@ -168,11 +195,11 @@ def run_training_worker_process(
     runtime = runtime_result.value
     try:
         while True:
-            command_result = control.recv_command()
+            command_result = await control.recv_command()
             if isinstance(command_result, Rejected):
                 return
             command = command_result.value
-            response = _handle_worker_command(
+            response = await _handle_worker_command(
                 worker_index=worker_index,
                 run_id=run_id,
                 train_config=train_config,
@@ -183,7 +210,7 @@ def run_training_worker_process(
             )
             if response is None:
                 return
-            send_result = control.send_response(response)
+            send_result = await control.send_response(response)
             if isinstance(send_result, Rejected):
                 return
     finally:
@@ -220,34 +247,26 @@ def _create_worker_runtime(
     train_config: TrainConfig,
     execution_config: ExecutionConfig,
     device: torch.device,
-    inference_request_sender: ConnectionPolicyRequestSender | None,
-    inference_response_receiver: (
-        ConnectionPolicyResponseReceiver | None
-    ),
+    inference_peer: AsyncPolicyPeer | None,
     rollout_arena_handle: RolloutArenaHandle,
     distributed_rank_config: DistributedRankConfig | None,
 ) -> _result.Ok[_WorkerRuntime] | _result.Rejected:
     if rollout_arena_handle.worker_index != worker_index:
         return Rejected(reason="worker rollout arena handle mismatch")
     if execution_config.uses_model_rank_processes():
-        if (
-            inference_request_sender is None
-            or inference_response_receiver is None
-        ):
+        if inference_peer is None:
             return Rejected(
-                reason="model-rank worker is missing inference queues"
+                reason="model-rank worker is missing inference peer"
             )
     arena_writer = attach_rollout_arena_writer(rollout_arena_handle)
     arena_reader = attach_rollout_arena_reader((rollout_arena_handle,))
     if execution_config.uses_model_rank_processes():
-        assert inference_request_sender is not None
-        assert inference_response_receiver is not None
+        assert inference_peer is not None
         policy = BatchedPolicyClient(
             worker_index=worker_index,
             max_observation_tokens=model_config.max_tokens,
-            transport=ConnectionPolicyBatchTransport(
-                request_sender=inference_request_sender,
-                response_receiver=inference_response_receiver,
+            transport=AsyncRemotePolicyBatchTransport(
+                peer=inference_peer,
             ),
             timeout_seconds=(execution_config.timeouts.round_seconds),
             batch_size=execution_config.model_inference_batch_size,
@@ -314,7 +333,7 @@ def _worker_update_partition(
     )
 
 
-def _handle_worker_command(
+async def _handle_worker_command(
     *,
     worker_index: int,
     run_id: str,
@@ -333,7 +352,7 @@ def _handle_worker_command(
             command=command,
         )
     if isinstance(command, WorkerStartSamplingCommand):
-        return _run_worker_sampling(
+        return await _run_worker_sampling(
             worker_index=worker_index,
             run_id=run_id,
             train_config=train_config,
@@ -463,7 +482,7 @@ def _snapshot_worker_state(
     )
 
 
-def _run_worker_sampling(
+async def _run_worker_sampling(
     *,
     worker_index: int,
     run_id: str,
@@ -486,14 +505,12 @@ def _run_worker_sampling(
             worker_index=worker_index,
             reason=telemetry_result.reason,
         )
-    sampling_result = asyncio.run(
-        _run_sampling_until_full(
-            worker_index=worker_index,
-            train_config=train_config,
-            execution_config=execution_config,
-            runtime=runtime,
-            command=command,
-        )
+    sampling_result = await _run_sampling_until_full(
+        worker_index=worker_index,
+        train_config=train_config,
+        execution_config=execution_config,
+        runtime=runtime,
+        command=command,
     )
     if isinstance(sampling_result, Rejected):
         return WorkerRejected(
