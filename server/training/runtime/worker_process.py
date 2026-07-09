@@ -53,6 +53,9 @@ from server.training.runtime.model_rank import (
 from server.training.runtime.model_rank.inference_transport import (
     AsyncPolicyPeer,
 )
+from server.training.runtime.process_signals import (
+    ignore_terminal_interrupt_in_child_process,
+)
 from server.training.runtime.shared_rollout_arena import (
     RolloutArenaHandle,
     RolloutRoundMetrics,
@@ -129,6 +132,7 @@ def run_training_worker_process(
     distributed_rank_config: DistributedRankConfig | None,
 ) -> None:
     """Worker process main loop."""
+    ignore_terminal_interrupt_in_child_process()
     asyncio.run(
         _run_training_worker_process_async(
             worker_index=worker_index,

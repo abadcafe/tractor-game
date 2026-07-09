@@ -60,6 +60,9 @@ from server.training.runtime.model_rank.messages import (
     decode_model_rank_command,
     decode_model_rank_response,
 )
+from server.training.runtime.process_signals import (
+    start_child_process_ignoring_terminal_interrupt,
+)
 from server.training.runtime.rendezvous import create_file_rendezvous
 from server.training.runtime.shared_rollout_arena import (
     RolloutArenaHandle,
@@ -342,7 +345,7 @@ def _start_runtime_pools(
                 ),
             },
         )
-        process.start()
+        start_child_process_ignoring_terminal_interrupt(process)
         control_link.child.close()
         worker_handles.append(
             _WorkerHandle(
@@ -422,7 +425,7 @@ def _start_model_rank_pool(
                 ),
             },
         )
-        process.start()
+        start_child_process_ignoring_terminal_interrupt(process)
         control_link.child.close()
         handles.append(
             _ModelRankHandle(

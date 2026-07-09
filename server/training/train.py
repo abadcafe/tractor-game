@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import argparse
 import math
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NoReturn
 
 from server import result as _result
 from server.training.config import (
@@ -362,6 +364,13 @@ def _model_ranks_arg(text: str) -> ModelRankPlacement:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    try:
+        _main_impl(argv)
+    except KeyboardInterrupt:
+        _exit_training_interrupted()
+
+
+def _main_impl(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", default=None)
     parser.add_argument("--init-only", action="store_true")
@@ -595,15 +604,18 @@ def main(argv: Sequence[str] | None = None) -> None:
         prepared = prepared_result.value
         dashboard_path = prepared.dashboard_path
         training_resume = resume_path
-    result = run_training_coordinator(
-        run_dir=run_dir,
-        run_id=run_dir.name,
-        model_config=model_config,
-        train_config=train_config,
-        execution_config=execution_config,
-        max_samples=args.max_samples,
-        resume=training_resume,
-    )
+    try:
+        result = run_training_coordinator(
+            run_dir=run_dir,
+            run_id=run_dir.name,
+            model_config=model_config,
+            train_config=train_config,
+            execution_config=execution_config,
+            max_samples=args.max_samples,
+            resume=training_resume,
+        )
+    except KeyboardInterrupt:
+        _exit_training_interrupted()
     if isinstance(result, _result.Rejected):
         parser.error(result.reason)
     loop_result = result.value
@@ -612,6 +624,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     print(f"rounds: {loop_result.total_rounds}")
     print(f"samples: {loop_result.total_samples}")
     print(f"updates: {loop_result.total_updates}")
+
+
+def _exit_training_interrupted() -> NoReturn:
+    print("training interrupted", file=sys.stderr)
+    raise SystemExit(130)
 
 
 if __name__ == "__main__":

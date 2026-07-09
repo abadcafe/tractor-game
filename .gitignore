@@ -10,5 +10,6 @@
 /static/
 /server/sessions/
 /test-results/
+/training_runs/
 *.pyc
 .env

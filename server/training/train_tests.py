@@ -624,6 +624,68 @@ def test_cuda_device_unavailable_reports_cli_error(
     assert not (tmp_path / "checkpoints").exists()
 
 
+def test_training_interrupt_reports_cli_error(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run_training_coordinator(
+        *,
+        run_dir: Path,
+        run_id: str,
+        model_config: ModelConfig,
+        train_config: TrainConfig,
+        execution_config: ExecutionConfig,
+        max_samples: int,
+        resume: Path | None,
+    ) -> Ok[TrainingLoopResult] | Rejected:
+        assert run_dir == tmp_path
+        assert run_id == tmp_path.name
+        assert model_config == ModelConfig(
+            d_model=4,
+            layers=1,
+            heads=1,
+            max_tokens=MIN_CLI_MAX_TOKENS,
+        )
+        assert train_config == TrainConfig()
+        assert execution_config == ExecutionConfig()
+        assert max_samples == 1
+        assert resume == tmp_path / "checkpoints" / "latest.json"
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(
+        train_module,
+        "run_training_coordinator",
+        fake_run_training_coordinator,
+    )
+    exit_code: object = None
+
+    try:
+        main(
+            (
+                "--run-dir",
+                str(tmp_path),
+                "--d-model",
+                "4",
+                "--layers",
+                "1",
+                "--heads",
+                "1",
+                "--max-tokens",
+                str(MIN_CLI_MAX_TOKENS),
+                "--max-samples",
+                "1",
+            )
+        )
+    except SystemExit as error:
+        exit_code = error.code
+
+    captured = capsys.readouterr()
+    assert exit_code == 130
+    assert captured.err == "training interrupted\n"
+    assert "Traceback" not in captured.err
+
+
 def test_cli_rejects_too_small_max_tokens() -> None:
     completed: subprocess.CompletedProcess[str] = subprocess.run(
         [

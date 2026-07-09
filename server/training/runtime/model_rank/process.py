@@ -54,6 +54,9 @@ from server.training.runtime.model_rank.staging import (
     ModelRankInferenceBatch,
     PolicyRequestIngress,
 )
+from server.training.runtime.process_signals import (
+    ignore_terminal_interrupt_in_child_process,
+)
 from server.training.runtime.shared_rollout_arena import (
     RolloutArenaHandle,
     SharedRolloutArenaReader,
@@ -93,6 +96,7 @@ def run_model_rank_process(
     distributed_rank_config: DistributedRankConfig | None,
 ) -> None:
     """Model-rank process main loop."""
+    ignore_terminal_interrupt_in_child_process()
     asyncio.run(
         _run_model_rank_process_async(
             model_rank_index=model_rank_index,
