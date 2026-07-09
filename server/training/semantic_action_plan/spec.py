@@ -9,6 +9,16 @@ from server.rules.card_faces import MAX_FACE_COUNT
 from server.training.semantic_actions.codec import SEMANTIC_CODEC
 
 ACTION_FACE_COUNT: int = 54
+MAX_TRACE_COUNT: int = 128
+MAX_PAIR_PLAN_COUNT: int = 64
+LEGAL_SELECTION_CANDIDATE_CAPACITY: int = (
+    1 + ACTION_FACE_COUNT * MAX_FACE_COUNT
+)
+MAX_LEGAL_CANDIDATE_COUNT: int = max(
+    1,
+    MAX_TRACE_COUNT,
+    LEGAL_SELECTION_CANDIDATE_CAPACITY,
+)
 
 type CompiledActionKind = Literal[
     "empty",

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import pytest
 import torch
 from torch import Tensor
@@ -17,33 +15,32 @@ from server.training.legal_actions import (
     build_legal_action_index,
 )
 from server.training.model import (
-    ArgumentPrefixScores,
+    ArgumentTraceScores,
     ObservationEncoding,
     TractorPolicyModel,
 )
 from server.training.observation import build_observation
 from server.training.policy_sampling import (
     DecisionHandle,
-    RankReturnBatch,
+    RankReturnTargets,
     SampledPolicyBatch,
 )
 from server.training.policy_sampling.model_rank_sample_arena import (
     ModelRankSampleArena,
 )
 from server.training.ppo import (
+    PPOBatchSource,
     PPOTrainer,
     PPOUpdateInput,
     PPOUpdateProfile,
 )
 from server.training.ppo.distributed import PPOUpdatePartition
-from server.training.ppo.replay_tensors import (
-    ReadyPPOBatch,
-)
 from server.training.semantic_action_plan import (
-    advance_action_state,
+    SemanticActionSampleBatch,
+    SemanticActionSampler,
+    SemanticArgumentLogitDecoder,
+    action_plan_generation_step_count,
     compile_legal_action_frame,
-    initial_action_state,
-    legal_token_choices,
     plan_batch_to_device,
 )
 from server.training.semantic_actions import (
@@ -55,7 +52,6 @@ from server.training.semantic_actions.codec import (
     semantic_argument_id,
 )
 from server.training.tensorize import (
-    ArgumentPrefixTensorBatch,
     ObservationTensorBatch,
     tensorize_observations,
 )
@@ -91,17 +87,25 @@ class CountingTractorPolicyModel(TractorPolicyModel):
         )
         return super().encode_observations(observation)
 
-    def score_argument_prefixes(
+    def score_argument_traces(
         self,
         encoding: ObservationEncoding,
-        prefix: ArgumentPrefixTensorBatch,
-    ) -> ArgumentPrefixScores:
+        *,
+        selected_token_ids_padded: Tensor,
+        step_counts: Tensor,
+    ) -> ArgumentTraceScores:
         self.training_modes.append(self.training)
-        self.score_batch_sizes.append(int(prefix.argument_ids.shape[0]))
-        self.score_prefix_widths.append(
-            int(prefix.argument_ids.shape[1])
+        self.score_batch_sizes.append(
+            int(selected_token_ids_padded.shape[0])
         )
-        return super().score_argument_prefixes(encoding, prefix)
+        self.score_prefix_widths.append(
+            int(selected_token_ids_padded.shape[1])
+        )
+        return super().score_argument_traces(
+            encoding,
+            selected_token_ids_padded=selected_token_ids_padded,
+            step_counts=step_counts,
+        )
 
 
 class NonFiniteValueModel(TractorPolicyModel):
@@ -113,6 +117,34 @@ class NonFiniteValueModel(TractorPolicyModel):
     ) -> Tensor:
         values = super().value_estimates(encoding)
         return torch.full_like(values, torch.inf)
+
+
+class _TraceTokenDecoder:
+    def __init__(
+        self,
+        *,
+        target_token_ids: tuple[int, ...],
+        batch_size: int,
+        device: torch.device,
+    ) -> None:
+        self._target_token_ids = target_token_ids
+        self._batch_size = batch_size
+        self._device = device
+        self._step_index = 0
+
+    def next_logits(self) -> Tensor:
+        logits = torch.zeros(
+            (self._batch_size, SEMANTIC_CODEC.argument_vocab_size),
+            dtype=torch.float32,
+            device=self._device,
+        )
+        if self._step_index < len(self._target_token_ids):
+            logits[:, self._target_token_ids[self._step_index]] = 100.0
+        return logits
+
+    def advance(self, selected_token_ids: Tensor) -> None:
+        assert selected_token_ids.shape == (self._batch_size,)
+        self._step_index += 1
 
 
 def test_update_returns_stats_and_adamw_state() -> None:
@@ -180,16 +212,16 @@ def test_update_batches_minibatch_model_forwards() -> None:
     profile = update_result.value.profile
 
     assert model.encode_batch_sizes == [4]
-    assert model.score_batch_sizes == [8]
+    assert model.score_batch_sizes == [4]
     assert model.score_prefix_widths == [2]
     assert profile.update_seconds > 0.0
     assert profile.argument_decode_seconds >= 0.0
     assert 0.0 <= profile.argument_decode_fraction <= 1.0
-    assert profile.argument_prefix_batch_count == 1
-    assert profile.argument_prefix_row_count == 8
-    assert profile.argument_prefix_token_count == 16
-    assert profile.argument_prefix_valid_token_count == 12
-    assert profile.argument_prefix_padding_token_count == 4
+    assert profile.argument_trace_batch_count == 1
+    assert profile.argument_trace_row_count == 4
+    assert profile.argument_trace_token_count == 8
+    assert profile.argument_trace_valid_token_count == 8
+    assert profile.argument_trace_padding_token_count == 0
     assert model.training_modes
     assert all(training is True for training in model.training_modes)
     assert model.training is True
@@ -257,7 +289,7 @@ def test_update_uses_configured_single_rank_partition() -> None:
 
     assert isinstance(result, Ok)
     assert model.encode_batch_sizes == [4]
-    assert model.score_batch_sizes == [8]
+    assert model.score_batch_sizes == [4]
 
 
 def test_update_rejects_empty_single_rank_input() -> None:
@@ -361,17 +393,16 @@ def test_update_basic_profile_records_only_update_seconds() -> None:
     assert profile.observation_encode_seconds == 0.0
     assert profile.value_head_seconds == 0.0
     assert profile.argument_select_seconds == 0.0
-    assert profile.argument_prefix_tensorize_seconds == 0.0
     assert profile.argument_decode_seconds == 0.0
     assert profile.argument_distribution_seconds == 0.0
     assert profile.backward_seconds == 0.0
     assert profile.optimizer_step_seconds == 0.0
     assert profile.argument_decode_fraction == 0.0
-    assert profile.argument_prefix_batch_count == 0
-    assert profile.argument_prefix_row_count == 0
-    assert profile.argument_prefix_token_count == 0
-    assert profile.argument_prefix_valid_token_count == 0
-    assert profile.argument_prefix_padding_token_count == 0
+    assert profile.argument_trace_batch_count == 0
+    assert profile.argument_trace_row_count == 0
+    assert profile.argument_trace_token_count == 0
+    assert profile.argument_trace_valid_token_count == 0
+    assert profile.argument_trace_padding_token_count == 0
 
 
 def test_update_rejects_non_finite_loss_before_optimizer_step() -> None:
@@ -458,7 +489,7 @@ def test_update_rejects_non_finite_gradients_before_optimizer_step(
         assert torch.equal(parameter.detach(), before[index])
 
 
-def _single_card_batch(*, count: int) -> ReadyPPOBatch:
+def _single_card_batch(*, count: int) -> PPOBatchSource:
     assert count > 0
     device = torch.device("cpu")
     store = ModelRankSampleArena(model_rank_index=0, device=device)
@@ -473,21 +504,20 @@ def _single_card_batch(*, count: int) -> ReadyPPOBatch:
         )
         handles.append(handle)
         return_values.append(1.0 if player_index in (0, 2) else -1.0)
-    returns = RankReturnBatch(
+    returns = RankReturnTargets(
         policy_version=0,
         model_rank_index=0,
-        slot_indices=torch.tensor(
-            tuple(handle.slot_index for handle in handles),
+        row_indices=torch.tensor(
+            tuple(handle.row_index for handle in handles),
             dtype=torch.long,
         ),
-        slot_generations=torch.tensor(
-            tuple(handle.slot_generation for handle in handles),
-            dtype=torch.long,
-        ),
+        step_counts=torch.full((len(handles),), 2, dtype=torch.long),
         return_values=torch.tensor(return_values, dtype=torch.float32),
         round_count=1,
+        total_step_count=len(handles) * 2,
+        max_step_count=2,
     )
-    batch_result = store.materialize_return_batch(returns=returns)
+    batch_result = store.ppo_batch_source(returns=returns)
     assert isinstance(batch_result, Ok)
     return batch_result.value
 
@@ -507,17 +537,16 @@ def _assert_profile_zero(profile: PPOUpdateProfile) -> None:
     assert profile.observation_encode_seconds == 0.0
     assert profile.value_head_seconds == 0.0
     assert profile.argument_select_seconds == 0.0
-    assert profile.argument_prefix_tensorize_seconds == 0.0
     assert profile.argument_decode_seconds == 0.0
     assert profile.argument_distribution_seconds == 0.0
     assert profile.backward_seconds == 0.0
     assert profile.optimizer_step_seconds == 0.0
     assert profile.argument_decode_fraction == 0.0
-    assert profile.argument_prefix_batch_count == 0
-    assert profile.argument_prefix_row_count == 0
-    assert profile.argument_prefix_token_count == 0
-    assert profile.argument_prefix_valid_token_count == 0
-    assert profile.argument_prefix_padding_token_count == 0
+    assert profile.argument_trace_batch_count == 0
+    assert profile.argument_trace_row_count == 0
+    assert profile.argument_trace_token_count == 0
+    assert profile.argument_trace_valid_token_count == 0
+    assert profile.argument_trace_padding_token_count == 0
 
 
 def _store_single_card_decision(
@@ -551,7 +580,7 @@ def _store_single_card_decision(
             SemanticArgument("stop"),
         )
     )
-    replay_trace = _replay_trace_for(
+    semantic_sample = _semantic_sample_for_trace(
         legal_actions=legal_actions, trace=trace, device=device
     )
     sample_batch = _sampled_policy_batch(
@@ -560,7 +589,7 @@ def _store_single_card_decision(
             max_observation_tokens=64,
             device=device,
         ),
-        replay_trace=replay_trace,
+        semantic_sample=semantic_sample,
         device=device,
     )
     stored = store.store_sampled_batch(batch=sample_batch)
@@ -573,57 +602,21 @@ def _store_single_card_decision(
 def _sampled_policy_batch(
     *,
     observation_batch: ObservationTensorBatch,
-    replay_trace: _ReplayTrace,
+    semantic_sample: SemanticActionSampleBatch,
     device: torch.device,
 ) -> SampledPolicyBatch:
-    selected = torch.zeros(
-        (1, SEMANTIC_CODEC.max_argument_tokens),
-        dtype=torch.long,
-        device=device,
-    )
-    step_count = int(replay_trace.selected_token_ids.shape[0])
-    selected[0, :step_count] = replay_trace.selected_token_ids
-    choice_width = int(replay_trace.legal_choice_ids.shape[1])
-    choice_ids = torch.zeros(
-        (
-            1,
-            SEMANTIC_CODEC.max_argument_tokens,
-            choice_width,
-        ),
-        dtype=torch.int16,
-        device=device,
-    )
-    choice_masks = torch.zeros(
-        choice_ids.shape,
-        dtype=torch.bool,
-        device=device,
-    )
-    selected_offsets = torch.zeros(
-        (1, SEMANTIC_CODEC.max_argument_tokens),
-        dtype=torch.long,
-        device=device,
-    )
-    choice_ids[0, :step_count, :] = replay_trace.legal_choice_ids
-    choice_masks[0, :step_count, :] = replay_trace.legal_choice_masks
-    selected_offsets[0, :step_count] = (
-        replay_trace.selected_choice_offsets
-    )
     return SampledPolicyBatch(
         policy_versions=(0,),
         status_codes=torch.zeros((1,), dtype=torch.long, device=device),
         observation_batch=observation_batch,
-        selected_token_ids_padded=selected,
-        legal_choice_ids_padded=choice_ids,
-        legal_choice_masks_padded=choice_masks,
-        selected_choice_offsets_padded=selected_offsets,
-        step_counts=torch.tensor(
-            (step_count,), dtype=torch.long, device=device
+        selected_token_ids_padded=(
+            semantic_sample.selected_token_ids_padded
         ),
-        choice_counts=torch.tensor(
-            (int(replay_trace.legal_choice_masks.sum().item()),),
-            dtype=torch.long,
-            device=device,
-        ),
+        choice_token_ids=semantic_sample.choice_token_ids,
+        choice_masks=semantic_sample.choice_masks,
+        selected_choice_offsets=semantic_sample.selected_choice_offsets,
+        step_counts=semantic_sample.step_counts,
+        choice_counts=semantic_sample.choice_counts,
         old_log_probabilities=torch.zeros(
             (1,), dtype=torch.float32, device=device
         ),
@@ -633,94 +626,40 @@ def _sampled_policy_batch(
     )
 
 
-@dataclass(frozen=True, slots=True)
-class _ReplayTrace:
-    selected_token_ids: Tensor
-    legal_choice_ids: Tensor
-    legal_choice_masks: Tensor
-    selected_choice_offsets: Tensor
-
-
-def _replay_trace_for(
+def _semantic_sample_for_trace(
     *,
     legal_actions: LegalActionIndex,
     trace: SemanticArgumentTrace,
     device: torch.device,
-) -> _ReplayTrace:
-    batch = plan_batch_to_device(
-        (compile_legal_action_frame(legal_actions),), device=device
+) -> SemanticActionSampleBatch:
+    action_plan = compile_legal_action_frame(legal_actions)
+    generation_steps = action_plan_generation_step_count(action_plan)
+    batch = plan_batch_to_device((action_plan,), device=device)
+    target_token_ids = tuple(
+        semantic_argument_id(argument) for argument in trace.arguments
     )
-    state = initial_action_state(batch)
-    legal_choice_ids: list[Tensor] = []
-    legal_choice_masks: list[Tensor] = []
-    selected_choice_offsets: list[int] = []
-    selected_token_ids: list[int] = []
-    for argument in trace.arguments:
-        choices = legal_token_choices(batch=batch, state=state)
-        token_id = semantic_argument_id(argument)
-        row_width = int(choices.choice_counts[0].item())
-        row_tokens = choices.token_ids[:row_width]
-        legal_choice_ids.append(row_tokens.to(dtype=torch.int16))
-        legal_choice_masks.append(
-            torch.ones((row_width,), dtype=torch.bool, device=device)
-        )
-        selected_choice_offsets.append(
-            _selected_choice_offset(
-                token_ids=row_tokens, selected_token_id=token_id
-            )
-        )
-        selected_token_ids.append(token_id)
-        state = advance_action_state(
-            batch=batch,
-            state=state,
-            selected_token_ids=torch.tensor(
-                (token_id,), dtype=torch.long, device=device
-            ),
-            choice_counts=choices.choice_counts,
-        )
-    max_choice_count = max(
-        int(row.shape[0]) for row in legal_choice_ids
+
+    logit_decoder: SemanticArgumentLogitDecoder = _TraceTokenDecoder(
+        target_token_ids=target_token_ids,
+        batch_size=1,
+        device=device,
     )
-    return _ReplayTrace(
-        selected_token_ids=torch.tensor(
-            tuple(selected_token_ids), dtype=torch.long, device=device
+    sampler = SemanticActionSampler.create(
+        batch_capacity=1, device=device
+    )
+    sample = sampler.sample(
+        action_batch=batch,
+        generation_step_counts=torch.tensor(
+            (generation_steps,), dtype=torch.long, device=device
         ),
-        legal_choice_ids=torch.stack(
-            [
-                _pad_choice_row(row, width=max_choice_count)
-                for row in legal_choice_ids
-            ]
-        ),
-        legal_choice_masks=torch.stack(
-            [
-                _pad_choice_row(row, width=max_choice_count)
-                for row in legal_choice_masks
-            ]
-        ),
-        selected_choice_offsets=torch.tensor(
-            tuple(selected_choice_offsets),
-            dtype=torch.long,
+        sampling_thresholds=torch.full(
+            (1, generation_steps),
+            0.5,
+            dtype=torch.float64,
             device=device,
         ),
+        padded_generation_steps=generation_steps,
+        logit_decoder=logit_decoder,
     )
-
-
-def _selected_choice_offset(
-    *, token_ids: Tensor, selected_token_id: int
-) -> int:
-    cpu_tokens = token_ids.detach().cpu()
-    for index in range(int(cpu_tokens.shape[0])):
-        if int(cpu_tokens[index].item()) == selected_token_id:
-            return index
-    assert False
-
-
-def _pad_choice_row(row: Tensor, *, width: int) -> Tensor:
-    if int(row.shape[0]) == width:
-        return row
-    padding = torch.zeros(
-        (width - int(row.shape[0]),),
-        dtype=row.dtype,
-        device=row.device,
-    )
-    return torch.cat((row, padding), dim=0)
+    assert isinstance(sample, Ok)
+    return sample.value

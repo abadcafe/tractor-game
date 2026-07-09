@@ -9,13 +9,12 @@ import torch
 from server import result as _result
 from server.result import Rejected
 from server.training.config import ModelConfig, TrainConfig
-from server.training.policy_inference_wire import (
+from server.training.policy_inference_batch import (
     DevicePolicyRequestBatch,
-    PolicyRequestWireBatch,
 )
 from server.training.policy_sampling import (
     ModelRankPolicyDecision,
-    RankReturnBatch,
+    RankReturnTargets,
 )
 from server.training.policy_sampling.model_rank_sample_arena import (
     ModelRankSampleArena,
@@ -30,14 +29,14 @@ from server.training.ppo.distributed import (
     single_update_partition,
 )
 from server.training.runtime.config import ExecutionConfig
-from server.training.runtime.model_rank.staging import (
-    stage_policy_request_wires,
-)
 from server.training.runtime.seeding import seed_training_rng
 from server.training.runtime.state import (
     RuntimeTrainingState,
     capture_runtime_training_state,
     load_runtime_training_state,
+)
+from server.training.semantic_action_plan import (
+    SemanticActionSampler,
 )
 from server.training.torch_sampler import sample_policy_batch
 from server.training.training_state import (
@@ -56,6 +55,7 @@ class ModelReplica:
     execution_config: ExecutionConfig
     device: torch.device
     sample_arena: ModelRankSampleArena
+    sampler: SemanticActionSampler
 
     def load_state(
         self,
@@ -65,21 +65,6 @@ class ModelReplica:
         """Load a CPU snapshot into this model replica."""
         load_runtime_training_state(state=self.state, snapshot=snapshot)
         self.sample_arena.clear()
-
-    def decide_wires(
-        self, requests: PolicyRequestWireBatch
-    ) -> tuple[
-        _result.Ok[ModelRankPolicyDecision] | _result.Rejected, ...
-    ]:
-        """Stage request wires and run batched policy inference."""
-        staged = stage_policy_request_wires(
-            requests=requests,
-            max_observation_tokens=self.model_config.max_tokens,
-            device=self.device,
-        )
-        if isinstance(staged, Rejected):
-            return tuple(staged for _ in requests.requests)
-        return self.decide_batch(staged.value.device_batch)
 
     def decide_batch(
         self, requests: DevicePolicyRequestBatch
@@ -92,6 +77,7 @@ class ModelReplica:
             config=self.model_config,
             device=self.device,
             requests=requests,
+            sampler=self.sampler,
         )
         if isinstance(sampled, Rejected):
             return tuple(sampled for _ in requests.policy_versions)
@@ -100,7 +86,7 @@ class ModelReplica:
         )
 
     def update_returns(
-        self, *, returns: RankReturnBatch
+        self, *, returns: RankReturnTargets
     ) -> _result.Ok[PPOUpdateStats] | _result.Rejected:
         """Resolve return targets on-device and apply PPO update."""
         if returns.is_empty():
@@ -109,14 +95,14 @@ class ModelReplica:
                 local_batch=None,
             )
         else:
-            batch_result = self.sample_arena.materialize_return_batch(
+            source_result = self.sample_arena.ppo_batch_source(
                 returns=returns
             )
-            if isinstance(batch_result, Rejected):
-                return batch_result
+            if isinstance(source_result, Rejected):
+                return source_result
             update_input = PPOUpdateInput(
                 policy_version=returns.policy_version,
-                local_batch=batch_result.value,
+                local_batch=source_result.value,
             )
         update_result = self.state.trainer.update(update_input)
         if isinstance(update_result, Rejected):
@@ -173,6 +159,10 @@ def create_model_replica(
         device=device,
         sample_arena=ModelRankSampleArena(
             model_rank_index=model_rank_index,
+            device=device,
+        ),
+        sampler=SemanticActionSampler.create(
+            batch_capacity=execution_config.model_inference_batch_size,
             device=device,
         ),
     )

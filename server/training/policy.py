@@ -13,19 +13,34 @@ from server.training.observation import Observation
 from server.training.policy_sampling.records import DecisionHandle
 from server.training.sampling import (
     PolicyDecisionKey,
-    uniform_choice_offset,
+    policy_choice_threshold,
 )
 from server.training.semantic_action_plan import (
-    action_trace_ids,
-    advance_action_state,
+    SemanticActionSampler,
+    SemanticArgumentLogitDecoder,
+    action_plan_generation_step_count,
     compile_legal_action_frame,
-    initial_action_state,
-    legal_token_choices,
     plan_batch_to_device,
     semantic_trace_from_token_ids,
 )
 from server.training.semantic_actions.codec import SEMANTIC_CODEC
 from server.training.semantic_actions.values import GeneratedAction
+
+
+@dataclass(slots=True)
+class _UniformArgumentLogitDecoder:
+    batch_size: int
+    device: torch.device
+
+    def next_logits(self) -> torch.Tensor:
+        return torch.zeros(
+            (self.batch_size, SEMANTIC_CODEC.argument_vocab_size),
+            dtype=torch.float32,
+            device=self.device,
+        )
+
+    def advance(self, selected_token_ids: torch.Tensor) -> None:
+        assert selected_token_ids.shape == (self.batch_size,)
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,36 +76,55 @@ class RandomTrainingPolicy:
         decision_key: PolicyDecisionKey,
     ) -> Ok[PolicyDecision] | Rejected:
         device = torch.device("cpu")
-        batch = plan_batch_to_device(
-            (compile_legal_action_frame(legal_actions),), device=device
+        action_plan = compile_legal_action_frame(legal_actions)
+        generation_step_count = action_plan_generation_step_count(
+            action_plan
         )
-        state = initial_action_state(batch)
-        for _ in range(SEMANTIC_CODEC.max_argument_tokens):
-            if bool(state.done.detach().cpu().item()):
-                break
-            choices = legal_token_choices(batch=batch, state=state)
-            choice_count = int(choices.choice_counts[0].item())
-            if choice_count <= 0:
-                return Rejected(
-                    reason="random policy has no legal token"
-                )
-            selected_argument_offset = uniform_choice_offset(
-                key=decision_key,
-                argument_index=int(state.step_counts[0].item()),
-                choice_count=choice_count,
+        batch = plan_batch_to_device((action_plan,), device=device)
+        thresholds = torch.tensor(
+            (
+                tuple(
+                    policy_choice_threshold(
+                        key=decision_key,
+                        argument_index=argument_index,
+                    )
+                    for argument_index in range(generation_step_count)
+                ),
+            ),
+            dtype=torch.float64,
+            device=device,
+        )
+        sampler = SemanticActionSampler.create(
+            batch_capacity=1, device=device
+        )
+
+        logit_decoder: SemanticArgumentLogitDecoder = (
+            _UniformArgumentLogitDecoder(batch_size=1, device=device)
+        )
+        sample_result = sampler.sample(
+            action_batch=batch,
+            generation_step_counts=torch.tensor(
+                (generation_step_count,),
+                dtype=torch.long,
+                device=device,
+            ),
+            sampling_thresholds=thresholds,
+            padded_generation_steps=generation_step_count,
+            logit_decoder=logit_decoder,
+        )
+        if isinstance(sample_result, Rejected):
+            return sample_result
+        sample = sample_result.value
+        step_count = int(sample.step_counts[0].detach().cpu().item())
+        trace_ids = tuple(
+            int(
+                sample.selected_token_ids_padded[0, index]
+                .detach()
+                .cpu()
+                .item()
             )
-            selected_token = choices.token_ids[
-                selected_argument_offset
-            ].view(1)
-            state = advance_action_state(
-                batch=batch,
-                state=state,
-                selected_token_ids=selected_token,
-                choice_counts=choices.choice_counts,
-            )
-        else:
-            assert False
-        trace_ids = action_trace_ids(state)[0]
+            for index in range(step_count)
+        )
         trace_result = semantic_trace_from_token_ids(trace_ids)
         if isinstance(trace_result, Rejected):
             return trace_result
@@ -103,9 +137,10 @@ class RandomTrainingPolicy:
                 decision_handle=DecisionHandle(
                     model_rank_index=0,
                     policy_version=decision_key.policy_version,
-                    slot_index=decision_key.decision_index,
-                    slot_generation=0,
+                    row_index=decision_key.decision_index,
                 ),
-                choice_count=int(state.choice_counts[0].item()),
+                choice_count=int(
+                    sample.choice_counts[0].detach().cpu().item()
+                ),
             )
         )

@@ -41,23 +41,25 @@ def synchronized_count_sum(
     )
 
 
-def synchronized_count_max(
+def synchronized_count_vector_sum(
     *,
-    value: int,
+    values: Tensor,
     partition: PPOUpdatePartition,
     device: torch.device,
-) -> _result.Ok[int] | _result.Rejected:
-    """Return a CPU loop bound after one distributed max sync."""
-    assert value >= 0
+) -> _result.Ok[Tensor] | _result.Rejected:
+    """Return a device vector containing global count sums."""
+    assert values.ndim == 1
+    assert values.dtype == torch.long
+    values = values.to(device=device)
     if partition.world_size == 1:
-        return _result.Ok(value=value)
+        return _result.Ok(value=values)
     if not dist.is_initialized():
         return _result.Rejected(
-            reason="distributed PPO step sync requires process group"
+            reason="distributed PPO count sync requires process group"
         )
-    tensor = torch.tensor(value, dtype=torch.long, device=device)
-    tensor = _all_reduce_tensor(tensor, dist.ReduceOp.MAX)
-    return _result.Ok(value=int(tensor.detach().cpu().item()))
+    return _result.Ok(
+        value=_all_reduce_tensor(values, dist.ReduceOp.SUM)
+    )
 
 
 def positive_count_value(

@@ -10,20 +10,20 @@ from server.training.legal_actions import LegalActionIndex
 from server.training.model import TractorPolicyModel
 from server.training.observation import Observation
 from server.training.policy import PolicyDecision
-from server.training.policy_inference_wire import (
+from server.training.policy_inference_batch import (
     CompletedPolicyResponse,
+    PolicyRequestInput,
     PolicyRequestRoute,
-    PolicyRequestWireBatch,
-    build_policy_request_wire,
     decode_policy_response,
+    materialize_policy_request_inputs,
 )
 from server.training.policy_sampling.model_rank_sample_arena import (
     ModelRankSampleArena,
 )
-from server.training.runtime.model_rank.staging import (
-    stage_policy_request_wires,
-)
 from server.training.sampling import PolicyDecisionKey
+from server.training.semantic_action_plan import (
+    SemanticActionSampler,
+)
 from server.training.torch_sampler import sample_policy_batch
 
 
@@ -44,6 +44,10 @@ class TorchTrainingPolicy:
             model_rank_index=0,
             device=device,
         )
+        self.sampler = SemanticActionSampler.create(
+            batch_capacity=1,
+            device=device,
+        )
 
     async def decide(
         self,
@@ -51,30 +55,30 @@ class TorchTrainingPolicy:
         legal_actions: LegalActionIndex,
         decision_key: PolicyDecisionKey,
     ) -> Ok[PolicyDecision] | Rejected:
-        request_result = build_policy_request_wire(
-            max_observation_tokens=self.config.max_tokens,
-            worker_index=0,
-            request_id=decision_key.decision_index,
-            observation=observation,
-            legal_actions=legal_actions,
-            decision_key=decision_key,
-        )
-        if isinstance(request_result, Rejected):
-            return request_result
-        staged_result = stage_policy_request_wires(
-            requests=PolicyRequestWireBatch(
-                requests=(request_result.value,)
+        request_result = materialize_policy_request_inputs(
+            requests=(
+                PolicyRequestInput(
+                    route=PolicyRequestRoute(
+                        worker_index=0,
+                        request_id=decision_key.decision_index,
+                    ),
+                    observation=observation,
+                    legal_actions=legal_actions,
+                    decision_key=decision_key,
+                ),
             ),
+            batch_capacity=1,
             max_observation_tokens=self.config.max_tokens,
             device=self.device,
         )
-        if isinstance(staged_result, Rejected):
-            return staged_result
+        if isinstance(request_result, Rejected):
+            return request_result
         sampled_result = sample_policy_batch(
             model=self.model,
             config=self.config,
             device=self.device,
-            requests=staged_result.value.device_batch,
+            requests=request_result.value,
+            sampler=self.sampler,
         )
         if isinstance(sampled_result, Rejected):
             return sampled_result
@@ -100,11 +104,8 @@ class TorchTrainingPolicy:
                 decision_handle_policy_version=(
                     decision.decision_handle.policy_version
                 ),
-                decision_handle_slot_index=(
-                    decision.decision_handle.slot_index
-                ),
-                decision_handle_slot_generation=(
-                    decision.decision_handle.slot_generation
+                decision_handle_row_index=(
+                    decision.decision_handle.row_index
                 ),
                 choice_count=decision.choice_count,
             ),

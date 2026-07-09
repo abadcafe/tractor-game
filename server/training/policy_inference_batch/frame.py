@@ -1,0 +1,221 @@
+"""Columnar request frame encoding and decoding."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from server import result as _result
+from server.result import Ok, Rejected
+from server.training.policy_inference_batch.schema import (
+    BATCH_CAPACITY_INDEX,
+    HEADER_BYTES,
+    I64,
+    MAGIC_INDEX,
+    MAX_OBSERVATION_TOKENS_INDEX,
+    MAX_PAIR_PLAN_COUNT,
+    MAX_TRACE_COUNT,
+    PADDED_GENERATION_STEPS_INDEX,
+    PAIR_PLAN_COUNT_INDEX,
+    REQUEST_BATCH_MAGIC,
+    ROW_COUNT_INDEX,
+    TOTAL_BYTES_INDEX,
+    TRACE_COUNT_INDEX,
+    policy_request_batch_layout,
+)
+from server.training.policy_inference_batch.types import (
+    PolicyRequestFrameMetadata,
+    PolicyRequestRoute,
+)
+from server.training.semantic_actions.codec import SEMANTIC_CODEC
+
+type ReadableFrameBuffer = bytes | bytearray | memoryview
+type WritableFrameBuffer = bytearray | memoryview
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyRequestFrameShape:
+    """Static shape declared by a request frame header."""
+
+    row_count: int
+    batch_capacity: int
+    max_observation_tokens: int
+    padded_generation_steps: int
+    total_bytes: int
+
+    def __post_init__(self) -> None:
+        assert self.row_count > 0
+        assert self.batch_capacity >= self.row_count
+        assert self.max_observation_tokens > 0
+        assert self.padded_generation_steps > 0
+        assert self.total_bytes > HEADER_BYTES
+
+
+def initialize_policy_request_frame(
+    buffer: WritableFrameBuffer,
+    *,
+    row_count: int,
+    batch_capacity: int,
+    max_observation_tokens: int,
+    padded_generation_steps: int,
+) -> None:
+    """Write a request frame header into a caller-owned buffer."""
+    assert row_count >= 0
+    assert batch_capacity > 0
+    assert row_count <= batch_capacity
+    assert padded_generation_steps > 0
+    assert padded_generation_steps <= SEMANTIC_CODEC.max_argument_tokens
+    layout = policy_request_batch_layout(
+        batch_capacity=batch_capacity,
+        max_observation_tokens=max_observation_tokens,
+        padded_generation_steps=padded_generation_steps,
+    )
+    assert len(buffer) == layout.total_bytes
+    words = (
+        REQUEST_BATCH_MAGIC,
+        layout.total_bytes,
+        row_count,
+        batch_capacity,
+        max_observation_tokens,
+        MAX_TRACE_COUNT,
+        padded_generation_steps,
+        MAX_PAIR_PLAN_COUNT,
+    )
+    for index, word in enumerate(words):
+        I64.pack_into(buffer, index * I64.size, word)
+
+
+def decode_policy_request_frame_metadata(
+    data: ReadableFrameBuffer,
+) -> _result.Ok[PolicyRequestFrameMetadata] | _result.Rejected:
+    """Decode and validate a columnar request frame header."""
+    shape_result = decode_policy_request_frame_shape(data)
+    if isinstance(shape_result, Rejected):
+        return shape_result
+    shape = shape_result.value
+    layout = policy_request_batch_layout(
+        batch_capacity=shape.batch_capacity,
+        max_observation_tokens=shape.max_observation_tokens,
+        padded_generation_steps=shape.padded_generation_steps,
+    )
+    routes: list[PolicyRequestRoute] = []
+    policy_versions: list[int] = []
+    generation_step_counts: list[int] = []
+    for row_index in range(shape.row_count):
+        worker_index = _read_column_i64(
+            data, layout.route_worker_indices.offset, row_index
+        )
+        request_id = _read_column_i64(
+            data, layout.route_request_ids.offset, row_index
+        )
+        policy_version = _read_column_i64(
+            data, layout.policy_versions.offset, row_index
+        )
+        generation_step_count = _read_column_i64(
+            data, layout.generation_step_counts.offset, row_index
+        )
+        if worker_index < 0 or request_id < 0:
+            return Rejected(reason="policy request route is invalid")
+        if policy_version < 0:
+            return Rejected(reason="policy request version is invalid")
+        if (
+            generation_step_count <= 0
+            or generation_step_count > shape.padded_generation_steps
+        ):
+            return Rejected(
+                reason="policy request generation width is invalid"
+            )
+        routes.append(
+            PolicyRequestRoute(
+                worker_index=worker_index,
+                request_id=request_id,
+            )
+        )
+        policy_versions.append(policy_version)
+        generation_step_counts.append(generation_step_count)
+    return Ok(
+        value=PolicyRequestFrameMetadata(
+            row_count=shape.row_count,
+            batch_capacity=shape.batch_capacity,
+            max_observation_tokens=shape.max_observation_tokens,
+            padded_generation_steps=shape.padded_generation_steps,
+            generation_step_counts=tuple(generation_step_counts),
+            routes=tuple(routes),
+            policy_versions=tuple(policy_versions),
+            byte_count=shape.total_bytes,
+        )
+    )
+
+
+def decode_policy_request_frame_shape(
+    data: ReadableFrameBuffer,
+) -> _result.Ok[PolicyRequestFrameShape] | _result.Rejected:
+    """Decode and validate only the static frame shape."""
+    if len(data) < HEADER_BYTES:
+        return Rejected(reason="policy request frame is truncated")
+    if _read_i64(data, MAGIC_INDEX) != REQUEST_BATCH_MAGIC:
+        return Rejected(reason="policy request frame schema is invalid")
+    total_bytes = _read_i64(data, TOTAL_BYTES_INDEX)
+    if total_bytes != len(data):
+        return Rejected(reason="policy request frame length mismatch")
+    row_count = _read_i64(data, ROW_COUNT_INDEX)
+    batch_capacity = _read_i64(data, BATCH_CAPACITY_INDEX)
+    max_observation_tokens = _read_i64(
+        data, MAX_OBSERVATION_TOKENS_INDEX
+    )
+    trace_count = _read_i64(data, TRACE_COUNT_INDEX)
+    padded_generation_steps = _read_i64(
+        data, PADDED_GENERATION_STEPS_INDEX
+    )
+    pair_plan_count = _read_i64(data, PAIR_PLAN_COUNT_INDEX)
+    if row_count <= 0:
+        return Rejected(reason="policy request frame is empty")
+    if batch_capacity <= 0 or row_count > batch_capacity:
+        return Rejected(
+            reason="policy request frame capacity is invalid"
+        )
+    if max_observation_tokens <= 0:
+        return Rejected(
+            reason="policy request observation layout is invalid"
+        )
+    if trace_count != MAX_TRACE_COUNT:
+        return Rejected(reason="policy request trace layout mismatch")
+    if (
+        padded_generation_steps <= 0
+        or padded_generation_steps > SEMANTIC_CODEC.max_argument_tokens
+    ):
+        return Rejected(reason="policy request trace width mismatch")
+    if pair_plan_count != MAX_PAIR_PLAN_COUNT:
+        return Rejected(
+            reason="policy request pair plan layout mismatch"
+        )
+    expected = policy_request_batch_layout(
+        batch_capacity=batch_capacity,
+        max_observation_tokens=max_observation_tokens,
+        padded_generation_steps=padded_generation_steps,
+    ).total_bytes
+    if expected != total_bytes:
+        return Rejected(reason="policy request frame layout mismatch")
+    return Ok(
+        value=PolicyRequestFrameShape(
+            row_count=row_count,
+            batch_capacity=batch_capacity,
+            max_observation_tokens=max_observation_tokens,
+            padded_generation_steps=padded_generation_steps,
+            total_bytes=total_bytes,
+        )
+    )
+
+
+def _read_column_i64(
+    data: ReadableFrameBuffer, column_offset: int, row_index: int
+) -> int:
+    return _read_i64_at(data, column_offset + row_index * I64.size)
+
+
+def _read_i64(data: ReadableFrameBuffer, word_index: int) -> int:
+    return _read_i64_at(data, word_index * I64.size)
+
+
+def _read_i64_at(data: ReadableFrameBuffer, offset: int) -> int:
+    values = I64.unpack_from(data, offset)
+    return int(values[0])

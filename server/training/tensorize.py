@@ -14,13 +14,6 @@ from server.training.packed_observation import (
     pack_observation,
     padded_packed_observation,
 )
-from server.training.semantic_actions.arguments import (
-    SemanticArgumentPrefix,
-)
-from server.training.semantic_actions.codec import (
-    SEMANTIC_CODEC,
-    semantic_argument_id,
-)
 from server.training.tensor_staging import staged_tensor
 
 
@@ -52,14 +45,6 @@ class ObservationComponentTensorBatch:
     count_ids: Tensor
     play_width_ids: Tensor
     event_age_ids: Tensor
-
-
-@dataclass(frozen=True, slots=True)
-class ArgumentPrefixTensorBatch:
-    """Batch-size-one semantic argument prefix tensors."""
-
-    argument_ids: Tensor
-    argument_masks: Tensor
 
 
 def tensorize_observation(
@@ -152,109 +137,9 @@ def observation_component_tensors(
     )
 
 
-def tensorize_argument_prefix(
-    *,
-    prefix: SemanticArgumentPrefix,
-    device: torch.device,
-) -> ArgumentPrefixTensorBatch:
-    """Tensorize one semantic argument prefix as batch size 1."""
-    return tensorize_argument_prefixes(
-        prefixes=(prefix,), device=device
-    )
-
-
-def tensorize_argument_prefixes(
-    *,
-    prefixes: tuple[SemanticArgumentPrefix, ...],
-    device: torch.device,
-) -> ArgumentPrefixTensorBatch:
-    """Tensorize semantic argument prefixes as one batch."""
-    assert prefixes
-    max_argument_tokens = max(
-        len(prefix.arguments) + 1 for prefix in prefixes
-    )
-    assert max_argument_tokens <= SEMANTIC_CODEC.max_argument_tokens
-    rows = tuple(
-        _argument_prefix_row(
-            tuple(
-                semantic_argument_id(argument)
-                for argument in prefix.arguments
-            ),
-            max_argument_tokens=max_argument_tokens,
-        )
-        for prefix in prefixes
-    )
-    return ArgumentPrefixTensorBatch(
-        argument_ids=_long_tensor_rows(
-            tuple(row.argument_ids for row in rows), device
-        ),
-        argument_masks=_bool_tensor_rows(
-            tuple(row.masks for row in rows), device
-        ),
-    )
-
-
-def tensorize_argument_id_prefixes(
-    *,
-    prefix_argument_ids: tuple[tuple[int, ...], ...],
-    device: torch.device,
-) -> ArgumentPrefixTensorBatch:
-    """Tensorize semantic argument id prefixes as one batch."""
-    assert prefix_argument_ids
-    max_argument_tokens = max(
-        len(argument_ids) + 1 for argument_ids in prefix_argument_ids
-    )
-    assert max_argument_tokens <= SEMANTIC_CODEC.max_argument_tokens
-    rows = tuple(
-        _argument_prefix_row(
-            argument_ids,
-            max_argument_tokens=max_argument_tokens,
-        )
-        for argument_ids in prefix_argument_ids
-    )
-    return ArgumentPrefixTensorBatch(
-        argument_ids=_long_tensor_rows(
-            tuple(row.argument_ids for row in rows), device
-        ),
-        argument_masks=_bool_tensor_rows(
-            tuple(row.masks for row in rows), device
-        ),
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class _ArgumentPrefixRow:
-    argument_ids: tuple[int, ...]
-    masks: tuple[bool, ...]
-
-
-def _argument_prefix_row(
-    prefix_argument_ids: tuple[int, ...],
-    *,
-    max_argument_tokens: int,
-) -> _ArgumentPrefixRow:
-    argument_ids = [SEMANTIC_CODEC.argument_bos_id]
-    argument_ids.extend(prefix_argument_ids)
-    assert len(argument_ids) <= max_argument_tokens
-    masks = [True for _ in argument_ids]
-    while len(argument_ids) < max_argument_tokens:
-        argument_ids.append(0)
-        masks.append(False)
-    return _ArgumentPrefixRow(
-        argument_ids=tuple(argument_ids),
-        masks=tuple(masks),
-    )
-
-
 def _component_tensor_rows(
     values: tuple[tuple[tuple[int, ...], ...], ...],
     device: torch.device,
-) -> Tensor:
-    return staged_tensor(values, dtype=torch.long, device=device)
-
-
-def _long_tensor_rows(
-    values: tuple[tuple[int, ...], ...], device: torch.device
 ) -> Tensor:
     return staged_tensor(values, dtype=torch.long, device=device)
 
@@ -264,9 +149,3 @@ def _numeric_tensor_rows(
     device: torch.device,
 ) -> Tensor:
     return staged_tensor(values, dtype=torch.float32, device=device)
-
-
-def _bool_tensor_rows(
-    values: tuple[tuple[bool, ...], ...], device: torch.device
-) -> Tensor:
-    return staged_tensor(values, dtype=torch.bool, device=device)

@@ -17,6 +17,10 @@ from server.training.ppo.math import (
 )
 from server.training.ppo.minibatch import TensorizedPPOMinibatch
 from server.training.ppo.profile import PPOProfileAccumulator
+from server.training.ppo.validation import (
+    PPO_TRACE_EVALUATION_FAILED,
+    validation_ok,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,11 +39,11 @@ class MinibatchLoss:
 class PPOLossForwardOutput:
     """PPO loss forward result returned through DDP or bare modules."""
 
-    loss: MinibatchLoss | None
-    rejection_reason: str | None
+    loss: MinibatchLoss
+    validation_code: Tensor
 
     def __post_init__(self) -> None:
-        assert (self.loss is None) != (self.rejection_reason is None)
+        assert self.validation_code.shape == ()
 
 
 type PPOLossForwardTensors = tuple[
@@ -89,7 +93,7 @@ class PPOLossModule(nn.Module):
                     approx_kl=zero,
                     clip_fraction=zero,
                 ),
-                rejected=False,
+                validation_code=validation_ok(self._device),
             )
         evaluated_result = evaluate_trace_batch(
             model=self._model,
@@ -108,7 +112,12 @@ class PPOLossModule(nn.Module):
                     approx_kl=zero,
                     clip_fraction=zero,
                 ),
-                rejected=True,
+                validation_code=torch.full(
+                    (),
+                    PPO_TRACE_EVALUATION_FAILED,
+                    dtype=torch.long,
+                    device=self._device,
+                ),
             )
         evaluated = evaluated_result.value
         objective = clipped_ppo_objective(
@@ -135,7 +144,7 @@ class PPOLossModule(nn.Module):
                 approx_kl=objective.approx_kl,
                 clip_fraction=objective.clip_fraction,
             ),
-            rejected=False,
+            validation_code=validation_ok(self._device),
         )
 
     def _zero_loss_touching_all_parameters(self) -> Tensor:
@@ -148,13 +157,8 @@ class PPOLossModule(nn.Module):
 
 
 def _loss_tensors(
-    loss: MinibatchLoss, *, rejected: bool
+    loss: MinibatchLoss, *, validation_code: Tensor
 ) -> PPOLossForwardTensors:
-    rejection_flag = torch.zeros(
-        (), dtype=torch.float32, device=loss.total_loss.device
-    )
-    if rejected:
-        rejection_flag = rejection_flag + 1.0
     return (
         loss.policy_loss,
         loss.value_loss,
@@ -162,14 +166,12 @@ def _loss_tensors(
         loss.total_loss,
         loss.approx_kl,
         loss.clip_fraction,
-        rejection_flag,
+        validation_code,
     )
 
 
 def loss_forward_output_from_tensors(
     tensors: PPOLossForwardTensors,
-    *,
-    rejected: bool,
 ) -> PPOLossForwardOutput:
     """Convert DDP-visible loss tensors back to trainer output."""
     loss = MinibatchLoss(
@@ -180,9 +182,4 @@ def loss_forward_output_from_tensors(
         approx_kl=tensors[4],
         clip_fraction=tensors[5],
     )
-    if rejected:
-        return PPOLossForwardOutput(
-            loss=None,
-            rejection_reason="PPO trace evaluation failed",
-        )
-    return PPOLossForwardOutput(loss=loss, rejection_reason=None)
+    return PPOLossForwardOutput(loss=loss, validation_code=tensors[6])

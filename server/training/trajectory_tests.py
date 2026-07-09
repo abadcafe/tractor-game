@@ -17,8 +17,7 @@ def test_decision_step_records_replay_handle() -> None:
     assert decision.decision_handle == DecisionHandle(
         model_rank_index=0,
         policy_version=3,
-        slot_index=7,
-        slot_generation=1,
+        row_index=7,
     )
 
 
@@ -49,8 +48,7 @@ def _decision_step(*, argument: SemanticArgument) -> DecisionStep:
         decision_handle=DecisionHandle(
             model_rank_index=0,
             policy_version=3,
-            slot_index=7,
-            slot_generation=1,
+            row_index=7,
         ),
         choice_count=1,
     )

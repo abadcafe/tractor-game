@@ -15,8 +15,7 @@ from server.training.model import (
 from server.training.ppo.minibatch import TensorizedPPOMinibatch
 from server.training.ppo.profile import PPOProfileAccumulator
 from server.training.ppo.replay_tensors import (
-    ReplayPrefixTensorBatch,
-    replay_prefix_tensor_batch,
+    PPOReplayTensorBatch,
 )
 from server.training.tensor_finiteness import (
     NamedTensorCheck,
@@ -37,6 +36,7 @@ class TraceBatchEval:
 class ArgumentBatchEval:
     """Current-model scores for one batch of trace prefixes."""
 
+    active_positions: Tensor
     log_probabilities: Tensor
     entropies: Tensor
 
@@ -52,8 +52,6 @@ def evaluate_trace_batch(
     assert not minibatch.is_empty()
     observation_batch = minibatch.observation_batch
     assert observation_batch is not None
-    replay = minibatch.replay
-    assert replay is not None
     encode_start = profile.mark()
     encoding = model.encode_observations(observation_batch)
     profile.record_elapsed("observation_encode_seconds", encode_start)
@@ -66,15 +64,12 @@ def evaluate_trace_batch(
     entropy_sums = torch.zeros(
         (minibatch.local_count,), dtype=torch.float32, device=device
     )
-    replay_prefixes = replay_prefix_tensor_batch(
-        replay=replay,
-        sample_indices=minibatch.sample_indices,
-    )
-    assert replay_prefixes is not None
+    replay = minibatch.replay
+    assert replay is not None
     prefix_eval_result = _argument_batch_eval(
         model=model,
         encoding=encoding,
-        replay_prefixes=replay_prefixes,
+        replay=replay,
         profile=profile,
     )
     if isinstance(prefix_eval_result, _result.Rejected):
@@ -82,12 +77,12 @@ def evaluate_trace_batch(
     prefix_eval = prefix_eval_result.value
     log_probability_sums.index_add_(
         dim=0,
-        index=replay_prefixes.active_positions,
+        index=prefix_eval.active_positions,
         source=prefix_eval.log_probabilities,
     )
     entropy_sums.index_add_(
         dim=0,
-        index=replay_prefixes.active_positions,
+        index=prefix_eval.active_positions,
         source=prefix_eval.entropies,
     )
     return _result.Ok(
@@ -103,30 +98,29 @@ def _argument_batch_eval(
     *,
     model: TractorPolicyModel,
     encoding: ObservationEncoding,
-    replay_prefixes: ReplayPrefixTensorBatch,
+    replay: PPOReplayTensorBatch,
     profile: PPOProfileAccumulator,
 ) -> _result.Ok[ArgumentBatchEval] | _result.Rejected:
-    assert int(replay_prefixes.active_positions.shape[0]) > 0
-    select_start = profile.mark()
-    active_encoding = model.select_observation_encoding(
-        encoding,
-        active_indices=replay_prefixes.active_positions,
-    )
-    profile.record_elapsed("argument_select_seconds", select_start)
-    profile.record_argument_prefix_lengths(
-        replay_prefixes.prefix_lengths
-    )
+    assert int(replay.step_counts.shape[0]) > 0
+    profile.record_argument_trace_lengths(replay.step_counts)
     decode_start = profile.mark()
-    scores = model.score_argument_prefixes(
-        active_encoding, prefix=replay_prefixes.prefix_batch
+    scores = model.score_argument_traces(
+        encoding,
+        selected_token_ids_padded=replay.selected_token_ids_padded,
+        step_counts=replay.step_counts,
     )
     profile.record_elapsed("argument_decode_seconds", decode_start)
+    active_positions = _active_sample_positions(
+        step_mask=replay.step_mask
+    )
     distribution_start = profile.mark()
     distribution_result = _evaluate_recorded_token_batch(
-        argument_logits=scores.argument_logits,
-        legal_choice_ids=replay_prefixes.legal_choice_ids,
-        legal_choice_masks=replay_prefixes.legal_choice_masks,
-        selected_choice_offsets=replay_prefixes.selected_choice_offsets,
+        argument_logits=scores.argument_logits[replay.step_mask],
+        choice_token_ids=replay.choice_token_ids[replay.step_mask],
+        choice_masks=replay.choice_masks[replay.step_mask],
+        selected_choice_offsets=replay.selected_choice_offsets[
+            replay.step_mask
+        ],
     )
     if isinstance(distribution_result, _result.Rejected):
         return distribution_result
@@ -136,10 +130,21 @@ def _argument_batch_eval(
     )
     return _result.Ok(
         value=ArgumentBatchEval(
+            active_positions=active_positions,
             log_probabilities=distribution.log_probabilities,
             entropies=distribution.entropies,
         )
     )
+
+
+def _active_sample_positions(*, step_mask: Tensor) -> Tensor:
+    assert step_mask.ndim == 2
+    sample_positions = torch.arange(
+        int(step_mask.shape[0]),
+        dtype=torch.long,
+        device=step_mask.device,
+    ).unsqueeze(1)
+    return sample_positions.expand_as(step_mask)[step_mask]
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,22 +156,22 @@ class _RecordedTokenEval:
 def _evaluate_recorded_token_batch(
     *,
     argument_logits: Tensor,
-    legal_choice_ids: Tensor,
-    legal_choice_masks: Tensor,
+    choice_token_ids: Tensor,
+    choice_masks: Tensor,
     selected_choice_offsets: Tensor,
 ) -> _result.Ok[_RecordedTokenEval] | _result.Rejected:
-    assert legal_choice_ids.ndim == 2
-    assert legal_choice_masks.shape == legal_choice_ids.shape
-    assert int(legal_choice_ids.shape[0]) == int(
+    assert choice_token_ids.ndim == 2
+    assert choice_masks.shape == choice_token_ids.shape
+    assert int(choice_token_ids.shape[0]) == int(
         argument_logits.shape[0]
     )
     assert selected_choice_offsets.shape == (
         int(argument_logits.shape[0]),
     )
     legal_logits = argument_logits.gather(
-        dim=1, index=legal_choice_ids.to(dtype=torch.long)
+        dim=1, index=choice_token_ids.to(dtype=torch.long)
     )
-    valid_logits = legal_logits[legal_choice_masks]
+    valid_logits = legal_logits[choice_masks]
     logits_check = reject_if_non_finite(
         (
             NamedTensorCheck(
@@ -177,15 +182,13 @@ def _evaluate_recorded_token_batch(
     )
     if isinstance(logits_check, _result.Rejected):
         return logits_check
-    masked_logits = legal_logits.masked_fill(
-        ~legal_choice_masks, -torch.inf
-    )
+    masked_logits = legal_logits.masked_fill(~choice_masks, -torch.inf)
     probabilities = torch.softmax(masked_logits, dim=1).masked_fill(
-        ~legal_choice_masks, 0.0
+        ~choice_masks, 0.0
     )
     log_probabilities = torch.log_softmax(
         masked_logits, dim=1
-    ).masked_fill(~legal_choice_masks, 0.0)
+    ).masked_fill(~choice_masks, 0.0)
     selected = log_probabilities.gather(
         dim=1, index=selected_choice_offsets.unsqueeze(1)
     ).squeeze(1)

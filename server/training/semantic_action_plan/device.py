@@ -7,10 +7,6 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from server.training.semantic_action_plan.choices import (
-    DeviceLegalChoices,
-    compact_legal_choices,
-)
 from server.training.semantic_action_plan.frame import (
     ACTION_KIND_DISCARD,
     ACTION_KIND_EMPTY,
@@ -24,7 +20,6 @@ from server.training.semantic_action_plan.spec import (
 )
 from server.training.semantic_actions.codec import SEMANTIC_CODEC
 from server.training.tensor_staging import staged_tensor
-from server.training.tensorize import ArgumentPrefixTensorBatch
 
 _KIND_EMPTY = ACTION_KIND_EMPTY
 _KIND_TRACE_SET = ACTION_KIND_TRACE_SET
@@ -259,208 +254,18 @@ def plan_batch_to_device(
     )
 
 
-def initial_action_state(
-    batch: DeviceActionPlanBatch,
-) -> DeviceActionState:
-    """Return an empty token-generation state for the plan batch."""
-    batch_size = batch.batch_size()
-    return DeviceActionState(
-        selected_counts=torch.zeros(
-            (batch_size, ACTION_FACE_COUNT),
-            dtype=torch.long,
-            device=batch.device,
-        ),
-        selected_token_ids=torch.zeros(
-            (batch_size, SEMANTIC_CODEC.max_argument_tokens),
-            dtype=torch.long,
-            device=batch.device,
-        ),
-        step_counts=torch.zeros(
-            (batch_size,), dtype=torch.long, device=batch.device
-        ),
-        selected_width=torch.zeros(
-            (batch_size,), dtype=torch.long, device=batch.device
-        ),
-        last_face_indices=torch.full(
-            (batch_size,), -1, dtype=torch.long, device=batch.device
-        ),
-        selected_suit_codes=torch.full(
-            (batch_size,), -1, dtype=torch.long, device=batch.device
-        ),
-        done=batch.kind_codes == _KIND_EMPTY,
-        choice_counts=torch.zeros(
-            (batch_size,), dtype=torch.long, device=batch.device
-        ),
+def pad_candidate_columns(values: Tensor, *, width: int) -> Tensor:
+    assert values.ndim == 2
+    current_width = int(values.shape[1])
+    assert width >= current_width
+    if current_width == width:
+        return values
+    padding = torch.zeros(
+        (int(values.shape[0]), width - current_width),
+        dtype=values.dtype,
+        device=values.device,
     )
-
-
-def action_prefix_batch(
-    state: DeviceActionState,
-    *,
-    generated_token_count: int,
-) -> ArgumentPrefixTensorBatch:
-    """Return model prefix tensors for the current action state."""
-    assert generated_token_count >= 0
-    assert generated_token_count < SEMANTIC_CODEC.max_argument_tokens
-    safe_token_ids = state.selected_token_ids[:, :generated_token_count]
-    positions = torch.arange(
-        generated_token_count,
-        dtype=torch.long,
-        device=state.step_counts.device,
-    ).unsqueeze(0)
-    prefix_masks = positions < state.step_counts.unsqueeze(1)
-    safe_prefix_ids = torch.where(
-        prefix_masks,
-        safe_token_ids,
-        torch.zeros_like(safe_token_ids),
-    )
-    bos = torch.full(
-        (int(state.step_counts.shape[0]), 1),
-        SEMANTIC_CODEC.argument_bos_id,
-        dtype=torch.long,
-        device=state.step_counts.device,
-    )
-    return ArgumentPrefixTensorBatch(
-        argument_ids=torch.cat((bos, safe_prefix_ids), dim=1),
-        argument_masks=torch.cat(
-            (
-                torch.ones(
-                    (int(state.step_counts.shape[0]), 1),
-                    dtype=torch.bool,
-                    device=state.step_counts.device,
-                ),
-                prefix_masks,
-            ),
-            dim=1,
-        ),
-    )
-
-
-def legal_token_choices(
-    *,
-    batch: DeviceActionPlanBatch,
-    state: DeviceActionState,
-) -> DeviceLegalChoices:
-    """Return compact legal semantic token ids for the current state."""
-    done_tokens = torch.full(
-        (batch.batch_size(), 1),
-        SEMANTIC_CODEC.argument_pass_id,
-        dtype=torch.long,
-        device=batch.device,
-    )
-    trace_ids, trace_mask = _trace_set_candidates(
-        batch=batch, state=state
-    )
-    selection_ids, selection_mask = _selection_candidates(
-        batch=batch, state=state
-    )
-    return compact_legal_choices(
-        candidate_token_ids=torch.cat(
-            (done_tokens, trace_ids, selection_ids), dim=1
-        ),
-        candidate_mask=torch.cat(
-            (state.done.unsqueeze(1), trace_mask, selection_mask), dim=1
-        ),
-    )
-
-
-def advance_action_state(
-    *,
-    batch: DeviceActionPlanBatch,
-    state: DeviceActionState,
-    selected_token_ids: Tensor,
-    choice_counts: Tensor,
-) -> DeviceActionState:
-    """Advance device state after one sampled semantic token."""
-    assert selected_token_ids.ndim == 1
-    assert choice_counts.shape == state.step_counts.shape
-    active = ~state.done
-    token_tables = _token_tables(batch.device)
-    token_face = token_tables.face_indices.index_select(
-        dim=0, index=selected_token_ids
-    )
-    token_count = token_tables.counts.index_select(
-        dim=0, index=selected_token_ids
-    )
-    token_suit = _safe_gather_2d(
-        batch.effective_suits, token_face.clamp(min=0)
-    )
-    is_select = token_tables.is_select.index_select(
-        dim=0, index=selected_token_ids
-    )
-    write_positions = state.step_counts.clamp(
-        max=SEMANTIC_CODEC.max_argument_tokens - 1
-    )
-    next_tokens = state.selected_token_ids.scatter(
-        dim=1,
-        index=write_positions.unsqueeze(1),
-        src=selected_token_ids.unsqueeze(1),
-    )
-    next_counts = state.selected_counts.scatter_add(
-        dim=1,
-        index=token_face.clamp(min=0).unsqueeze(1),
-        src=torch.where(active & is_select, token_count, 0).unsqueeze(
-            1
-        ),
-    )
-    next_width = state.selected_width + torch.where(
-        active & is_select, token_count, 0
-    )
-    next_step_counts = state.step_counts + active.to(dtype=torch.long)
-    next_last_faces = torch.where(
-        active & is_select, token_face, state.last_face_indices
-    )
-    next_suits = torch.where(
-        active & is_select & (state.selected_suit_codes < 0),
-        token_suit,
-        state.selected_suit_codes,
-    )
-    terminal_token = (
-        selected_token_ids == SEMANTIC_CODEC.argument_pass_id
-    ) | (selected_token_ids == SEMANTIC_CODEC.argument_stop_id)
-    exact_done = (
-        (batch.kind_codes == _KIND_DISCARD)
-        | (batch.kind_codes == _KIND_FOLLOW)
-    ) & (next_width == batch.exact_select)
-    trace_done = _trace_done(
-        batch=batch,
-        selected_token_ids=next_tokens,
-        step_counts=next_step_counts,
-    )
-    next_done = state.done | (
-        active & (terminal_token | exact_done | trace_done)
-    )
-    next_choice_counts = state.choice_counts + torch.where(
-        active, choice_counts, torch.zeros_like(choice_counts)
-    )
-    return DeviceActionState(
-        selected_counts=next_counts,
-        selected_token_ids=next_tokens,
-        step_counts=next_step_counts,
-        selected_width=next_width,
-        last_face_indices=next_last_faces,
-        selected_suit_codes=next_suits,
-        done=next_done,
-        choice_counts=next_choice_counts,
-    )
-
-
-def action_trace_ids(
-    state: DeviceActionState,
-) -> tuple[tuple[int, ...], ...]:
-    """Return completed semantic trace token ids on CPU."""
-    token_rows = state.selected_token_ids.detach().cpu()
-    counts = state.step_counts.detach().cpu()
-    result: list[tuple[int, ...]] = []
-    for row_index in range(int(token_rows.shape[0])):
-        count = int(counts[row_index].item())
-        result.append(
-            tuple(
-                int(token_rows[row_index, token_index].item())
-                for token_index in range(count)
-            )
-        )
-    return tuple(result)
+    return torch.cat((values, padding), dim=1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -476,7 +281,7 @@ class _TokenTables:
 _TOKEN_TABLE_CACHE: dict[torch.device, _TokenTables] = {}
 
 
-def _token_tables(device: torch.device) -> _TokenTables:
+def token_tables(device: torch.device) -> _TokenTables:
     cached = _TOKEN_TABLE_CACHE.get(device)
     if cached is not None:
         return cached
@@ -526,7 +331,7 @@ def _token_tables(device: torch.device) -> _TokenTables:
     return tables
 
 
-def _trace_set_candidates(
+def trace_set_candidates(
     *,
     batch: DeviceActionPlanBatch,
     state: DeviceActionState,
@@ -598,19 +403,17 @@ def _trace_set_candidates(
     ), packed_mask
 
 
-def _selection_candidates(
+def selection_candidates(
     *,
     batch: DeviceActionPlanBatch,
     state: DeviceActionState,
 ) -> tuple[Tensor, Tensor]:
-    token_tables = _token_tables(batch.device)
+    tables = token_tables(batch.device)
     batch_size = batch.batch_size()
-    face_indices = token_tables.select_face_indices.unsqueeze(0).expand(
+    face_indices = tables.select_face_indices.unsqueeze(0).expand(
         batch_size, -1
     )
-    counts = token_tables.select_counts.unsqueeze(0).expand(
-        batch_size, -1
-    )
+    counts = tables.select_counts.unsqueeze(0).expand(batch_size, -1)
     available = batch.available_counts.gather(
         dim=1,
         index=face_indices,
@@ -675,7 +478,7 @@ def _selection_candidates(
         dtype=torch.long,
         device=batch.device,
     )
-    selection_ids = token_tables.select_token_ids.unsqueeze(0).expand(
+    selection_ids = tables.select_token_ids.unsqueeze(0).expand(
         batch_size, -1
     )
     return (
@@ -872,24 +675,25 @@ def _pair_without_tractor_can_complete(
         candidate_faces=candidate_faces,
         selected_faces=pair_selected,
     )
-    max_future = int(ACTION_FACE_COUNT)
-    result = torch.zeros_like(selected_pair_count, dtype=torch.bool)
     new_width = state.selected_width.unsqueeze(1) + candidate_counts
-    for future_pair_count in range(max_future + 1):
-        future_pairs = torch.full_like(
-            selected_pair_count, future_pair_count
-        )
-        final_pair_count = selected_pair_count + future_pairs
-        fixed_width = new_width + future_pairs * 2
-        remaining = batch.exact_select.unsqueeze(1) - fixed_width
-        candidate_ok = (
-            (future_pairs <= future_pair_capacity)
-            & (final_pair_count >= batch.pair_floor.unsqueeze(1))
-            & (fixed_width <= batch.exact_select.unsqueeze(1))
-            & (remaining <= single_capacity - future_pairs)
-        )
-        result = result | candidate_ok
-    return result
+    target_width = batch.exact_select.unsqueeze(1)
+    minimum_pair_need = (
+        batch.pair_floor.unsqueeze(1) - selected_pair_count
+    )
+    minimum_width_need = target_width - new_width - single_capacity
+    lower_bound = torch.maximum(
+        torch.zeros_like(selected_pair_count),
+        torch.maximum(minimum_pair_need, minimum_width_need),
+    )
+    upper_bound = torch.minimum(
+        future_pair_capacity,
+        torch.div(
+            target_width - new_width,
+            2,
+            rounding_mode="floor",
+        ),
+    )
+    return lower_bound <= upper_bound
 
 
 def _future_pair_capacity(
@@ -1046,7 +850,7 @@ def _follow_exhausting_suit_can_complete(
     )
 
 
-def _trace_done(
+def trace_done(
     *,
     batch: DeviceActionPlanBatch,
     selected_token_ids: Tensor,
@@ -1070,7 +874,7 @@ def _trace_done(
     ).any(dim=1)
 
 
-def _safe_gather_2d(values: Tensor, indices: Tensor) -> Tensor:
+def safe_gather_2d(values: Tensor, indices: Tensor) -> Tensor:
     return values.gather(dim=1, index=indices.unsqueeze(1)).squeeze(1)
 
 

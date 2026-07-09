@@ -39,9 +39,10 @@ from server.training.runtime.messages import (
     WorkerUpdateCompleted,
 )
 from server.training.runtime.model_rank import (
-    DirectPolicyClient,
-    FramedPolicyClient,
+    BatchedPolicyClient,
+    ConnectionPolicyBatchTransport,
     LocalModelRank,
+    LocalPolicyBatchTransport,
     create_model_replica,
 )
 from server.training.runtime.model_rank.inference_transport import (
@@ -59,6 +60,7 @@ from server.training.runtime.shared_rollout_arena import (
 )
 from server.training.runtime.telemetry import (
     TelemetryEvent,
+    TelemetryMeasurement,
     TelemetrySink,
 )
 from server.training.runtime.threads import apply_torch_thread_config
@@ -66,7 +68,7 @@ from server.training.runtime.threads import apply_torch_thread_config
 
 @dataclass(slots=True)
 class _WorkerRuntime:
-    policy: TrainingPolicy
+    policy: BatchedPolicyClient
     local_model_rank: LocalModelRank | None
     sessions: tuple[SelfPlaySession, ...]
     arena_writer: SharedRolloutArenaWriter
@@ -86,6 +88,22 @@ type _EnvRoundTaskResult = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class _SamplingTelemetry:
+    active_game_envs: int
+    completed_rounds: int
+    round_seconds: float
+    append_seconds: float
+    cancelled_envs: int
+
+    def __post_init__(self) -> None:
+        assert self.active_game_envs > 0
+        assert self.completed_rounds >= 0
+        assert self.round_seconds >= 0.0
+        assert self.append_seconds >= 0.0
+        assert self.cancelled_envs >= 0
+
+
 def run_training_worker_process(
     *,
     worker_index: int,
@@ -100,7 +118,7 @@ def run_training_worker_process(
     inference_response_receiver: (
         ConnectionPolicyResponseReceiver | None
     ),
-    rollout_arena_handles: tuple[RolloutArenaHandle, ...],
+    rollout_arena_handle: RolloutArenaHandle,
     distributed_rank_config: DistributedRankConfig | None,
 ) -> None:
     """Worker process main loop."""
@@ -135,7 +153,7 @@ def run_training_worker_process(
         device=setup_result.value,
         inference_request_sender=inference_request_sender,
         inference_response_receiver=inference_response_receiver,
-        rollout_arena_handles=rollout_arena_handles,
+        rollout_arena_handle=rollout_arena_handle,
         distributed_rank_config=distributed_rank_config,
     )
     if isinstance(runtime_result, Rejected):
@@ -206,11 +224,11 @@ def _create_worker_runtime(
     inference_response_receiver: (
         ConnectionPolicyResponseReceiver | None
     ),
-    rollout_arena_handles: tuple[RolloutArenaHandle, ...],
+    rollout_arena_handle: RolloutArenaHandle,
     distributed_rank_config: DistributedRankConfig | None,
 ) -> _result.Ok[_WorkerRuntime] | _result.Rejected:
-    if worker_index >= len(rollout_arena_handles):
-        return Rejected(reason="worker rollout arena handle is missing")
+    if rollout_arena_handle.worker_index != worker_index:
+        return Rejected(reason="worker rollout arena handle mismatch")
     if execution_config.uses_model_rank_processes():
         if (
             inference_request_sender is None
@@ -219,19 +237,20 @@ def _create_worker_runtime(
             return Rejected(
                 reason="model-rank worker is missing inference queues"
             )
-    arena_writer = attach_rollout_arena_writer(
-        rollout_arena_handles[worker_index]
-    )
-    arena_reader = attach_rollout_arena_reader(rollout_arena_handles)
+    arena_writer = attach_rollout_arena_writer(rollout_arena_handle)
+    arena_reader = attach_rollout_arena_reader((rollout_arena_handle,))
     if execution_config.uses_model_rank_processes():
         assert inference_request_sender is not None
         assert inference_response_receiver is not None
-        policy = FramedPolicyClient(
+        policy = BatchedPolicyClient(
             worker_index=worker_index,
             max_observation_tokens=model_config.max_tokens,
-            request_sender=inference_request_sender,
-            response_receiver=inference_response_receiver,
+            transport=ConnectionPolicyBatchTransport(
+                request_sender=inference_request_sender,
+                response_receiver=inference_response_receiver,
+            ),
             timeout_seconds=(execution_config.timeouts.round_seconds),
+            batch_size=execution_config.model_inference_batch_size,
         )
         return Ok(
             value=_WorkerRuntime(
@@ -256,9 +275,12 @@ def _create_worker_runtime(
         ),
     )
     local_model_rank = LocalModelRank(replica=core)
-    policy = DirectPolicyClient(
-        replica=core,
+    policy = BatchedPolicyClient(
+        worker_index=worker_index,
         max_observation_tokens=model_config.max_tokens,
+        transport=LocalPolicyBatchTransport(replica=core),
+        timeout_seconds=(execution_config.timeouts.round_seconds),
+        batch_size=execution_config.model_inference_batch_size,
     )
     return Ok(
         value=_WorkerRuntime(
@@ -394,6 +416,7 @@ def _run_worker_update(
     returns_result = runtime.arena_reader.read_rank_batch(
         policy_version=command.policy_version,
         model_rank_index=worker_index,
+        device=torch.device("cpu"),
     )
     if isinstance(returns_result, Rejected):
         return WorkerRejected(
@@ -477,6 +500,50 @@ def _run_worker_sampling(
             worker_index=worker_index,
             reason=sampling_result.reason,
         )
+    policy_stats = runtime.policy.drain_stats()
+    summary_telemetry = _record_worker_stage(
+        telemetry_sink=telemetry_sink,
+        run_id=run_id,
+        worker_index=worker_index,
+        stage="rollout",
+        total_rounds=runtime.next_episode_id,
+        total_updates=command.policy_version,
+        measurements=(
+            TelemetryMeasurement(
+                key="worker_active_game_envs",
+                value=sampling_result.value.active_game_envs,
+            ),
+            TelemetryMeasurement(
+                key="worker_completed_rounds",
+                value=sampling_result.value.completed_rounds,
+            ),
+            TelemetryMeasurement(
+                key="worker_round_seconds",
+                value=sampling_result.value.round_seconds,
+            ),
+            TelemetryMeasurement(
+                key="worker_policy_wait_seconds",
+                value=policy_stats.wait_seconds,
+            ),
+            TelemetryMeasurement(
+                key="worker_policy_decision_count",
+                value=policy_stats.decision_count,
+            ),
+            TelemetryMeasurement(
+                key="worker_arena_append_seconds",
+                value=sampling_result.value.append_seconds,
+            ),
+            TelemetryMeasurement(
+                key="worker_cancelled_game_envs",
+                value=sampling_result.value.cancelled_envs,
+            ),
+        ),
+    )
+    if isinstance(summary_telemetry, Rejected):
+        return WorkerRejected(
+            worker_index=worker_index,
+            reason=summary_telemetry.reason,
+        )
     return WorkerSamplingStopped(
         worker_index=worker_index,
         policy_version=command.policy_version,
@@ -490,9 +557,14 @@ async def _run_sampling_until_full(
     execution_config: ExecutionConfig,
     runtime: _WorkerRuntime,
     command: WorkerStartSamplingCommand,
-) -> _result.Ok[None] | _result.Rejected:
+) -> _result.Ok[_SamplingTelemetry] | _result.Rejected:
     assert command.game_env_count <= len(runtime.sessions)
     sessions = list(runtime.sessions)
+    completed_rounds = 0
+    round_seconds = 0.0
+    append_seconds = 0.0
+    cancelled_envs = 0
+    draining = False
     pending: dict[asyncio.Task[_EnvRoundTaskResult], int] = {}
     for game_env_index in range(command.game_env_count):
         task = _schedule_round(
@@ -523,20 +595,27 @@ async def _run_sampling_until_full(
                     sessions=sessions,
                     policy=runtime.policy,
                 )
+                cancelled_envs += cancelled_count
                 runtime.arena_writer.record_cancelled_envs(
                     cancelled_count
                 )
                 return round_result
             env_round = round_result.value
             round_data = env_round.round_data
+            completed_rounds += 1
+            round_seconds += round_data.elapsed_seconds
             if round_data.game_over:
                 sessions[game_env_index] = SelfPlaySession(
                     policy=runtime.policy
                 )
+            append_start = time.perf_counter()
             append_result = runtime.arena_writer.append_round(
                 policy_version=command.policy_version,
                 metrics=_round_metrics(round_data),
                 commit=round_data.returns,
+            )
+            append_seconds += max(
+                time.perf_counter() - append_start, 0.0
             )
             if isinstance(append_result, Rejected):
                 cancelled_count = len(pending)
@@ -545,22 +624,27 @@ async def _run_sampling_until_full(
                     sessions=sessions,
                     policy=runtime.policy,
                 )
+                cancelled_envs += cancelled_count
                 runtime.arena_writer.record_cancelled_envs(
                     cancelled_count
                 )
                 return append_result
             if append_result.value.arena_full:
-                cancelled_count = len(pending)
-                await _cancel_pending_rounds(
-                    pending=pending,
-                    sessions=sessions,
-                    policy=runtime.policy,
-                )
-                runtime.arena_writer.record_cancelled_envs(
-                    cancelled_count
-                )
-                runtime.sessions = tuple(sessions)
-                return Ok(value=None)
+                draining = True
+                if not pending:
+                    runtime.sessions = tuple(sessions)
+                    return Ok(
+                        value=_SamplingTelemetry(
+                            active_game_envs=command.game_env_count,
+                            completed_rounds=completed_rounds,
+                            round_seconds=round_seconds,
+                            append_seconds=append_seconds,
+                            cancelled_envs=cancelled_envs,
+                        )
+                    )
+                continue
+            if draining:
+                continue
             task = _schedule_round(
                 session=sessions[game_env_index],
                 game_env_index=game_env_index,
@@ -575,7 +659,15 @@ async def _run_sampling_until_full(
             runtime.next_episode_id += 1
             pending[task] = game_env_index
     runtime.sessions = tuple(sessions)
-    return Ok(value=None)
+    return Ok(
+        value=_SamplingTelemetry(
+            active_game_envs=command.game_env_count,
+            completed_rounds=completed_rounds,
+            round_seconds=round_seconds,
+            append_seconds=append_seconds,
+            cancelled_envs=cancelled_envs,
+        )
+    )
 
 
 def _schedule_round(
@@ -659,6 +751,7 @@ def _record_worker_stage(
     stage: str,
     total_rounds: int,
     total_updates: int,
+    measurements: tuple[TelemetryMeasurement, ...] = (),
 ) -> _result.Ok[None] | _result.Rejected:
     assert stage in ("rollout", "update")
     return telemetry_sink.append(
@@ -671,6 +764,7 @@ def _record_worker_stage(
             progress_numerator=0,
             progress_denominator=1,
             unix_seconds=time.time(),
+            measurements=measurements,
         )
     )
 

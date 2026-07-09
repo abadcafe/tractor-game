@@ -80,22 +80,16 @@ class _PPOLossForwarderAdapter:
         profile: PPOProfileAccumulator,
     ) -> PPOLossForwardOutput:
         tensors = self.module(minibatch, profile)
-        rejection_flag = tensors[6]
+        validation_code = tensors[6]
         if self.partition.world_size > 1:
             if not dist.is_initialized():
-                return PPOLossForwardOutput(
-                    loss=None,
-                    rejection_reason=(
-                        "distributed PPO loss sync requires "
-                        "process group"
-                    ),
+                raise AssertionError(
+                    "distributed PPO loss sync requires process group"
                 )
-            rejection_flag = rejection_flag.detach().clone()
-            _all_reduce_in_place(rejection_flag, dist.ReduceOp.MAX)
-        rejected = bool(rejection_flag.detach().cpu().item() > 0.5)
+            validation_code = validation_code.detach().clone()
+            _all_reduce_in_place(validation_code, dist.ReduceOp.MAX)
         return loss_forward_output_from_tensors(
-            tensors,
-            rejected=rejected,
+            (*tensors[:6], validation_code),
         )
 
     def train(self, mode: bool = True) -> nn.Module:

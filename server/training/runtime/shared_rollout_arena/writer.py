@@ -11,7 +11,7 @@ from server.training.returns import ReturnCommit
 from server.training.runtime.shared_rollout_arena.schema import (
     RolloutArenaHeader,
     pack_header,
-    pack_sample_reference,
+    pack_sample_references,
     unpack_header,
 )
 from server.training.runtime.shared_rollout_arena.types import (
@@ -49,7 +49,7 @@ class SharedRolloutArenaWriter:
                 return Rejected(
                     reason="rollout arena policy version mismatch"
                 )
-            if header.full:
+            if header.sample_count >= header.capacity:
                 dropped = commit.sample_count()
                 updated = _add_dropped_samples(header, dropped)
                 pack_header(buffer, header=updated)
@@ -73,6 +73,7 @@ class SharedRolloutArenaWriter:
             updated = _advance_header(
                 header=header,
                 metrics=metrics,
+                accepted_step_counts=commit.step_counts[:accepted],
                 accepted_sample_count=accepted,
                 dropped_sample_count=dropped,
             )
@@ -102,6 +103,7 @@ class SharedRolloutArenaWriter:
                 policy_version=header.policy_version,
                 sample_count=header.sample_count,
                 capacity=header.capacity,
+                target_sample_count=header.target_sample_count,
                 full=header.full,
                 round_count=header.round_count,
                 generated_action_count=header.generated_action_count,
@@ -110,6 +112,8 @@ class SharedRolloutArenaWriter:
                 game_over_count=header.game_over_count,
                 dropped_sample_count=header.dropped_sample_count,
                 cancelled_env_count=header.cancelled_env_count + count,
+                total_step_count=header.total_step_count,
+                max_step_count=header.max_step_count,
                 team0_reward_sum=header.team0_reward_sum,
                 team1_reward_sum=header.team1_reward_sum,
                 elapsed_seconds_max=header.elapsed_seconds_max,
@@ -154,40 +158,39 @@ def _write_commit_rows(
     assert capacity > 0
     assert start_index >= 0
     assert accepted_count >= 0
-    for offset, (handle, return_value) in enumerate(
-        zip(
-            commit.decision_handles[:accepted_count],
-            commit.return_values[:accepted_count],
-            strict=True,
-        )
-    ):
-        pack_sample_reference(
-            buffer=buffer,
-            capacity=capacity,
-            index=start_index + offset,
-            model_rank_index=handle.model_rank_index,
-            slot_index=handle.slot_index,
-            slot_generation=handle.slot_generation,
-            return_value=return_value,
-        )
+    pack_sample_references(
+        buffer=buffer,
+        capacity=capacity,
+        start_index=start_index,
+        row_indices=commit.row_indices[:accepted_count],
+        step_counts=commit.step_counts[:accepted_count],
+        return_values=commit.return_values[:accepted_count],
+    )
 
 
 def _advance_header(
     *,
     header: RolloutArenaHeader,
     metrics: RolloutRoundMetrics,
+    accepted_step_counts: tuple[int, ...],
     accepted_sample_count: int,
     dropped_sample_count: int,
 ) -> RolloutArenaHeader:
     assert accepted_sample_count >= 0
     assert dropped_sample_count >= 0
+    assert len(accepted_step_counts) == accepted_sample_count
+    assert all(count > 0 for count in accepted_step_counts)
     new_count = header.sample_count + accepted_sample_count
     accepted_round = accepted_sample_count > 0
+    accepted_total_steps = sum(accepted_step_counts)
+    accepted_max_steps = max(accepted_step_counts, default=0)
+    full = header.full or new_count >= header.target_sample_count
     return RolloutArenaHeader(
         policy_version=header.policy_version,
         sample_count=new_count,
         capacity=header.capacity,
-        full=new_count == header.capacity,
+        target_sample_count=header.target_sample_count,
+        full=full,
         round_count=header.round_count + (1 if accepted_round else 0),
         generated_action_count=(
             header.generated_action_count
@@ -209,6 +212,10 @@ def _advance_header(
             header.dropped_sample_count + dropped_sample_count
         ),
         cancelled_env_count=header.cancelled_env_count,
+        total_step_count=(
+            header.total_step_count + accepted_total_steps
+        ),
+        max_step_count=max(header.max_step_count, accepted_max_steps),
         team0_reward_sum=(
             header.team0_reward_sum
             + (metrics.team0_reward if accepted_round else 0.0)
@@ -232,6 +239,7 @@ def _add_dropped_samples(
         policy_version=header.policy_version,
         sample_count=header.sample_count,
         capacity=header.capacity,
+        target_sample_count=header.target_sample_count,
         full=header.full,
         round_count=header.round_count,
         generated_action_count=header.generated_action_count,
@@ -240,6 +248,8 @@ def _add_dropped_samples(
         game_over_count=header.game_over_count,
         dropped_sample_count=header.dropped_sample_count + count,
         cancelled_env_count=header.cancelled_env_count,
+        total_step_count=header.total_step_count,
+        max_step_count=header.max_step_count,
         team0_reward_sum=header.team0_reward_sum,
         team1_reward_sum=header.team1_reward_sum,
         elapsed_seconds_max=header.elapsed_seconds_max,

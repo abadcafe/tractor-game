@@ -39,7 +39,6 @@ _NULLABLE_FLOAT_METRIC_SCHEMA_FIELDS: tuple[str, ...] = (
     "ppo_observation_encode_seconds",
     "ppo_value_head_seconds",
     "ppo_argument_select_seconds",
-    "ppo_argument_prefix_tensorize_seconds",
     "ppo_argument_decode_seconds",
     "ppo_argument_distribution_seconds",
     "ppo_backward_seconds",
@@ -47,11 +46,11 @@ _NULLABLE_FLOAT_METRIC_SCHEMA_FIELDS: tuple[str, ...] = (
     "ppo_argument_decode_fraction",
 )
 _NULLABLE_INT_METRIC_SCHEMA_FIELDS: tuple[str, ...] = (
-    "ppo_argument_prefix_batch_count",
-    "ppo_argument_prefix_row_count",
-    "ppo_argument_prefix_token_count",
-    "ppo_argument_prefix_valid_token_count",
-    "ppo_argument_prefix_padding_token_count",
+    "ppo_argument_trace_batch_count",
+    "ppo_argument_trace_row_count",
+    "ppo_argument_trace_token_count",
+    "ppo_argument_trace_valid_token_count",
+    "ppo_argument_trace_padding_token_count",
 )
 _NULLABLE_STR_METRIC_SCHEMA_FIELDS: tuple[str, ...] = (
     "checkpoint_path",
@@ -90,17 +89,16 @@ class TrainingMetric:
     ppo_observation_encode_seconds: float | None
     ppo_value_head_seconds: float | None
     ppo_argument_select_seconds: float | None
-    ppo_argument_prefix_tensorize_seconds: float | None
     ppo_argument_decode_seconds: float | None
     ppo_argument_distribution_seconds: float | None
     ppo_backward_seconds: float | None
     ppo_optimizer_step_seconds: float | None
     ppo_argument_decode_fraction: float | None
-    ppo_argument_prefix_batch_count: int | None
-    ppo_argument_prefix_row_count: int | None
-    ppo_argument_prefix_token_count: int | None
-    ppo_argument_prefix_valid_token_count: int | None
-    ppo_argument_prefix_padding_token_count: int | None
+    ppo_argument_trace_batch_count: int | None
+    ppo_argument_trace_row_count: int | None
+    ppo_argument_trace_token_count: int | None
+    ppo_argument_trace_valid_token_count: int | None
+    ppo_argument_trace_padding_token_count: int | None
     checkpoint_path: str | None
 
 
@@ -186,10 +184,6 @@ def validate_training_metric(
             metric.ppo_argument_select_seconds,
         ),
         (
-            "ppo_argument_prefix_tensorize_seconds",
-            metric.ppo_argument_prefix_tensorize_seconds,
-        ),
-        (
             "ppo_argument_decode_seconds",
             metric.ppo_argument_decode_seconds,
         ),
@@ -232,10 +226,6 @@ def validate_training_metric(
             metric.ppo_argument_select_seconds,
         ),
         (
-            "ppo_argument_prefix_tensorize_seconds",
-            metric.ppo_argument_prefix_tensorize_seconds,
-        ),
-        (
             "ppo_argument_decode_seconds",
             metric.ppo_argument_decode_seconds,
         ),
@@ -267,24 +257,24 @@ def validate_training_metric(
         )
     optional_ints = (
         (
-            "ppo_argument_prefix_batch_count",
-            metric.ppo_argument_prefix_batch_count,
+            "ppo_argument_trace_batch_count",
+            metric.ppo_argument_trace_batch_count,
         ),
         (
-            "ppo_argument_prefix_row_count",
-            metric.ppo_argument_prefix_row_count,
+            "ppo_argument_trace_row_count",
+            metric.ppo_argument_trace_row_count,
         ),
         (
-            "ppo_argument_prefix_token_count",
-            metric.ppo_argument_prefix_token_count,
+            "ppo_argument_trace_token_count",
+            metric.ppo_argument_trace_token_count,
         ),
         (
-            "ppo_argument_prefix_valid_token_count",
-            metric.ppo_argument_prefix_valid_token_count,
+            "ppo_argument_trace_valid_token_count",
+            metric.ppo_argument_trace_valid_token_count,
         ),
         (
-            "ppo_argument_prefix_padding_token_count",
-            metric.ppo_argument_prefix_padding_token_count,
+            "ppo_argument_trace_padding_token_count",
+            metric.ppo_argument_trace_padding_token_count,
         ),
     )
     for field, value in optional_ints:
@@ -371,9 +361,6 @@ def _to_json(metric: TrainingMetric) -> JsonObject:
         "ppo_argument_select_seconds": (
             metric.ppo_argument_select_seconds
         ),
-        "ppo_argument_prefix_tensorize_seconds": (
-            metric.ppo_argument_prefix_tensorize_seconds
-        ),
         "ppo_argument_decode_seconds": (
             metric.ppo_argument_decode_seconds
         ),
@@ -387,20 +374,20 @@ def _to_json(metric: TrainingMetric) -> JsonObject:
         "ppo_argument_decode_fraction": (
             metric.ppo_argument_decode_fraction
         ),
-        "ppo_argument_prefix_batch_count": (
-            metric.ppo_argument_prefix_batch_count
+        "ppo_argument_trace_batch_count": (
+            metric.ppo_argument_trace_batch_count
         ),
-        "ppo_argument_prefix_row_count": (
-            metric.ppo_argument_prefix_row_count
+        "ppo_argument_trace_row_count": (
+            metric.ppo_argument_trace_row_count
         ),
-        "ppo_argument_prefix_token_count": (
-            metric.ppo_argument_prefix_token_count
+        "ppo_argument_trace_token_count": (
+            metric.ppo_argument_trace_token_count
         ),
-        "ppo_argument_prefix_valid_token_count": (
-            metric.ppo_argument_prefix_valid_token_count
+        "ppo_argument_trace_valid_token_count": (
+            metric.ppo_argument_trace_valid_token_count
         ),
-        "ppo_argument_prefix_padding_token_count": (
-            metric.ppo_argument_prefix_padding_token_count
+        "ppo_argument_trace_padding_token_count": (
+            metric.ppo_argument_trace_padding_token_count
         ),
         "checkpoint_path": metric.checkpoint_path,
     }
@@ -517,9 +504,6 @@ def _from_json(data: dict[object, object]) -> TrainingMetric | None:
         ppo_argument_select_seconds=nullable_floats[
             "ppo_argument_select_seconds"
         ],
-        ppo_argument_prefix_tensorize_seconds=(
-            nullable_floats["ppo_argument_prefix_tensorize_seconds"]
-        ),
         ppo_argument_decode_seconds=nullable_floats[
             "ppo_argument_decode_seconds"
         ],
@@ -533,20 +517,20 @@ def _from_json(data: dict[object, object]) -> TrainingMetric | None:
         ppo_argument_decode_fraction=nullable_floats[
             "ppo_argument_decode_fraction"
         ],
-        ppo_argument_prefix_batch_count=(
-            nullable_ints["ppo_argument_prefix_batch_count"]
+        ppo_argument_trace_batch_count=(
+            nullable_ints["ppo_argument_trace_batch_count"]
         ),
-        ppo_argument_prefix_row_count=nullable_ints[
-            "ppo_argument_prefix_row_count"
+        ppo_argument_trace_row_count=nullable_ints[
+            "ppo_argument_trace_row_count"
         ],
-        ppo_argument_prefix_token_count=(
-            nullable_ints["ppo_argument_prefix_token_count"]
+        ppo_argument_trace_token_count=(
+            nullable_ints["ppo_argument_trace_token_count"]
         ),
-        ppo_argument_prefix_valid_token_count=(
-            nullable_ints["ppo_argument_prefix_valid_token_count"]
+        ppo_argument_trace_valid_token_count=(
+            nullable_ints["ppo_argument_trace_valid_token_count"]
         ),
-        ppo_argument_prefix_padding_token_count=(
-            nullable_ints["ppo_argument_prefix_padding_token_count"]
+        ppo_argument_trace_padding_token_count=(
+            nullable_ints["ppo_argument_trace_padding_token_count"]
         ),
         checkpoint_path=nullable_strs["checkpoint_path"],
     )

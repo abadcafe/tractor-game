@@ -38,6 +38,7 @@ from server.training.runtime.model_rank.inference_transport import (
     ConnectionPolicyRequestReceiver,
     ConnectionPolicyRequestSender,
     ConnectionPolicyResponseReceiver,
+    ConnectionPolicyResponseSender,
 )
 from server.training.runtime.model_rank.messages import (
     ModelRankCommand,
@@ -261,6 +262,9 @@ def _start_runtime_pools(
         samples_per_worker_update=(
             execution_config.samples_per_worker_update
         ),
+        slack_sample_count=_rollout_arena_slack_sample_count(
+            execution_config
+        ),
     )
     if isinstance(arena_group_result, Rejected):
         return arena_group_result
@@ -284,7 +288,10 @@ def _start_runtime_pools(
             )
         ),
         worker_inference_response_senders=tuple(
-            link.response_sender for link in worker_inference_links
+            ConnectionPolicyResponseSender(
+                worker_index=index, connection=link.response_sender
+            )
+            for index, link in enumerate(worker_inference_links)
         ),
         rollout_arena_handles=arena_group.handles,
     )
@@ -331,7 +338,7 @@ def _start_runtime_pools(
                 "inference_response_receiver": (
                     inference_response_receiver
                 ),
-                "rollout_arena_handles": arena_group.handles,
+                "rollout_arena_handle": arena_group.handles[index],
                 "distributed_rank_config": (
                     _worker_distributed_rank_config(
                         execution_config=execution_config,
@@ -362,6 +369,14 @@ def _start_runtime_pools(
     )
 
 
+def _rollout_arena_slack_sample_count(
+    execution_config: ExecutionConfig,
+) -> int:
+    """Return physical arena slack for already-running game envs."""
+    per_env_slack = 256
+    return execution_config.game_envs_per_worker * per_env_slack
+
+
 def _start_model_rank_pool(
     *,
     context: SpawnContext,
@@ -374,7 +389,9 @@ def _start_model_rank_pool(
     rank_inference_request_receivers: tuple[
         tuple[ConnectionPolicyRequestReceiver, ...], ...
     ],
-    worker_inference_response_senders: tuple[Connection, ...],
+    worker_inference_response_senders: tuple[
+        ConnectionPolicyResponseSender, ...
+    ],
     rollout_arena_handles: tuple[RolloutArenaHandle, ...],
 ) -> _result.Ok[_ModelRankPool | None] | _result.Rejected:
     if not execution_config.uses_model_rank_processes():
@@ -401,9 +418,21 @@ def _start_model_rank_pool(
                     rank_inference_request_receivers[index]
                 ),
                 "inference_response_senders": (
-                    worker_inference_response_senders
+                    _model_rank_inference_response_senders(
+                        execution_config=execution_config,
+                        worker_inference_response_senders=(
+                            worker_inference_response_senders
+                        ),
+                        model_rank_index=index,
+                    )
                 ),
-                "rollout_arena_handles": rollout_arena_handles,
+                "assigned_rollout_arena_handles": (
+                    _model_rank_rollout_arena_handles(
+                        execution_config=execution_config,
+                        rollout_arena_handles=rollout_arena_handles,
+                        model_rank_index=index,
+                    )
+                ),
                 "telemetry_sink": _telemetry_sink(
                     run_dir=run_dir,
                     execution_config=execution_config,
@@ -429,6 +458,42 @@ def _start_model_rank_pool(
         value=_ModelRankPool(
             handles=tuple(handles),
         )
+    )
+
+
+def _model_rank_inference_response_senders(
+    *,
+    execution_config: ExecutionConfig,
+    worker_inference_response_senders: tuple[
+        ConnectionPolicyResponseSender, ...
+    ],
+    model_rank_index: int,
+) -> tuple[ConnectionPolicyResponseSender, ...]:
+    assert model_rank_index >= 0
+    return tuple(
+        sender
+        for sender in worker_inference_response_senders
+        if execution_config.model_rank_index_for_worker(
+            sender.worker_index
+        )
+        == model_rank_index
+    )
+
+
+def _model_rank_rollout_arena_handles(
+    *,
+    execution_config: ExecutionConfig,
+    rollout_arena_handles: tuple[RolloutArenaHandle, ...],
+    model_rank_index: int,
+) -> tuple[RolloutArenaHandle, ...]:
+    assert model_rank_index >= 0
+    return tuple(
+        handle
+        for handle in rollout_arena_handles
+        if execution_config.model_rank_index_for_worker(
+            handle.worker_index
+        )
+        == model_rank_index
     )
 
 
@@ -1320,10 +1385,6 @@ def _aggregate_ppo_update_profiles(
         argument_select_seconds=max(
             profile.argument_select_seconds for profile in profiles
         ),
-        argument_prefix_tensorize_seconds=max(
-            profile.argument_prefix_tensorize_seconds
-            for profile in profiles
-        ),
         argument_decode_seconds=argument_decode_seconds,
         argument_distribution_seconds=max(
             profile.argument_distribution_seconds
@@ -1336,21 +1397,21 @@ def _aggregate_ppo_update_profiles(
             profile.optimizer_step_seconds for profile in profiles
         ),
         argument_decode_fraction=decode_fraction,
-        argument_prefix_batch_count=sum(
-            profile.argument_prefix_batch_count for profile in profiles
+        argument_trace_batch_count=sum(
+            profile.argument_trace_batch_count for profile in profiles
         ),
-        argument_prefix_row_count=sum(
-            profile.argument_prefix_row_count for profile in profiles
+        argument_trace_row_count=sum(
+            profile.argument_trace_row_count for profile in profiles
         ),
-        argument_prefix_token_count=sum(
-            profile.argument_prefix_token_count for profile in profiles
+        argument_trace_token_count=sum(
+            profile.argument_trace_token_count for profile in profiles
         ),
-        argument_prefix_valid_token_count=sum(
-            profile.argument_prefix_valid_token_count
+        argument_trace_valid_token_count=sum(
+            profile.argument_trace_valid_token_count
             for profile in profiles
         ),
-        argument_prefix_padding_token_count=sum(
-            profile.argument_prefix_padding_token_count
+        argument_trace_padding_token_count=sum(
+            profile.argument_trace_padding_token_count
             for profile in profiles
         ),
     )

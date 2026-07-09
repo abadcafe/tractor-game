@@ -17,23 +17,23 @@ class ReturnCommit:
     policy_version: int
     first_episode_id: int
     episode_count: int
-    decision_handles: tuple[DecisionHandle, ...]
+    row_indices: tuple[int, ...]
+    step_counts: tuple[int, ...]
     return_values: tuple[float, ...]
 
     def __post_init__(self) -> None:
         assert self.policy_version >= 0
         assert self.first_episode_id >= 0
         assert self.episode_count >= 0
-        assert len(self.decision_handles) == len(self.return_values)
-        assert all(
-            handle.policy_version == self.policy_version
-            for handle in self.decision_handles
-        )
+        assert len(self.row_indices) == len(self.return_values)
+        assert len(self.step_counts) == len(self.return_values)
+        assert all(value >= 0 for value in self.row_indices)
+        assert all(value > 0 for value in self.step_counts)
         assert all(math.isfinite(value) for value in self.return_values)
 
     def sample_count(self) -> int:
         """Return committed trainable decision count."""
-        return len(self.decision_handles)
+        return len(self.row_indices)
 
     def is_empty(self) -> bool:
         """Return whether this commit has no trainable decisions."""
@@ -78,7 +78,8 @@ class _ReturnCommitBuilder:
     policy_version: int
     first_episode_id: int
     episode_count: int
-    decision_handles: list[DecisionHandle]
+    row_indices: list[int]
+    step_counts: list[int]
     return_values: list[float]
 
     def __init__(
@@ -91,7 +92,8 @@ class _ReturnCommitBuilder:
         self.policy_version = policy_version
         self.first_episode_id = first_episode_id
         self.episode_count = episode_count
-        self.decision_handles = []
+        self.row_indices = []
+        self.step_counts = []
         self.return_values = []
 
     def append_terminal_trajectory(
@@ -110,6 +112,7 @@ class _ReturnCommitBuilder:
         ):
             self.append_decision(
                 handle=step.decision_handle,
+                step_count=len(step.action.semantic_trace.arguments),
                 return_value=return_value,
             )
 
@@ -117,11 +120,14 @@ class _ReturnCommitBuilder:
         self,
         *,
         handle: DecisionHandle,
+        step_count: int,
         return_value: float,
     ) -> None:
         assert handle.policy_version == self.policy_version
+        assert step_count > 0
         assert math.isfinite(return_value)
-        self.decision_handles.append(handle)
+        self.row_indices.append(handle.row_index)
+        self.step_counts.append(step_count)
         self.return_values.append(return_value)
 
     def build(self) -> ReturnCommit:
@@ -129,6 +135,7 @@ class _ReturnCommitBuilder:
             policy_version=self.policy_version,
             first_episode_id=self.first_episode_id,
             episode_count=self.episode_count,
-            decision_handles=tuple(self.decision_handles),
+            row_indices=tuple(self.row_indices),
+            step_counts=tuple(self.step_counts),
             return_values=tuple(self.return_values),
         )

@@ -8,19 +8,11 @@ import sys
 import torch
 
 from server.player.test_helpers import card, make_snapshot
-from server.rules.card_faces import CardFace, FaceCount
 from server.training.feature_schema import NUMERIC_FEATURE_COUNT
 from server.training.observation import build_observation
-from server.training.semantic_actions import (
-    SemanticArgument,
-    SemanticArgumentPrefix,
-)
-from server.training.semantic_actions.codec import SEMANTIC_CODEC
 from server.training.tensorize import (
     OBSERVATION_COMPONENT_COUNT,
     observation_component_tensors,
-    tensorize_argument_prefix,
-    tensorize_argument_prefixes,
     tensorize_observation,
     tensorize_observations,
 )
@@ -166,54 +158,3 @@ def test_tensorize_observation_exposes_face_count_component() -> None:
 
     assert components.count_ids.shape == (1, len(observation.tokens))
     assert components.count_ids.max().item() > 0
-
-
-def test_tensorize_argument_prefix_outputs_bos_and_arguments() -> None:
-    test_card = card("clubs", "3", 1)
-    prefix = SemanticArgumentPrefix(
-        arguments=(
-            SemanticArgument(
-                "select_face_count",
-                FaceCount(CardFace(test_card.suit, test_card.rank), 1),
-            ),
-        )
-    )
-
-    batch = tensorize_argument_prefix(
-        prefix=prefix,
-        device=torch.device("cpu"),
-    )
-
-    assert batch.argument_ids.shape[0] == 1
-    assert batch.argument_ids.shape[1] == 2
-    assert (
-        batch.argument_ids[0, 0].item()
-        == SEMANTIC_CODEC.argument_bos_id
-    )
-    assert (
-        batch.argument_ids[0, 1].item() > SEMANTIC_CODEC.argument_bos_id
-    )
-    assert batch.argument_masks[0, 0].item()
-    assert batch.argument_masks[0, 1].item()
-
-
-def test_tensorize_argument_prefixes_use_batch_max_length() -> None:
-    test_card = card("clubs", "3", 1)
-    selected = SemanticArgument(
-        "select_face_count",
-        FaceCount(CardFace(test_card.suit, test_card.rank), 1),
-    )
-
-    batch = tensorize_argument_prefixes(
-        prefixes=(
-            SemanticArgumentPrefix(arguments=()),
-            SemanticArgumentPrefix(arguments=(selected,)),
-        ),
-        device=torch.device("cpu"),
-    )
-
-    assert batch.argument_ids.shape == (2, 2)
-    assert bool(batch.argument_masks[0, 0].item())
-    assert not bool(batch.argument_masks[0, 1].item())
-    assert bool(batch.argument_masks[1, 0].item())
-    assert bool(batch.argument_masks[1, 1].item())

@@ -1,4 +1,4 @@
-"""Compact legal-choice sampling for compiled action plans."""
+"""Fixed-width legal-candidate sampling for compiled action plans."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import torch
 from torch import Tensor
 
 from server.training.semantic_action_plan.choices import (
-    DeviceLegalChoices,
+    DeviceLegalCandidateBatch,
 )
 from server.training.semantic_actions.codec import SEMANTIC_CODEC
 
@@ -24,17 +24,23 @@ class SampledActionTokens:
     error_code: Tensor
 
 
-def sample_legal_choices(
+def sample_legal_candidates(
     *,
     argument_logits: Tensor,
-    legal_choices: DeviceLegalChoices,
+    legal_candidates: DeviceLegalCandidateBatch,
     thresholds: Tensor,
+    active_rows: Tensor,
 ) -> SampledActionTokens:
     """Sample one legal semantic token per row."""
     assert argument_logits.ndim == 2
-    assert legal_choices.batch_size() == int(argument_logits.shape[0])
+    assert legal_candidates.batch_size() == int(
+        argument_logits.shape[0]
+    )
     assert thresholds.ndim == 1
     assert int(thresholds.shape[0]) == int(argument_logits.shape[0])
+    assert active_rows.ndim == 1
+    assert int(active_rows.shape[0]) == int(argument_logits.shape[0])
+    assert active_rows.dtype == torch.bool
     error_code = torch.zeros(
         (), dtype=torch.long, device=argument_logits.device
     )
@@ -54,24 +60,21 @@ def sample_legal_choices(
         ).any(),
         _ERROR_THRESHOLD_RANGE,
     )
-    has_legal_token = legal_choices.choice_counts > 0
+    has_legal_token = legal_candidates.choice_counts > 0
     error_code = _set_error_if(
         error_code,
-        (~has_legal_token).any(),
+        (active_rows & ~has_legal_token).any(),
         _ERROR_EMPTY_LEGAL_MASK,
     )
-    if int(legal_choices.token_ids.shape[0]) == 0:
-        return _empty_choice_sample(
-            argument_logits=argument_logits, error_code=error_code
-        )
-    selected = _sample_non_empty_choice_rows(
+    selected = _sample_candidate_rows(
         argument_logits=argument_logits,
-        legal_choices=legal_choices,
+        legal_candidates=legal_candidates,
         thresholds=_sampling_thresholds_for_logits(
             thresholds=high_precision_thresholds,
             argument_logits=argument_logits,
         ),
         has_legal_token=has_legal_token,
+        active_rows=active_rows,
     )
     error_code = _set_error_if(
         error_code,
@@ -119,64 +122,47 @@ class _ChoiceSelection:
     nonfinite_distribution: Tensor
 
 
-def _sample_non_empty_choice_rows(
+def _sample_candidate_rows(
     *,
     argument_logits: Tensor,
-    legal_choices: DeviceLegalChoices,
+    legal_candidates: DeviceLegalCandidateBatch,
     thresholds: Tensor,
     has_legal_token: Tensor,
+    active_rows: Tensor,
 ) -> _ChoiceSelection:
-    row_indices = legal_choices.row_indices
-    token_ids = legal_choices.token_ids
-    choice_logits = argument_logits[row_indices, token_ids]
-    row_max = _scatter_row_max(
-        values=choice_logits,
-        row_indices=row_indices,
-        row_count=legal_choices.batch_size(),
+    token_ids = legal_candidates.token_ids
+    masks = legal_candidates.masks
+    safe_masks = _safe_candidate_masks(
+        masks=masks, has_legal_token=has_legal_token
     )
-    safe_row_max = torch.where(
-        has_legal_token, row_max, torch.zeros_like(row_max)
+    legal_logits = argument_logits.gather(dim=1, index=token_ids)
+    active_masks = masks & active_rows.unsqueeze(1)
+    valid_logits = legal_logits[active_masks]
+    safe_logits = legal_logits.masked_fill(~safe_masks, -torch.inf)
+    probabilities = torch.softmax(safe_logits, dim=1).masked_fill(
+        ~masks, 0.0
     )
-    shifted = choice_logits - safe_row_max.index_select(0, row_indices)
-    exp_logits = torch.exp(shifted)
-    row_sums = _scatter_row_sum(
-        values=exp_logits,
-        row_indices=row_indices,
-        row_count=legal_choices.batch_size(),
-    )
-    log_row_sums = torch.log(row_sums.index_select(0, row_indices))
-    log_probabilities = shifted - log_row_sums
-    probabilities = torch.exp(log_probabilities)
+    log_probabilities = torch.log_softmax(
+        safe_logits, dim=1
+    ).masked_fill(~masks, 0.0)
     selected_offsets = _selected_choice_offsets(
         probabilities=probabilities,
-        legal_choices=legal_choices,
+        masks=masks,
         thresholds=thresholds,
     )
-    selected_flat_indices = (
-        legal_choices.choice_offsets[:-1] + selected_offsets
-    )
-    safe_selected_flat_indices = selected_flat_indices.clamp(
-        min=0, max=int(token_ids.shape[0]) - 1
-    )
-    selected_token_ids = token_ids.index_select(
-        dim=0, index=safe_selected_flat_indices
-    )
-    selected_log_probabilities = log_probabilities.index_select(
-        dim=0, index=safe_selected_flat_indices
-    )
-    entropy_terms = -(probabilities * log_probabilities)
-    entropies = _scatter_row_sum(
-        values=entropy_terms,
-        row_indices=row_indices,
-        row_count=legal_choices.batch_size(),
+    selected_token_ids = token_ids.gather(
+        dim=1, index=selected_offsets.unsqueeze(1)
+    ).squeeze(1)
+    selected_log_probabilities = log_probabilities.gather(
+        dim=1, index=selected_offsets.unsqueeze(1)
+    ).squeeze(1)
+    entropies = -(probabilities * log_probabilities).sum(dim=1)
+    empty_replacement = torch.full_like(
+        selected_token_ids, SEMANTIC_CODEC.argument_pass_id
     )
     return _ChoiceSelection(
         token_ids=torch.where(
-            has_legal_token,
-            selected_token_ids,
-            torch.full_like(
-                selected_token_ids, SEMANTIC_CODEC.argument_pass_id
-            ),
+            has_legal_token, selected_token_ids, empty_replacement
         ),
         choice_offsets=torch.where(
             has_legal_token,
@@ -191,12 +177,14 @@ def _sample_non_empty_choice_rows(
         entropies=torch.where(
             has_legal_token, entropies, torch.zeros_like(entropies)
         ),
-        nonfinite_logits=(~torch.isfinite(choice_logits)).any(),
+        nonfinite_logits=(~torch.isfinite(valid_logits)).any(),
         nonfinite_distribution=(
-            (~torch.isfinite(probabilities)).any()
-            | (~torch.isfinite(log_probabilities)).any()
-            | (~torch.isfinite(selected_log_probabilities)).any()
-            | (~torch.isfinite(entropies)).any()
+            (~torch.isfinite(probabilities[active_rows])).any()
+            | (~torch.isfinite(log_probabilities[active_rows])).any()
+            | (
+                ~torch.isfinite(selected_log_probabilities[active_rows])
+            ).any()
+            | (~torch.isfinite(entropies[active_rows])).any()
         ),
     )
 
@@ -204,109 +192,53 @@ def _sample_non_empty_choice_rows(
 def _selected_choice_offsets(
     *,
     probabilities: Tensor,
-    legal_choices: DeviceLegalChoices,
+    masks: Tensor,
     thresholds: Tensor,
 ) -> Tensor:
-    row_indices = legal_choices.row_indices
-    flat_positions = torch.arange(
-        int(probabilities.shape[0]),
+    columns = torch.arange(
+        int(probabilities.shape[1]),
+        dtype=torch.long,
+        device=probabilities.device,
+    ).unsqueeze(0)
+    cumulative = probabilities.cumsum(dim=1)
+    crossed = (cumulative > thresholds.unsqueeze(1)) & masks
+    sentinel = torch.full(
+        masks.shape,
+        int(probabilities.shape[1]),
         dtype=torch.long,
         device=probabilities.device,
     )
-    segment_starts = legal_choices.choice_offsets.index_select(
-        dim=0, index=row_indices
+    first_offsets = (
+        torch.where(crossed, columns, sentinel).min(dim=1).values
     )
-    local_offsets = flat_positions - segment_starts
-    cumulative = probabilities.cumsum(dim=0)
-    previous_indices = (segment_starts - 1).clamp(min=0)
-    previous_cumulative = cumulative.index_select(
-        dim=0, index=previous_indices
+    last_offsets = (
+        torch.where(
+            masks,
+            columns.expand_as(masks),
+            torch.full_like(masks, -1, dtype=torch.long),
+        )
+        .max(dim=1)
+        .values
     )
-    previous_cumulative = torch.where(
-        segment_starts > 0,
-        previous_cumulative,
-        torch.zeros_like(previous_cumulative),
-    )
-    segmented_cumulative = cumulative - previous_cumulative
-    crossed = segmented_cumulative > thresholds.index_select(
-        dim=0, index=row_indices
-    )
-    sentinel = torch.full_like(
-        local_offsets, int(probabilities.shape[0])
-    )
-    crossed_offsets = torch.where(crossed, local_offsets, sentinel)
-    first_offsets = torch.full(
-        legal_choices.choice_counts.shape,
-        int(probabilities.shape[0]),
-        dtype=torch.long,
-        device=probabilities.device,
-    ).scatter_reduce(
-        dim=0,
-        index=row_indices,
-        src=crossed_offsets,
-        reduce="amin",
-        include_self=True,
-    )
-    fallback_offsets = (legal_choices.choice_counts - 1).clamp(min=0)
+    safe_last_offsets = last_offsets.clamp(min=0)
     return torch.where(
-        first_offsets <= fallback_offsets,
+        first_offsets <= safe_last_offsets,
         first_offsets,
-        fallback_offsets,
+        safe_last_offsets,
     )
 
 
-def _scatter_row_max(
-    *, values: Tensor, row_indices: Tensor, row_count: int
+def _safe_candidate_masks(
+    *, masks: Tensor, has_legal_token: Tensor
 ) -> Tensor:
-    return torch.full(
-        (row_count,),
-        -torch.inf,
-        dtype=values.dtype,
-        device=values.device,
-    ).scatter_reduce(
-        dim=0,
-        index=row_indices,
-        src=values,
-        reduce="amax",
-        include_self=True,
-    )
-
-
-def _scatter_row_sum(
-    *, values: Tensor, row_indices: Tensor, row_count: int
-) -> Tensor:
-    return torch.zeros(
-        (row_count,), dtype=values.dtype, device=values.device
-    ).scatter_add(dim=0, index=row_indices, src=values)
-
-
-def _empty_choice_sample(
-    *, argument_logits: Tensor, error_code: Tensor
-) -> SampledActionTokens:
-    batch_size = int(argument_logits.shape[0])
-    return SampledActionTokens(
-        token_ids=torch.full(
-            (batch_size,),
-            SEMANTIC_CODEC.argument_pass_id,
-            dtype=torch.long,
-            device=argument_logits.device,
-        ),
-        selected_choice_offsets=torch.zeros(
-            (batch_size,),
-            dtype=torch.long,
-            device=argument_logits.device,
-        ),
-        selected_log_probabilities=torch.zeros(
-            (batch_size,),
-            dtype=argument_logits.dtype,
-            device=argument_logits.device,
-        ),
-        entropies=torch.zeros(
-            (batch_size,),
-            dtype=argument_logits.dtype,
-            device=argument_logits.device,
-        ),
-        error_code=error_code,
+    if int(masks.shape[1]) == 0:
+        return torch.ones_like(masks)
+    first_column = torch.zeros_like(masks)
+    first_column[:, 0] = True
+    return torch.where(
+        has_legal_token.unsqueeze(1),
+        masks,
+        first_column,
     )
 
 

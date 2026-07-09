@@ -4,12 +4,14 @@ from .connection import (
     ConnectionPolicyRequestReceiver,
     ConnectionPolicyRequestSender,
     ConnectionPolicyResponseReceiver,
-    send_policy_response,
+    ConnectionPolicyResponseSender,
+    send_policy_response_batch,
 )
 
 __all__ = (
     "ConnectionPolicyRequestReceiver",
     "ConnectionPolicyRequestSender",
     "ConnectionPolicyResponseReceiver",
-    "send_policy_response",
+    "ConnectionPolicyResponseSender",
+    "send_policy_response_batch",
 )

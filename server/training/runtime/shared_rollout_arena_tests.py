@@ -7,7 +7,6 @@ import multiprocessing as mp
 import torch
 
 from server.result import Ok, Rejected
-from server.training.policy_sampling import DecisionHandle
 from server.training.returns import ReturnCommit
 from server.training.runtime.shared_rollout_arena import (
     SharedRolloutArenaGroup,
@@ -24,47 +23,78 @@ from server.training.runtime.shared_rollout_arena.types import (
 )
 
 
-def test_append_round_partially_fills_and_filters_rank() -> None:
-    group_result = _arena_group(worker_count=1, capacity=2)
+def test_read_rank_batch_reads_assigned_worker_arenas() -> None:
+    group_result = _arena_group(worker_count=2, capacity=1)
     assert isinstance(group_result, Ok)
     group = group_result.value
     try:
-        writer = attach_rollout_arena_writer(group.handles[0])
-        reader = attach_rollout_arena_reader(group.handles)
+        first_writer = attach_rollout_arena_writer(group.handles[0])
+        second_writer = attach_rollout_arena_writer(group.handles[1])
+        first_reader = attach_rollout_arena_reader((group.handles[0],))
+        second_reader = attach_rollout_arena_reader((group.handles[1],))
         try:
-            append_result = writer.append_round(
+            first_append = first_writer.append_round(
                 policy_version=3,
-                metrics=_metrics(decision_count=3),
+                metrics=_metrics(decision_count=1),
                 commit=_commit(
                     policy_version=3,
-                    model_ranks=(0, 1, 0),
+                    model_ranks=(1,),
+                    step_counts=(2,),
+                    return_values=(10.0,),
                 ),
             )
-            assert isinstance(append_result, Ok)
-            assert append_result.value.accepted_sample_count == 2
-            assert append_result.value.dropped_sample_count == 1
-            assert append_result.value.arena_full
+            second_append = second_writer.append_round(
+                policy_version=3,
+                metrics=_metrics(decision_count=1),
+                commit=_commit(
+                    policy_version=3,
+                    model_ranks=(0,),
+                    step_counts=(3,),
+                    return_values=(20.0,),
+                ),
+            )
+            assert isinstance(first_append, Ok)
+            assert first_append.value.accepted_sample_count == 1
+            assert first_append.value.dropped_sample_count == 0
+            assert first_append.value.arena_full
+            assert isinstance(second_append, Ok)
+            assert second_append.value.accepted_sample_count == 1
+            assert second_append.value.dropped_sample_count == 0
+            assert second_append.value.arena_full
 
-            rank0 = reader.read_rank_batch(
-                policy_version=3, model_rank_index=0
+            device = torch.device("cpu")
+            rank0 = first_reader.read_rank_batch(
+                policy_version=3, model_rank_index=0, device=device
             )
             assert isinstance(rank0, Ok)
-            assert int(rank0.value.slot_indices.shape[0]) == 1
+            assert int(rank0.value.row_indices.shape[0]) == 1
             assert torch.equal(
-                rank0.value.return_values, torch.tensor((1.0,))
+                rank0.value.step_counts, torch.tensor((2,))
             )
+            assert torch.equal(
+                rank0.value.return_values, torch.tensor((10.0,))
+            )
+            assert rank0.value.total_step_count == 2
+            assert rank0.value.max_step_count == 2
 
-            rank1 = reader.read_rank_batch(
-                policy_version=3, model_rank_index=1
+            rank1 = second_reader.read_rank_batch(
+                policy_version=3, model_rank_index=1, device=device
             )
             assert isinstance(rank1, Ok)
-            assert int(rank1.value.slot_indices.shape[0]) == 1
+            assert int(rank1.value.row_indices.shape[0]) == 1
             assert torch.equal(
-                rank1.value.return_values, torch.tensor((2.0,))
+                rank1.value.step_counts, torch.tensor((3,))
             )
+            assert torch.equal(
+                rank1.value.return_values, torch.tensor((20.0,))
+            )
+            assert rank1.value.total_step_count == 3
+            assert rank1.value.max_step_count == 3
         finally:
-            writer.close()
-            reader.close()
+            first_writer.close()
+            second_writer.close()
+            first_reader.close()
+            second_reader.close()
     finally:
         close_shared_rollout_arenas(group)
 
@@ -104,11 +134,73 @@ def test_wait_all_rollout_arenas_full_uses_predicate_state() -> None:
             assert isinstance(full_wait, Ok)
             assert full_wait.value.sample_count == 2
             assert full_wait.value.round_count == 2
+            assert full_wait.value.total_step_count == 2
+            assert full_wait.value.max_step_count == 1
         finally:
             first_writer.close()
             second_writer.close()
     finally:
         close_shared_rollout_arenas(group)
+
+
+def test_append_round_accepts_slack_after_target_full() -> None:
+    group_result = _arena_group(worker_count=1, capacity=1)
+    assert isinstance(group_result, Ok)
+    group = group_result.value
+    try:
+        writer = attach_rollout_arena_writer(group.handles[0])
+        try:
+            first_append = writer.append_round(
+                policy_version=3,
+                metrics=_metrics(decision_count=1),
+                commit=_commit(policy_version=3, model_ranks=(0,)),
+            )
+            second_append = writer.append_round(
+                policy_version=3,
+                metrics=_metrics(decision_count=1),
+                commit=_commit(policy_version=3, model_ranks=(0,)),
+            )
+            snapshot = snapshot_rollout_arenas(
+                group=group,
+                policy_version=3,
+            )
+        finally:
+            writer.close()
+    finally:
+        close_shared_rollout_arenas(group)
+
+    assert isinstance(first_append, Ok)
+    assert first_append.value.arena_full
+    assert isinstance(second_append, Ok)
+    assert second_append.value.accepted_sample_count == 1
+    assert second_append.value.dropped_sample_count == 0
+    assert second_append.value.arena_full
+    assert isinstance(snapshot, Ok)
+    assert snapshot.value.target_sample_count == 1
+    assert snapshot.value.sample_count == 2
+    assert snapshot.value.dropped_sample_count == 0
+
+
+def test_read_rank_batch_allows_empty_assigned_shard() -> None:
+    reader = attach_rollout_arena_reader(())
+    try:
+        result = reader.read_rank_batch(
+            policy_version=3,
+            model_rank_index=1,
+            device=torch.device("cpu"),
+        )
+    finally:
+        reader.close()
+
+    assert isinstance(result, Ok)
+    assert result.value.policy_version == 3
+    assert result.value.model_rank_index == 1
+    assert int(result.value.row_indices.shape[0]) == 0
+    assert int(result.value.step_counts.shape[0]) == 0
+    assert int(result.value.return_values.shape[0]) == 0
+    assert result.value.round_count == 0
+    assert result.value.total_step_count == 0
+    assert result.value.max_step_count == 0
 
 
 def test_reset_rollout_arenas_allows_new_policy_version() -> None:
@@ -141,6 +233,8 @@ def test_reset_rollout_arenas_allows_new_policy_version() -> None:
             )
             assert isinstance(snapshot, Ok)
             assert snapshot.value.sample_count == 1
+            assert snapshot.value.total_step_count == 1
+            assert snapshot.value.max_step_count == 1
         finally:
             writer.close()
     finally:
@@ -155,6 +249,7 @@ def _arena_group(
         context=context,
         worker_count=worker_count,
         samples_per_worker_update=capacity,
+        slack_sample_count=capacity,
         policy_version=3,
     )
 
@@ -173,22 +268,29 @@ def _metrics(*, decision_count: int) -> RolloutRoundMetrics:
 
 
 def _commit(
-    *, policy_version: int, model_ranks: tuple[int, ...]
+    *,
+    policy_version: int,
+    model_ranks: tuple[int, ...],
+    step_counts: tuple[int, ...] | None = None,
+    return_values: tuple[float, ...] | None = None,
 ) -> ReturnCommit:
+    values = (
+        tuple(float(index + 1) for index in range(len(model_ranks)))
+        if return_values is None
+        else return_values
+    )
+    assert len(values) == len(model_ranks)
+    counts = (
+        tuple(1 for _ in model_ranks)
+        if step_counts is None
+        else step_counts
+    )
+    assert len(counts) == len(model_ranks)
     return ReturnCommit(
         policy_version=policy_version,
         first_episode_id=0,
         episode_count=1,
-        decision_handles=tuple(
-            DecisionHandle(
-                model_rank_index=model_rank_index,
-                policy_version=policy_version,
-                slot_index=index,
-                slot_generation=1,
-            )
-            for index, model_rank_index in enumerate(model_ranks)
-        ),
-        return_values=tuple(
-            float(index + 1) for index in range(len(model_ranks))
-        ),
+        row_indices=tuple(index for index in range(len(model_ranks))),
+        step_counts=counts,
+        return_values=values,
     )

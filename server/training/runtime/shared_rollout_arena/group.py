@@ -39,33 +39,36 @@ def create_shared_rollout_arena_group(
     context: SpawnContext,
     worker_count: int,
     samples_per_worker_update: int,
+    slack_sample_count: int,
     policy_version: int = 0,
 ) -> _result.Ok[SharedRolloutArenaGroup] | _result.Rejected:
     """Create one fixed-capacity rollout arena per worker."""
     assert worker_count > 0
     assert samples_per_worker_update > 0
+    assert slack_sample_count >= 0
     assert policy_version >= 0
+    capacity = samples_per_worker_update + slack_sample_count
     handles: list[RolloutArenaHandle] = []
     segments: list[shared_memory.SharedMemory] = []
     try:
         for worker_index in range(worker_count):
             segment = shared_memory.SharedMemory(
                 create=True,
-                size=arena_byte_size(
-                    capacity=samples_per_worker_update
-                ),
+                size=arena_byte_size(capacity=capacity),
             )
             _write_empty_header(
                 segment=segment,
                 policy_version=policy_version,
-                capacity=samples_per_worker_update,
+                capacity=capacity,
+                target_sample_count=samples_per_worker_update,
             )
             condition = context.Condition()
             handles.append(
                 RolloutArenaHandle(
                     worker_index=worker_index,
                     shared_memory_name=segment.name,
-                    capacity=samples_per_worker_update,
+                    capacity=capacity,
+                    target_sample_count=samples_per_worker_update,
                     condition=condition,
                 )
             )
@@ -115,6 +118,7 @@ def snapshot_rollout_arenas(
     assert policy_version >= 0
     snapshot = RolloutArenaSnapshot(
         policy_version=policy_version,
+        target_sample_count=0,
         round_count=0,
         sample_count=0,
         generated_action_count=0,
@@ -123,6 +127,8 @@ def snapshot_rollout_arenas(
         game_over_count=0,
         dropped_sample_count=0,
         cancelled_env_count=0,
+        total_step_count=0,
+        max_step_count=0,
         team0_reward_sum=0.0,
         team1_reward_sum=0.0,
         elapsed_seconds_max=0.0,
@@ -161,6 +167,7 @@ def reset_rollout_arenas(
                     segment=segment,
                     policy_version=policy_version,
                     capacity=handle.capacity,
+                    target_sample_count=handle.target_sample_count,
                 )
                 handle.condition.notify_all()
             finally:
@@ -185,6 +192,7 @@ def header_snapshot(header: RolloutArenaHeader) -> RolloutArenaSnapshot:
     """Convert a header-like object into an aggregate snapshot."""
     return RolloutArenaSnapshot(
         policy_version=header.policy_version,
+        target_sample_count=header.target_sample_count,
         round_count=header.round_count,
         sample_count=header.sample_count,
         generated_action_count=header.generated_action_count,
@@ -193,6 +201,8 @@ def header_snapshot(header: RolloutArenaHeader) -> RolloutArenaSnapshot:
         game_over_count=header.game_over_count,
         dropped_sample_count=header.dropped_sample_count,
         cancelled_env_count=header.cancelled_env_count,
+        total_step_count=header.total_step_count,
+        max_step_count=header.max_step_count,
         team0_reward_sum=header.team0_reward_sum,
         team1_reward_sum=header.team1_reward_sum,
         elapsed_seconds_max=header.elapsed_seconds_max,
@@ -237,12 +247,14 @@ def _write_empty_header(
     segment: shared_memory.SharedMemory,
     policy_version: int,
     capacity: int,
+    target_sample_count: int,
 ) -> None:
     pack_header(
         _segment_buffer(segment),
         header=empty_header(
             policy_version=policy_version,
             capacity=capacity,
+            target_sample_count=target_sample_count,
         ),
     )
 
@@ -268,6 +280,9 @@ def _merge_snapshot(
     assert first.policy_version == second.policy_version
     return RolloutArenaSnapshot(
         policy_version=first.policy_version,
+        target_sample_count=(
+            first.target_sample_count + second.target_sample_count
+        ),
         round_count=first.round_count + second.round_count,
         sample_count=first.sample_count + second.sample_count,
         generated_action_count=(
@@ -286,6 +301,10 @@ def _merge_snapshot(
         cancelled_env_count=(
             first.cancelled_env_count + second.cancelled_env_count
         ),
+        total_step_count=(
+            first.total_step_count + second.total_step_count
+        ),
+        max_step_count=max(first.max_step_count, second.max_step_count),
         team0_reward_sum=(
             first.team0_reward_sum + second.team0_reward_sum
         ),

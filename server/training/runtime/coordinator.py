@@ -14,7 +14,6 @@ from server.training.metrics import (
     append_metric,
     validate_training_metric,
 )
-from server.training.ppo import PPOUpdateStats
 from server.training.runtime.checkpoint_state import (
     RuntimeCheckpointState,
     create_initial_runtime_checkpoint_state,
@@ -29,6 +28,7 @@ from server.training.runtime.telemetry import (
     JsonlTelemetrySink,
     ProcessStage,
     TelemetryEvent,
+    TelemetryMeasurement,
     TelemetrySink,
 )
 from server.training.runtime.training_runtime import (
@@ -211,11 +211,10 @@ def _run_synchronized_training(
     total_rounds = state.total_rounds
     total_samples = state.total_samples
     total_updates = state.total_updates
-    runtime_state = state.state
     start_total_rounds = total_rounds
     start_total_samples = total_samples
     load_result = runtime.load_state(
-        state=runtime_state,
+        state=state.state,
         policy_version=total_updates,
     )
     if isinstance(load_result, Rejected):
@@ -240,6 +239,7 @@ def _run_synchronized_training(
         )
         if isinstance(stage_result, Rejected):
             return stage_result
+        update_cycle_start = time.monotonic()
         update_result = runtime.run_update(
             policy_version=total_updates,
         )
@@ -257,48 +257,42 @@ def _run_synchronized_training(
                 processed_samples=processed_samples,
             ),
             progress_denominator=_progress_denominator(max_samples),
+            measurements=(
+                TelemetryMeasurement(
+                    key="coordinator_update_cycle_seconds",
+                    value=max(
+                        time.monotonic() - update_cycle_start,
+                        0.0,
+                    ),
+                ),
+            ),
         )
         if isinstance(update_stage, Rejected):
             return update_stage
         total_updates += 1
         total_rounds += update.snapshot.round_count
         total_samples += update.snapshot.sample_count
-        checkpoint_stage = _record_coordinator_stage(
-            telemetry_sink=telemetry_sink,
-            run_id=run_id,
-            stage="checkpoint",
-            total_rounds=total_rounds,
-            total_updates=total_updates,
-            progress_numerator=_progress_numerator(
-                max_samples=max_samples,
-                processed_samples=total_samples - start_total_samples,
-            ),
-            progress_denominator=_progress_denominator(max_samples),
-        )
-        if isinstance(checkpoint_stage, Rejected):
-            return checkpoint_stage
-        snapshot_result = runtime.snapshot(policy_version=total_updates)
-        if isinstance(snapshot_result, Rejected):
-            return snapshot_result
-        runtime_state = snapshot_result.value
-        checkpoint_result = _save_checkpoint(
+        checkpoint_path_result = _maybe_save_checkpoint(
             run_dir=run_dir,
+            run_id=run_id,
             model_config=model_config,
             train_config=train_config,
             execution_config=execution_config,
-            state=runtime_state,
+            telemetry_sink=telemetry_sink,
+            runtime=runtime,
+            max_samples=max_samples,
+            start_total_samples=start_total_samples,
             total_rounds=total_rounds,
             total_samples=total_samples,
             total_updates=total_updates,
-            update_stats=update.update_stats,
         )
-        if isinstance(checkpoint_result, Rejected):
-            return checkpoint_result
+        if isinstance(checkpoint_path_result, Rejected):
+            return checkpoint_path_result
         elapsed = max(time.monotonic() - start, 0.000001)
         metric_result = _append_update_metric(
             run_dir=run_dir,
             run_id=run_id,
-            checkpoint_path=checkpoint_result.value,
+            checkpoint_path=checkpoint_path_result.value,
             start_total_rounds=start_total_rounds,
             start_total_samples=start_total_samples,
             total_rounds=total_rounds,
@@ -321,6 +315,65 @@ def _run_synchronized_training(
     )
 
 
+def _maybe_save_checkpoint(
+    *,
+    run_dir: Path,
+    run_id: str,
+    model_config: ModelConfig,
+    train_config: TrainConfig,
+    execution_config: ExecutionConfig,
+    telemetry_sink: TelemetrySink,
+    runtime: TrainingRuntime,
+    max_samples: int,
+    start_total_samples: int,
+    total_rounds: int,
+    total_samples: int,
+    total_updates: int,
+) -> _result.Ok[Path | None] | _result.Rejected:
+    if not _checkpoint_due(
+        total_updates=total_updates,
+        train_config=train_config,
+    ):
+        return Ok(value=None)
+    checkpoint_stage = _record_coordinator_stage(
+        telemetry_sink=telemetry_sink,
+        run_id=run_id,
+        stage="checkpoint",
+        total_rounds=total_rounds,
+        total_updates=total_updates,
+        progress_numerator=_progress_numerator(
+            max_samples=max_samples,
+            processed_samples=total_samples - start_total_samples,
+        ),
+        progress_denominator=_progress_denominator(max_samples),
+    )
+    if isinstance(checkpoint_stage, Rejected):
+        return checkpoint_stage
+    snapshot_result = runtime.snapshot(policy_version=total_updates)
+    if isinstance(snapshot_result, Rejected):
+        return snapshot_result
+    save_result = _save_checkpoint(
+        run_dir=run_dir,
+        model_config=model_config,
+        train_config=train_config,
+        execution_config=execution_config,
+        state=snapshot_result.value,
+        total_rounds=total_rounds,
+        total_samples=total_samples,
+        total_updates=total_updates,
+    )
+    if isinstance(save_result, Rejected):
+        return save_result
+    return Ok(value=save_result.value)
+
+
+def _checkpoint_due(
+    *, total_updates: int, train_config: TrainConfig
+) -> bool:
+    assert total_updates > 0
+    return total_updates % train_config.checkpoint_every_updates == 0
+
+
 def _save_checkpoint(
     *,
     run_dir: Path,
@@ -331,7 +384,6 @@ def _save_checkpoint(
     total_rounds: int,
     total_samples: int,
     total_updates: int,
-    update_stats: PPOUpdateStats,
 ) -> _result.Ok[Path] | _result.Rejected:
     latest_checkpoint = run_dir / _CHECKPOINTS_DIR_NAME / "latest.json"
     archive_checkpoint = _archive_checkpoint_path(
@@ -375,23 +427,20 @@ def _archive_checkpoint_path(
 ) -> Path | None:
     if train_config.checkpoint_retention_updates == 0:
         return None
-    if (
-        total_updates > 0
-        and total_updates % train_config.checkpoint_every_updates == 0
-    ):
-        return (
-            run_dir
-            / _CHECKPOINTS_DIR_NAME
-            / f"update-{total_updates}.json"
-        )
-    return None
+    assert _checkpoint_due(
+        total_updates=total_updates,
+        train_config=train_config,
+    )
+    return (
+        run_dir / _CHECKPOINTS_DIR_NAME / f"update-{total_updates}.json"
+    )
 
 
 def _append_update_metric(
     *,
     run_dir: Path,
     run_id: str,
-    checkpoint_path: Path,
+    checkpoint_path: Path | None,
     start_total_rounds: int,
     start_total_samples: int,
     total_rounds: int,
@@ -446,9 +495,6 @@ def _append_update_metric(
         ppo_argument_select_seconds=(
             stats.profile.argument_select_seconds
         ),
-        ppo_argument_prefix_tensorize_seconds=(
-            stats.profile.argument_prefix_tensorize_seconds
-        ),
         ppo_argument_decode_seconds=(
             stats.profile.argument_decode_seconds
         ),
@@ -462,22 +508,24 @@ def _append_update_metric(
         ppo_argument_decode_fraction=(
             stats.profile.argument_decode_fraction
         ),
-        ppo_argument_prefix_batch_count=(
-            stats.profile.argument_prefix_batch_count
+        ppo_argument_trace_batch_count=(
+            stats.profile.argument_trace_batch_count
         ),
-        ppo_argument_prefix_row_count=(
-            stats.profile.argument_prefix_row_count
+        ppo_argument_trace_row_count=(
+            stats.profile.argument_trace_row_count
         ),
-        ppo_argument_prefix_token_count=(
-            stats.profile.argument_prefix_token_count
+        ppo_argument_trace_token_count=(
+            stats.profile.argument_trace_token_count
         ),
-        ppo_argument_prefix_valid_token_count=(
-            stats.profile.argument_prefix_valid_token_count
+        ppo_argument_trace_valid_token_count=(
+            stats.profile.argument_trace_valid_token_count
         ),
-        ppo_argument_prefix_padding_token_count=(
-            stats.profile.argument_prefix_padding_token_count
+        ppo_argument_trace_padding_token_count=(
+            stats.profile.argument_trace_padding_token_count
         ),
-        checkpoint_path=str(checkpoint_path),
+        checkpoint_path=(
+            None if checkpoint_path is None else str(checkpoint_path)
+        ),
     )
     validation = validate_training_metric(metric)
     if isinstance(validation, Rejected):
@@ -494,6 +542,7 @@ def _record_coordinator_stage(
     total_updates: int,
     progress_numerator: int,
     progress_denominator: int,
+    measurements: tuple[TelemetryMeasurement, ...] = (),
 ) -> _result.Ok[None] | _result.Rejected:
     process_stage: ProcessStage = stage
     return telemetry_sink.append(
@@ -506,6 +555,7 @@ def _record_coordinator_stage(
             progress_numerator=progress_numerator,
             progress_denominator=progress_denominator,
             unix_seconds=time.time(),
+            measurements=measurements,
         )
     )
 

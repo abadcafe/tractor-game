@@ -17,21 +17,21 @@ from server.training.legal_actions import (
     build_legal_action_index,
 )
 from server.training.model import (
-    ArgumentPrefixScores,
+    ArgumentDecodeSession,
     ObservationEncoding,
     TractorPolicyModel,
 )
 from server.training.observation import Observation, build_observation
-from server.training.policy_inference_wire import (
+from server.training.policy_inference_batch import (
     DevicePolicyRequestBatch,
-    PolicyRequestWire,
-    PolicyRequestWireBatch,
-    build_policy_request_wire,
-)
-from server.training.runtime.model_rank.staging import (
-    stage_policy_request_wires,
+    PolicyRequestInput,
+    PolicyRequestRoute,
+    materialize_policy_request_inputs,
 )
 from server.training.sampling import PolicyDecisionKey
+from server.training.semantic_action_plan import (
+    SemanticActionSampler,
+)
 from server.training.semantic_actions import (
     SemanticArgument,
 )
@@ -40,7 +40,6 @@ from server.training.semantic_actions.codec import (
     semantic_argument_id,
 )
 from server.training.tensorize import (
-    ArgumentPrefixTensorBatch,
     ObservationTensorBatch,
 )
 from server.training.torch_policy import TorchTrainingPolicy
@@ -86,17 +85,20 @@ def test_decide_scores_sampled_argument_with_distribution() -> None:
         config=model_config,
         device=torch.device("cpu"),
         requests=_request_batch(observation, legal_actions),
+        sampler=_sampler(batch_size=1),
     )
     assert isinstance(sample_result, Ok)
     sample = sample_result.value
     first_token_id = int(sample.selected_token_ids_padded[0, 0])
     first_legal_token_ids = _legal_choice_ids(
-        sample.legal_choice_ids_padded[0, 0],
-        sample.legal_choice_masks_padded[0, 0],
+        sample.choice_token_ids[0, 0],
+        sample.choice_masks[0, 0],
     )
-    selected_offset = int(sample.selected_choice_offsets_padded[0, 0])
-    expected_first_log_probabilities = torch.log_softmax(
-        torch.tensor([1.0, 3.0], dtype=torch.float32), dim=0
+    selected_offset = int(sample.selected_choice_offsets[0, 0])
+    expected_first_log_probabilities = _masked_candidate_log_probs(
+        logits=logits,
+        candidate_ids=sample.choice_token_ids[0, 0],
+        candidate_mask=sample.choice_masks[0, 0],
     )
     expected_log_probability = float(
         expected_first_log_probabilities[selected_offset]
@@ -196,7 +198,9 @@ def test_sample_policy_batch_rejects_empty_legal_choices() -> None:
         observation_batch=request.observation_batch,
         action_plan_batch=malformed_action_plan,
         sampling_thresholds=request.sampling_thresholds,
+        generation_step_counts=request.generation_step_counts,
         policy_versions=request.policy_versions,
+        padded_generation_steps=request.padded_generation_steps,
     )
 
     result = sample_policy_batch(
@@ -204,6 +208,7 @@ def test_sample_policy_batch_rejects_empty_legal_choices() -> None:
         config=model_config,
         device=torch.device("cpu"),
         requests=malformed_request,
+        sampler=_sampler(batch_size=1),
     )
 
     assert isinstance(result, Rejected)
@@ -289,8 +294,7 @@ async def test_decide_reuses_observation_encoding_for_full_trace() -> (
     assert model.encode_calls == 1
     assert model.score_batch_sizes == [1, 1]
     assert model.score_prefix_widths == [1, 2]
-    assert decision.decision_handle.slot_index == 0
-    assert decision.decision_handle.slot_generation == 1
+    assert decision.decision_handle.row_index == 0
     assert decision.choice_count == len(
         decision.action.semantic_trace.arguments
     )
@@ -332,14 +336,15 @@ def test_sample_policy_batch_batches_observation_encoding() -> None:
             legal_actions,
             batch_size=2,
         ),
+        sampler=_sampler(batch_size=2),
     )
 
     assert isinstance(result, Ok)
     assert len(result.value.policy_versions) == 2
     assert int(result.value.selected_token_ids_padded.shape[0]) == 2
     assert model.encode_calls == 1
-    assert model.score_batch_sizes == [2]
-    assert model.score_prefix_widths == [1]
+    assert model.score_batch_sizes == [2, 2]
+    assert model.score_prefix_widths == [1, 2]
 
 
 class _FixedArgumentModel(TractorPolicyModel):
@@ -357,22 +362,51 @@ class _FixedArgumentModel(TractorPolicyModel):
         self.encode_calls += 1
         return super().encode_observations(observation)
 
-    def score_argument_prefixes(
+    def begin_argument_decode_session(
         self,
         encoding: ObservationEncoding,
-        prefix: ArgumentPrefixTensorBatch,
-    ) -> ArgumentPrefixScores:
-        batch_size = int(prefix.argument_ids.shape[0])
-        self.score_batch_sizes.append(batch_size)
-        self.score_prefix_widths.append(
-            int(prefix.argument_ids.shape[1])
+        *,
+        max_steps: int,
+    ) -> ArgumentDecodeSession:
+        return _FixedArgumentDecodeSession(
+            argument_logits=self._fixed_argument_logits,
+            batch_size=int(encoding.memory.shape[0]),
+            device=encoding.memory.device,
+            score_batch_sizes=self.score_batch_sizes,
+            score_prefix_widths=self.score_prefix_widths,
+            max_steps=max_steps,
         )
-        logits = self._fixed_argument_logits.to(
-            prefix.argument_ids.device
-        )
-        return ArgumentPrefixScores(
-            argument_logits=logits.repeat(batch_size, 1),
-        )
+
+
+class _FixedArgumentDecodeSession(ArgumentDecodeSession):
+    def __init__(
+        self,
+        *,
+        argument_logits: Tensor,
+        batch_size: int,
+        device: torch.device,
+        score_batch_sizes: list[int],
+        score_prefix_widths: list[int],
+        max_steps: int,
+    ) -> None:
+        self._argument_logits = argument_logits
+        self._batch_size = batch_size
+        self._device = device
+        self._score_batch_sizes = score_batch_sizes
+        self._score_prefix_widths = score_prefix_widths
+        self._max_steps = max_steps
+        self._step_index = 0
+
+    def next_logits(self) -> Tensor:
+        self._score_batch_sizes.append(self._batch_size)
+        self._score_prefix_widths.append(self._step_index + 1)
+        logits = self._argument_logits.to(self._device)
+        return logits.repeat(self._batch_size, 1)
+
+    def advance(self, selected_token_ids: Tensor) -> None:
+        assert selected_token_ids.shape == (self._batch_size,)
+        self._step_index += 1
+        assert self._step_index < self._max_steps
 
 
 def _decision_key(*, decision_index: int = 0) -> PolicyDecisionKey:
@@ -391,25 +425,32 @@ def _request_batch(
     *,
     batch_size: int = 1,
 ) -> DevicePolicyRequestBatch:
-    wires: list[PolicyRequestWire] = []
-    for index in range(batch_size):
-        wire_result = build_policy_request_wire(
-            max_observation_tokens=512,
-            worker_index=0,
-            request_id=index,
-            observation=observation,
-            legal_actions=legal_actions,
-            decision_key=_decision_key(decision_index=index),
-        )
-        assert isinstance(wire_result, Ok)
-        wires.append(wire_result.value)
-    staged_result = stage_policy_request_wires(
-        requests=PolicyRequestWireBatch(requests=tuple(wires)),
+    result = materialize_policy_request_inputs(
+        requests=tuple(
+            PolicyRequestInput(
+                route=PolicyRequestRoute(
+                    worker_index=0,
+                    request_id=index,
+                ),
+                observation=observation,
+                legal_actions=legal_actions,
+                decision_key=_decision_key(decision_index=index),
+            )
+            for index in range(batch_size)
+        ),
+        batch_capacity=batch_size,
         max_observation_tokens=512,
         device=torch.device("cpu"),
     )
-    assert isinstance(staged_result, Ok)
-    return staged_result.value.device_batch
+    assert isinstance(result, Ok)
+    return result.value
+
+
+def _sampler(*, batch_size: int) -> SemanticActionSampler:
+    return SemanticActionSampler.create(
+        batch_capacity=batch_size,
+        device=torch.device("cpu"),
+    )
 
 
 def _legal_choice_ids(ids: Tensor, mask: Tensor) -> tuple[int, ...]:
@@ -420,3 +461,19 @@ def _legal_choice_ids(ids: Tensor, mask: Tensor) -> tuple[int, ...]:
         for index in range(int(cpu_ids.shape[0]))
         if bool(cpu_mask[index].item())
     )
+
+
+def _masked_candidate_log_probs(
+    *, logits: Tensor, candidate_ids: Tensor, candidate_mask: Tensor
+) -> Tensor:
+    index = candidate_ids.detach().cpu().to(dtype=torch.long)
+    candidate_logits = logits.index_select(
+        dim=0,
+        index=index,
+    )
+    masked_logits = torch.where(
+        candidate_mask.detach().cpu(),
+        candidate_logits,
+        torch.full_like(candidate_logits, -torch.inf),
+    )
+    return torch.log_softmax(masked_logits, dim=0)

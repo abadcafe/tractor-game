@@ -12,6 +12,7 @@ from server.training.semantic_action_plan.spec import (
     ACTION_FACE_COUNT,
     CompiledActionSpec,
 )
+from server.training.semantic_actions.codec import SEMANTIC_CODEC
 
 ACTION_KIND_EMPTY = 0
 ACTION_KIND_TRACE_SET = 1
@@ -68,6 +69,29 @@ def compile_legal_action_frame(
     return action_plan_frame_from_spec(
         compile_legal_action_spec(legal_action)
     )
+
+
+def action_plan_generation_step_count(
+    action_plan: ActionPlanFrame,
+) -> int:
+    """Return the maximum semantic token count for one action plan."""
+    if action_plan.kind_code == ACTION_KIND_EMPTY:
+        return 1
+    if action_plan.kind_code == ACTION_KIND_TRACE_SET:
+        return max(len(trace) for trace in action_plan.trace_tokens)
+    if action_plan.kind_code == ACTION_KIND_LEAD:
+        assert (
+            action_plan.max_select <= SEMANTIC_CODEC.max_argument_tokens
+        )
+        return max(action_plan.max_select + 1, 1)
+    if action_plan.exact_select >= 0:
+        assert (
+            action_plan.exact_select
+            <= SEMANTIC_CODEC.max_argument_tokens
+        )
+        return max(action_plan.exact_select, 1)
+    assert action_plan.max_select <= SEMANTIC_CODEC.max_argument_tokens
+    return max(action_plan.max_select, 1)
 
 
 def action_plan_frame_from_spec(

@@ -101,7 +101,8 @@ def render_dashboard_html(
     }}
     .stage-row {{
       display: grid;
-      grid-template-columns: 150px minmax(160px, 1fr) 110px 110px;
+      grid-template-columns:
+        150px minmax(160px, 1fr) 110px 110px minmax(220px, 1fr);
       align-items: center;
       gap: 10px;
       padding: 8px 0;
@@ -172,10 +173,7 @@ def render_dashboard_html(
       'last_average_action_choices',
       'policy_loss', 'value_loss', 'entropy', 'approx_kl',
       'clip_fraction', 'ppo_update_seconds', 'ppo_backward_seconds',
-      'ppo_optimizer_step_seconds',
-      'model_rank_inference_batch_size', 'inference_frame_bytes',
-      'inference_transport_wait_seconds',
-      'model_rank_inference_seconds'
+      'ppo_optimizer_step_seconds'
     ];
 
     async function fetchJsonl(path) {{
@@ -274,9 +272,28 @@ def render_dashboard_html(
         counters.textContent =
           String(record.total_rounds ?? 0) + ' / ' +
           String(record.total_updates ?? 0);
-        row.append(name, bar, stage, counters);
+        const measurements = document.createElement('div');
+        measurements.className = 'stage-text';
+        measurements.textContent = measurementText(record);
+        row.append(name, bar, stage, counters, measurements);
         container.append(row);
       }}
+    }}
+
+    function measurementText(record) {{
+      const reserved = new Set([
+        'run_id', 'process_label', 'stage', 'total_rounds',
+        'total_updates', 'progress_numerator',
+        'progress_denominator', 'unix_seconds'
+      ]);
+      const parts = [];
+      for (const [key, value] of Object.entries(record)) {{
+        if (reserved.has(key)) continue;
+        if (typeof value !== 'number') continue;
+        if (!Number.isFinite(value)) continue;
+        parts.push(key + '=' + numberText(value));
+      }}
+      return parts.join('  ');
     }}
 
     function drawChart(records) {{

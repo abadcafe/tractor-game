@@ -18,7 +18,6 @@ type _ProfileField = Literal[
     "observation_encode_seconds",
     "value_head_seconds",
     "argument_select_seconds",
-    "argument_prefix_tensorize_seconds",
     "argument_decode_seconds",
     "argument_distribution_seconds",
     "backward_seconds",
@@ -36,17 +35,16 @@ class PPOUpdateProfile:
     observation_encode_seconds: float
     value_head_seconds: float
     argument_select_seconds: float
-    argument_prefix_tensorize_seconds: float
     argument_decode_seconds: float
     argument_distribution_seconds: float
     backward_seconds: float
     optimizer_step_seconds: float
     argument_decode_fraction: float
-    argument_prefix_batch_count: int
-    argument_prefix_row_count: int
-    argument_prefix_token_count: int
-    argument_prefix_valid_token_count: int
-    argument_prefix_padding_token_count: int
+    argument_trace_batch_count: int
+    argument_trace_row_count: int
+    argument_trace_token_count: int
+    argument_trace_valid_token_count: int
+    argument_trace_padding_token_count: int
 
 
 def ppo_update_profile_is_finite(profile: PPOUpdateProfile) -> bool:
@@ -58,7 +56,6 @@ def ppo_update_profile_is_finite(profile: PPOUpdateProfile) -> bool:
         profile.observation_encode_seconds,
         profile.value_head_seconds,
         profile.argument_select_seconds,
-        profile.argument_prefix_tensorize_seconds,
         profile.argument_decode_seconds,
         profile.argument_distribution_seconds,
         profile.backward_seconds,
@@ -71,11 +68,11 @@ def ppo_update_profile_is_finite(profile: PPOUpdateProfile) -> bool:
         )
         and math.isfinite(profile.argument_decode_fraction)
         and 0.0 <= profile.argument_decode_fraction <= 1.0
-        and profile.argument_prefix_batch_count >= 0
-        and profile.argument_prefix_row_count >= 0
-        and profile.argument_prefix_token_count >= 0
-        and profile.argument_prefix_valid_token_count >= 0
-        and profile.argument_prefix_padding_token_count >= 0
+        and profile.argument_trace_batch_count >= 0
+        and profile.argument_trace_row_count >= 0
+        and profile.argument_trace_token_count >= 0
+        and profile.argument_trace_valid_token_count >= 0
+        and profile.argument_trace_padding_token_count >= 0
     )
 
 
@@ -90,17 +87,16 @@ def blank_update_profile(*, update_seconds: float) -> PPOUpdateProfile:
         observation_encode_seconds=0.0,
         value_head_seconds=0.0,
         argument_select_seconds=0.0,
-        argument_prefix_tensorize_seconds=0.0,
         argument_decode_seconds=0.0,
         argument_distribution_seconds=0.0,
         backward_seconds=0.0,
         optimizer_step_seconds=0.0,
         argument_decode_fraction=0.0,
-        argument_prefix_batch_count=0,
-        argument_prefix_row_count=0,
-        argument_prefix_token_count=0,
-        argument_prefix_valid_token_count=0,
-        argument_prefix_padding_token_count=0,
+        argument_trace_batch_count=0,
+        argument_trace_row_count=0,
+        argument_trace_token_count=0,
+        argument_trace_valid_token_count=0,
+        argument_trace_padding_token_count=0,
     )
 
 
@@ -140,16 +136,15 @@ class PPOProfileAccumulator:
     observation_encode_seconds: float = 0.0
     value_head_seconds: float = 0.0
     argument_select_seconds: float = 0.0
-    argument_prefix_tensorize_seconds: float = 0.0
     argument_decode_seconds: float = 0.0
     argument_distribution_seconds: float = 0.0
     backward_seconds: float = 0.0
     optimizer_step_seconds: float = 0.0
-    argument_prefix_batch_count: int = 0
-    argument_prefix_row_count: int = 0
-    argument_prefix_token_count: int = 0
-    argument_prefix_valid_token_count: int = 0
-    argument_prefix_padding_token_count: int = 0
+    argument_trace_batch_count: int = 0
+    argument_trace_row_count: int = 0
+    argument_trace_token_count: int = 0
+    argument_trace_valid_token_count: int = 0
+    argument_trace_padding_token_count: int = 0
     _cuda_segments: list[_CudaProfileSegment] = field(
         default_factory=_cuda_profile_segment_list
     )
@@ -202,33 +197,33 @@ class PPOProfileAccumulator:
             )
         )
 
-    def record_argument_prefix_lengths(
-        self, prefix_lengths: Tensor
+    def record_argument_trace_lengths(
+        self, trace_lengths: Tensor
     ) -> None:
         if self.mode != "detailed":
             return
-        assert prefix_lengths.ndim == 1
-        cpu_lengths = prefix_lengths.detach().cpu()
+        assert trace_lengths.ndim == 1
+        cpu_lengths = trace_lengths.detach().cpu()
         lengths = tuple(
             int(cpu_lengths[index].item())
             for index in range(int(cpu_lengths.shape[0]))
         )
-        self._record_argument_prefix_length_values(lengths)
+        self._record_argument_trace_length_values(lengths)
 
-    def _record_argument_prefix_length_values(
-        self, prefix_lengths: tuple[int, ...]
+    def _record_argument_trace_length_values(
+        self, trace_lengths: tuple[int, ...]
     ) -> None:
-        assert prefix_lengths
-        assert all(length >= 0 for length in prefix_lengths)
-        row_count = len(prefix_lengths)
-        valid_token_count = sum(length + 1 for length in prefix_lengths)
-        max_token_count = max(length + 1 for length in prefix_lengths)
+        assert trace_lengths
+        assert all(length >= 0 for length in trace_lengths)
+        row_count = len(trace_lengths)
+        valid_token_count = sum(trace_lengths)
+        max_token_count = max(trace_lengths)
         token_count = row_count * max_token_count
-        self.argument_prefix_batch_count += 1
-        self.argument_prefix_row_count += row_count
-        self.argument_prefix_token_count += token_count
-        self.argument_prefix_valid_token_count += valid_token_count
-        self.argument_prefix_padding_token_count += (
+        self.argument_trace_batch_count += 1
+        self.argument_trace_row_count += row_count
+        self.argument_trace_token_count += token_count
+        self.argument_trace_valid_token_count += valid_token_count
+        self.argument_trace_padding_token_count += (
             token_count - valid_token_count
         )
 
@@ -260,9 +255,6 @@ class PPOProfileAccumulator:
             observation_encode_seconds=self.observation_encode_seconds,
             value_head_seconds=self.value_head_seconds,
             argument_select_seconds=self.argument_select_seconds,
-            argument_prefix_tensorize_seconds=(
-                self.argument_prefix_tensorize_seconds
-            ),
             argument_decode_seconds=self.argument_decode_seconds,
             argument_distribution_seconds=(
                 self.argument_distribution_seconds
@@ -270,16 +262,16 @@ class PPOProfileAccumulator:
             backward_seconds=self.backward_seconds,
             optimizer_step_seconds=self.optimizer_step_seconds,
             argument_decode_fraction=decode_fraction,
-            argument_prefix_batch_count=(
-                self.argument_prefix_batch_count
+            argument_trace_batch_count=(
+                self.argument_trace_batch_count
             ),
-            argument_prefix_row_count=self.argument_prefix_row_count,
-            argument_prefix_token_count=self.argument_prefix_token_count,
-            argument_prefix_valid_token_count=(
-                self.argument_prefix_valid_token_count
+            argument_trace_row_count=self.argument_trace_row_count,
+            argument_trace_token_count=self.argument_trace_token_count,
+            argument_trace_valid_token_count=(
+                self.argument_trace_valid_token_count
             ),
-            argument_prefix_padding_token_count=(
-                self.argument_prefix_padding_token_count
+            argument_trace_padding_token_count=(
+                self.argument_trace_padding_token_count
             ),
         )
 
@@ -314,9 +306,6 @@ class PPOProfileAccumulator:
             return
         if field_name == "argument_select_seconds":
             self.argument_select_seconds += seconds
-            return
-        if field_name == "argument_prefix_tensorize_seconds":
-            self.argument_prefix_tensorize_seconds += seconds
             return
         if field_name == "argument_decode_seconds":
             self.argument_decode_seconds += seconds

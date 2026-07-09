@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 
 import pytest
 import torch
@@ -23,10 +24,10 @@ from server.training.policy import PolicyDecision
 from server.training.policy_sampling import DecisionHandle
 from server.training.sampling import PolicyDecisionKey
 from server.training.semantic_action_plan import (
-    advance_action_state,
+    SemanticActionSampler,
+    SemanticArgumentLogitDecoder,
+    action_plan_generation_step_count,
     compile_legal_action_frame,
-    initial_action_state,
-    legal_token_choices,
     plan_batch_to_device,
     semantic_trace_from_token_ids,
 )
@@ -36,6 +37,22 @@ from server.training.semantic_actions import (
 from server.training.semantic_actions.codec import SEMANTIC_CODEC
 from server.training.tokens import GlobalFieldToken, RoundFieldToken
 from server.training.trajectory import TrajectoryRecorder
+
+
+@dataclass(slots=True)
+class _ZeroLogitDecoder:
+    batch_size: int
+    device: torch.device
+
+    def next_logits(self) -> torch.Tensor:
+        return torch.zeros(
+            (self.batch_size, SEMANTIC_CODEC.argument_vocab_size),
+            dtype=torch.float32,
+            device=self.device,
+        )
+
+    def advance(self, selected_token_ids: torch.Tensor) -> None:
+        assert selected_token_ids.shape == (self.batch_size,)
 
 
 class FirstCardPlayPolicy:
@@ -60,8 +77,7 @@ class FirstCardPlayPolicy:
                 decision_handle=DecisionHandle(
                     model_rank_index=0,
                     policy_version=decision_key.policy_version,
-                    slot_index=decision_key.decision_index,
-                    slot_generation=0,
+                    row_index=decision_key.decision_index,
                 ),
                 choice_count=len(
                     decoded.value.semantic_trace.arguments
@@ -74,26 +90,36 @@ def _first_legal_trace(
     legal_actions: LegalActionIndex,
 ) -> Ok[SemanticArgumentTrace] | Rejected:
     device = torch.device("cpu")
-    batch = plan_batch_to_device(
-        (compile_legal_action_frame(legal_actions),), device=device
+    action_plan = compile_legal_action_frame(legal_actions)
+    generation_steps = action_plan_generation_step_count(action_plan)
+    batch = plan_batch_to_device((action_plan,), device=device)
+
+    logit_decoder: SemanticArgumentLogitDecoder = _ZeroLogitDecoder(
+        batch_size=1, device=device
     )
-    state = initial_action_state(batch)
-    for _ in range(SEMANTIC_CODEC.max_argument_tokens):
-        if bool(state.done[0].item()):
-            trace_ids = tuple(
-                int(state.selected_token_ids[0, index].item())
-                for index in range(int(state.step_counts[0].item()))
-            )
-            return semantic_trace_from_token_ids(trace_ids)
-        choices = legal_token_choices(batch=batch, state=state)
-        assert int(choices.choice_counts[0].item()) > 0
-        state = advance_action_state(
-            batch=batch,
-            state=state,
-            selected_token_ids=choices.token_ids[0].view(1),
-            choice_counts=choices.choice_counts,
-        )
-    assert False
+    sampler = SemanticActionSampler.create(
+        batch_capacity=1, device=device
+    )
+    sample_result = sampler.sample(
+        action_batch=batch,
+        generation_step_counts=torch.tensor(
+            (generation_steps,), dtype=torch.long, device=device
+        ),
+        sampling_thresholds=torch.zeros(
+            (1, generation_steps), dtype=torch.float64, device=device
+        ),
+        padded_generation_steps=generation_steps,
+        logit_decoder=logit_decoder,
+    )
+    if isinstance(sample_result, Rejected):
+        return sample_result
+    sample = sample_result.value
+    step_count = int(sample.step_counts[0].item())
+    trace_ids = tuple(
+        int(sample.selected_token_ids_padded[0, index].item())
+        for index in range(step_count)
+    )
+    return semantic_trace_from_token_ids(trace_ids)
 
 
 class CapturingFirstCardPlayPolicy(FirstCardPlayPolicy):

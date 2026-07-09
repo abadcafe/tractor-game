@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol, cast
 
 import torch
@@ -21,7 +22,6 @@ from server.training.ppo.distributed import (
 )
 from server.training.ppo.gradients import (
     clip_grad_norm_on_device,
-    reject_if_gradients_non_finite,
 )
 from server.training.ppo.loss_module import (
     MinibatchLoss,
@@ -30,10 +30,12 @@ from server.training.ppo.loss_module import (
 from server.training.ppo.minibatch import TensorizedPPOMinibatch
 from server.training.ppo.optimizer import PPOOptimizer
 from server.training.ppo.prepared_batch import (
+    PPOEpochSchedule,
     PreparedPPOBatch,
     empty_ppo_minibatch,
     prepare_ppo_batch,
-    prepared_ppo_minibatch,
+    prepare_ppo_epoch_schedule,
+    prepared_ppo_epoch_minibatch,
 )
 from server.training.ppo.profile import (
     PPOProfileAccumulator,
@@ -45,16 +47,25 @@ from server.training.ppo.stats import (
 )
 from server.training.ppo.sync import (
     positive_count_value,
-    synchronized_count_max,
     synchronized_count_sum,
+    synchronized_count_vector_sum,
 )
 from server.training.ppo.update_input import PPOUpdateInput
+from server.training.ppo.validation import (
+    PPO_APPROX_KL_NONFINITE,
+    PPO_CLIP_FRACTION_NONFINITE,
+    PPO_ENTROPY_NONFINITE,
+    PPO_POLICY_LOSS_NONFINITE,
+    PPO_TOTAL_LOSS_NONFINITE,
+    PPO_VALUE_LOSS_NONFINITE,
+    TensorValidationCheck,
+    combine_validation_codes,
+    gradient_validation_code,
+    non_finite_validation_code,
+    validation_rejection_reason,
+)
 from server.training.runtime.config import PPOProfileMode
 from server.training.sampling import ShuffleKey, shuffled_indices
-from server.training.tensor_finiteness import (
-    NamedTensorCheck,
-    reject_if_non_finite,
-)
 
 
 class _AllReduceTensor(Protocol):
@@ -63,6 +74,20 @@ class _AllReduceTensor(Protocol):
 
 _all_reduce_object: object = getattr(dist_functional, "all_reduce")
 _all_reduce_tensor = cast(_AllReduceTensor, _all_reduce_object)
+
+
+@dataclass(frozen=True, slots=True)
+class _MinibatchSpan:
+    start: int
+    end: int
+
+    def __post_init__(self) -> None:
+        assert self.start >= 0
+        assert self.end >= self.start
+
+    def count(self) -> int:
+        """Return sample count in this contiguous epoch span."""
+        return self.end - self.start
 
 
 class PPOTrainer:
@@ -166,17 +191,11 @@ class PPOTrainer:
         if isinstance(normalized_advantages_result, _result.Rejected):
             return normalized_advantages_result
         if batch is not None:
-            normalized_batch = type(batch)(
-                policy_version=batch.policy_version,
-                observation_batch=batch.observation_batch,
-                replay=batch.replay,
-                old_log_probabilities=batch.old_log_probabilities,
-                old_values=batch.old_values,
-                return_values=batch.return_values,
-                raw_advantages=normalized_advantages_result.value,
-            )
             observation_batch_start = profile.mark()
-            prepared_batch = prepare_ppo_batch(batch=normalized_batch)
+            prepared_batch = prepare_ppo_batch(
+                source=batch,
+                advantages=normalized_advantages_result.value,
+            )
             profile.record_elapsed(
                 "observation_batch_seconds",
                 observation_batch_start,
@@ -195,40 +214,51 @@ class PPOTrainer:
         )
         parameters = tuple(self.model.parameters())
         for epoch in range(self.train_config.ppo_epochs):
-            local_minibatches = _local_epoch_minibatches(
+            local_epoch_schedule = _local_epoch_schedule(
                 prepared_batch=prepared_batch,
                 train_config=self.train_config,
                 policy_version=update_input.policy_version,
                 epoch=epoch,
                 device=self.device,
             )
-            minibatch_step_count_result = synchronized_count_max(
-                value=len(local_minibatches),
+            local_minibatches = _local_epoch_minibatch_spans(
+                epoch_schedule=local_epoch_schedule,
+                minibatch_size=self.train_config.minibatch_size,
+            )
+            minibatch_step_count = _global_minibatch_step_bound(
+                global_sample_count=global_sample_count_result.value,
+                minibatch_size=self.train_config.minibatch_size,
+            )
+            local_counts = _local_minibatch_counts(
+                local_minibatches,
+                step_count=minibatch_step_count,
+                device=self.device,
+            )
+            global_counts_result = synchronized_count_vector_sum(
+                values=local_counts,
                 partition=self.update_partition,
                 device=self.device,
             )
-            if isinstance(
-                minibatch_step_count_result, _result.Rejected
+            if isinstance(global_counts_result, _result.Rejected):
+                return global_counts_result
+            global_counts = global_counts_result.value
+            global_count_values = _count_tensor_values(global_counts)
+            for step_index, global_count_value in enumerate(
+                global_count_values
             ):
-                return minibatch_step_count_result
-            for step_index in range(minibatch_step_count_result.value):
-                local_indices = _local_minibatch_or_empty(
+                if global_count_value == 0:
+                    break
+                local_span = _local_minibatch_or_empty(
                     local_minibatches,
                     step_index=step_index,
-                    device=self.device,
                 )
-                local_count = int(local_indices.shape[0])
-                global_count_result = synchronized_count_sum(
-                    value=local_count,
-                    partition=self.update_partition,
-                    device=self.device,
-                )
-                if isinstance(global_count_result, _result.Rejected):
-                    return global_count_result
+                local_count = local_span.count()
+                global_count = global_counts[step_index]
                 tensorized_minibatch = _tensorized_minibatch_for_step(
                     prepared_batch=prepared_batch,
-                    indices=local_indices,
-                    global_count=global_count_result.value,
+                    epoch_schedule=local_epoch_schedule,
+                    span=local_span,
+                    global_count=global_count,
                     device=self.device,
                 )
                 loss_start = profile.mark()
@@ -239,46 +269,65 @@ class PPOTrainer:
                 profile.record_elapsed(
                     "minibatch_loss_seconds", loss_start
                 )
-                if forward_output.rejection_reason is not None:
-                    self.model.zero_grad(set_to_none=True)
-                    return _result.Rejected(
-                        reason=forward_output.rejection_reason
-                    )
                 loss = forward_output.loss
-                assert loss is not None
                 self.model.zero_grad(set_to_none=True)
-                loss_check = _validate_minibatch_loss(loss)
-                if isinstance(loss_check, _result.Rejected):
+                loss_validation_code = combine_validation_codes(
+                    forward_output.validation_code,
+                    _loss_validation_code(loss),
+                )
+                loss_validation_code_result = _sync_validation_code(
+                    code=loss_validation_code,
+                    partition=self.update_partition,
+                )
+                if isinstance(
+                    loss_validation_code_result, _result.Rejected
+                ):
                     self.model.zero_grad(set_to_none=True)
-                    return loss_check
+                    return loss_validation_code_result
+                loss_rejection = validation_rejection_reason(
+                    loss_validation_code_result.value
+                )
+                if loss_rejection is not None:
+                    self.model.zero_grad(set_to_none=True)
+                    return _result.Rejected(reason=loss_rejection)
                 backward_start = profile.mark()
                 torch.autograd.backward(
                     loss.total_loss
                     * _ddp_loss_scale(
                         local_count=local_count,
-                        global_count=global_count_result.value,
+                        global_count=global_count,
                         world_size=self.update_partition.world_size,
                     )
                 )
                 profile.record_elapsed(
                     "backward_seconds", backward_start
                 )
-                gradient_check = reject_if_gradients_non_finite(
-                    parameters
-                )
-                if isinstance(gradient_check, _result.Rejected):
-                    self.model.zero_grad(set_to_none=True)
-                    return gradient_check
+                gradient_code = gradient_validation_code(parameters)
                 clip_grad_norm_on_device(
                     parameters,
                     max_norm=self.train_config.max_grad_norm,
                 )
-                clipped_gradient_check = reject_if_gradients_non_finite(
-                    parameters
+                gradient_code = combine_validation_codes(
+                    gradient_code,
+                    gradient_validation_code(parameters),
                 )
-                if isinstance(clipped_gradient_check, _result.Rejected):
+                gradient_code_result = _sync_validation_code(
+                    code=gradient_code,
+                    partition=self.update_partition,
+                )
+                if isinstance(gradient_code_result, _result.Rejected):
                     self.model.zero_grad(set_to_none=True)
-                    return clipped_gradient_check
+                    return gradient_code_result
+                clipped_gradient_rejection = (
+                    validation_rejection_reason(
+                        gradient_code_result.value
+                    )
+                )
+                if clipped_gradient_rejection is not None:
+                    self.model.zero_grad(set_to_none=True)
+                    return _result.Rejected(
+                        reason=clipped_gradient_rejection
+                    )
                 optimizer_start = profile.mark()
                 self.optimizer.step()
                 profile.record_elapsed(
@@ -318,16 +367,16 @@ class PPOTrainer:
         self.optimizer.load_state_dict(state)
 
 
-def _local_epoch_minibatches(
+def _local_epoch_schedule(
     *,
     prepared_batch: PreparedPPOBatch | None,
     train_config: TrainConfig,
     policy_version: int,
     epoch: int,
     device: torch.device,
-) -> tuple[Tensor, ...]:
+) -> PPOEpochSchedule | None:
     if prepared_batch is None:
-        return ()
+        return None
     sample_count = prepared_batch.sample_count
     shuffled_order = shuffled_indices(
         key=ShuffleKey(
@@ -341,27 +390,44 @@ def _local_epoch_minibatches(
         indices=shuffled_order,
         device=device,
     )
-    return _index_minibatches(
-        shuffled_order_tensor,
-        minibatch_size=train_config.minibatch_size,
+    return prepare_ppo_epoch_schedule(
+        batch=prepared_batch,
+        indices=shuffled_order_tensor,
+    )
+
+
+def _local_epoch_minibatch_spans(
+    *,
+    epoch_schedule: PPOEpochSchedule | None,
+    minibatch_size: int,
+) -> tuple[_MinibatchSpan, ...]:
+    if epoch_schedule is None:
+        return ()
+    return _index_minibatch_spans(
+        sample_count=epoch_schedule.sample_count,
+        minibatch_size=minibatch_size,
     )
 
 
 def _tensorized_minibatch_for_step(
     *,
     prepared_batch: PreparedPPOBatch | None,
-    indices: Tensor,
+    epoch_schedule: PPOEpochSchedule | None,
+    span: _MinibatchSpan,
     global_count: Tensor,
     device: torch.device,
 ) -> TensorizedPPOMinibatch:
-    if prepared_batch is None:
+    if prepared_batch is None or epoch_schedule is None:
         return empty_ppo_minibatch(
             device=device,
             global_count=global_count,
         )
-    return prepared_ppo_minibatch(
+    assert prepared_batch.sample_count == epoch_schedule.sample_count
+    return prepared_ppo_epoch_minibatch(
         batch=prepared_batch,
-        indices=indices,
+        schedule=epoch_schedule,
+        start=span.start,
+        end=span.end,
         global_count=global_count,
     )
 
@@ -377,30 +443,82 @@ def _validate_update_partition(
     return _result.Ok(value=None)
 
 
-def _index_minibatches(
-    indices: Tensor,
-    *,
-    minibatch_size: int,
-) -> tuple[Tensor, ...]:
+def _global_minibatch_step_bound(
+    *, global_sample_count: int, minibatch_size: int
+) -> int:
+    assert global_sample_count > 0
     assert minibatch_size > 0
-    assert indices.ndim == 1
-    result: list[Tensor] = []
-    length = int(indices.shape[0])
-    for start in range(0, length, minibatch_size):
-        result.append(indices[start : start + minibatch_size])
+    return (global_sample_count + minibatch_size - 1) // minibatch_size
+
+
+def _count_tensor_values(counts: Tensor) -> tuple[int, ...]:
+    assert counts.ndim == 1
+    cpu_counts = counts.detach().cpu()
+    return tuple(
+        int(cpu_counts[index].item())
+        for index in range(int(cpu_counts.shape[0]))
+    )
+
+
+def _sync_validation_code(
+    *, code: Tensor, partition: PPOUpdatePartition
+) -> _result.Ok[Tensor] | _result.Rejected:
+    assert code.shape == ()
+    if partition.world_size == 1:
+        return _result.Ok(value=code)
+    if not dist.is_initialized():
+        return _result.Rejected(
+            reason=(
+                "distributed PPO validation sync requires process group"
+            )
+        )
+    return _result.Ok(value=_all_reduce_tensor(code, dist.ReduceOp.MAX))
+
+
+def _index_minibatch_spans(
+    *,
+    sample_count: int,
+    minibatch_size: int,
+) -> tuple[_MinibatchSpan, ...]:
+    assert minibatch_size > 0
+    assert sample_count > 0
+    result: list[_MinibatchSpan] = []
+    for start in range(0, sample_count, minibatch_size):
+        result.append(
+            _MinibatchSpan(
+                start=start,
+                end=min(start + minibatch_size, sample_count),
+            )
+        )
     return tuple(result)
 
 
 def _local_minibatch_or_empty(
-    minibatches: tuple[Tensor, ...],
+    minibatches: tuple[_MinibatchSpan, ...],
     *,
     step_index: int,
-    device: torch.device,
-) -> Tensor:
+) -> _MinibatchSpan:
     assert step_index >= 0
     if step_index < len(minibatches):
         return minibatches[step_index]
-    return torch.empty((0,), dtype=torch.long, device=device)
+    return _MinibatchSpan(start=0, end=0)
+
+
+def _local_minibatch_counts(
+    minibatches: tuple[_MinibatchSpan, ...],
+    *,
+    step_count: int,
+    device: torch.device,
+) -> Tensor:
+    assert step_count >= 0
+    counts = torch.zeros((step_count,), dtype=torch.long, device=device)
+    if not minibatches:
+        return counts
+    values = tuple(minibatch.count() for minibatch in minibatches)
+    counts[: len(values)] = torch.tensor(
+        values, dtype=torch.long, device=device
+    )
+    return counts
 
 
 def _ddp_loss_scale(
@@ -522,34 +640,32 @@ def _finalize_update_stats(
     )
 
 
-def _validate_minibatch_loss(
-    loss: MinibatchLoss,
-) -> _result.Ok[None] | _result.Rejected:
-    return reject_if_non_finite(
+def _loss_validation_code(loss: MinibatchLoss) -> Tensor:
+    return non_finite_validation_code(
         (
-            NamedTensorCheck(
+            TensorValidationCheck(
                 tensor=loss.policy_loss,
-                reason="PPO policy_loss must be finite",
+                code=PPO_POLICY_LOSS_NONFINITE,
             ),
-            NamedTensorCheck(
+            TensorValidationCheck(
                 tensor=loss.value_loss,
-                reason="PPO value_loss must be finite",
+                code=PPO_VALUE_LOSS_NONFINITE,
             ),
-            NamedTensorCheck(
+            TensorValidationCheck(
                 tensor=loss.entropy,
-                reason="PPO entropy must be finite",
+                code=PPO_ENTROPY_NONFINITE,
             ),
-            NamedTensorCheck(
+            TensorValidationCheck(
                 tensor=loss.total_loss,
-                reason="PPO total_loss must be finite",
+                code=PPO_TOTAL_LOSS_NONFINITE,
             ),
-            NamedTensorCheck(
+            TensorValidationCheck(
                 tensor=loss.approx_kl,
-                reason="PPO approx_kl must be finite",
+                code=PPO_APPROX_KL_NONFINITE,
             ),
-            NamedTensorCheck(
+            TensorValidationCheck(
                 tensor=loss.clip_fraction,
-                reason="PPO clip_fraction must be finite",
+                code=PPO_CLIP_FRACTION_NONFINITE,
             ),
         )
     )
