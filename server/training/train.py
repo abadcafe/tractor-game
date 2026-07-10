@@ -628,18 +628,15 @@ def _main_impl(argv: Sequence[str] | None = None) -> None:
         prepared = prepared_result.value
         dashboard_path = prepared.dashboard_path
         training_resume = resume_path
-    try:
-        result = run_training_coordinator(
-            run_dir=run_dir,
-            run_id=run_dir.name,
-            model_config=model_config,
-            train_config=train_config,
-            execution_config=execution_config,
-            max_samples=args.max_samples,
-            resume=training_resume,
-        )
-    except KeyboardInterrupt:
-        _exit_training_interrupted()
+    result = run_training_coordinator(
+        run_dir=run_dir,
+        run_id=run_dir.name,
+        model_config=model_config,
+        train_config=train_config,
+        execution_config=execution_config,
+        max_samples=args.max_samples,
+        resume=training_resume,
+    )
     if isinstance(result, _result.Rejected):
         parser.error(result.reason)
     loop_result = result.value

@@ -8,10 +8,20 @@ import subprocess
 import sys
 from multiprocessing.connection import Connection
 from multiprocessing.context import SpawnContext
+from multiprocessing.process import BaseProcess
 
 from server.training.runtime.process_signals import (
     start_child_process_ignoring_terminal_interrupt,
 )
+
+
+class _StartFailure(Exception):
+    """Test-only process start failure."""
+
+
+class _StartFailureProcess(BaseProcess):
+    def start(self) -> None:
+        raise _StartFailure
 
 
 def _send_current_sigint_handler_is_ignored(
@@ -72,3 +82,17 @@ def test_start_child_process_ignores_sigint_and_restores_parent() -> (
         if process.is_alive():
             process.kill()
             process.join(timeout=5.0)
+
+
+def test_start_child_process_restores_sigint_when_start_fails() -> None:
+    process = _StartFailureProcess()
+    previous = signal.getsignal(signal.SIGINT)
+    failed = False
+
+    try:
+        start_child_process_ignoring_terminal_interrupt(process)
+    except _StartFailure:
+        failed = True
+
+    assert failed
+    assert signal.getsignal(signal.SIGINT) == previous

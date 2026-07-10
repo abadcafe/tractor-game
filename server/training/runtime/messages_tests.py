@@ -117,3 +117,18 @@ def test_decode_worker_command_rejected_response_accepts_context() -> (
     decoded = decode_worker_response(response)
 
     assert decoded is response
+
+
+def test_decode_worker_rejection_accepts_setup_without_policy() -> None:
+    response = WorkerCommandRejected(
+        worker_index=1,
+        command="setup",
+        policy_version=None,
+        reason="setup failed",
+    )
+
+    decoded = decode_worker_response(response)
+
+    assert response.command == "setup"
+    assert response.policy_version is None
+    assert decoded is response
