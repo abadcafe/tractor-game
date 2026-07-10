@@ -8,6 +8,8 @@ import torch
 from torch import Tensor
 
 from server.result import Ok, Rejected
+from server.rules.card_faces import CardFace, FaceCount
+from server.rules.cards import Rank, Suit
 from server.training.semantic_action_plan import (
     ACTION_FACE_COUNT,
     ActionPlanFrame,
@@ -115,6 +117,68 @@ def test_semantic_action_sampler_reuses_workspace() -> None:
     assert int(second.value.choice_masks[0].sum().item()) == 1
 
 
+def test_semantic_action_sampler_flattens_variable_active_steps() -> (
+    None
+):
+    first_id = _select_token_id(Suit.HEARTS, Rank.THREE, 1)
+    second_id = _select_token_id(Suit.HEARTS, Rank.FOUR, 1)
+    third_id = _select_token_id(Suit.HEARTS, Rank.FIVE, 1)
+    action_batch = plan_batch_to_device(
+        (
+            _trace_set_plan(((first_id,),)),
+            _trace_set_plan(((first_id, second_id, third_id),)),
+            _trace_set_plan(((second_id, third_id),)),
+        ),
+        device=torch.device("cpu"),
+    )
+    sampler = SemanticActionSampler.create(
+        batch_capacity=3, device=torch.device("cpu")
+    )
+
+    result = sampler.sample(
+        action_batch=action_batch,
+        generation_step_counts=torch.tensor(
+            (1, 3, 2), dtype=torch.long
+        ),
+        sampling_thresholds=torch.zeros((3, 3), dtype=torch.float64),
+        padded_generation_steps=3,
+        logit_decoder=_ConstantLogitDecoder(
+            logits=torch.zeros(
+                (SEMANTIC_CODEC.argument_vocab_size,),
+                dtype=torch.float32,
+            ),
+            batch_size=3,
+        ),
+    )
+
+    assert isinstance(result, Ok)
+    assert _tensor_tuple(result.value.active_sample_indices) == (
+        0,
+        1,
+        1,
+        1,
+        2,
+        2,
+    )
+    assert _tensor_tuple(result.value.active_step_indices) == (
+        0,
+        0,
+        1,
+        2,
+        0,
+        1,
+    )
+    assert _tensor_tuple(result.value.selected_choice_offsets) == (
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    )
+    assert int(result.value.choice_token_ids.shape[0]) == 6
+
+
 def _sample_trace_set(
     *,
     traces: tuple[tuple[int, ...], ...],
@@ -187,6 +251,15 @@ def _constant_decoder(logits: Tensor) -> SemanticArgumentLogitDecoder:
     return _ConstantLogitDecoder(logits=logits)
 
 
+def _select_token_id(suit: Suit, rank: Rank, count: int) -> int:
+    return semantic_argument_id(
+        SemanticArgument(
+            "select_face_count",
+            FaceCount(face=CardFace(suit, rank), count=count),
+        )
+    )
+
+
 def _pad_thresholds(
     thresholds: tuple[float, ...], generation_steps: int
 ) -> tuple[float, ...]:
@@ -204,3 +277,7 @@ def _token_ids(sample: SemanticActionSampleBatch) -> tuple[int, ...]:
         int(sample.selected_token_ids_padded[0, index].item())
         for index in range(step_count)
     )
+
+
+def _tensor_tuple(values: Tensor) -> tuple[int, ...]:
+    return tuple(int(value.item()) for value in values)

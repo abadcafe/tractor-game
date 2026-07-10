@@ -27,7 +27,7 @@ from server.training.policy_inference_batch import (
     PolicyRequestCompiler,
     PolicyRequestInput,
     PolicyRequestRoute,
-    materialize_compiled_policy_request_batch,
+    materialize_borrowed_policy_request_batch,
 )
 from server.training.sampling import PolicyDecisionKey
 from server.training.semantic_action_plan import (
@@ -445,7 +445,7 @@ def _request_batch(
         ),
     )
     assert isinstance(compiled_result, Ok)
-    result = materialize_compiled_policy_request_batch(
+    result = materialize_borrowed_policy_request_batch(
         batch=compiled_result.value,
         device=torch.device("cpu"),
     )

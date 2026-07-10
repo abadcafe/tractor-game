@@ -471,29 +471,41 @@ def _flat_active_replay(
         device=workspace.device,
     ).unsqueeze(0)
     step_positions = positions.expand(batch_size, -1)
-    sample_positions = torch.arange(
-        batch_size,
-        dtype=torch.long,
-        device=workspace.device,
-    ).unsqueeze(1)
-    sample_positions = sample_positions.expand(
-        -1, padded_generation_steps
-    )
     active_mask = step_positions < workspace.step_counts[
         :batch_size
     ].unsqueeze(1)
+    active_positions = torch.nonzero(
+        active_mask.reshape(-1), as_tuple=False
+    ).flatten()
+    active_sample_indices = torch.div(
+        active_positions,
+        padded_generation_steps,
+        rounding_mode="floor",
+    )
+    active_step_indices = active_positions.remainder(
+        padded_generation_steps
+    )
+    replay_choice_ids = workspace.replay_choice_ids[
+        :batch_size, :padded_generation_steps, :
+    ].reshape(batch_size * padded_generation_steps, -1)
+    replay_choice_masks = workspace.replay_choice_masks[
+        :batch_size, :padded_generation_steps, :
+    ].reshape(batch_size * padded_generation_steps, -1)
+    replay_selected_offsets = workspace.replay_selected_offsets[
+        :batch_size, :padded_generation_steps
+    ].reshape(batch_size * padded_generation_steps)
     return _FlatReplay(
-        active_sample_indices=sample_positions[active_mask],
-        active_step_indices=step_positions[active_mask],
-        choice_token_ids=workspace.replay_choice_ids[
-            :batch_size, :padded_generation_steps, :
-        ][active_mask],
-        choice_masks=workspace.replay_choice_masks[
-            :batch_size, :padded_generation_steps, :
-        ][active_mask],
-        selected_choice_offsets=workspace.replay_selected_offsets[
-            :batch_size, :padded_generation_steps
-        ][active_mask],
+        active_sample_indices=active_sample_indices,
+        active_step_indices=active_step_indices,
+        choice_token_ids=replay_choice_ids.index_select(
+            0, active_positions
+        ),
+        choice_masks=replay_choice_masks.index_select(
+            0, active_positions
+        ),
+        selected_choice_offsets=replay_selected_offsets.index_select(
+            0, active_positions
+        ),
     )
 
 

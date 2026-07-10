@@ -133,6 +133,7 @@ class PolicyRequestIngress:
     _workspace: _FinalPolicyRequestBatchBuilder | None = field(
         init=False
     )
+    _single_device_slot: Tensor | None = field(init=False)
     _pending_frame: _ReceivedPolicyRequestFrame | None = field(
         init=False
     )
@@ -152,6 +153,7 @@ class PolicyRequestIngress:
         self._next_slot_index = 0
         self._builder = None
         self._workspace = None
+        self._single_device_slot = None
         self._pending_frame = None
         self._single_frame = None
         self._recv_start = 0.0
@@ -328,11 +330,15 @@ class PolicyRequestIngress:
             h2d_seconds = 0.0
         else:
             host_frame = frame.slot.tensor[: frame.wire_byte_count]
+            device_slot = self._single_device_frame(
+                byte_count=frame.wire_byte_count
+            )
             device_frame = copy_policy_request_host_frame_to_device(
                 host_frame=host_frame,
-                device_slot=None,
+                device_slot=device_slot,
                 device=self.device,
             )
+            _record_slot_copy_event(slot=frame.slot, device=self.device)
             h2d_seconds = time.perf_counter() - h2d_start
             decode_start = time.perf_counter()
             batch_result = materialize_policy_request_frame(
@@ -372,6 +378,21 @@ class PolicyRequestIngress:
                 frame_count=frame.frame_count,
             )
         )
+
+    def _single_device_frame(self, *, byte_count: int) -> Tensor | None:
+        assert byte_count > 0
+        if self.device.type != "cuda":
+            return None
+        slot = self._single_device_slot
+        if slot is None:
+            slot = torch.empty(
+                (self._max_frame_bytes,),
+                dtype=torch.uint8,
+                device=self.device,
+            )
+            self._single_device_slot = slot
+        assert int(slot.shape[0]) >= byte_count
+        return slot[:byte_count]
 
     def _workspace_for(
         self, template: DevicePolicyRequestBatch

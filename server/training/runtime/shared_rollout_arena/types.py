@@ -6,12 +6,16 @@ from dataclasses import dataclass
 from typing import Protocol
 
 
-class RolloutArenaCondition(Protocol):
-    """Condition interface used by shared rollout arenas."""
+class RolloutArenaLock(Protocol):
+    """Lock interface used to protect one arena header and columns."""
 
     def acquire(self) -> bool: ...
 
     def release(self) -> None: ...
+
+
+class RolloutProgressCondition(RolloutArenaLock, Protocol):
+    """Condition interface used to wait for aggregate arena progress."""
 
     def wait(self, timeout: float | None = None) -> bool: ...
 
@@ -25,8 +29,8 @@ class RolloutArenaHandle:
     worker_index: int
     shared_memory_name: str
     capacity: int
-    condition: RolloutArenaCondition
-    progress_condition: RolloutArenaCondition
+    lock: RolloutArenaLock
+    progress_condition: RolloutProgressCondition
 
     def __post_init__(self) -> None:
         assert self.worker_index >= 0

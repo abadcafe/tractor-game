@@ -21,10 +21,9 @@ from server.training.policy_inference_batch.schema import (
     MAX_PAIR_PLAN_COUNT,
     MAX_TRACE_COUNT,
     ColumnLayout,
-    policy_request_batch_layout,
 )
 from server.training.policy_inference_batch.types import (
-    CompiledPolicyRequestBatch,
+    BorrowedPolicyRequestBatch,
     DevicePolicyRequestBatch,
     PolicyRequestFrameMetadata,
     PolicyRequestWireFrame,
@@ -34,10 +33,10 @@ from server.training.semantic_action_plan.spec import ACTION_FACE_COUNT
 from server.training.tensorize import ObservationTensorBatch
 
 
-def materialize_compiled_policy_request_batch(
-    *, batch: CompiledPolicyRequestBatch, device: torch.device
+def materialize_borrowed_policy_request_batch(
+    *, batch: BorrowedPolicyRequestBatch, device: torch.device
 ) -> _result.Ok[DevicePolicyRequestBatch] | _result.Rejected:
-    """Materialize one compiled request frame on one torch device."""
+    """Materialize one borrowed request frame on one torch device."""
     host_frame = _host_frame_tensor(batch.frame.view(), device=device)
     device_frame = copy_policy_request_host_frame_to_device(
         host_frame=host_frame,
@@ -86,12 +85,7 @@ def copy_policy_request_host_frame_to_device(
         return device_slot
     if device_slot is None:
         return host_frame.to(device=device, non_blocking=True)
-    stream = torch.cuda.Stream(device=device)
-    with torch.cuda.stream(stream):
-        device_slot.copy_(host_frame, non_blocking=True)
-    event = torch.cuda.Event()
-    event.record(stream)
-    torch.cuda.current_stream(device).wait_event(event)
+    device_slot.copy_(host_frame, non_blocking=True)
     return device_slot
 
 
@@ -107,11 +101,7 @@ def materialize_policy_request_frame(
     )
     if isinstance(validate_result, Rejected):
         return validate_result
-    layout = policy_request_batch_layout(
-        batch_capacity=metadata.batch_capacity,
-        max_observation_tokens=metadata.max_observation_tokens,
-        padded_generation_steps=metadata.padded_generation_steps,
-    )
+    layout = metadata.layout
     row_count = metadata.row_count
     return Ok(
         value=DevicePolicyRequestBatch(

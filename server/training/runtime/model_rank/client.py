@@ -14,7 +14,7 @@ from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
 from server.training.policy import PolicyDecision
 from server.training.policy_inference_batch import (
-    CompiledPolicyRequestBatch,
+    BorrowedPolicyRequestBatch,
     CompletedPolicyResponse,
     DevicePolicyRequestBatch,
     PolicyRequestCompiler,
@@ -23,9 +23,10 @@ from server.training.policy_inference_batch import (
     PolicyResponse,
     RejectedPolicyResponse,
     build_completed_policy_responses,
+    build_rejected_policy_responses,
     decode_policy_response,
     decode_policy_response_batch_wire,
-    materialize_compiled_policy_request_batch,
+    materialize_borrowed_policy_request_batch,
 )
 from server.training.policy_sampling import CompactPolicyDecisionBatch
 from server.training.runtime.model_rank.inference_transport import (
@@ -41,7 +42,7 @@ class PolicyBatchTransport(Protocol):
     """Transport one request frame through a model-rank boundary."""
 
     async def submit_batch(
-        self, *, batch: CompiledPolicyRequestBatch
+        self, *, batch: BorrowedPolicyRequestBatch
     ) -> Ok[None] | Rejected: ...
 
     async def receive(
@@ -67,7 +68,7 @@ class AsyncRemotePolicyBatchTransport:
     peer: AsyncPolicyPeer
 
     async def submit_batch(
-        self, *, batch: CompiledPolicyRequestBatch
+        self, *, batch: BorrowedPolicyRequestBatch
     ) -> Ok[None] | Rejected:
         """Send one compiled request batch to the model rank."""
         return await self.peer.send_request(batch.frame)
@@ -94,10 +95,10 @@ class LocalPolicyBatchTransport:
     _pending_response: tuple[PolicyResponse, ...] | None = None
 
     async def submit_batch(
-        self, *, batch: CompiledPolicyRequestBatch
+        self, *, batch: BorrowedPolicyRequestBatch
     ) -> Ok[None] | Rejected:
         """Submit one prepared batch to the local model rank."""
-        request_result = materialize_compiled_policy_request_batch(
+        request_result = materialize_borrowed_policy_request_batch(
             batch=batch, device=self.replica.device
         )
         if isinstance(request_result, Rejected):
@@ -106,12 +107,13 @@ class LocalPolicyBatchTransport:
             request_result.value
         )
         if isinstance(decision_result, Rejected):
-            responses = tuple(
-                RejectedPolicyResponse(
-                    route=route, reason=decision_result.reason
-                )
-                for route in batch.routes
+            responses_result = build_rejected_policy_responses(
+                routes=batch.routes,
+                reason=decision_result.reason,
             )
+            if isinstance(responses_result, Rejected):
+                return responses_result
+            responses = responses_result.value
         else:
             if decision_result.value.row_count() != batch.row_count():
                 return Rejected(
@@ -161,7 +163,7 @@ class _QueuedPolicyRequest:
 
 @dataclass(frozen=True, slots=True)
 class _BuiltPolicyBatch:
-    batch: CompiledPolicyRequestBatch
+    batch: BorrowedPolicyRequestBatch
     requests: tuple[_QueuedPolicyRequest, ...]
 
 

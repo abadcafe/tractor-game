@@ -371,6 +371,48 @@ async def test_run_until_command_batches_until_batch_size() -> None:
         link2.close()
 
 
+async def test_ingress_reuses_cuda_single_frame_slot() -> None:
+    if not torch.cuda.is_available():
+        return
+    link = _request_link(worker_index=0)
+    ingress = PolicyRequestIngress(
+        batch_size=4,
+        max_observation_tokens=_TEST_MAX_OBSERVATION_TOKENS,
+        device=torch.device("cuda:0"),
+    )
+    try:
+        first_batch = await _receive_single_frame_batch(
+            ingress=ingress,
+            link=link,
+            worker_index=0,
+            policy_version=11,
+        )
+        first_component_ptr = int(
+            first_batch.device_batch.observation_batch.component_ids.data_ptr()
+        )
+
+        second_batch = await _receive_single_frame_batch(
+            ingress=ingress,
+            link=link,
+            worker_index=0,
+            policy_version=12,
+        )
+        second_component_ptr = int(
+            second_batch.device_batch.observation_batch.component_ids.data_ptr()
+        )
+
+        assert second_component_ptr == first_component_ptr
+        assert second_batch.device_batch.policy_versions == (12,)
+        generation_count = int(
+            second_batch.device_batch.generation_step_counts.cpu()[
+                0
+            ].item()
+        )
+        assert generation_count > 0
+    finally:
+        link.close()
+
+
 def _control_link() -> _ModelRankControlLink:
     return create_async_process_control_link(
         protocol=_MODEL_RANK_CONTROL_PROTOCOL
@@ -431,6 +473,26 @@ async def _send_request(
         frame_result.value
     )
     assert isinstance(send_result, Ok)
+
+
+async def _receive_single_frame_batch(
+    *,
+    ingress: PolicyRequestIngress,
+    link: _RequestLink,
+    worker_index: int,
+    policy_version: int,
+) -> ModelRankInferenceBatch:
+    await _send_request(
+        link=link,
+        worker_index=worker_index,
+        policy_version=policy_version,
+    )
+    ingress.begin_batch()
+    receive_result = await ingress.receive_from(link.model_rank_peer)
+    assert isinstance(receive_result, Ok)
+    batch_result = ingress.finish_batch()
+    assert isinstance(batch_result, Ok)
+    return batch_result.value
 
 
 def _request_frame(

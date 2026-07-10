@@ -43,7 +43,7 @@ class SharedRolloutArenaWriter:
             )
         notify_progress = False
         result: _result.Ok[RolloutArenaAppendResult] | _result.Rejected
-        self.handle.condition.acquire()
+        self.handle.lock.acquire()
         try:
             buffer = _segment_buffer(self._segment)
             header = unpack_header(buffer)
@@ -55,7 +55,6 @@ class SharedRolloutArenaWriter:
                 dropped = commit.sample_count()
                 updated = _add_dropped_samples(header, dropped)
                 pack_header(buffer, header=updated)
-                self.handle.condition.notify_all()
                 notify_progress = True
                 result = Ok(
                     value=RolloutArenaAppendResult(
@@ -83,7 +82,6 @@ class SharedRolloutArenaWriter:
                     dropped_sample_count=dropped,
                 )
                 pack_header(buffer, header=updated)
-                self.handle.condition.notify_all()
                 notify_progress = True
                 result = Ok(
                     value=RolloutArenaAppendResult(
@@ -94,7 +92,7 @@ class SharedRolloutArenaWriter:
                     )
                 )
         finally:
-            self.handle.condition.release()
+            self.handle.lock.release()
         if notify_progress:
             _notify_progress(self.handle)
         return result
@@ -104,7 +102,7 @@ class SharedRolloutArenaWriter:
         assert count >= 0
         if count == 0:
             return
-        self.handle.condition.acquire()
+        self.handle.lock.acquire()
         try:
             buffer = _segment_buffer(self._segment)
             header = unpack_header(buffer)
@@ -127,7 +125,7 @@ class SharedRolloutArenaWriter:
             )
             pack_header(buffer, header=updated)
         finally:
-            self.handle.condition.release()
+            self.handle.lock.release()
         _notify_progress(self.handle)
 
     def close(self) -> None:

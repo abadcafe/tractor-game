@@ -38,16 +38,13 @@ def create_shared_rollout_arena_group(
     *,
     context: SpawnContext,
     worker_count: int,
-    samples_per_update: int,
-    slack_sample_count: int,
+    arena_capacity_per_worker: int,
     policy_version: int = 0,
 ) -> _result.Ok[SharedRolloutArenaGroup] | _result.Rejected:
     """Create one fixed-capacity rollout arena per worker."""
     assert worker_count > 0
-    assert samples_per_update > 0
-    assert slack_sample_count >= 0
+    assert arena_capacity_per_worker > 0
     assert policy_version >= 0
-    capacity = samples_per_update + slack_sample_count
     handles: list[RolloutArenaHandle] = []
     segments: list[shared_memory.SharedMemory] = []
     progress_condition = context.Condition()
@@ -55,20 +52,22 @@ def create_shared_rollout_arena_group(
         for worker_index in range(worker_count):
             segment = shared_memory.SharedMemory(
                 create=True,
-                size=arena_byte_size(capacity=capacity),
+                size=arena_byte_size(
+                    capacity=arena_capacity_per_worker
+                ),
             )
             _write_empty_header(
                 segment=segment,
                 policy_version=policy_version,
-                capacity=capacity,
+                capacity=arena_capacity_per_worker,
             )
-            condition = context.Condition()
+            lock = context.Condition()
             handles.append(
                 RolloutArenaHandle(
                     worker_index=worker_index,
                     shared_memory_name=segment.name,
-                    capacity=capacity,
-                    condition=condition,
+                    capacity=arena_capacity_per_worker,
+                    lock=lock,
                     progress_condition=progress_condition,
                 )
             )
@@ -146,16 +145,14 @@ def snapshot_rollout_arenas(
         team1_reward_sum=0.0,
         elapsed_seconds_max=0.0,
     )
-    for handle in group.handles:
-        segment = _attach_segment(handle)
+    for handle, segment in zip(
+        group.handles, group.segments, strict=True
+    ):
+        handle.lock.acquire()
         try:
-            handle.condition.acquire()
-            try:
-                header = unpack_header(_segment_buffer(segment))
-            finally:
-                handle.condition.release()
+            header = unpack_header(_segment_buffer(segment))
         finally:
-            segment.close()
+            handle.lock.release()
         if header.policy_version != policy_version:
             return Rejected(
                 reason="rollout arena policy version mismatch"
@@ -174,21 +171,18 @@ def reset_rollout_arenas(
     progress_condition = group.handles[0].progress_condition
     progress_condition.acquire()
     try:
-        for handle in group.handles:
-            segment = _attach_segment(handle)
+        for handle, segment in zip(
+            group.handles, group.segments, strict=True
+        ):
+            handle.lock.acquire()
             try:
-                handle.condition.acquire()
-                try:
-                    _write_empty_header(
-                        segment=segment,
-                        policy_version=policy_version,
-                        capacity=handle.capacity,
-                    )
-                    handle.condition.notify_all()
-                finally:
-                    handle.condition.release()
+                _write_empty_header(
+                    segment=segment,
+                    policy_version=policy_version,
+                    capacity=handle.capacity,
+                )
             finally:
-                segment.close()
+                handle.lock.release()
         progress_condition.notify_all()
     finally:
         progress_condition.release()
@@ -240,12 +234,6 @@ def _write_empty_header(
             capacity=capacity,
         ),
     )
-
-
-def _attach_segment(
-    handle: RolloutArenaHandle,
-) -> shared_memory.SharedMemory:
-    return shared_memory.SharedMemory(name=handle.shared_memory_name)
 
 
 def _segment_buffer(

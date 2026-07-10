@@ -13,8 +13,9 @@ from server.result import Ok, Rejected
 from server.training.config import ModelConfig, TrainConfig
 from server.training.policy_inference_batch import (
     PolicyRequestRoute,
-    build_policy_response_batch_wire,
-    build_rejected_policy_response_batch_wire,
+    build_completed_policy_responses,
+    build_rejected_policy_responses,
+    encode_policy_response_batch_wire,
 )
 from server.training.policy_sampling import CompactPolicyDecisionBatch
 from server.training.ppo.distributed import (
@@ -572,12 +573,17 @@ async def _send_rejected_inference_batch(
         )
         if not sender_routes:
             continue
-        batch_result = build_rejected_policy_response_batch_wire(
+        responses_result = build_rejected_policy_responses(
             routes=sender_routes, reason=reason
         )
-        if isinstance(batch_result, Rejected):
-            return batch_result
-        send_result = await peer.send_response(batch_result.value)
+        if isinstance(responses_result, Rejected):
+            return responses_result
+        wire_result = encode_policy_response_batch_wire(
+            responses_result.value
+        )
+        if isinstance(wire_result, Rejected):
+            return wire_result
+        send_result = await peer.send_response(wire_result.value)
         if isinstance(send_result, Rejected):
             return send_result
     return Ok(value=None)
@@ -622,16 +628,21 @@ async def _send_response_batches(
         bucket = grouped.get(peer.worker_index)
         if bucket is None:
             continue
-        batch_result = build_policy_response_batch_wire(
+        responses_result = build_completed_policy_responses(
             routes=tuple(bucket.routes),
             decisions=_select_compact_decision_rows(
                 decisions=decisions,
                 rows=tuple(bucket.row_indices),
             ),
         )
-        if isinstance(batch_result, Rejected):
-            return batch_result
-        send_result = await peer.send_response(batch_result.value)
+        if isinstance(responses_result, Rejected):
+            return responses_result
+        wire_result = encode_policy_response_batch_wire(
+            responses_result.value
+        )
+        if isinstance(wire_result, Rejected):
+            return wire_result
+        send_result = await peer.send_response(wire_result.value)
         if isinstance(send_result, Rejected):
             return send_result
     return Ok(value=None)

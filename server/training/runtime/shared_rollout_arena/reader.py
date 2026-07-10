@@ -50,7 +50,7 @@ class SharedRolloutArenaReader:
         for handle, segment in zip(
             self.handles, self._segments, strict=True
         ):
-            handle.condition.acquire()
+            handle.lock.acquire()
             try:
                 buffer = _segment_buffer(segment)
                 header = unpack_header(buffer)
@@ -87,7 +87,7 @@ class SharedRolloutArenaReader:
                     )
                 )
             finally:
-                handle.condition.release()
+                handle.lock.release()
         return Ok(
             value=RankReturnTargets(
                 policy_version=policy_version,

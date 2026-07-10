@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import multiprocessing as mp
 from dataclasses import dataclass
 from multiprocessing.context import SpawnContext
 from multiprocessing.process import BaseProcess
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, assert_never
 
 from server import result as _result
 from server.result import Ok, Rejected
@@ -15,7 +16,9 @@ from server.training.config import ModelConfig, TrainConfig
 from server.training.ppo import PPOUpdateProfile, PPOUpdateStats
 from server.training.runtime.async_ipc import (
     AsyncCoordinatorControlEndpoint,
+    ControlCommandBroadcastFailure,
     ProcessControlProtocol,
+    broadcast_control_commands,
     create_async_process_control_link,
     create_async_socket_pair,
     wait_async_control_responses,
@@ -84,7 +87,6 @@ from server.training.runtime.worker_process import (
     run_training_worker_process,
 )
 from server.training.runtime.worker_sampling_lifecycle import (
-    reject_after_sampling_cleanup,
     start_worker_sampling_session,
     stop_worker_sampling_session,
 )
@@ -174,6 +176,18 @@ class _UpdateResult:
     update_stats: PPOUpdateStats
 
 
+@dataclass(frozen=True, slots=True)
+class _UnrecoverableRuntimeFailure:
+    rejection: Rejected
+
+
+type _TrainingUpdateCycleResult = (
+    _result.Ok[TrainingUpdateResult]
+    | _result.Rejected
+    | _UnrecoverableRuntimeFailure
+)
+
+
 _WORKER_CONTROL_PROTOCOL: ProcessControlProtocol[
     WorkerCommand, WorkerResponse
 ] = ProcessControlProtocol(
@@ -194,10 +208,14 @@ _MODEL_RANK_CONTROL_PROTOCOL: ProcessControlProtocol[
 class _ProcessTrainingRuntime:
     execution_config: ExecutionConfig
     pools: _RuntimePools
+    _poisoned: Rejected | None = None
+    _closed: bool = False
 
     async def load_state(
         self, *, state: RuntimeTrainingState, policy_version: int
     ) -> _result.Ok[None] | _result.Rejected:
+        if self._poisoned is not None:
+            return self._poisoned
         return await _sync_compute_rank_states(
             worker_pool=self.pools.worker_pool,
             model_rank_pool=self.pools.model_rank_pool,
@@ -211,15 +229,23 @@ class _ProcessTrainingRuntime:
     async def run_update(
         self, *, policy_version: int
     ) -> _result.Ok[TrainingUpdateResult] | _result.Rejected:
-        return await _run_training_update(
+        if self._poisoned is not None:
+            return self._poisoned
+        result = await _run_training_update(
             pools=self.pools,
             execution_config=self.execution_config,
             policy_version=policy_version,
         )
+        if isinstance(result, _UnrecoverableRuntimeFailure):
+            await self._poison_and_close(result.rejection)
+            return result.rejection
+        return result
 
     async def snapshot(
         self, *, policy_version: int
     ) -> _result.Ok[RuntimeTrainingState] | _result.Rejected:
+        if self._poisoned is not None:
+            return self._poisoned
         return await _snapshot_compute_rank_state(
             worker_pool=self.pools.worker_pool,
             model_rank_pool=self.pools.model_rank_pool,
@@ -230,7 +256,18 @@ class _ProcessTrainingRuntime:
         )
 
     async def close(self) -> None:
+        if self._closed:
+            return
         await _stop_runtime_pools(self.pools)
+        self._closed = True
+
+    async def _poison_and_close(self, rejection: Rejected) -> None:
+        if self._poisoned is None:
+            self._poisoned = rejection
+        if self._closed:
+            return
+        _force_stop_runtime_pools(self.pools)
+        self._closed = True
 
 
 def open_training_runtime(
@@ -275,87 +312,92 @@ def _start_runtime_pools(
     if isinstance(distributed_group_result, Rejected):
         return distributed_group_result
     distributed_group = distributed_group_result.value
-    arena_group_result = create_shared_rollout_arena_group(
-        context=context,
-        worker_count=execution_config.worker_process_count(),
-        samples_per_update=execution_config.samples_per_update,
-        slack_sample_count=_rollout_arena_slack_sample_count(
-            execution_config
-        ),
-    )
-    if isinstance(arena_group_result, Rejected):
-        return arena_group_result
-    arena_group = arena_group_result.value
-    worker_inference_links = _worker_inference_links(
-        worker_count=execution_config.worker_process_count(),
-    )
-    model_rank_pool_result = _start_model_rank_pool(
-        context=context,
-        run_dir=run_dir,
-        run_id=run_id,
-        model_config=model_config,
-        train_config=train_config,
-        execution_config=execution_config,
-        distributed_group=distributed_group,
-        rank_inference_peers=(
-            _rank_inference_peers(
-                execution_config=execution_config,
-                worker_inference_links=worker_inference_links,
-            )
-        ),
-        rollout_arena_handles=arena_group.handles,
-    )
-    if isinstance(model_rank_pool_result, Rejected):
-        _close_worker_inference_links(worker_inference_links)
-        close_shared_rollout_arenas(arena_group)
-        return model_rank_pool_result
-    model_rank_pool = model_rank_pool_result.value
+    arena_group: SharedRolloutArenaGroup | None = None
+    worker_inference_links: tuple[_WorkerInferenceLink, ...] = ()
+    model_rank_pool: _ModelRankPool | None = None
     worker_handles: list[_WorkerHandle] = []
-    for index in range(execution_config.worker_process_count()):
-        control_link = create_async_process_control_link(
-            protocol=_WORKER_CONTROL_PROTOCOL,
+    committed = False
+    try:
+        arena_group_result = create_shared_rollout_arena_group(
+            context=context,
+            worker_count=execution_config.worker_process_count(),
+            arena_capacity_per_worker=(
+                rollout_arena_capacity_per_worker(execution_config)
+            ),
         )
-        inference_peer = (
-            None
-            if model_rank_pool is None
-            else worker_inference_links[index].worker_peer
+        if isinstance(arena_group_result, Rejected):
+            return arena_group_result
+        arena_group = arena_group_result.value
+        worker_inference_links = _worker_inference_links(
+            worker_count=execution_config.worker_process_count(),
         )
-        process = context.Process(
-            target=run_training_worker_process,
-            kwargs={
-                "worker_index": index,
-                "run_id": run_id,
-                "model_config": model_config,
-                "train_config": train_config,
-                "execution_config": execution_config,
-                "worker_cpus": execution_config.worker_cpu_set(index),
-                "control": control_link.child,
-                "telemetry_sink": _telemetry_sink(
-                    run_dir=run_dir,
+        model_rank_pool_result = _start_model_rank_pool(
+            context=context,
+            run_dir=run_dir,
+            run_id=run_id,
+            model_config=model_config,
+            train_config=train_config,
+            execution_config=execution_config,
+            distributed_group=distributed_group,
+            rank_inference_peers=(
+                _rank_inference_peers(
                     execution_config=execution_config,
-                ),
-                "inference_peer": inference_peer,
-                "rollout_arena_handle": arena_group.handles[index],
-                "distributed_rank_config": (
-                    _worker_distributed_rank_config(
-                        execution_config=execution_config,
-                        group=distributed_group,
-                        worker_index=index,
-                    )
-                ),
-            },
+                    worker_inference_links=worker_inference_links,
+                )
+            ),
+            rollout_arena_handles=arena_group.handles,
         )
-        start_child_process_ignoring_terminal_interrupt(process)
-        control_link.child.close()
-        worker_handles.append(
-            _WorkerHandle(
-                index=index,
-                control=control_link.coordinator,
-                process=process,
+        if isinstance(model_rank_pool_result, Rejected):
+            return model_rank_pool_result
+        model_rank_pool = model_rank_pool_result.value
+        for index in range(execution_config.worker_process_count()):
+            control_link = create_async_process_control_link(
+                protocol=_WORKER_CONTROL_PROTOCOL,
             )
-        )
-    return Ok(
-        value=_RuntimePools(
+            inference_peer = (
+                None
+                if model_rank_pool is None
+                else worker_inference_links[index].worker_peer
+            )
+            process = context.Process(
+                target=run_training_worker_process,
+                kwargs={
+                    "worker_index": index,
+                    "run_id": run_id,
+                    "model_config": model_config,
+                    "train_config": train_config,
+                    "execution_config": execution_config,
+                    "worker_cpus": execution_config.worker_cpu_set(
+                        index
+                    ),
+                    "control": control_link.child,
+                    "telemetry_sink": _telemetry_sink(
+                        run_dir=run_dir,
+                        execution_config=execution_config,
+                    ),
+                    "inference_peer": inference_peer,
+                    "rollout_arena_handle": arena_group.handles[index],
+                    "distributed_rank_config": (
+                        _worker_distributed_rank_config(
+                            execution_config=execution_config,
+                            group=distributed_group,
+                            worker_index=index,
+                        )
+                    ),
+                },
+            )
+            worker_handles.append(
+                _WorkerHandle(
+                    index=index,
+                    control=control_link.coordinator,
+                    process=process,
+                )
+            )
+            try:
+                start_child_process_ignoring_terminal_interrupt(process)
+            finally:
+                control_link.child.close()
+        pools = _RuntimePools(
             worker_pool=_WorkerPool(
                 handles=tuple(worker_handles),
             ),
@@ -363,7 +405,16 @@ def _start_runtime_pools(
             worker_inference_links=worker_inference_links,
             rollout_arena_group=arena_group,
         )
-    )
+        committed = True
+        return Ok(value=pools)
+    finally:
+        if not committed:
+            _cleanup_startup_runtime_resources(
+                worker_handles=tuple(worker_handles),
+                model_rank_pool=model_rank_pool,
+                worker_inference_links=worker_inference_links,
+                arena_group=arena_group,
+            )
 
 
 def _rollout_arena_slack_sample_count(
@@ -372,6 +423,16 @@ def _rollout_arena_slack_sample_count(
     """Return physical arena slack for already-running game envs."""
     per_env_slack = 256
     return execution_config.game_envs_per_worker * per_env_slack
+
+
+def rollout_arena_capacity_per_worker(
+    execution_config: ExecutionConfig,
+) -> int:
+    """Return robust per-worker sample reference capacity."""
+    return (
+        execution_config.samples_per_update
+        + _rollout_arena_slack_sample_count(execution_config)
+    )
 
 
 def _start_model_rank_pool(
@@ -389,56 +450,61 @@ def _start_model_rank_pool(
     if not execution_config.uses_model_rank_processes():
         return Ok(value=None)
     handles: list[_ModelRankHandle] = []
-    for index, model_rank_device in enumerate(
-        execution_config.model_ranks.devices
-    ):
-        control_link = create_async_process_control_link(
-            protocol=_MODEL_RANK_CONTROL_PROTOCOL,
-        )
-        process = context.Process(
-            target=run_model_rank_process,
-            kwargs={
-                "model_rank_index": index,
-                "model_rank_device": model_rank_device,
-                "run_id": run_id,
-                "model_config": model_config,
-                "train_config": train_config,
-                "execution_config": execution_config,
-                "control": control_link.child,
-                "inference_peers": rank_inference_peers[index],
-                "assigned_rollout_arena_handles": (
-                    _model_rank_rollout_arena_handles(
-                        execution_config=execution_config,
-                        rollout_arena_handles=rollout_arena_handles,
-                        model_rank_index=index,
-                    )
-                ),
-                "telemetry_sink": _telemetry_sink(
-                    run_dir=run_dir,
-                    execution_config=execution_config,
-                ),
-                "distributed_rank_config": (
-                    _model_rank_distributed_rank_config(
-                        group=distributed_group,
-                        model_rank_index=index,
-                    )
-                ),
-            },
-        )
-        start_child_process_ignoring_terminal_interrupt(process)
-        control_link.child.close()
-        handles.append(
-            _ModelRankHandle(
-                index=index,
-                control=control_link.coordinator,
-                process=process,
+    committed = False
+    try:
+        for index, model_rank_device in enumerate(
+            execution_config.model_ranks.devices
+        ):
+            control_link = create_async_process_control_link(
+                protocol=_MODEL_RANK_CONTROL_PROTOCOL,
             )
-        )
-    return Ok(
-        value=_ModelRankPool(
-            handles=tuple(handles),
-        )
-    )
+            process = context.Process(
+                target=run_model_rank_process,
+                kwargs={
+                    "model_rank_index": index,
+                    "model_rank_device": model_rank_device,
+                    "run_id": run_id,
+                    "model_config": model_config,
+                    "train_config": train_config,
+                    "execution_config": execution_config,
+                    "control": control_link.child,
+                    "inference_peers": rank_inference_peers[index],
+                    "assigned_rollout_arena_handles": (
+                        _model_rank_rollout_arena_handles(
+                            execution_config=execution_config,
+                            rollout_arena_handles=rollout_arena_handles,
+                            model_rank_index=index,
+                        )
+                    ),
+                    "telemetry_sink": _telemetry_sink(
+                        run_dir=run_dir,
+                        execution_config=execution_config,
+                    ),
+                    "distributed_rank_config": (
+                        _model_rank_distributed_rank_config(
+                            group=distributed_group,
+                            model_rank_index=index,
+                        )
+                    ),
+                },
+            )
+            handles.append(
+                _ModelRankHandle(
+                    index=index,
+                    control=control_link.coordinator,
+                    process=process,
+                )
+            )
+            try:
+                start_child_process_ignoring_terminal_interrupt(process)
+            finally:
+                control_link.child.close()
+        pool = _ModelRankPool(handles=tuple(handles))
+        committed = True
+        return Ok(value=pool)
+    finally:
+        if not committed:
+            _cleanup_startup_model_rank_handles(tuple(handles))
 
 
 def _model_rank_rollout_arena_handles(
@@ -592,7 +658,7 @@ async def _run_training_update(
     pools: _RuntimePools,
     execution_config: ExecutionConfig,
     policy_version: int,
-) -> _result.Ok[TrainingUpdateResult] | _result.Rejected:
+) -> _TrainingUpdateCycleResult:
     reset_result = reset_rollout_arenas(
         group=pools.rollout_arena_group,
         policy_version=policy_version,
@@ -607,26 +673,33 @@ async def _run_training_update(
     if isinstance(session_result, Rejected):
         return session_result
     session = session_result.value
-    target_snapshot_result = wait_rollout_sample_target(
+    target_snapshot_result = await wait_rollout_sample_target_async(
         group=pools.rollout_arena_group,
         policy_version=policy_version,
         target_sample_count=execution_config.samples_per_update,
-        timeout_seconds=execution_config.timeouts.rollout_response_seconds,
+        timeout_seconds=execution_config.timeouts.rollout_sample_seconds,
     )
     if isinstance(target_snapshot_result, Rejected):
-        return await reject_after_sampling_cleanup(
+        stopped_result = await stop_worker_sampling_session(
             session=session,
             timeout_seconds=(
-                execution_config.timeouts.rollout_response_seconds
+                execution_config.timeouts.sampling_stop_seconds
             ),
-            failure=target_snapshot_result,
         )
+        if isinstance(stopped_result, Rejected):
+            return _UnrecoverableRuntimeFailure(
+                rejection=_runtime_cleanup_rejection(
+                    failure=target_snapshot_result,
+                    cleanup=stopped_result,
+                )
+            )
+        return target_snapshot_result
     stopped_result = await stop_worker_sampling_session(
         session=session,
-        timeout_seconds=execution_config.timeouts.rollout_response_seconds,
+        timeout_seconds=execution_config.timeouts.sampling_stop_seconds,
     )
     if isinstance(stopped_result, Rejected):
-        return stopped_result
+        return _UnrecoverableRuntimeFailure(rejection=stopped_result)
     update_result = await _run_compute_updates(
         worker_pool=pools.worker_pool,
         model_rank_pool=pools.model_rank_pool,
@@ -646,6 +719,23 @@ async def _run_training_update(
             snapshot=snapshot_result.value,
             update_stats=update_result.value.update_stats,
         )
+    )
+
+
+async def wait_rollout_sample_target_async(
+    *,
+    group: SharedRolloutArenaGroup,
+    policy_version: int,
+    target_sample_count: int,
+    timeout_seconds: float,
+) -> _result.Ok[RolloutArenaSnapshot] | _result.Rejected:
+    """Wait for rollout progress without blocking the event loop."""
+    return await asyncio.to_thread(
+        wait_rollout_sample_target,
+        group=group,
+        policy_version=policy_version,
+        target_sample_count=target_sample_count,
+        timeout_seconds=timeout_seconds,
     )
 
 
@@ -728,14 +818,15 @@ async def _send_worker_update_commands(
     worker_pool: _WorkerPool,
     policy_version: int,
 ) -> _result.Ok[None] | _result.Rejected:
-    for handle in worker_pool.handles:
-        send_result = await handle.control.send_command(
-            WorkerUpdateCommand(
-                policy_version=policy_version,
-            )
-        )
-        if isinstance(send_result, Rejected):
-            return send_result
+    send_result = await broadcast_control_commands(
+        targets=worker_pool.handles,
+        sender=_worker_control_sender,
+        command=lambda _handle: WorkerUpdateCommand(
+            policy_version=policy_version,
+        ),
+    )
+    if isinstance(send_result, ControlCommandBroadcastFailure):
+        return send_result.rejection
     return Ok(value=None)
 
 
@@ -774,11 +865,28 @@ def _worker_handle_for_control(
     raise AssertionError("ready worker control endpoint is unknown")
 
 
+def _worker_control_sender(
+    handle: _WorkerHandle,
+) -> AsyncCoordinatorControlEndpoint[WorkerCommand, WorkerResponse]:
+    return handle.control
+
+
 def _worker_command_rejection(
     response: WorkerCommandRejected,
 ) -> Rejected:
     return Rejected(
         reason=f"worker-{response.worker_index}: {response.reason}"
+    )
+
+
+def _runtime_cleanup_rejection(
+    *, failure: Rejected, cleanup: Rejected
+) -> Rejected:
+    return Rejected(
+        reason=(
+            f"{failure.reason}; sampling cleanup failed: "
+            f"{cleanup.reason}"
+        )
     )
 
 
@@ -804,34 +912,41 @@ async def _receive_worker_updates(
                 return response_result
             response = response_result.value
             pending.remove(handle)
-            if isinstance(response, WorkerCommandRejected):
-                return _worker_command_rejection(response)
-            if isinstance(response, WorkerSamplingStarted):
-                return Rejected(reason=unexpected_sampling_reason)
-            if isinstance(
-                response,
-                WorkerSamplingStopped | WorkerSamplingAlreadyStopped,
-            ):
-                return Rejected(reason=unexpected_sampling_reason)
-            if isinstance(response, WorkerStateLoaded):
-                return Rejected(
-                    reason=(
-                        "worker returned state sync during "
-                        "synchronized update"
+            match response:
+                case WorkerCommandRejected():
+                    return _worker_command_rejection(response)
+                case WorkerSamplingStarted():
+                    return Rejected(reason=unexpected_sampling_reason)
+                case (
+                    WorkerSamplingStopped()
+                    | WorkerSamplingAlreadyStopped()
+                ):
+                    return Rejected(reason=unexpected_sampling_reason)
+                case WorkerStateLoaded():
+                    return Rejected(
+                        reason=(
+                            "worker returned state sync during "
+                            "synchronized update"
+                        )
                     )
-                )
-            if isinstance(response, WorkerSnapshotCompleted):
-                return Rejected(
-                    reason=(
-                        "worker returned snapshot during "
-                        "synchronized update"
+                case WorkerSnapshotCompleted():
+                    return Rejected(
+                        reason=(
+                            "worker returned snapshot during "
+                            "synchronized update"
+                        )
                     )
-                )
-            if response.policy_version != policy_version:
-                return Rejected(
-                    reason="worker returned stale update policy version"
-                )
-            responses.append(response)
+                case WorkerUpdateCompleted():
+                    if response.policy_version != policy_version:
+                        return Rejected(
+                            reason=(
+                                "worker returned stale update policy "
+                                "version"
+                            )
+                        )
+                    responses.append(response)
+                case _:
+                    assert_never(response)
     return Ok(
         value=tuple(
             sorted(responses, key=lambda item: item.worker_index)
@@ -847,15 +962,16 @@ async def _sync_worker_states(
     state_sync_timeout_seconds: float,
 ) -> _result.Ok[None] | _result.Rejected:
     expected_indices = {handle.index for handle in worker_pool.handles}
-    for handle in worker_pool.handles:
-        send_result = await handle.control.send_command(
-            WorkerLoadStateCommand(
-                state=state,
-                policy_version=policy_version,
-            )
-        )
-        if isinstance(send_result, Rejected):
-            return send_result
+    send_result = await broadcast_control_commands(
+        targets=worker_pool.handles,
+        sender=_worker_control_sender,
+        command=lambda _handle: WorkerLoadStateCommand(
+            state=state,
+            policy_version=policy_version,
+        ),
+    )
+    if isinstance(send_result, ControlCommandBroadcastFailure):
+        return send_result.rejection
     loaded_indices: set[int] = set()
     pending = list(worker_pool.handles)
     while pending:
@@ -871,33 +987,42 @@ async def _sync_worker_states(
                 return response_result
             response = response_result.value
             pending.remove(handle)
-            if isinstance(response, WorkerCommandRejected):
-                return _worker_command_rejection(response)
-            if isinstance(
-                response,
-                WorkerSamplingStarted
-                | WorkerSamplingStopped
-                | WorkerSamplingAlreadyStopped,
-            ):
-                return Rejected(
-                    reason="worker returned sampling during state sync"
-                )
-            if isinstance(response, WorkerUpdateCompleted):
-                return Rejected(
-                    reason="worker returned update during state sync"
-                )
-            if isinstance(response, WorkerSnapshotCompleted):
-                return Rejected(
-                    reason="worker returned snapshot during state sync"
-                )
-            if response.policy_version != policy_version:
-                return Rejected(
-                    reason=(
-                        "worker state sync returned stale policy "
-                        "version"
+            match response:
+                case WorkerCommandRejected():
+                    return _worker_command_rejection(response)
+                case (
+                    WorkerSamplingStarted()
+                    | WorkerSamplingStopped()
+                    | WorkerSamplingAlreadyStopped()
+                ):
+                    return Rejected(
+                        reason=(
+                            "worker returned sampling during state sync"
+                        )
                     )
-                )
-            loaded_indices.add(response.worker_index)
+                case WorkerUpdateCompleted():
+                    return Rejected(
+                        reason=(
+                            "worker returned update during state sync"
+                        )
+                    )
+                case WorkerSnapshotCompleted():
+                    return Rejected(
+                        reason=(
+                            "worker returned snapshot during state sync"
+                        )
+                    )
+                case WorkerStateLoaded():
+                    if response.policy_version != policy_version:
+                        return Rejected(
+                            reason=(
+                                "worker state sync returned stale "
+                                "policy version"
+                            )
+                        )
+                    loaded_indices.add(response.worker_index)
+                case _:
+                    assert_never(response)
     if loaded_indices != expected_indices:
         return Rejected(reason="worker state sync rank set mismatch")
     return Ok(value=None)
@@ -913,15 +1038,16 @@ async def _sync_model_rank_states(
     expected_indices = {
         handle.index for handle in model_rank_pool.handles
     }
-    for handle in model_rank_pool.handles:
-        send_result = await handle.control.send_command(
-            ModelRankLoadStateCommand(
-                state=state,
-                policy_version=policy_version,
-            )
-        )
-        if isinstance(send_result, Rejected):
-            return send_result
+    send_result = await broadcast_control_commands(
+        targets=model_rank_pool.handles,
+        sender=_model_rank_control_sender,
+        command=lambda _handle: ModelRankLoadStateCommand(
+            state=state,
+            policy_version=policy_version,
+        ),
+    )
+    if isinstance(send_result, ControlCommandBroadcastFailure):
+        return send_result.rejection
     loaded: list[ModelRankStateLoaded] = []
     pending = list(model_rank_pool.handles)
     while pending:
@@ -937,26 +1063,32 @@ async def _sync_model_rank_states(
                 return response_result
             response = response_result.value
             pending.remove(handle)
-            if isinstance(response, ModelRankRejected):
-                return Rejected(
-                    reason=(
-                        f"model-rank-{response.model_rank_index}: "
-                        f"{response.reason}"
+            match response:
+                case ModelRankRejected():
+                    return Rejected(
+                        reason=(
+                            f"model-rank-{response.model_rank_index}: "
+                            f"{response.reason}"
+                        )
                     )
-                )
-            if isinstance(response, ModelRankUpdateCompleted):
-                return Rejected(
-                    reason=(
-                        "model rank returned update during state sync"
+                case ModelRankUpdateCompleted():
+                    return Rejected(
+                        reason=(
+                            "model rank returned update during "
+                            "state sync"
+                        )
                     )
-                )
-            if isinstance(response, ModelRankSnapshotCompleted):
-                return Rejected(
-                    reason=(
-                        "model rank returned snapshot during state sync"
+                case ModelRankSnapshotCompleted():
+                    return Rejected(
+                        reason=(
+                            "model rank returned snapshot during "
+                            "state sync"
+                        )
                     )
-                )
-            loaded.append(response)
+                case ModelRankStateLoaded():
+                    loaded.append(response)
+                case _:
+                    assert_never(response)
     loaded_indices = {item.model_rank_index for item in loaded}
     if loaded_indices != expected_indices:
         return Rejected(
@@ -1012,28 +1144,35 @@ async def _snapshot_worker_state(
     if isinstance(response_result, Rejected):
         return response_result
     response = response_result.value
-    if isinstance(response, WorkerCommandRejected):
-        return _worker_command_rejection(response)
-    if isinstance(
-        response,
-        WorkerSamplingStarted
-        | WorkerSamplingStopped
-        | WorkerSamplingAlreadyStopped,
-    ):
-        return Rejected(
-            reason="worker returned sampling during snapshot"
-        )
-    if isinstance(response, WorkerStateLoaded):
-        return Rejected(
-            reason="worker returned state sync during snapshot"
-        )
-    if isinstance(response, WorkerUpdateCompleted):
-        return Rejected(reason="worker returned update during snapshot")
-    if response.policy_version != policy_version:
-        return Rejected(
-            reason="worker snapshot returned stale policy version"
-        )
-    return Ok(value=response.state)
+    match response:
+        case WorkerCommandRejected():
+            return _worker_command_rejection(response)
+        case (
+            WorkerSamplingStarted()
+            | WorkerSamplingStopped()
+            | WorkerSamplingAlreadyStopped()
+        ):
+            return Rejected(
+                reason="worker returned sampling during snapshot"
+            )
+        case WorkerStateLoaded():
+            return Rejected(
+                reason="worker returned state sync during snapshot"
+            )
+        case WorkerUpdateCompleted():
+            return Rejected(
+                reason="worker returned update during snapshot"
+            )
+        case WorkerSnapshotCompleted():
+            if response.policy_version != policy_version:
+                return Rejected(
+                    reason=(
+                        "worker snapshot returned stale policy version"
+                    )
+                )
+            return Ok(value=response.state)
+        case _:
+            assert_never(response)
 
 
 def _rank_zero_worker(worker_pool: _WorkerPool) -> _WorkerHandle:
@@ -1064,26 +1203,33 @@ async def _snapshot_model_rank_state(
     if isinstance(response_result, Rejected):
         return response_result
     response = response_result.value
-    if isinstance(response, ModelRankRejected):
-        return Rejected(
-            reason=(
-                f"model-rank-{response.model_rank_index}: "
-                f"{response.reason}"
+    match response:
+        case ModelRankRejected():
+            return Rejected(
+                reason=(
+                    f"model-rank-{response.model_rank_index}: "
+                    f"{response.reason}"
+                )
             )
-        )
-    if isinstance(response, ModelRankStateLoaded):
-        return Rejected(
-            reason="model rank returned state sync during snapshot"
-        )
-    if isinstance(response, ModelRankUpdateCompleted):
-        return Rejected(
-            reason="model rank returned update during snapshot"
-        )
-    if response.policy_version != policy_version:
-        return Rejected(
-            reason="model rank snapshot returned stale policy version"
-        )
-    return Ok(value=response.state)
+        case ModelRankStateLoaded():
+            return Rejected(
+                reason="model rank returned state sync during snapshot"
+            )
+        case ModelRankUpdateCompleted():
+            return Rejected(
+                reason="model rank returned update during snapshot"
+            )
+        case ModelRankSnapshotCompleted():
+            if response.policy_version != policy_version:
+                return Rejected(
+                    reason=(
+                        "model rank snapshot returned stale policy "
+                        "version"
+                    )
+                )
+            return Ok(value=response.state)
+        case _:
+            assert_never(response)
 
 
 def _rank_zero_model_rank(
@@ -1128,6 +1274,14 @@ def _model_rank_handle_for_control(
     raise AssertionError("ready model-rank control endpoint is unknown")
 
 
+def _model_rank_control_sender(
+    handle: _ModelRankHandle,
+) -> AsyncCoordinatorControlEndpoint[
+    ModelRankCommand, ModelRankResponse
+]:
+    return handle.control
+
+
 async def _run_model_rank_updates(
     *,
     model_rank_pool: _ModelRankPool,
@@ -1155,33 +1309,38 @@ async def _run_model_rank_updates(
                 return response_result
             response = response_result.value
             pending.remove(handle)
-            if isinstance(response, ModelRankRejected):
-                return Rejected(
-                    reason=(
-                        f"model-rank-{response.model_rank_index}: "
-                        f"{response.reason}"
+            match response:
+                case ModelRankRejected():
+                    return Rejected(
+                        reason=(
+                            f"model-rank-{response.model_rank_index}: "
+                            f"{response.reason}"
+                        )
                     )
-                )
-            if isinstance(response, ModelRankStateLoaded):
-                return Rejected(
-                    reason=(
-                        "model rank returned state sync during update"
+                case ModelRankStateLoaded():
+                    return Rejected(
+                        reason=(
+                            "model rank returned state sync during "
+                            "update"
+                        )
                     )
-                )
-            if isinstance(response, ModelRankSnapshotCompleted):
-                return Rejected(
-                    reason=(
-                        "model rank returned snapshot during update"
+                case ModelRankSnapshotCompleted():
+                    return Rejected(
+                        reason=(
+                            "model rank returned snapshot during update"
+                        )
                     )
-                )
-            if response.policy_version != policy_version:
-                return Rejected(
-                    reason=(
-                        "model rank returned stale update policy "
-                        "version"
-                    )
-                )
-            responses.append(response)
+                case ModelRankUpdateCompleted():
+                    if response.policy_version != policy_version:
+                        return Rejected(
+                            reason=(
+                                "model rank returned stale update "
+                                "policy version"
+                            )
+                        )
+                    responses.append(response)
+                case _:
+                    assert_never(response)
     ordered = tuple(sorted(responses, key=lambda item: item.rank_index))
     update_stats = tuple(response.update_stats for response in ordered)
     return Ok(
@@ -1196,14 +1355,15 @@ async def _send_model_rank_update_commands(
     model_rank_pool: _ModelRankPool,
     policy_version: int,
 ) -> _result.Ok[None] | _result.Rejected:
-    for handle in model_rank_pool.handles:
-        send_result = await handle.control.send_command(
-            ModelRankUpdateCommand(
-                policy_version=policy_version,
-            )
-        )
-        if isinstance(send_result, Rejected):
-            return send_result
+    send_result = await broadcast_control_commands(
+        targets=model_rank_pool.handles,
+        sender=_model_rank_control_sender,
+        command=lambda _handle: ModelRankUpdateCommand(
+            policy_version=policy_version,
+        ),
+    )
+    if isinstance(send_result, ControlCommandBroadcastFailure):
+        return send_result.rejection
     return Ok(value=None)
 
 
@@ -1215,21 +1375,74 @@ async def _stop_runtime_pools(pools: _RuntimePools) -> None:
     close_shared_rollout_arenas(pools.rollout_arena_group)
 
 
+def _force_stop_runtime_pools(pools: _RuntimePools) -> None:
+    _force_stop_worker_pool(pools.worker_pool)
+    if pools.model_rank_pool is not None:
+        _force_stop_model_rank_pool(pools.model_rank_pool)
+    _close_worker_inference_links(pools.worker_inference_links)
+    close_shared_rollout_arenas(pools.rollout_arena_group)
+
+
+def _cleanup_startup_runtime_resources(
+    *,
+    worker_handles: tuple[_WorkerHandle, ...],
+    model_rank_pool: _ModelRankPool | None,
+    worker_inference_links: tuple[_WorkerInferenceLink, ...],
+    arena_group: SharedRolloutArenaGroup | None,
+) -> None:
+    _cleanup_startup_worker_handles(worker_handles)
+    if model_rank_pool is not None:
+        _cleanup_startup_model_rank_handles(model_rank_pool.handles)
+    _close_worker_inference_links(worker_inference_links)
+    if arena_group is not None:
+        close_shared_rollout_arenas(arena_group)
+
+
+def _cleanup_startup_worker_handles(
+    handles: tuple[_WorkerHandle, ...],
+) -> None:
+    for handle in handles:
+        _stop_process_if_started(handle.process)
+        handle.control.close()
+
+
+def _cleanup_startup_model_rank_handles(
+    handles: tuple[_ModelRankHandle, ...],
+) -> None:
+    for handle in handles:
+        _stop_process_if_started(handle.process)
+        handle.control.close()
+
+
 async def _stop_worker_pool(pool: _WorkerPool) -> None:
-    for handle in pool.handles:
-        await handle.control.send_command(
-            StopWorkerCommand(reason="complete")
-        )
+    await broadcast_control_commands(
+        targets=pool.handles,
+        sender=_worker_control_sender,
+        command=lambda _handle: StopWorkerCommand(reason="complete"),
+    )
     for handle in pool.handles:
         _stop_process(handle.process)
         handle.control.close()
 
 
 async def _stop_model_rank_pool(pool: _ModelRankPool) -> None:
+    await broadcast_control_commands(
+        targets=pool.handles,
+        sender=_model_rank_control_sender,
+        command=lambda _handle: ModelRankStopCommand(reason="complete"),
+    )
     for handle in pool.handles:
-        await handle.control.send_command(
-            ModelRankStopCommand(reason="complete")
-        )
+        _stop_process(handle.process)
+        handle.control.close()
+
+
+def _force_stop_worker_pool(pool: _WorkerPool) -> None:
+    for handle in pool.handles:
+        _stop_process(handle.process)
+        handle.control.close()
+
+
+def _force_stop_model_rank_pool(pool: _ModelRankPool) -> None:
     for handle in pool.handles:
         _stop_process(handle.process)
         handle.control.close()
@@ -1244,6 +1457,12 @@ def _stop_process(process: BaseProcess) -> None:
     if process.is_alive():
         process.kill()
         process.join(timeout=_TERMINATED_PROCESS_STOP_SECONDS)
+
+
+def _stop_process_if_started(process: BaseProcess) -> None:
+    if process.pid is None:
+        return
+    _stop_process(process)
 
 
 def _close_worker_inference_links(

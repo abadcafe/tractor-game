@@ -19,12 +19,13 @@ from server.training.observation import (
     build_observation,
 )
 from server.training.policy_inference_batch import (
-    CompiledPolicyRequestBatch,
+    BorrowedPolicyRequestBatch,
     CompletedPolicyResponse,
     DevicePolicyRequestBatch,
     PolicyRequestRoute,
     PolicyResponse,
-    build_policy_response_batch_wire,
+    build_completed_policy_responses,
+    encode_policy_response_batch_wire,
 )
 from server.training.policy_inference_batch.frame import (
     decode_policy_request_frame_metadata,
@@ -162,9 +163,13 @@ async def test_remote_policy_client_roundtrips_async_payload() -> None:
         route = metadata.routes[0]
         assert route.worker_index == 2
         assert route.request_id == 0
-        response_wire = build_policy_response_batch_wire(
+        responses = build_completed_policy_responses(
             routes=(route,),
             decisions=_compact_policy_decision_batch(row_count=1),
+        )
+        assert isinstance(responses, Ok)
+        response_wire = encode_policy_response_batch_wire(
+            responses.value
         )
         assert isinstance(response_wire, Ok)
         send_result = await peers.model_rank_peer.send_response(
@@ -212,9 +217,13 @@ async def test_remote_policy_client_rejects_response_mismatch() -> None:
             worker_index=3,
             request_id=route.request_id,
         )
-        response_wire = build_policy_response_batch_wire(
+        responses = build_completed_policy_responses(
             routes=(mismatch_route,),
             decisions=_compact_policy_decision_batch(row_count=1),
+        )
+        assert isinstance(responses, Ok)
+        response_wire = encode_policy_response_batch_wire(
+            responses.value
         )
         assert isinstance(response_wire, Ok)
         send_result = await peers.model_rank_peer.send_response(
@@ -355,10 +364,12 @@ async def _send_decision_response(
     peer: AsyncPolicyPeer,
     route: PolicyRequestRoute,
 ) -> None:
-    response_wire = build_policy_response_batch_wire(
+    responses = build_completed_policy_responses(
         routes=(route,),
         decisions=_compact_policy_decision_batch(row_count=1),
     )
+    assert isinstance(responses, Ok)
+    response_wire = encode_policy_response_batch_wire(responses.value)
     assert isinstance(response_wire, Ok)
     send_result = await peer.send_response(response_wire.value)
     assert isinstance(send_result, Ok)
@@ -400,7 +411,7 @@ class _MismatchedFirstResponseTransport:
         self._release_first_response.set()
 
     async def submit_batch(
-        self, *, batch: CompiledPolicyRequestBatch
+        self, *, batch: BorrowedPolicyRequestBatch
     ) -> Ok[None]:
         assert batch.row_count() == 1
         route = batch.routes[0]

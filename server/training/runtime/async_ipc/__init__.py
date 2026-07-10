@@ -1,5 +1,10 @@
 """Async framed IPC primitives for training child processes."""
 
+from server.training.runtime.async_ipc.broadcast import (
+    ControlCommandBroadcastFailure,
+    ControlCommandSender,
+    broadcast_control_commands,
+)
 from server.training.runtime.async_ipc.control import (
     AsyncChildControlEndpoint,
     AsyncCoordinatorControlEndpoint,
@@ -21,7 +26,10 @@ __all__ = (
     "AsyncFrameEndpoint",
     "AsyncProcessControlLink",
     "AsyncSocketPair",
+    "ControlCommandBroadcastFailure",
+    "ControlCommandSender",
     "ProcessControlProtocol",
+    "broadcast_control_commands",
     "create_async_process_control_link",
     "create_async_socket_pair",
     "wait_async_control_responses",

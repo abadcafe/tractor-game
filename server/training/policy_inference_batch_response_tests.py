@@ -15,10 +15,12 @@ from server.training.policy_inference_batch import (
     CompletedPolicyResponse,
     PolicyRequestRoute,
     PolicyResponseBatchWire,
+    RejectedPolicyResponse,
     build_completed_policy_responses,
-    build_policy_response_batch_wire,
+    build_rejected_policy_responses,
     decode_policy_response,
     decode_policy_response_batch_wire,
+    encode_policy_response_batch_wire,
 )
 from server.training.policy_sampling import (
     CompactPolicyDecisionBatch,
@@ -30,10 +32,12 @@ from server.training.semantic_actions.codec import semantic_argument_id
 
 
 def test_policy_response_batch_wire_decodes_rule_action() -> None:
-    response_wire = build_policy_response_batch_wire(
+    responses = build_completed_policy_responses(
         routes=(_route(),),
         decisions=_compact_policy_decision_batch(),
     )
+    assert isinstance(responses, Ok)
+    response_wire = encode_policy_response_batch_wire(responses.value)
     assert isinstance(response_wire, Ok)
 
     decoded_wire = decode_policy_response_batch_wire(
@@ -55,6 +59,32 @@ def test_policy_response_batch_wire_decodes_rule_action() -> None:
     assert isinstance(decoded_decision, Ok)
     assert decoded_decision.value.decision_handle.model_rank_index == 1
     assert decoded_decision.value.decision_handle.policy_version == 3
+
+
+def test_policy_response_batch_wire_decodes_mixed_rows() -> None:
+    completed = build_completed_policy_responses(
+        routes=(_route(),),
+        decisions=_compact_policy_decision_batch(),
+    )
+    rejected = build_rejected_policy_responses(
+        routes=(PolicyRequestRoute(worker_index=2, request_id=6),),
+        reason="bad logits",
+    )
+    assert isinstance(completed, Ok)
+    assert isinstance(rejected, Ok)
+
+    wire = encode_policy_response_batch_wire(
+        completed.value + rejected.value
+    )
+    assert isinstance(wire, Ok)
+    decoded = decode_policy_response_batch_wire(wire.value.data)
+
+    assert isinstance(decoded, Ok)
+    assert len(decoded.value) == 2
+    assert isinstance(decoded.value[0], CompletedPolicyResponse)
+    assert isinstance(decoded.value[1], RejectedPolicyResponse)
+    assert decoded.value[1].route.request_id == 6
+    assert decoded.value[1].reason == "bad logits"
 
 
 def test_build_completed_policy_responses_uses_compact_decisions() -> (
@@ -103,10 +133,12 @@ def test_decode_response_batch_rejects_negative_request_route() -> None:
 
 
 def _completed_response_wire() -> PolicyResponseBatchWire:
-    result = build_policy_response_batch_wire(
+    responses = build_completed_policy_responses(
         routes=(_route(),),
         decisions=_compact_policy_decision_batch(),
     )
+    assert isinstance(responses, Ok)
+    result = encode_policy_response_batch_wire(responses.value)
     assert isinstance(result, Ok)
     return result.value
 

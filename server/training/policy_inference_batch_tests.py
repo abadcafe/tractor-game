@@ -5,31 +5,47 @@ from __future__ import annotations
 import torch
 
 from server.player.test_helpers import card, make_snapshot
+from server.protocol import TrickSlotSnapshot, TrickSnapshot
 from server.result import Ok, Rejected
+from server.rules.cards import Card
 from server.training.feature_schema import NUMERIC_FEATURE_COUNT
 from server.training.legal_actions import (
     LegalActionIndex,
     build_legal_action_index,
 )
-from server.training.numeric_features import PAD_NUMERIC_FEATURES
+from server.training.numeric_features import (
+    PAD_NUMERIC_FEATURES,
+    numeric_feature_values,
+)
 from server.training.observation import Observation, build_observation
 from server.training.policy_inference_batch import (
-    CompiledPolicyRequestBatch,
+    BorrowedPolicyRequestBatch,
     PolicyRequestCompiler,
     PolicyRequestInput,
     PolicyRequestRoute,
-    materialize_compiled_policy_request_batch,
+    materialize_borrowed_policy_request_batch,
+)
+from server.training.policy_inference_batch.frame import (
+    decode_policy_request_frame_metadata,
 )
 from server.training.sampling import PolicyDecisionKey
+from server.training.semantic_action_plan.frame import (
+    compile_legal_action_frame,
+)
 from server.training.tensorize import OBSERVATION_COMPONENT_COUNT
-from server.training.vocab_schema import PAD_COMPONENT_IDS, VOCAB_SCHEMA
+from server.training.vocab import component_ids
+from server.training.vocab_schema import (
+    PAD_COMPONENT_IDS,
+    VOCAB_SCHEMA,
+    TokenComponentIds,
+)
 
 
 def test_compile_request_batch_materializes_device_batch() -> None:
     batch_result = _request_batch((_request_input(),))
     assert isinstance(batch_result, Ok)
 
-    device_result = materialize_compiled_policy_request_batch(
+    device_result = materialize_borrowed_policy_request_batch(
         batch=batch_result.value,
         device=torch.device("cpu"),
     )
@@ -78,6 +94,28 @@ def test_compile_request_batch_accepts_mixed_generation_widths() -> (
     )
 
 
+def test_request_frame_metadata_carries_canonical_layout() -> None:
+    batch_result = _request_batch((_request_input(),))
+    assert isinstance(batch_result, Ok)
+    metadata = batch_result.value.metadata
+
+    decoded_result = decode_policy_request_frame_metadata(
+        batch_result.value.frame.view()
+    )
+
+    assert isinstance(decoded_result, Ok)
+    decoded = decoded_result.value
+    assert metadata.layout.total_bytes == metadata.byte_count
+    assert metadata.layout.batch_capacity == metadata.batch_capacity
+    assert metadata.layout.max_observation_tokens == (
+        metadata.max_observation_tokens
+    )
+    assert metadata.layout.padded_generation_steps == (
+        metadata.padded_generation_steps
+    )
+    assert decoded.layout == metadata.layout
+
+
 def test_compile_request_batch_rejects_token_over_budget() -> None:
     compiler = PolicyRequestCompiler(
         batch_capacity=4,
@@ -97,7 +135,7 @@ def test_compile_request_batch_leaves_padding_columns_zero() -> None:
     batch_result = _request_batch((_request_input(),))
     assert isinstance(batch_result, Ok)
 
-    device_result = materialize_compiled_policy_request_batch(
+    device_result = materialize_borrowed_policy_request_batch(
         batch=batch_result.value,
         device=torch.device("cpu"),
     )
@@ -124,6 +162,127 @@ def test_compile_request_batch_leaves_padding_columns_zero() -> None:
     assert int(torch.count_nonzero(numeric_mask_padding).item()) == 0
 
 
+def test_compile_request_batch_reuses_compiler_workspace() -> None:
+    compiler = PolicyRequestCompiler(
+        batch_capacity=4,
+        max_observation_tokens=512,
+    )
+    first_result = compiler.compile_batch(
+        (_play_request_input(), _play_request_input())
+    )
+    assert isinstance(first_result, Ok)
+    first_buffer = first_result.value.frame.view().obj
+
+    second_result = compiler.compile_batch((_request_input(),))
+
+    assert isinstance(second_result, Ok)
+    assert second_result.value.frame.view().obj is first_buffer
+
+
+def test_reused_request_workspace_clears_padding_columns() -> None:
+    compiler = PolicyRequestCompiler(
+        batch_capacity=4,
+        max_observation_tokens=512,
+    )
+    wide_result = compiler.compile_batch((_play_request_input(),))
+    assert isinstance(wide_result, Ok)
+
+    narrow_result = compiler.compile_batch((_request_input(),))
+    assert isinstance(narrow_result, Ok)
+    device_result = materialize_borrowed_policy_request_batch(
+        batch=narrow_result.value,
+        device=torch.device("cpu"),
+    )
+
+    assert isinstance(device_result, Ok)
+    token_count = len(_observation().tokens)
+    component_padding = (
+        device_result.value.observation_batch.component_ids[
+            0, token_count:
+        ]
+    )
+    numeric_value_padding = (
+        device_result.value.observation_batch.numeric_values[
+            0, token_count:
+        ]
+    )
+    numeric_mask_padding = (
+        device_result.value.observation_batch.numeric_masks[
+            0, token_count:
+        ]
+    )
+    assert int(torch.count_nonzero(component_padding).item()) == 0
+    assert int(torch.count_nonzero(numeric_value_padding).item()) == 0
+    assert int(torch.count_nonzero(numeric_mask_padding).item()) == 0
+
+
+def test_compile_request_batch_preserves_fixed_width_columns() -> None:
+    request = _follow_pair_request_input()
+    action_plan = compile_legal_action_frame(request.legal_actions)
+    batch_result = _request_batch((request,))
+    assert isinstance(batch_result, Ok)
+
+    device_result = materialize_borrowed_policy_request_batch(
+        batch=batch_result.value,
+        device=torch.device("cpu"),
+    )
+
+    assert isinstance(device_result, Ok)
+    device_batch = device_result.value
+    token = request.observation.tokens[0]
+    numeric = numeric_feature_values(token)
+    action_batch = device_batch.action_plan_batch
+    assert _tensor_int_tuple(
+        device_batch.observation_batch.component_ids[0, 0]
+    ) == _component_tuple(component_ids(token))
+    assert torch.allclose(
+        device_batch.observation_batch.numeric_values[0, 0],
+        torch.tensor(numeric.values, dtype=torch.float32),
+    )
+    assert torch.allclose(
+        device_batch.observation_batch.numeric_masks[0, 0],
+        torch.tensor(numeric.masks, dtype=torch.float32),
+    )
+    assert (
+        _tensor_int_tuple(action_batch.available_counts[0])
+        == action_plan.available_counts
+    )
+    assert (
+        _tensor_int_tuple(action_batch.effective_suits[0])
+        == action_plan.effective_suits
+    )
+    assert (
+        _tensor_bool_tuple(action_batch.same_suit_mask[0])
+        == action_plan.same_suit_mask
+    )
+    assert (
+        _tensor_bool_tuple(action_batch.off_suit_mask[0])
+        == action_plan.off_suit_mask
+    )
+    assert (
+        _tensor_bool_tuple(action_batch.pair_face_mask[0])
+        == action_plan.pair_face_mask
+    )
+
+    pair_plan_count = len(action_plan.pair_plan_masks)
+    assert pair_plan_count > 0
+    for pair_plan_index, expected_mask in enumerate(
+        action_plan.pair_plan_masks
+    ):
+        assert (
+            _tensor_bool_tuple(
+                action_batch.pair_plan_masks[0, pair_plan_index]
+            )
+            == expected_mask
+        )
+    assert _tensor_bool_tuple(
+        action_batch.pair_plan_row_mask[0, :pair_plan_count]
+    ) == tuple(True for _ in action_plan.pair_plan_masks)
+    assert not bool(
+        action_batch.pair_plan_row_mask[0, pair_plan_count].item()
+    )
+
+
 def test_padding_token_schema_is_zero_initialized() -> None:
     assert VOCAB_SCHEMA.obs_pad_id == 0
     assert PAD_COMPONENT_IDS.token_type == 0
@@ -147,7 +306,7 @@ def test_padding_token_schema_is_zero_initialized() -> None:
 
 def _request_batch(
     requests: tuple[PolicyRequestInput, ...],
-) -> Ok[CompiledPolicyRequestBatch] | Rejected:
+) -> Ok[BorrowedPolicyRequestBatch] | Rejected:
     compiler = PolicyRequestCompiler(
         batch_capacity=4,
         max_observation_tokens=512,
@@ -199,6 +358,48 @@ def _play_request_input() -> PolicyRequestInput:
     )
 
 
+def _follow_pair_request_input() -> PolicyRequestInput:
+    lead_cards = [card("hearts", "A", 1), card("hearts", "A", 2)]
+    snapshot = make_snapshot(
+        phase="PLAYING",
+        awaiting_action="play",
+        player_hand=[
+            card("hearts", "K", 1),
+            card("hearts", "K", 2),
+            card("hearts", "Q", 1),
+            card("hearts", "Q", 2),
+            card("spades", "3", 1),
+        ],
+        trump_rank="2",
+        trick=_trick(
+            lead_player=1,
+            current_player=2,
+            lead_cards=lead_cards,
+        ),
+    )
+    observation = build_observation(
+        player_index=2,
+        snapshot=snapshot,
+        history=(),
+    )
+    return PolicyRequestInput(
+        route=PolicyRequestRoute(worker_index=2, request_id=7),
+        observation=observation,
+        legal_actions=build_legal_action_index(
+            player_index=2,
+            snapshot=snapshot,
+            query=observation.action_query,
+        ),
+        decision_key=PolicyDecisionKey(
+            base_seed=0,
+            policy_version=3,
+            episode_id=0,
+            player_index=2,
+            decision_index=2,
+        ),
+    )
+
+
 def _observation() -> Observation:
     return build_observation(
         player_index=0,
@@ -233,3 +434,54 @@ def _decision_key() -> PolicyDecisionKey:
         player_index=0,
         decision_index=0,
     )
+
+
+def _trick(
+    *,
+    lead_player: int,
+    current_player: int,
+    lead_cards: list[Card],
+) -> TrickSnapshot:
+    return TrickSnapshot(
+        lead_player=lead_player,
+        current_player=current_player,
+        slots=[
+            TrickSlotSnapshot(player=0, cards=[]),
+            TrickSlotSnapshot(
+                player=lead_player,
+                cards=list(lead_cards),
+            ),
+            TrickSlotSnapshot(player=2, cards=[]),
+            TrickSlotSnapshot(player=3, cards=[]),
+        ],
+    )
+
+
+def _component_tuple(
+    values: TokenComponentIds,
+) -> tuple[int, ...]:
+    return (
+        values.token_type,
+        values.segment,
+        values.field,
+        values.value,
+        values.suit,
+        values.rank,
+        values.points,
+        values.color,
+        values.role,
+        values.trick_age,
+        values.trick_state,
+        values.play_order,
+        values.count,
+        values.play_width,
+        values.event_age,
+    )
+
+
+def _tensor_int_tuple(values: torch.Tensor) -> tuple[int, ...]:
+    return tuple(int(value.item()) for value in values)
+
+
+def _tensor_bool_tuple(values: torch.Tensor) -> tuple[bool, ...]:
+    return tuple(bool(value.item()) for value in values)

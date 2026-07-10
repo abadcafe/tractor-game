@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import multiprocessing as mp
+from typing import NoReturn
 
+import pytest
 import torch
 
 from server.result import Ok, Rejected
@@ -18,6 +20,9 @@ from server.training.runtime.shared_rollout_arena import (
     reset_rollout_arenas,
     snapshot_rollout_arenas,
     wait_rollout_sample_target,
+)
+from server.training.runtime.shared_rollout_arena import (
+    group as arena_group_module,
 )
 from server.training.runtime.shared_rollout_arena.types import (
     RolloutRoundMetrics,
@@ -144,12 +149,81 @@ def test_wait_rollout_sample_target_uses_aggregate_samples() -> None:
         close_shared_rollout_arenas(group)
 
 
+def test_snapshot_and_reset_reuse_group_owned_segments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    group_result = _arena_group(worker_count=2, capacity=1)
+    assert isinstance(group_result, Ok)
+    group = group_result.value
+    try:
+        first_writer = attach_rollout_arena_writer(group.handles[0])
+        second_writer = attach_rollout_arena_writer(group.handles[1])
+        try:
+            first_append = first_writer.append_round(
+                policy_version=3,
+                metrics=_metrics(decision_count=1),
+                commit=_commit(policy_version=3, model_ranks=(0,)),
+            )
+            second_append = second_writer.append_round(
+                policy_version=3,
+                metrics=_metrics(decision_count=1),
+                commit=_commit(policy_version=3, model_ranks=(0,)),
+            )
+        finally:
+            first_writer.close()
+            second_writer.close()
+
+        assert isinstance(first_append, Ok)
+        assert isinstance(second_append, Ok)
+        monkeypatch.setattr(
+            arena_group_module.shared_memory,
+            "SharedMemory",
+            _reject_group_shared_memory_attach,
+        )
+
+        snapshot = snapshot_rollout_arenas(
+            group=group, policy_version=3
+        )
+        reset = reset_rollout_arenas(group=group, policy_version=4)
+        reset_snapshot = snapshot_rollout_arenas(
+            group=group, policy_version=4
+        )
+    finally:
+        close_shared_rollout_arenas(group)
+
+    assert isinstance(snapshot, Ok)
+    assert snapshot.value.sample_count == 2
+    assert isinstance(reset, Ok)
+    assert isinstance(reset_snapshot, Ok)
+    assert reset_snapshot.value.sample_count == 0
+
+
+def test_arena_group_uses_explicit_per_worker_capacity() -> None:
+    group_result = _arena_group(worker_count=3, capacity=5)
+    assert isinstance(group_result, Ok)
+    group = group_result.value
+    try:
+        snapshot = snapshot_rollout_arenas(
+            group=group, policy_version=3
+        )
+    finally:
+        close_shared_rollout_arenas(group)
+
+    assert isinstance(snapshot, Ok)
+    assert tuple(handle.capacity for handle in group.handles) == (
+        5,
+        5,
+        5,
+    )
+    assert snapshot.value.capacity == 15
+
+
 def test_append_round_notifies_progress_after_arena_write() -> None:
     group_result = _arena_group(worker_count=1, capacity=1)
     assert isinstance(group_result, Ok)
     group = group_result.value
     events: list[str] = []
-    arena_condition = _RecordingCondition(name="arena", events=events)
+    arena_lock = _RecordingCondition(name="arena", events=events)
     progress_condition = _RecordingCondition(
         name="progress",
         events=events,
@@ -159,7 +233,7 @@ def test_append_round_notifies_progress_after_arena_write() -> None:
         worker_index=real_handle.worker_index,
         shared_memory_name=real_handle.shared_memory_name,
         capacity=real_handle.capacity,
-        condition=arena_condition,
+        lock=arena_lock,
         progress_condition=progress_condition,
     )
     try:
@@ -178,9 +252,47 @@ def test_append_round_notifies_progress_after_arena_write() -> None:
     assert isinstance(append, Ok)
     assert events == [
         "arena.acquire",
-        "arena.notify_all",
         "arena.release",
         "progress.acquire",
+        "progress.notify_all",
+        "progress.release",
+    ]
+
+
+def test_reset_rollout_arenas_notifies_only_progress() -> None:
+    group_result = _arena_group(worker_count=1, capacity=1)
+    assert isinstance(group_result, Ok)
+    group = group_result.value
+    events: list[str] = []
+    arena_lock = _RecordingCondition(name="arena", events=events)
+    progress_condition = _RecordingCondition(
+        name="progress",
+        events=events,
+    )
+    real_handle = group.handles[0]
+    handle = RolloutArenaHandle(
+        worker_index=real_handle.worker_index,
+        shared_memory_name=real_handle.shared_memory_name,
+        capacity=real_handle.capacity,
+        lock=arena_lock,
+        progress_condition=progress_condition,
+    )
+    recording_group = SharedRolloutArenaGroup(
+        handles=(handle,), segments=group.segments
+    )
+    try:
+        reset = reset_rollout_arenas(
+            group=recording_group,
+            policy_version=4,
+        )
+    finally:
+        close_shared_rollout_arenas(group)
+
+    assert isinstance(reset, Ok)
+    assert events == [
+        "progress.acquire",
+        "arena.acquire",
+        "arena.release",
         "progress.notify_all",
         "progress.release",
     ]
@@ -332,9 +444,14 @@ def _arena_group(
     return create_shared_rollout_arena_group(
         context=context,
         worker_count=worker_count,
-        samples_per_update=capacity,
-        slack_sample_count=0,
+        arena_capacity_per_worker=capacity,
         policy_version=3,
+    )
+
+
+def _reject_group_shared_memory_attach(*, name: str) -> NoReturn:
+    raise AssertionError(
+        f"group snapshot/reset must reuse owned segment: {name}"
     )
 
 

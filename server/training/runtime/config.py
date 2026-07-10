@@ -48,13 +48,17 @@ class ExecutionTimeouts:
     """Watchdog limits for distinct runtime stages."""
 
     round_seconds: float = 120.0
-    rollout_response_seconds: float = 240.0
+    sampling_start_seconds: float = 240.0
+    rollout_sample_seconds: float = 240.0
+    sampling_stop_seconds: float = 240.0
     state_sync_seconds: float = 300.0
     update_seconds: float = 3600.0
 
     def __post_init__(self) -> None:
         assert _positive_finite(self.round_seconds)
-        assert _positive_finite(self.rollout_response_seconds)
+        assert _positive_finite(self.sampling_start_seconds)
+        assert _positive_finite(self.rollout_sample_seconds)
+        assert _positive_finite(self.sampling_stop_seconds)
         assert _positive_finite(self.state_sync_seconds)
         assert _positive_finite(self.update_seconds)
 

@@ -11,14 +11,12 @@ from server.training.model import TractorPolicyModel
 from server.training.observation import Observation
 from server.training.policy import PolicyDecision
 from server.training.policy_inference_batch import (
-    CompletedPolicyResponse,
     PolicyRequestCompiler,
     PolicyRequestInput,
     PolicyRequestRoute,
-    build_policy_response_batch_wire,
+    build_completed_policy_responses,
     decode_policy_response,
-    decode_policy_response_batch_wire,
-    materialize_compiled_policy_request_batch,
+    materialize_borrowed_policy_request_batch,
 )
 from server.training.policy_sampling.model_rank_sample_arena import (
     ModelRankSampleArena,
@@ -47,6 +45,10 @@ class TorchTrainingPolicy:
             model_rank_index=0,
             device=device,
         )
+        self.compiler = PolicyRequestCompiler(
+            batch_capacity=1,
+            max_observation_tokens=self.config.max_tokens,
+        )
         self.sampler = SemanticActionSampler.create(
             batch_capacity=1,
             device=device,
@@ -62,11 +64,7 @@ class TorchTrainingPolicy:
             worker_index=0,
             request_id=decision_key.decision_index,
         )
-        compiler = PolicyRequestCompiler(
-            batch_capacity=1,
-            max_observation_tokens=self.config.max_tokens,
-        )
-        compiled_result = compiler.compile_batch(
+        compiled_result = self.compiler.compile_batch(
             (
                 PolicyRequestInput(
                     route=route,
@@ -78,7 +76,7 @@ class TorchTrainingPolicy:
         )
         if isinstance(compiled_result, Rejected):
             return compiled_result
-        request_result = materialize_compiled_policy_request_batch(
+        request_result = materialize_borrowed_policy_request_batch(
             batch=compiled_result.value,
             device=self.device,
         )
@@ -94,19 +92,13 @@ class TorchTrainingPolicy:
         )
         if isinstance(decision_result, Rejected):
             return decision_result
-        wire_result = build_policy_response_batch_wire(
+        response_result = build_completed_policy_responses(
             routes=(route,), decisions=decision_result.value
-        )
-        if isinstance(wire_result, Rejected):
-            return wire_result
-        response_result = decode_policy_response_batch_wire(
-            wire_result.value.data
         )
         if isinstance(response_result, Rejected):
             return response_result
         assert len(response_result.value) == 1
         response = response_result.value[0]
-        assert isinstance(response, CompletedPolicyResponse)
         return decode_policy_response(
             legal_actions=legal_actions, response=response
         )

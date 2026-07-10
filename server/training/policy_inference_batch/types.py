@@ -9,6 +9,9 @@ from torch import Tensor
 
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
+from server.training.policy_inference_batch.schema import (
+    PolicyRequestBatchLayout,
+)
 from server.training.sampling import PolicyDecisionKey
 from server.training.semantic_action_plan import DeviceActionPlanBatch
 from server.training.tensorize import ObservationTensorBatch
@@ -39,21 +42,28 @@ class PolicyRequestInput:
         assert self.decision_key.policy_version >= 0
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class PolicyRequestWireFrame:
-    """One columnar binary policy inference request batch."""
+    """One borrowed columnar binary policy inference request frame."""
 
-    data: bytearray
-    byte_count: int
+    _buffer: bytearray
+    _byte_count: int
 
-    def __post_init__(self) -> None:
-        assert self.data
-        assert self.byte_count > 0
-        assert self.byte_count <= len(self.data)
+    def __init__(self, *, buffer: bytearray, byte_count: int) -> None:
+        assert buffer
+        assert byte_count > 0
+        assert byte_count <= len(buffer)
+        object.__setattr__(self, "_buffer", buffer)
+        object.__setattr__(self, "_byte_count", byte_count)
+
+    @property
+    def byte_count(self) -> int:
+        """Return active frame byte count."""
+        return self._byte_count
 
     def view(self) -> memoryview:
         """Return the active frame bytes without copying."""
-        return memoryview(self.data)[: self.byte_count]
+        return memoryview(self._buffer)[: self._byte_count]
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +78,7 @@ class PolicyRequestFrameMetadata:
     routes: tuple[PolicyRequestRoute, ...]
     policy_versions: tuple[int, ...]
     byte_count: int
+    layout: PolicyRequestBatchLayout
 
     def __post_init__(self) -> None:
         assert self.row_count > 0
@@ -84,11 +95,19 @@ class PolicyRequestFrameMetadata:
         assert len(self.policy_versions) == self.row_count
         assert all(version >= 0 for version in self.policy_versions)
         assert self.byte_count > 0
+        assert self.layout.batch_capacity == self.batch_capacity
+        assert self.layout.max_observation_tokens == (
+            self.max_observation_tokens
+        )
+        assert self.layout.padded_generation_steps == (
+            self.padded_generation_steps
+        )
+        assert self.layout.total_bytes == self.byte_count
 
 
 @dataclass(frozen=True, slots=True)
-class CompiledPolicyRequestBatch:
-    """Transport-ready worker request batch with hidden row layout."""
+class BorrowedPolicyRequestBatch:
+    """Transport-ready batch borrowed from compiler workspace."""
 
     frame: PolicyRequestWireFrame
     metadata: PolicyRequestFrameMetadata

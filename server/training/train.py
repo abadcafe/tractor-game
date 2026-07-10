@@ -70,7 +70,9 @@ class ExecutionConfigOverrides:
     model_ranks: ModelRankPlacement | None = None
     ppo_profile: PPOProfileMode | None = None
     round_timeout_seconds: float | None = None
-    rollout_response_timeout_seconds: float | None = None
+    sampling_start_timeout_seconds: float | None = None
+    rollout_sample_timeout_seconds: float | None = None
+    sampling_stop_timeout_seconds: float | None = None
     state_sync_timeout_seconds: float | None = None
     update_timeout_seconds: float | None = None
     telemetry_interval_seconds: float | None = None
@@ -174,9 +176,15 @@ def resolve_execution_config(
         round_seconds=base.timeouts.round_seconds
         if overrides.round_timeout_seconds is None
         else overrides.round_timeout_seconds,
-        rollout_response_seconds=base.timeouts.rollout_response_seconds
-        if overrides.rollout_response_timeout_seconds is None
-        else overrides.rollout_response_timeout_seconds,
+        sampling_start_seconds=base.timeouts.sampling_start_seconds
+        if overrides.sampling_start_timeout_seconds is None
+        else overrides.sampling_start_timeout_seconds,
+        rollout_sample_seconds=base.timeouts.rollout_sample_seconds
+        if overrides.rollout_sample_timeout_seconds is None
+        else overrides.rollout_sample_timeout_seconds,
+        sampling_stop_seconds=base.timeouts.sampling_stop_seconds
+        if overrides.sampling_stop_timeout_seconds is None
+        else overrides.sampling_stop_timeout_seconds,
         state_sync_seconds=base.timeouts.state_sync_seconds
         if overrides.state_sync_timeout_seconds is None
         else overrides.state_sync_timeout_seconds,
@@ -420,7 +428,17 @@ def _main_impl(argv: Sequence[str] | None = None) -> None:
         default=None,
     )
     parser.add_argument(
-        "--rollout-response-timeout-seconds",
+        "--sampling-start-timeout-seconds",
+        type=_positive_float_arg,
+        default=None,
+    )
+    parser.add_argument(
+        "--rollout-sample-timeout-seconds",
+        type=_positive_float_arg,
+        default=None,
+    )
+    parser.add_argument(
+        "--sampling-stop-timeout-seconds",
         type=_positive_float_arg,
         default=None,
     )
@@ -556,8 +574,14 @@ def _main_impl(argv: Sequence[str] | None = None) -> None:
             model_ranks=args.model_ranks,
             ppo_profile=_ppo_profile_arg(args.ppo_profile),
             round_timeout_seconds=args.round_timeout_seconds,
-            rollout_response_timeout_seconds=(
-                args.rollout_response_timeout_seconds
+            sampling_start_timeout_seconds=(
+                args.sampling_start_timeout_seconds
+            ),
+            rollout_sample_timeout_seconds=(
+                args.rollout_sample_timeout_seconds
+            ),
+            sampling_stop_timeout_seconds=(
+                args.sampling_stop_timeout_seconds
             ),
             state_sync_timeout_seconds=(
                 args.state_sync_timeout_seconds

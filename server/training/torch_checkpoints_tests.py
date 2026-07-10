@@ -1954,7 +1954,9 @@ def test_resolve_train_config_defaults_and_resume_overrides(
             ),
             ppo_profile="detailed",
             round_timeout_seconds=111.0,
-            rollout_response_timeout_seconds=222.0,
+            sampling_start_timeout_seconds=222.0,
+            rollout_sample_timeout_seconds=223.0,
+            sampling_stop_timeout_seconds=224.0,
             state_sync_timeout_seconds=333.0,
             update_timeout_seconds=444.0,
         )
@@ -1970,7 +1972,9 @@ def test_resolve_train_config_defaults_and_resume_overrides(
     assert execution.value.ppo_profile == "detailed"
     assert execution.value.timeouts == ExecutionTimeouts(
         round_seconds=111.0,
-        rollout_response_seconds=222.0,
+        sampling_start_seconds=222.0,
+        rollout_sample_seconds=223.0,
+        sampling_stop_seconds=224.0,
         state_sync_seconds=333.0,
         update_seconds=444.0,
     )

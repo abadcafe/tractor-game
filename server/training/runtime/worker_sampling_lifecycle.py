@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, assert_never
 
 from server import result as _result
 from server.result import Ok, Rejected
 from server.training.runtime.async_ipc import (
     AsyncCoordinatorControlEndpoint,
+    ControlCommandBroadcastFailure,
+    broadcast_control_commands,
     wait_async_control_responses,
 )
 from server.training.runtime.config import ExecutionConfig
@@ -66,28 +68,32 @@ async def start_worker_sampling_session(
 ) -> _result.Ok[WorkerSamplingSession] | _result.Rejected:
     """Start sampling on every worker or clean up commanded workers."""
     assert handles
-    commanded_handles: list[WorkerControlHandle] = []
-    for handle in handles:
-        send_result = await handle.control.send_command(
-            WorkerStartSamplingCommand(
-                policy_version=policy_version,
-                game_env_count=execution_config.game_envs_per_worker,
-            )
+    send_result = await broadcast_control_commands(
+        targets=handles,
+        sender=_worker_control_sender,
+        command=lambda _handle: WorkerStartSamplingCommand(
+            policy_version=policy_version,
+            game_env_count=execution_config.game_envs_per_worker,
+        ),
+    )
+    if isinstance(send_result, ControlCommandBroadcastFailure):
+        return await _abort_worker_sampling_start(
+            handles=send_result.sent_targets,
+            policy_version=policy_version,
+            timeout_seconds=(
+                execution_config.timeouts.sampling_stop_seconds
+            ),
+            failure=send_result.rejection,
         )
-        if isinstance(send_result, Rejected):
-            return await _abort_worker_sampling_start(
-                handles=tuple(commanded_handles),
-                policy_version=policy_version,
-                timeout_seconds=(
-                    execution_config.timeouts.rollout_response_seconds
-                ),
-                failure=send_result,
-            )
-        commanded_handles.append(handle)
     return await _receive_worker_sampling_session_started(
-        commanded_handles=tuple(commanded_handles),
+        commanded_handles=send_result.value,
         policy_version=policy_version,
-        timeout_seconds=execution_config.timeouts.rollout_response_seconds,
+        start_timeout_seconds=(
+            execution_config.timeouts.sampling_start_seconds
+        ),
+        stop_timeout_seconds=(
+            execution_config.timeouts.sampling_stop_seconds
+        ),
     )
 
 
@@ -110,24 +116,6 @@ async def stop_worker_sampling_session(
     )
 
 
-async def reject_after_sampling_cleanup(
-    *,
-    session: WorkerSamplingSession,
-    timeout_seconds: float,
-    failure: Rejected,
-) -> Rejected:
-    """Stop active sampling before returning an earlier failure."""
-    stopped_result = await stop_worker_sampling_session(
-        session=session,
-        timeout_seconds=timeout_seconds,
-    )
-    if isinstance(stopped_result, Rejected):
-        return _cleanup_rejection(
-            failure=failure, cleanup=stopped_result
-        )
-    return failure
-
-
 def _cleanup_rejection(
     *, failure: Rejected, cleanup: Rejected
 ) -> Rejected:
@@ -143,33 +131,43 @@ async def _send_worker_stop_sampling_commands(
     policy_version: int,
 ) -> _result.Ok[None] | _result.Rejected:
     assert handles
-    for handle in handles:
-        send_result = await handle.control.send_command(
-            WorkerStopSamplingCommand(policy_version=policy_version)
-        )
-        if isinstance(send_result, Rejected):
-            return send_result
+    send_result = await broadcast_control_commands(
+        targets=handles,
+        sender=_worker_control_sender,
+        command=lambda _handle: WorkerStopSamplingCommand(
+            policy_version=policy_version
+        ),
+    )
+    if isinstance(send_result, ControlCommandBroadcastFailure):
+        return send_result.rejection
     return Ok(value=None)
+
+
+def _worker_control_sender(
+    handle: WorkerControlHandle,
+) -> AsyncCoordinatorControlEndpoint[WorkerCommand, WorkerResponse]:
+    return handle.control
 
 
 async def _receive_worker_sampling_session_started(
     *,
     commanded_handles: tuple[WorkerControlHandle, ...],
     policy_version: int,
-    timeout_seconds: float,
+    start_timeout_seconds: float,
+    stop_timeout_seconds: float,
 ) -> _result.Ok[WorkerSamplingSession] | _result.Rejected:
     started_handles: list[WorkerControlHandle] = []
     pending = list(commanded_handles)
     while pending:
         ready_result = await _wait_worker_responses(
             handles=tuple(pending),
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=start_timeout_seconds,
         )
         if isinstance(ready_result, Rejected):
             return await _abort_worker_sampling_start(
                 handles=commanded_handles,
                 policy_version=policy_version,
-                timeout_seconds=timeout_seconds,
+                timeout_seconds=stop_timeout_seconds,
                 failure=ready_result,
             )
         for handle in ready_result.value:
@@ -178,7 +176,7 @@ async def _receive_worker_sampling_session_started(
                 return await _abort_worker_sampling_start(
                     handles=commanded_handles,
                     policy_version=policy_version,
-                    timeout_seconds=timeout_seconds,
+                    timeout_seconds=stop_timeout_seconds,
                     failure=response_result,
                 )
             response = response_result.value
@@ -187,7 +185,7 @@ async def _receive_worker_sampling_session_started(
                 return await _abort_worker_sampling_start(
                     handles=commanded_handles,
                     policy_version=policy_version,
-                    timeout_seconds=timeout_seconds,
+                    timeout_seconds=stop_timeout_seconds,
                     failure=_worker_command_rejection(response),
                 )
             if isinstance(response, WorkerSamplingStarted):
@@ -195,7 +193,7 @@ async def _receive_worker_sampling_session_started(
                     return await _abort_worker_sampling_start(
                         handles=commanded_handles,
                         policy_version=policy_version,
-                        timeout_seconds=timeout_seconds,
+                        timeout_seconds=stop_timeout_seconds,
                         failure=Rejected(
                             reason=(
                                 "worker returned stale sampling start "
@@ -208,7 +206,7 @@ async def _receive_worker_sampling_session_started(
             return await _abort_worker_sampling_start(
                 handles=commanded_handles,
                 policy_version=policy_version,
-                timeout_seconds=timeout_seconds,
+                timeout_seconds=stop_timeout_seconds,
                 failure=Rejected(
                     reason=_unexpected_worker_response_reason(
                         response=response,
@@ -346,38 +344,49 @@ async def _receive_worker_sampling_stopped(
                 return response_result
             response = response_result.value
             pending.remove(handle)
-            if isinstance(response, WorkerCommandRejected):
-                return _worker_command_rejection(response)
-            if isinstance(response, WorkerSamplingStarted):
-                return Rejected(
-                    reason="worker returned start during sampling stop"
-                )
-            if isinstance(response, WorkerSamplingAlreadyStopped):
-                return Rejected(
-                    reason=(
-                        "worker returned already-stopped during "
-                        "sampling stop"
+            match response:
+                case WorkerCommandRejected():
+                    return _worker_command_rejection(response)
+                case WorkerSamplingStarted():
+                    return Rejected(
+                        reason=(
+                            "worker returned start during sampling stop"
+                        )
                     )
-                )
-            if isinstance(response, WorkerUpdateCompleted):
-                return Rejected(
-                    reason="worker returned update during sampling"
-                )
-            if isinstance(response, WorkerStateLoaded):
-                return Rejected(
-                    reason="worker returned state sync during sampling"
-                )
-            if isinstance(response, WorkerSnapshotCompleted):
-                return Rejected(
-                    reason="worker returned snapshot during sampling"
-                )
-            if response.policy_version != policy_version:
-                return Rejected(
-                    reason=(
-                        "worker returned stale sampling policy version"
+                case WorkerSamplingAlreadyStopped():
+                    return Rejected(
+                        reason=(
+                            "worker returned already-stopped during "
+                            "sampling stop"
+                        )
                     )
-                )
-            responses.append(response)
+                case WorkerUpdateCompleted():
+                    return Rejected(
+                        reason="worker returned update during sampling"
+                    )
+                case WorkerStateLoaded():
+                    return Rejected(
+                        reason=(
+                            "worker returned state sync during sampling"
+                        )
+                    )
+                case WorkerSnapshotCompleted():
+                    return Rejected(
+                        reason=(
+                            "worker returned snapshot during sampling"
+                        )
+                    )
+                case WorkerSamplingStopped():
+                    if response.policy_version != policy_version:
+                        return Rejected(
+                            reason=(
+                                "worker returned stale sampling policy "
+                                "version"
+                            )
+                        )
+                    responses.append(response)
+                case _:
+                    assert_never(response)
     return Ok(
         value=tuple(
             sorted(responses, key=lambda item: item.worker_index)

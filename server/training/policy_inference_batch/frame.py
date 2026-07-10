@@ -20,6 +20,7 @@ from server.training.policy_inference_batch.schema import (
     ROW_COUNT_INDEX,
     TOTAL_BYTES_INDEX,
     TRACE_COUNT_INDEX,
+    PolicyRequestBatchLayout,
     policy_request_batch_layout,
 )
 from server.training.policy_inference_batch.types import (
@@ -41,6 +42,7 @@ class PolicyRequestFrameShape:
     max_observation_tokens: int
     padded_generation_steps: int
     total_bytes: int
+    layout: PolicyRequestBatchLayout
 
     def __post_init__(self) -> None:
         assert self.row_count > 0
@@ -48,36 +50,37 @@ class PolicyRequestFrameShape:
         assert self.max_observation_tokens > 0
         assert self.padded_generation_steps > 0
         assert self.total_bytes > HEADER_BYTES
+        assert self.layout.batch_capacity == self.batch_capacity
+        assert self.layout.max_observation_tokens == (
+            self.max_observation_tokens
+        )
+        assert self.layout.padded_generation_steps == (
+            self.padded_generation_steps
+        )
+        assert self.layout.total_bytes == self.total_bytes
 
 
 def initialize_policy_request_frame(
     buffer: WritableFrameBuffer,
     *,
     row_count: int,
-    batch_capacity: int,
-    max_observation_tokens: int,
-    padded_generation_steps: int,
+    layout: PolicyRequestBatchLayout,
 ) -> None:
     """Write a request frame header into a caller-owned buffer."""
     assert row_count >= 0
-    assert batch_capacity > 0
-    assert row_count <= batch_capacity
-    assert padded_generation_steps > 0
-    assert padded_generation_steps <= SEMANTIC_CODEC.max_argument_tokens
-    layout = policy_request_batch_layout(
-        batch_capacity=batch_capacity,
-        max_observation_tokens=max_observation_tokens,
-        padded_generation_steps=padded_generation_steps,
+    assert row_count <= layout.batch_capacity
+    assert layout.padded_generation_steps <= (
+        SEMANTIC_CODEC.max_argument_tokens
     )
     assert len(buffer) == layout.total_bytes
     words = (
         REQUEST_BATCH_MAGIC,
         layout.total_bytes,
         row_count,
-        batch_capacity,
-        max_observation_tokens,
+        layout.batch_capacity,
+        layout.max_observation_tokens,
         MAX_TRACE_COUNT,
-        padded_generation_steps,
+        layout.padded_generation_steps,
         MAX_PAIR_PLAN_COUNT,
     )
     for index, word in enumerate(words):
@@ -92,11 +95,7 @@ def decode_policy_request_frame_metadata(
     if isinstance(shape_result, Rejected):
         return shape_result
     shape = shape_result.value
-    layout = policy_request_batch_layout(
-        batch_capacity=shape.batch_capacity,
-        max_observation_tokens=shape.max_observation_tokens,
-        padded_generation_steps=shape.padded_generation_steps,
-    )
+    layout = shape.layout
     routes: list[PolicyRequestRoute] = []
     policy_versions: list[int] = []
     generation_step_counts: list[int] = []
@@ -142,6 +141,7 @@ def decode_policy_request_frame_metadata(
             routes=tuple(routes),
             policy_versions=tuple(policy_versions),
             byte_count=shape.total_bytes,
+            layout=shape.layout,
         )
     )
 
@@ -188,12 +188,12 @@ def decode_policy_request_frame_shape(
         return Rejected(
             reason="policy request pair plan layout mismatch"
         )
-    expected = policy_request_batch_layout(
+    layout = policy_request_batch_layout(
         batch_capacity=batch_capacity,
         max_observation_tokens=max_observation_tokens,
         padded_generation_steps=padded_generation_steps,
-    ).total_bytes
-    if expected != total_bytes:
+    )
+    if layout.total_bytes != total_bytes:
         return Rejected(reason="policy request frame layout mismatch")
     return Ok(
         value=PolicyRequestFrameShape(
@@ -202,6 +202,7 @@ def decode_policy_request_frame_shape(
             max_observation_tokens=max_observation_tokens,
             padded_generation_steps=padded_generation_steps,
             total_bytes=total_bytes,
+            layout=layout,
         )
     )
 

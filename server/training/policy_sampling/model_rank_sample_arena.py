@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Protocol, cast
 
 import torch
 from torch import Tensor
@@ -27,6 +28,10 @@ _INITIAL_CAPACITY = 256
 type ModelRankDecisionBatchResult = (
     _result.Ok[CompactPolicyDecisionBatch] | _result.Rejected
 )
+
+
+class _IntTensorListable(Protocol):
+    def tolist(self) -> list[int]: ...
 
 
 def _arena_minibatch_workspace() -> "_ArenaMinibatchWorkspace":
@@ -401,18 +406,24 @@ class _ArenaMinibatchWorkspace:
             device=selected_step_counts.device,
         ).unsqueeze(0)
         step_positions = positions.expand(local_count, -1)
-        sample_positions = torch.arange(
-            local_count,
-            dtype=torch.long,
-            device=selected_step_counts.device,
-        ).unsqueeze(1)
-        sample_positions = sample_positions.expand(-1, max_step_count)
         active_mask = step_positions < selected_step_counts.unsqueeze(1)
-        self._active_sample_indices = sample_positions[active_mask]
-        self._active_step_indices = step_positions[active_mask]
+        active_positions = torch.nonzero(
+            active_mask.reshape(-1), as_tuple=False
+        ).flatten()
+        self._active_sample_indices = torch.div(
+            active_positions,
+            max_step_count,
+            rounding_mode="floor",
+        )
+        self._active_step_indices = active_positions.remainder(
+            max_step_count
+        )
         self._source_step_indices = (
-            selected_step_offsets.unsqueeze(1) + step_positions
-        )[active_mask]
+            selected_step_offsets.index_select(
+                0, self._active_sample_indices
+            )
+            + self._active_step_indices
+        )
 
     def _component_ids_tensor(self) -> Tensor:
         assert self._component_ids is not None
@@ -1174,11 +1185,9 @@ def _bool_tensor_value(value: Tensor) -> bool:
 
 
 def _int_tensor_tuple(values: Tensor) -> tuple[int, ...]:
-    cpu_values = values.detach().cpu()
-    return tuple(
-        int(cpu_values[index].item())
-        for index in range(int(cpu_values.shape[0]))
-    )
+    assert values.ndim == 1
+    cpu_values = cast(_IntTensorListable, values.detach().cpu())
+    return tuple(cpu_values.tolist())
 
 
 def _row_step_offsets(

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import struct
+from dataclasses import dataclass, field
 
 from server import result as _result
 from server.result import Ok, Rejected
@@ -26,10 +27,11 @@ from server.training.policy_inference_batch.schema import (
     MAX_TRACE_COUNT,
     ColumnLayout,
     PolicyRequestBatchLayout,
+    max_policy_request_batch_frame_bytes,
     policy_request_batch_layout,
 )
 from server.training.policy_inference_batch.types import (
-    CompiledPolicyRequestBatch,
+    BorrowedPolicyRequestBatch,
     PolicyRequestFrameMetadata,
     PolicyRequestInput,
     PolicyRequestRoute,
@@ -54,6 +56,19 @@ from server.training.tokens import ObservationToken
 from server.training.vocab import component_ids
 from server.training.vocab_schema import TokenComponentIds
 
+ACTION_OBSERVATION_COMPONENT_BYTES = (
+    OBSERVATION_COMPONENT_COUNT * I64.size
+)
+NUMERIC_FEATURE_BYTES = NUMERIC_FEATURE_COUNT * F32.size
+
+_COMPONENT_IDS = struct.Struct("<15q")
+_NUMERIC_FEATURES = struct.Struct("<25f")
+_FACE_I64 = struct.Struct("<54q")
+
+assert _COMPONENT_IDS.size == ACTION_OBSERVATION_COMPONENT_BYTES
+assert _NUMERIC_FEATURES.size == NUMERIC_FEATURE_BYTES
+assert _FACE_I64.size == ACTION_FACE_COUNT * I64.size
+
 
 @dataclass(frozen=True, slots=True)
 class _PlannedPolicyRequest:
@@ -73,19 +88,30 @@ class _PlannedPolicyRequest:
 
 @dataclass(slots=True)
 class PolicyRequestCompiler:
-    """Compile raw worker requests into one owned columnar frame."""
+    """Compile raw worker requests into reusable columnar workspace."""
 
     batch_capacity: int
     max_observation_tokens: int
+    _frame_buffer: bytearray = field(init=False, repr=False)
+    _zero_buffer: bytearray = field(init=False, repr=False)
+    _zero_view: memoryview = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         assert self.batch_capacity > 0
         assert self.max_observation_tokens > 0
+        max_frame_bytes = max_policy_request_batch_frame_bytes(
+            batch_capacity=self.batch_capacity,
+            max_observation_tokens=self.max_observation_tokens,
+            padded_generation_steps=SEMANTIC_CODEC.max_argument_tokens,
+        )
+        self._frame_buffer = bytearray(max_frame_bytes)
+        self._zero_buffer = bytearray(max_frame_bytes)
+        self._zero_view = memoryview(self._zero_buffer)
 
     def compile_batch(
         self, requests: tuple[PolicyRequestInput, ...]
-    ) -> _result.Ok[CompiledPolicyRequestBatch] | _result.Rejected:
-        """Compile one bounded request batch into canonical columns."""
+    ) -> _result.Ok[BorrowedPolicyRequestBatch] | _result.Rejected:
+        """Compile one bounded request batch into borrowed columns."""
         assert requests
         if len(requests) > self.batch_capacity:
             return Rejected(reason="policy request batch is full")
@@ -102,6 +128,8 @@ class PolicyRequestCompiler:
             value=_PolicyRequestColumnWriter.compile(
                 requests=tuple(planned_requests),
                 max_observation_tokens=self.max_observation_tokens,
+                frame_buffer=self._frame_buffer,
+                zero_view=self._zero_view,
             )
         )
 
@@ -112,7 +140,6 @@ class _PolicyRequestColumnWriter:
 
     data: bytearray
     layout: PolicyRequestBatchLayout
-    max_observation_tokens: int
 
     @classmethod
     def compile(
@@ -120,8 +147,10 @@ class _PolicyRequestColumnWriter:
         *,
         requests: tuple[_PlannedPolicyRequest, ...],
         max_observation_tokens: int,
-    ) -> CompiledPolicyRequestBatch:
-        """Return an owned compiled batch for planned requests."""
+        frame_buffer: bytearray,
+        zero_view: memoryview,
+    ) -> BorrowedPolicyRequestBatch:
+        """Return a compiled batch borrowed from caller workspace."""
         assert requests
         padded_generation_steps = max(
             request.generation_step_count for request in requests
@@ -131,19 +160,22 @@ class _PolicyRequestColumnWriter:
             max_observation_tokens=max_observation_tokens,
             padded_generation_steps=padded_generation_steps,
         )
-        data = bytearray(layout.total_bytes)
+        assert layout.total_bytes <= len(frame_buffer)
+        assert layout.total_bytes <= zero_view.nbytes
+        frame_buffer[: layout.total_bytes] = zero_view[
+            : layout.total_bytes
+        ]
         writer = cls(
-            data=data,
+            data=frame_buffer,
             layout=layout,
-            max_observation_tokens=max_observation_tokens,
         )
         writer._initialize_header(row_count=len(requests))
         for row_index, request in enumerate(requests):
             writer._write_row(row_index=row_index, request=request)
         frame = PolicyRequestWireFrame(
-            data=data, byte_count=layout.total_bytes
+            buffer=frame_buffer, byte_count=layout.total_bytes
         )
-        return CompiledPolicyRequestBatch(
+        return BorrowedPolicyRequestBatch(
             frame=frame,
             metadata=PolicyRequestFrameMetadata(
                 row_count=len(requests),
@@ -159,6 +191,7 @@ class _PolicyRequestColumnWriter:
                     request.policy_version for request in requests
                 ),
                 byte_count=frame.byte_count,
+                layout=layout,
             ),
         )
 
@@ -166,9 +199,7 @@ class _PolicyRequestColumnWriter:
         initialize_policy_request_frame(
             memoryview(self.data)[: self.layout.total_bytes],
             row_count=row_count,
-            batch_capacity=self.layout.batch_capacity,
-            max_observation_tokens=self.max_observation_tokens,
-            padded_generation_steps=self.layout.padded_generation_steps,
+            layout=self.layout,
         )
 
     def _write_row(
@@ -244,30 +275,24 @@ class _PolicyRequestColumnWriter:
             _row_offset(self.layout.component_ids, row_index)
             + token_index * ACTION_OBSERVATION_COMPONENT_BYTES
         )
-        _pack_i64(self.data, base_offset, values.token_type)
-        _pack_i64(self.data, base_offset + I64.size, values.segment)
-        _pack_i64(self.data, base_offset + I64.size * 2, values.field)
-        _pack_i64(self.data, base_offset + I64.size * 3, values.value)
-        _pack_i64(self.data, base_offset + I64.size * 4, values.suit)
-        _pack_i64(self.data, base_offset + I64.size * 5, values.rank)
-        _pack_i64(self.data, base_offset + I64.size * 6, values.points)
-        _pack_i64(self.data, base_offset + I64.size * 7, values.color)
-        _pack_i64(self.data, base_offset + I64.size * 8, values.role)
-        _pack_i64(
-            self.data, base_offset + I64.size * 9, values.trick_age
-        )
-        _pack_i64(
-            self.data, base_offset + I64.size * 10, values.trick_state
-        )
-        _pack_i64(
-            self.data, base_offset + I64.size * 11, values.play_order
-        )
-        _pack_i64(self.data, base_offset + I64.size * 12, values.count)
-        _pack_i64(
-            self.data, base_offset + I64.size * 13, values.play_width
-        )
-        _pack_i64(
-            self.data, base_offset + I64.size * 14, values.event_age
+        _COMPONENT_IDS.pack_into(
+            self.data,
+            base_offset,
+            values.token_type,
+            values.segment,
+            values.field,
+            values.value,
+            values.suit,
+            values.rank,
+            values.points,
+            values.color,
+            values.role,
+            values.trick_age,
+            values.trick_state,
+            values.play_order,
+            values.count,
+            values.play_width,
+            values.event_age,
         )
 
     def _write_numeric_row(
@@ -285,10 +310,14 @@ class _PolicyRequestColumnWriter:
             _row_offset(self.layout.numeric_masks, row_index)
             + token_index * NUMERIC_FEATURE_BYTES
         )
-        for index, value in enumerate(values.values):
-            _pack_f32(self.data, value_offset + index * F32.size, value)
-        for index, value in enumerate(values.masks):
-            _pack_f32(self.data, mask_offset + index * F32.size, value)
+        assert len(values.values) == NUMERIC_FEATURE_COUNT
+        assert len(values.masks) == NUMERIC_FEATURE_COUNT
+        _NUMERIC_FEATURES.pack_into(
+            self.data, value_offset, *values.values
+        )
+        _NUMERIC_FEATURES.pack_into(
+            self.data, mask_offset, *values.masks
+        )
 
     def _write_action_plan(
         self, *, row_index: int, plan: ActionPlanFrame
@@ -395,10 +424,12 @@ class _PolicyRequestColumnWriter:
             self.layout.pair_plan_row_mask, row_index
         )
         for plan_index, plan_mask in enumerate(plan.pair_plan_masks):
+            assert len(plan_mask) == ACTION_FACE_COUNT
             self.data[row_mask_base + plan_index] = 1
             plan_base = mask_base + plan_index * ACTION_FACE_COUNT
-            for face_index, value in enumerate(plan_mask):
-                self.data[plan_base + face_index] = 1 if value else 0
+            self.data[plan_base : plan_base + ACTION_FACE_COUNT] = (
+                bytes(plan_mask)
+            )
 
     def _write_sampling_thresholds(
         self, *, row_index: int, request: _PlannedPolicyRequest
@@ -434,9 +465,10 @@ class _PolicyRequestColumnWriter:
         row_index: int,
         values: tuple[int, ...],
     ) -> None:
+        assert column.row_bytes == _FACE_I64.size
+        assert len(values) == ACTION_FACE_COUNT
         base_offset = _row_offset(column, row_index)
-        for index, value in enumerate(values):
-            _pack_i64(self.data, base_offset + index * I64.size, value)
+        _FACE_I64.pack_into(self.data, base_offset, *values)
 
     def _write_bool_vector(
         self,
@@ -445,9 +477,12 @@ class _PolicyRequestColumnWriter:
         row_index: int,
         values: tuple[bool, ...],
     ) -> None:
+        assert column.row_bytes == ACTION_FACE_COUNT
+        assert len(values) == ACTION_FACE_COUNT
         base_offset = _row_offset(column, row_index)
-        for index, value in enumerate(values):
-            self.data[base_offset + index] = 1 if value else 0
+        self.data[base_offset : base_offset + ACTION_FACE_COUNT] = (
+            bytes(values)
+        )
 
 
 def _plan_request(
@@ -519,15 +554,5 @@ def _pack_i64(data: bytearray, offset: int, value: int) -> None:
     I64.pack_into(data, offset, value)
 
 
-def _pack_f32(data: bytearray, offset: int, value: float) -> None:
-    F32.pack_into(data, offset, value)
-
-
 def _pack_f64(data: bytearray, offset: int, value: float) -> None:
     F64.pack_into(data, offset, value)
-
-
-ACTION_OBSERVATION_COMPONENT_BYTES = (
-    OBSERVATION_COMPONENT_COUNT * I64.size
-)
-NUMERIC_FEATURE_BYTES = NUMERIC_FEATURE_COUNT * F32.size

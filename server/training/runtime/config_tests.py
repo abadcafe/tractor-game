@@ -126,6 +126,18 @@ def test_execution_timeouts_reject_non_positive_values() -> None:
     assert "AssertionError" in completed.stderr
 
 
+def test_execution_timeouts_keep_sampling_stages_separate() -> None:
+    timeouts = ExecutionTimeouts(
+        sampling_start_seconds=11.0,
+        rollout_sample_seconds=22.0,
+        sampling_stop_seconds=33.0,
+    )
+
+    assert timeouts.sampling_start_seconds == 11.0
+    assert timeouts.rollout_sample_seconds == 22.0
+    assert timeouts.sampling_stop_seconds == 33.0
+
+
 def test_execution_config_derives_workers_from_cpu_list() -> None:
     config = ExecutionConfig(worker_cpus=(4, 5, 6, 7))
 

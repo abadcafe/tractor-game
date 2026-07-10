@@ -172,7 +172,9 @@ async def test_runtime_stops_sampling_after_rollout_wait_failure(
         samples_per_update=4096,
         timeouts=ExecutionTimeouts(
             round_seconds=120.0,
-            rollout_response_seconds=0.2,
+            sampling_start_seconds=10.0,
+            rollout_sample_seconds=0.2,
+            sampling_stop_seconds=10.0,
             state_sync_seconds=10.0,
             update_seconds=2.0,
         ),
