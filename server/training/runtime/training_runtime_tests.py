@@ -29,14 +29,24 @@ from server.training.runtime.config import (
 from server.training.runtime.messages import (
     WorkerCommand,
     WorkerCommandRejected,
+    WorkerLoadStateCommand,
     WorkerResponse,
     WorkerSamplingAlreadyStopped,
     WorkerSamplingStarted,
     WorkerSamplingStopped,
+    WorkerSnapshotCommand,
     WorkerStartSamplingCommand,
     WorkerStopSamplingCommand,
+    WorkerUpdateCommand,
     decode_worker_command,
     decode_worker_response,
+)
+from server.training.runtime.model_rank.messages import (
+    ModelRankCommand,
+    ModelRankResponse,
+    ModelRankUpdateCommand,
+    decode_model_rank_command,
+    decode_model_rank_response,
 )
 from server.training.runtime.shared_rollout_arena import (
     RolloutArenaSnapshot,
@@ -44,8 +54,14 @@ from server.training.runtime.shared_rollout_arena import (
     close_shared_rollout_arenas,
     create_shared_rollout_arena_group,
 )
+from server.training.runtime.state import (
+    ModelTensorState,
+    OptimizerPayload,
+    RuntimeTrainingState,
+)
 from server.training.runtime.worker_sampling_lifecycle import (
     WorkerControlHandle,
+    WorkerSamplingCleanupFailed,
     WorkerSamplingSession,
     start_worker_sampling_session,
 )
@@ -56,6 +72,13 @@ _WORKER_TEST_PROTOCOL: ProcessControlProtocol[
     name="worker",
     decode_command=decode_worker_command,
     decode_response=decode_worker_response,
+)
+_MODEL_RANK_TEST_PROTOCOL: ProcessControlProtocol[
+    ModelRankCommand, ModelRankResponse
+] = ProcessControlProtocol(
+    name="model-rank",
+    decode_command=decode_model_rank_command,
+    decode_response=decode_model_rank_response,
 )
 
 
@@ -98,9 +121,34 @@ class _FakeWorkerPool:
 
 
 @dataclass(frozen=True, slots=True)
+class _FakeModelRankHandle:
+    index: int
+    control: AsyncCoordinatorControlEndpoint[
+        ModelRankCommand, ModelRankResponse
+    ]
+
+
+@dataclass(frozen=True, slots=True)
+class _FakeModelRank:
+    handle: _FakeModelRankHandle
+    child: AsyncChildControlEndpoint[
+        ModelRankCommand, ModelRankResponse
+    ]
+
+    def close(self) -> None:
+        self.handle.control.close()
+        self.child.close()
+
+
+@dataclass(frozen=True, slots=True)
+class _FakeModelRankPool:
+    handles: tuple[_FakeModelRankHandle, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class _FakeRuntimePools:
     worker_pool: _FakeWorkerPool
-    model_rank_pool: None
+    model_rank_pool: _FakeModelRankPool | None
     worker_inference_links: tuple[object, ...]
     rollout_arena_group: SharedRolloutArenaGroup
 
@@ -112,6 +160,19 @@ def _fake_worker(worker_index: int) -> _FakeWorker:
     return _FakeWorker(
         handle=_FakeWorkerHandle(
             index=worker_index,
+            control=link.coordinator,
+        ),
+        child=link.child,
+    )
+
+
+def _fake_model_rank(model_rank_index: int) -> _FakeModelRank:
+    link = create_async_process_control_link(
+        protocol=_MODEL_RANK_TEST_PROTOCOL,
+    )
+    return _FakeModelRank(
+        handle=_FakeModelRankHandle(
+            index=model_rank_index,
             control=link.coordinator,
         ),
         child=link.child,
@@ -134,6 +195,94 @@ async def _receive_stop_command(
     assert isinstance(command, Ok)
     assert isinstance(command.value, WorkerStopSamplingCommand)
     return command.value
+
+
+async def _receive_worker_update_command(
+    worker: _FakeWorker,
+) -> WorkerUpdateCommand:
+    command = await worker.child.recv_command()
+    assert isinstance(command, Ok)
+    assert isinstance(command.value, WorkerUpdateCommand)
+    return command.value
+
+
+async def _receive_worker_load_state_command(
+    worker: _FakeWorker,
+) -> WorkerLoadStateCommand:
+    command = await worker.child.recv_command()
+    assert isinstance(command, Ok)
+    assert isinstance(command.value, WorkerLoadStateCommand)
+    return command.value
+
+
+async def _receive_worker_snapshot_command(
+    worker: _FakeWorker,
+) -> WorkerSnapshotCommand:
+    command = await worker.child.recv_command()
+    assert isinstance(command, Ok)
+    assert isinstance(command.value, WorkerSnapshotCommand)
+    return command.value
+
+
+async def _receive_model_rank_update_command(
+    model_rank: _FakeModelRank,
+) -> ModelRankUpdateCommand:
+    command = await model_rank.child.recv_command()
+    assert isinstance(command, Ok)
+    assert isinstance(command.value, ModelRankUpdateCommand)
+    return command.value
+
+
+def _empty_runtime_state() -> RuntimeTrainingState:
+    model_state: ModelTensorState = {}
+    optimizer_state: OptimizerPayload = {}
+    return RuntimeTrainingState(
+        model_state=model_state,
+        optimizer_state=optimizer_state,
+    )
+
+
+def _open_fake_runtime(
+    *,
+    monkeypatch: pytest.MonkeyPatch,
+    pools: _FakeRuntimePools,
+    execution_config: ExecutionConfig,
+    force_stop_runtime_pools: Callable[[_FakeRuntimePools], None],
+) -> training_runtime.TrainingRuntime:
+    def start_runtime_pools(
+        *,
+        run_dir: Path,
+        run_id: str,
+        model_config: ModelConfig,
+        train_config: TrainConfig,
+        execution_config: ExecutionConfig,
+    ) -> Ok[_FakeRuntimePools] | Rejected:
+        assert run_dir == Path("unused")
+        assert run_id == "poisoned-runtime"
+        assert model_config.d_model == 4
+        assert train_config.ppo_epochs == 1
+        assert execution_config.samples_per_update == 1
+        return Ok(value=pools)
+
+    monkeypatch.setattr(
+        training_runtime,
+        "_start_runtime_pools",
+        start_runtime_pools,
+    )
+    monkeypatch.setattr(
+        training_runtime,
+        "_force_stop_runtime_pools",
+        force_stop_runtime_pools,
+    )
+    runtime_result = training_runtime.open_training_runtime(
+        run_dir=Path("unused"),
+        run_id="poisoned-runtime",
+        model_config=ModelConfig(d_model=4, layers=1, heads=1),
+        train_config=TrainConfig(ppo_epochs=1),
+        execution_config=execution_config,
+    )
+    assert isinstance(runtime_result, Ok)
+    return runtime_result.value
 
 
 @pytest.mark.asyncio
@@ -235,6 +384,42 @@ async def test_start_sampling_cleans_sent_worker_on_failure() -> None:
 
         assert isinstance(result, Rejected)
         assert "async IPC endpoint is closed" in result.reason
+    finally:
+        first.close()
+        second.close()
+
+
+@pytest.mark.asyncio
+async def test_start_sampling_reports_uncleaned_sent_workers() -> None:
+    first = _fake_worker(0)
+    second = _fake_worker(1)
+    try:
+        first.handle.control.close()
+        task = asyncio.create_task(
+            start_worker_sampling_session(
+                handles=(first.handle, second.handle),
+                execution_config=ExecutionConfig(
+                    game_envs_per_worker=2,
+                    timeouts=ExecutionTimeouts(
+                        sampling_stop_seconds=0.01,
+                    ),
+                ),
+                policy_version=7,
+            )
+        )
+
+        second_start = await _receive_start_command(second)
+        assert second_start.policy_version == 7
+        second_stop = await _receive_stop_command(second)
+        assert second_stop.policy_version == 7
+
+        result = await task
+
+        assert isinstance(result, WorkerSamplingCleanupFailed)
+        assert (
+            "sampling cleanup failed: process control response "
+            "timed out" in result.rejection.reason
+        )
     finally:
         first.close()
         second.close()
@@ -445,6 +630,547 @@ async def test_runtime_poisoned_after_sampling_stop_failure(
     assert first.reason == "sampling stop timed out"
     assert second is first
     assert start_calls == 1
+    assert force_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_poisoned_after_sampling_start_cleanup_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = mp.get_context("spawn")
+    group_result = create_shared_rollout_arena_group(
+        context=context,
+        worker_count=1,
+        arena_capacity_per_worker=1,
+        policy_version=0,
+    )
+    assert isinstance(group_result, Ok)
+    group = group_result.value
+    fake_worker = _fake_worker(0)
+    pools = _FakeRuntimePools(
+        worker_pool=_FakeWorkerPool(handles=(fake_worker.handle,)),
+        model_rank_pool=None,
+        worker_inference_links=(),
+        rollout_arena_group=group,
+    )
+    start_calls = 0
+    force_calls = 0
+
+    async def failed_sampling_start(
+        *,
+        handles: tuple[WorkerControlHandle, ...],
+        execution_config: ExecutionConfig,
+        policy_version: int,
+    ) -> (
+        Ok[WorkerSamplingSession]
+        | Rejected
+        | WorkerSamplingCleanupFailed
+    ):
+        nonlocal start_calls
+        assert handles == (fake_worker.handle,)
+        assert execution_config.samples_per_update == 1
+        assert policy_version == 3
+        start_calls += 1
+        return WorkerSamplingCleanupFailed(
+            rejection=Rejected(
+                reason="sampling start failed; cleanup incomplete"
+            )
+        )
+
+    def force_stop_runtime_pools(_pools: _FakeRuntimePools) -> None:
+        nonlocal force_calls
+        force_calls += 1
+
+    runtime = _open_fake_runtime(
+        monkeypatch=monkeypatch,
+        pools=pools,
+        execution_config=ExecutionConfig(samples_per_update=1),
+        force_stop_runtime_pools=force_stop_runtime_pools,
+    )
+    monkeypatch.setattr(
+        training_runtime,
+        "start_worker_sampling_session",
+        failed_sampling_start,
+    )
+    try:
+        first = await runtime.run_update(policy_version=3)
+        second = await runtime.run_update(policy_version=4)
+        await runtime.close()
+    finally:
+        fake_worker.close()
+        close_shared_rollout_arenas(group)
+
+    assert isinstance(first, Rejected)
+    assert first.reason == "sampling start failed; cleanup incomplete"
+    assert second is first
+    assert start_calls == 1
+    assert force_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_poisoned_after_worker_update_partial_broadcast(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = mp.get_context("spawn")
+    group_result = create_shared_rollout_arena_group(
+        context=context,
+        worker_count=2,
+        arena_capacity_per_worker=1,
+        policy_version=0,
+    )
+    assert isinstance(group_result, Ok)
+    group = group_result.value
+    first_worker = _fake_worker(0)
+    second_worker = _fake_worker(1)
+    pools = _FakeRuntimePools(
+        worker_pool=_FakeWorkerPool(
+            handles=(first_worker.handle, second_worker.handle)
+        ),
+        model_rank_pool=None,
+        worker_inference_links=(),
+        rollout_arena_group=group,
+    )
+    force_calls = 0
+
+    async def started_sampling_session(
+        *,
+        handles: tuple[WorkerControlHandle, ...],
+        execution_config: ExecutionConfig,
+        policy_version: int,
+    ) -> (
+        Ok[WorkerSamplingSession]
+        | Rejected
+        | WorkerSamplingCleanupFailed
+    ):
+        assert execution_config.samples_per_update == 1
+        return Ok(
+            value=WorkerSamplingSession(
+                policy_version=policy_version,
+                commanded_handles=handles,
+                started_handles=handles,
+            )
+        )
+
+    async def completed_rollout_wait(
+        *,
+        group: SharedRolloutArenaGroup,
+        policy_version: int,
+        target_sample_count: int,
+        timeout_seconds: float,
+    ) -> Ok[RolloutArenaSnapshot] | Rejected:
+        assert group.handles
+        assert target_sample_count == 1
+        return Ok(value=_empty_snapshot(policy_version=policy_version))
+
+    async def stopped_sampling_session(
+        *, session: WorkerSamplingSession, timeout_seconds: float
+    ) -> Ok[tuple[WorkerSamplingStopped, ...]] | Rejected:
+        return Ok(
+            value=tuple(
+                WorkerSamplingStopped(
+                    worker_index=handle.index,
+                    policy_version=session.policy_version,
+                    cancelled_env_count=0,
+                )
+                for handle in session.started_handles
+            )
+        )
+
+    def force_stop_runtime_pools(_pools: _FakeRuntimePools) -> None:
+        nonlocal force_calls
+        force_calls += 1
+
+    runtime = _open_fake_runtime(
+        monkeypatch=monkeypatch,
+        pools=pools,
+        execution_config=ExecutionConfig(samples_per_update=1),
+        force_stop_runtime_pools=force_stop_runtime_pools,
+    )
+    monkeypatch.setattr(
+        training_runtime,
+        "start_worker_sampling_session",
+        started_sampling_session,
+    )
+    monkeypatch.setattr(
+        training_runtime,
+        "wait_rollout_sample_target_async",
+        completed_rollout_wait,
+    )
+    monkeypatch.setattr(
+        training_runtime,
+        "stop_worker_sampling_session",
+        stopped_sampling_session,
+    )
+    try:
+        first_worker.handle.control.close()
+        task = asyncio.create_task(runtime.run_update(policy_version=5))
+        command = await _receive_worker_update_command(second_worker)
+        first = await task
+        second = await runtime.run_update(policy_version=6)
+        await runtime.close()
+    finally:
+        first_worker.close()
+        second_worker.close()
+        close_shared_rollout_arenas(group)
+
+    assert command.policy_version == 5
+    assert isinstance(first, Rejected)
+    assert "worker update broadcast failed" in first.reason
+    assert "sent workers (1,)" in first.reason
+    assert second is first
+    assert force_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_poisoned_after_model_rank_update_partial_send(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = mp.get_context("spawn")
+    group_result = create_shared_rollout_arena_group(
+        context=context,
+        worker_count=1,
+        arena_capacity_per_worker=1,
+        policy_version=0,
+    )
+    assert isinstance(group_result, Ok)
+    group = group_result.value
+    worker = _fake_worker(0)
+    first_rank = _fake_model_rank(0)
+    second_rank = _fake_model_rank(1)
+    pools = _FakeRuntimePools(
+        worker_pool=_FakeWorkerPool(handles=(worker.handle,)),
+        model_rank_pool=_FakeModelRankPool(
+            handles=(first_rank.handle, second_rank.handle)
+        ),
+        worker_inference_links=(),
+        rollout_arena_group=group,
+    )
+    force_calls = 0
+
+    async def started_sampling_session(
+        *,
+        handles: tuple[WorkerControlHandle, ...],
+        execution_config: ExecutionConfig,
+        policy_version: int,
+    ) -> (
+        Ok[WorkerSamplingSession]
+        | Rejected
+        | WorkerSamplingCleanupFailed
+    ):
+        return Ok(
+            value=WorkerSamplingSession(
+                policy_version=policy_version,
+                commanded_handles=handles,
+                started_handles=handles,
+            )
+        )
+
+    async def completed_rollout_wait(
+        *,
+        group: SharedRolloutArenaGroup,
+        policy_version: int,
+        target_sample_count: int,
+        timeout_seconds: float,
+    ) -> Ok[RolloutArenaSnapshot] | Rejected:
+        assert group.handles
+        return Ok(value=_empty_snapshot(policy_version=policy_version))
+
+    async def stopped_sampling_session(
+        *, session: WorkerSamplingSession, timeout_seconds: float
+    ) -> Ok[tuple[WorkerSamplingStopped, ...]] | Rejected:
+        return Ok(
+            value=(
+                WorkerSamplingStopped(
+                    worker_index=0,
+                    policy_version=session.policy_version,
+                    cancelled_env_count=0,
+                ),
+            )
+        )
+
+    def force_stop_runtime_pools(_pools: _FakeRuntimePools) -> None:
+        nonlocal force_calls
+        force_calls += 1
+
+    runtime = _open_fake_runtime(
+        monkeypatch=monkeypatch,
+        pools=pools,
+        execution_config=ExecutionConfig(
+            samples_per_update=1,
+            model_ranks=ModelRankPlacement(
+                kind="cuda",
+                devices=("cuda:0", "cuda:1"),
+            ),
+        ),
+        force_stop_runtime_pools=force_stop_runtime_pools,
+    )
+    monkeypatch.setattr(
+        training_runtime,
+        "start_worker_sampling_session",
+        started_sampling_session,
+    )
+    monkeypatch.setattr(
+        training_runtime,
+        "wait_rollout_sample_target_async",
+        completed_rollout_wait,
+    )
+    monkeypatch.setattr(
+        training_runtime,
+        "stop_worker_sampling_session",
+        stopped_sampling_session,
+    )
+    try:
+        first_rank.handle.control.close()
+        task = asyncio.create_task(runtime.run_update(policy_version=5))
+        command = await _receive_model_rank_update_command(second_rank)
+        first = await task
+        second = await runtime.run_update(policy_version=6)
+        await runtime.close()
+    finally:
+        worker.close()
+        first_rank.close()
+        second_rank.close()
+        close_shared_rollout_arenas(group)
+
+    assert command.policy_version == 5
+    assert isinstance(first, Rejected)
+    assert "model-rank update broadcast failed" in first.reason
+    assert "sent ranks (1,)" in first.reason
+    assert second is first
+    assert force_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_poisoned_after_worker_update_response_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = mp.get_context("spawn")
+    group_result = create_shared_rollout_arena_group(
+        context=context,
+        worker_count=2,
+        arena_capacity_per_worker=1,
+        policy_version=0,
+    )
+    assert isinstance(group_result, Ok)
+    group = group_result.value
+    first_worker = _fake_worker(0)
+    second_worker = _fake_worker(1)
+    pools = _FakeRuntimePools(
+        worker_pool=_FakeWorkerPool(
+            handles=(first_worker.handle, second_worker.handle)
+        ),
+        model_rank_pool=None,
+        worker_inference_links=(),
+        rollout_arena_group=group,
+    )
+    force_calls = 0
+
+    async def started_sampling_session(
+        *,
+        handles: tuple[WorkerControlHandle, ...],
+        execution_config: ExecutionConfig,
+        policy_version: int,
+    ) -> (
+        Ok[WorkerSamplingSession]
+        | Rejected
+        | WorkerSamplingCleanupFailed
+    ):
+        return Ok(
+            value=WorkerSamplingSession(
+                policy_version=policy_version,
+                commanded_handles=handles,
+                started_handles=handles,
+            )
+        )
+
+    async def completed_rollout_wait(
+        *,
+        group: SharedRolloutArenaGroup,
+        policy_version: int,
+        target_sample_count: int,
+        timeout_seconds: float,
+    ) -> Ok[RolloutArenaSnapshot] | Rejected:
+        assert group.handles
+        return Ok(value=_empty_snapshot(policy_version=policy_version))
+
+    async def stopped_sampling_session(
+        *, session: WorkerSamplingSession, timeout_seconds: float
+    ) -> Ok[tuple[WorkerSamplingStopped, ...]] | Rejected:
+        return Ok(
+            value=tuple(
+                WorkerSamplingStopped(
+                    worker_index=handle.index,
+                    policy_version=session.policy_version,
+                    cancelled_env_count=0,
+                )
+                for handle in session.started_handles
+            )
+        )
+
+    def force_stop_runtime_pools(_pools: _FakeRuntimePools) -> None:
+        nonlocal force_calls
+        force_calls += 1
+
+    runtime = _open_fake_runtime(
+        monkeypatch=monkeypatch,
+        pools=pools,
+        execution_config=ExecutionConfig(
+            samples_per_update=1,
+            timeouts=ExecutionTimeouts(update_seconds=0.01),
+        ),
+        force_stop_runtime_pools=force_stop_runtime_pools,
+    )
+    monkeypatch.setattr(
+        training_runtime,
+        "start_worker_sampling_session",
+        started_sampling_session,
+    )
+    monkeypatch.setattr(
+        training_runtime,
+        "wait_rollout_sample_target_async",
+        completed_rollout_wait,
+    )
+    monkeypatch.setattr(
+        training_runtime,
+        "stop_worker_sampling_session",
+        stopped_sampling_session,
+    )
+    try:
+        task = asyncio.create_task(runtime.run_update(policy_version=5))
+        first_command = await _receive_worker_update_command(
+            first_worker
+        )
+        second_command = await _receive_worker_update_command(
+            second_worker
+        )
+        first = await task
+        second = await runtime.run_update(policy_version=6)
+        await runtime.close()
+    finally:
+        first_worker.close()
+        second_worker.close()
+        close_shared_rollout_arenas(group)
+
+    assert first_command.policy_version == 5
+    assert second_command.policy_version == 5
+    assert isinstance(first, Rejected)
+    assert first.reason == "process control response timed out"
+    assert second is first
+    assert force_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_poisoned_after_worker_load_state_partial_send(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = mp.get_context("spawn")
+    group_result = create_shared_rollout_arena_group(
+        context=context,
+        worker_count=2,
+        arena_capacity_per_worker=1,
+        policy_version=0,
+    )
+    assert isinstance(group_result, Ok)
+    group = group_result.value
+    first_worker = _fake_worker(0)
+    second_worker = _fake_worker(1)
+    pools = _FakeRuntimePools(
+        worker_pool=_FakeWorkerPool(
+            handles=(first_worker.handle, second_worker.handle)
+        ),
+        model_rank_pool=None,
+        worker_inference_links=(),
+        rollout_arena_group=group,
+    )
+    force_calls = 0
+
+    def force_stop_runtime_pools(_pools: _FakeRuntimePools) -> None:
+        nonlocal force_calls
+        force_calls += 1
+
+    runtime = _open_fake_runtime(
+        monkeypatch=monkeypatch,
+        pools=pools,
+        execution_config=ExecutionConfig(samples_per_update=1),
+        force_stop_runtime_pools=force_stop_runtime_pools,
+    )
+    state = _empty_runtime_state()
+    try:
+        first_worker.handle.control.close()
+        task = asyncio.create_task(
+            runtime.load_state(state=state, policy_version=11)
+        )
+        command = await _receive_worker_load_state_command(
+            second_worker
+        )
+        first = await task
+        second = await runtime.load_state(
+            state=state,
+            policy_version=12,
+        )
+        await runtime.close()
+    finally:
+        first_worker.close()
+        second_worker.close()
+        close_shared_rollout_arenas(group)
+
+    assert command.policy_version == 11
+    assert isinstance(first, Rejected)
+    assert "worker state sync broadcast failed" in first.reason
+    assert "sent workers (1,)" in first.reason
+    assert second is first
+    assert force_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_poisoned_after_worker_snapshot_response_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = mp.get_context("spawn")
+    group_result = create_shared_rollout_arena_group(
+        context=context,
+        worker_count=1,
+        arena_capacity_per_worker=1,
+        policy_version=0,
+    )
+    assert isinstance(group_result, Ok)
+    group = group_result.value
+    worker = _fake_worker(0)
+    pools = _FakeRuntimePools(
+        worker_pool=_FakeWorkerPool(handles=(worker.handle,)),
+        model_rank_pool=None,
+        worker_inference_links=(),
+        rollout_arena_group=group,
+    )
+    force_calls = 0
+
+    def force_stop_runtime_pools(_pools: _FakeRuntimePools) -> None:
+        nonlocal force_calls
+        force_calls += 1
+
+    runtime = _open_fake_runtime(
+        monkeypatch=monkeypatch,
+        pools=pools,
+        execution_config=ExecutionConfig(
+            samples_per_update=1,
+            timeouts=ExecutionTimeouts(state_sync_seconds=0.01),
+        ),
+        force_stop_runtime_pools=force_stop_runtime_pools,
+    )
+    try:
+        task = asyncio.create_task(runtime.snapshot(policy_version=13))
+        command = await _receive_worker_snapshot_command(worker)
+        first = await task
+        second = await runtime.snapshot(policy_version=14)
+        await runtime.close()
+    finally:
+        worker.close()
+        close_shared_rollout_arenas(group)
+
+    assert command.policy_version == 13
+    assert isinstance(first, Rejected)
+    assert first.reason == "process control response timed out"
+    assert second is first
     assert force_calls == 1
 
 

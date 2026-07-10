@@ -60,12 +60,26 @@ class WorkerSamplingSession:
         assert len(self.commanded_handles) == len(self.started_handles)
 
 
+@dataclass(frozen=True, slots=True)
+class WorkerSamplingCleanupFailed:
+    """Sampling start failed and commanded workers were not cleaned."""
+
+    rejection: Rejected
+
+    def __post_init__(self) -> None:
+        assert self.rejection.reason
+
+
 async def start_worker_sampling_session(
     *,
     handles: tuple[WorkerControlHandle, ...],
     execution_config: ExecutionConfig,
     policy_version: int,
-) -> _result.Ok[WorkerSamplingSession] | _result.Rejected:
+) -> (
+    _result.Ok[WorkerSamplingSession]
+    | _result.Rejected
+    | WorkerSamplingCleanupFailed
+):
     """Start sampling on every worker or clean up commanded workers."""
     assert handles
     send_result = await broadcast_control_commands(
@@ -155,7 +169,11 @@ async def _receive_worker_sampling_session_started(
     policy_version: int,
     start_timeout_seconds: float,
     stop_timeout_seconds: float,
-) -> _result.Ok[WorkerSamplingSession] | _result.Rejected:
+) -> (
+    _result.Ok[WorkerSamplingSession]
+    | _result.Rejected
+    | WorkerSamplingCleanupFailed
+):
     started_handles: list[WorkerControlHandle] = []
     pending = list(commanded_handles)
     while pending:
@@ -231,7 +249,7 @@ async def _abort_worker_sampling_start(
     policy_version: int,
     timeout_seconds: float,
     failure: Rejected,
-) -> Rejected:
+) -> Rejected | WorkerSamplingCleanupFailed:
     if not handles:
         return failure
     send_result = await _send_worker_stop_sampling_commands(
@@ -239,15 +257,23 @@ async def _abort_worker_sampling_start(
         policy_version=policy_version,
     )
     if isinstance(send_result, Rejected):
-        return _cleanup_rejection(failure=failure, cleanup=send_result)
+        return WorkerSamplingCleanupFailed(
+            rejection=_cleanup_rejection(
+                failure=failure,
+                cleanup=send_result,
+            )
+        )
     stopped_result = await _receive_worker_sampling_abort_stopped(
         handles=handles,
         policy_version=policy_version,
         timeout_seconds=timeout_seconds,
     )
     if isinstance(stopped_result, Rejected):
-        return _cleanup_rejection(
-            failure=failure, cleanup=stopped_result
+        return WorkerSamplingCleanupFailed(
+            rejection=_cleanup_rejection(
+                failure=failure,
+                cleanup=stopped_result,
+            )
         )
     return failure
 
