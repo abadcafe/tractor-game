@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, assert_never
 
-from server import result as _result
-from server.result import Ok, Rejected
+from server.foundation import result as _result
+from server.foundation.result import Ok, Rejected
 from server.training.runtime.async_ipc import (
     AsyncCoordinatorControlEndpoint,
     ControlCommandBroadcastFailure,

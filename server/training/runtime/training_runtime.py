@@ -10,8 +10,8 @@ from multiprocessing.process import BaseProcess
 from pathlib import Path
 from typing import Protocol, assert_never
 
-from server import result as _result
-from server.result import Ok, Rejected
+from server.foundation import result as _result
+from server.foundation.result import Ok, Rejected
 from server.training.config import ModelConfig, TrainConfig
 from server.training.ppo import PPOUpdateProfile, PPOUpdateStats
 from server.training.runtime.async_ipc import (
@@ -78,11 +78,6 @@ from server.training.runtime.shared_rollout_arena import (
     wait_rollout_sample_target,
 )
 from server.training.runtime.state import RuntimeTrainingState
-from server.training.runtime.telemetry import (
-    IntervalTelemetrySink,
-    JsonlTelemetrySink,
-    TelemetrySink,
-)
 from server.training.runtime.worker_process import (
     run_training_worker_process,
 )
@@ -90,6 +85,11 @@ from server.training.runtime.worker_sampling_lifecycle import (
     WorkerSamplingCleanupFailed,
     start_worker_sampling_session,
     stop_worker_sampling_session,
+)
+from server.training.telemetry import (
+    IntervalTelemetrySink,
+    SqliteTelemetrySink,
+    TelemetrySink,
 )
 
 _GRACEFUL_PROCESS_STOP_SECONDS = 1.0
@@ -623,7 +623,7 @@ def _telemetry_sink(
     *, run_dir: Path, execution_config: ExecutionConfig
 ) -> TelemetrySink:
     return IntervalTelemetrySink(
-        sink=JsonlTelemetrySink(run_dir),
+        sink=SqliteTelemetrySink(run_dir),
         min_interval_seconds=(
             execution_config.telemetry_interval_seconds
         ),

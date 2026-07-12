@@ -10,7 +10,7 @@ import torch.distributed as dist
 from torch import Tensor, nn
 from torch.nn.parallel import DistributedDataParallel
 
-from server import result as _result
+from server.foundation import result as _result
 from server.training.ppo.loss_module import (
     PPOLossForwardOutput,
     PPOLossForwardTensors,

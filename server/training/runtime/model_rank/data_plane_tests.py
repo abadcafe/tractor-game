@@ -6,9 +6,9 @@ from dataclasses import dataclass, field
 
 import torch
 
-from server import result as _result
-from server.player.test_helpers import card, make_snapshot
-from server.result import Ok, Rejected
+from server.foundation import result as _result
+from server.foundation.result import Ok, Rejected
+from server.game.players.test_helpers import card, make_snapshot
 from server.training.legal_actions import (
     LegalActionIndex,
     build_legal_action_index,

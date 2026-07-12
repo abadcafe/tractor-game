@@ -22,7 +22,7 @@ import pytest
 from anyio import WouldBlock
 from starlette.testclient import TestClient, WebSocketTestSession
 
-from server.server import app
+from server.web.app import app
 
 _DEFAULT_WS_RECEIVE_TIMEOUT_SECONDS: float = 5.0
 

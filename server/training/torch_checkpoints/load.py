@@ -6,7 +6,7 @@ from pathlib import Path
 
 import torch
 
-from server import result as _result
+from server.foundation import result as _result
 from server.training import training_state as _training_state
 from server.training.config import ModelConfig, TrainConfig
 from server.training.model import TractorPolicyModel

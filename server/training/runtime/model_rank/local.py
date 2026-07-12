@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from server import result as _result
-from server.result import Ok, Rejected
+from server.foundation import result as _result
+from server.foundation.result import Ok, Rejected
 from server.training.policy_sampling import (
     RankReturnTargets,
 )

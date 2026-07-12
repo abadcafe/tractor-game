@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from server.player.test_helpers import card, make_snapshot
+from server.game.players.test_helpers import card, make_snapshot
 from server.training.model import TractorPolicyModel
 from server.training.observation import build_observation
 from server.training.semantic_actions import SemanticArgument

@@ -6,8 +6,8 @@ from dataclasses import dataclass
 
 import torch
 
-from server import result as _result
-from server.result import Rejected
+from server.foundation import result as _result
+from server.foundation.result import Rejected
 from server.training.config import ModelConfig, TrainConfig
 from server.training.policy_inference_batch import (
     DevicePolicyRequestBatch,

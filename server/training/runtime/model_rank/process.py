@@ -8,8 +8,8 @@ from dataclasses import dataclass
 
 import torch
 
-from server import result as _result
-from server.result import Ok, Rejected
+from server.foundation import result as _result
+from server.foundation.result import Ok, Rejected
 from server.training.config import ModelConfig, TrainConfig
 from server.training.policy_inference_batch import (
     PolicyRequestRoute,
@@ -63,7 +63,7 @@ from server.training.runtime.shared_rollout_arena import (
     SharedRolloutArenaReader,
     attach_rollout_arena_reader,
 )
-from server.training.runtime.telemetry import (
+from server.training.telemetry import (
     TelemetryEvent,
     TelemetryMeasurement,
     TelemetrySink,
@@ -715,7 +715,6 @@ def _record_model_rank_stage(
     assert stage in ("inference", "update")
     return telemetry_sink.append(
         TelemetryEvent(
-            run_id=run_id,
             process_label=f"model-rank-{model_rank_index}",
             stage=stage,
             total_rounds=total_rounds,

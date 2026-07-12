@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 import sys
 
-from server.result import Ok, Rejected
+from server.foundation.result import Ok, Rejected
 from server.training.runtime.config import (
     ExecutionConfig,
     ExecutionTimeouts,

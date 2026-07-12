@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from server.rules.card_faces import FaceCount
+from server.game.rules.card_faces import FaceCount
 from server.training.semantic_actions.arguments import (
     SemanticArgumentTrace,
 )

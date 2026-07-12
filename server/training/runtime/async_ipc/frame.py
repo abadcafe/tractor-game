@@ -9,8 +9,8 @@ import struct
 from collections.abc import Buffer
 from dataclasses import dataclass, field
 
-from server import result as _result
-from server.result import Ok, Rejected
+from server.foundation import result as _result
+from server.foundation.result import Ok, Rejected
 
 _FRAME_HEADER_BYTES = 8
 _DEFAULT_MAX_FRAME_BYTES = 2_147_483_647

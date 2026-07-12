@@ -8,7 +8,7 @@ from typing import NoReturn
 import pytest
 import torch
 
-from server.result import Ok, Rejected
+from server.foundation.result import Ok, Rejected
 from server.training.returns import ReturnCommit
 from server.training.runtime.shared_rollout_arena import (
     RolloutArenaHandle,

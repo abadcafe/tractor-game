@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from server.rules.cards import Rank
-from server.rules.required_progress import TerminalProgress
+from server.game.rules.cards import Rank
+from server.game.rules.required_progress import TerminalProgress
 from server.training.progress import (
     RoundScore,
     TeamProgress,

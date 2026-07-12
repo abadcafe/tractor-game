@@ -30,7 +30,7 @@ from anyio import (
 from starlette.testclient import TestClient, WebSocketTestSession
 from starlette.websockets import WebSocketDisconnect
 
-from server.server import app
+from server.web.app import app
 
 # Connection-related exceptions from third-party libraries (normal flow
 # control).

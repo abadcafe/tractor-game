@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from server.sm.constants import get_team_index
+from server.game.state_machine.constants import get_team_index
 from server.training.policy_sampling.records import DecisionHandle
 from server.training.trajectory import DecisionStep
 

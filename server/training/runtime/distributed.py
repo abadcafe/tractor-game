@@ -8,7 +8,7 @@ from typing import Literal
 
 import torch.distributed as dist
 
-from server import result as _result
+from server.foundation import result as _result
 
 type DistributedBackend = Literal["gloo", "nccl"]
 

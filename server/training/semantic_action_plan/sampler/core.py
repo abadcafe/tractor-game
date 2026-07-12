@@ -8,8 +8,8 @@ from typing import Protocol
 import torch
 from torch import Tensor
 
-from server import result as _result
-from server.result import Ok, Rejected
+from server.foundation import result as _result
+from server.foundation.result import Ok, Rejected
 from server.training.semantic_action_plan.choices import (
     DeviceLegalCandidateBatch,
     legal_candidate_batch,

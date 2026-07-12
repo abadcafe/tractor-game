@@ -7,8 +7,12 @@ from pathlib import Path
 import pytest
 import torch
 
-from server.result import Ok, Rejected
-from server.training.config import ModelConfig, TrainConfig
+from server.foundation.result import Ok, Rejected
+from server.training.config import (
+    CheckpointPolicy,
+    ModelConfig,
+    TrainConfig,
+)
 from server.training.metrics import read_metrics
 from server.training.run_setup import initialize_training_run
 from server.training.runtime.affinity import current_cpu_affinity
@@ -22,11 +26,12 @@ from server.training.runtime.config import (
 )
 from server.training.runtime.coordinator import run_training_coordinator
 from server.training.runtime.state import RuntimeTrainingState
-from server.training.runtime.telemetry import telemetry_path
 from server.training.runtime.training_runtime import (
     open_training_runtime,
 )
-from server.training.torch_checkpoints import (
+from server.training.stop import TrainingStopRequest
+from server.training.telemetry import read_telemetry_records
+from server.training.torch_checkpoints.load import (
     read_torch_checkpoint_metadata,
 )
 
@@ -40,19 +45,15 @@ def test_run_training_coordinator_spawns_worker_and_commits_progress(
         heads=1,
         max_tokens=512,
     )
-    train_config = TrainConfig(
-        checkpoint_every_updates=1,
-        checkpoint_retention_updates=1,
-        ppo_epochs=1,
-        minibatch_size=512,
+    train_config = TrainConfig(ppo_epochs=1, minibatch_size=512)
+    checkpoint_policy = CheckpointPolicy(
+        every_updates=1, retention_updates=1
     )
     execution_config = ExecutionConfig(samples_per_update=32)
     initialized = initialize_training_run(
         run_dir=tmp_path,
-        run_id=tmp_path.name,
         model_config=model_config,
         train_config=train_config,
-        execution_config=execution_config,
     )
     assert isinstance(initialized, Ok)
 
@@ -61,15 +62,18 @@ def test_run_training_coordinator_spawns_worker_and_commits_progress(
         run_id=tmp_path.name,
         model_config=model_config,
         train_config=train_config,
+        checkpoint_policy=checkpoint_policy,
         execution_config=execution_config,
         max_samples=1,
         resume=initialized.value.checkpoint_path,
+        stop_request=TrainingStopRequest(),
     )
 
     assert isinstance(result, Ok)
     assert result.value.total_rounds >= 1
     assert result.value.total_samples > 0
     assert result.value.total_updates == 1
+    assert result.value.outcome == "completed"
     metadata = read_torch_checkpoint_metadata(
         result.value.checkpoint_path
     )
@@ -78,15 +82,18 @@ def test_run_training_coordinator_spawns_worker_and_commits_progress(
     assert metadata.value.total_samples == result.value.total_samples
     assert metadata.value.total_updates == 1
     metrics = read_metrics(tmp_path)
-    assert [metric.total_games for metric in metrics] == [
+    assert isinstance(metrics, Ok)
+    assert [metric.total_games for metric in metrics.value] == [
         0,
         result.value.total_rounds,
     ]
-    assert [metric.total_samples for metric in metrics] == [
+    assert [metric.total_samples for metric in metrics.value] == [
         0,
         result.value.total_samples,
     ]
-    assert telemetry_path(tmp_path).exists()
+    telemetry = read_telemetry_records(tmp_path)
+    assert isinstance(telemetry, Ok)
+    assert telemetry.value[-1].stage == "completed"
 
 
 @pytest.mark.timeout(120.0)
@@ -99,11 +106,9 @@ def test_run_training_coordinator_synchronizes_cpu_arena_update(
         heads=1,
         max_tokens=512,
     )
-    train_config = TrainConfig(
-        checkpoint_every_updates=1,
-        checkpoint_retention_updates=1,
-        ppo_epochs=1,
-        minibatch_size=512,
+    train_config = TrainConfig(ppo_epochs=1, minibatch_size=512)
+    checkpoint_policy = CheckpointPolicy(
+        every_updates=1, retention_updates=1
     )
     worker_cpus = current_cpu_affinity()[:2]
     if len(worker_cpus) < 2:
@@ -143,15 +148,52 @@ def test_run_training_coordinator_synchronizes_cpu_arena_update(
         run_id=tmp_path.name,
         model_config=model_config,
         train_config=train_config,
+        checkpoint_policy=checkpoint_policy,
         execution_config=execution_config,
         max_samples=1,
         resume=checkpoint_path,
+        stop_request=TrainingStopRequest(),
     )
 
     assert isinstance(result, Ok)
     assert result.value.total_rounds >= 2
     assert result.value.total_samples > 17
     assert result.value.total_updates == 2
+
+
+def test_coordinator_honors_pre_requested_stop_and_saves_checkpoint(
+    tmp_path: Path,
+) -> None:
+    model_config = ModelConfig(
+        d_model=2, layers=1, heads=1, max_tokens=512
+    )
+    train_config = TrainConfig()
+    execution_config = ExecutionConfig(samples_per_update=32)
+    initialized = initialize_training_run(
+        run_dir=tmp_path,
+        model_config=model_config,
+        train_config=train_config,
+    )
+    assert isinstance(initialized, Ok)
+    stop_request = TrainingStopRequest()
+    stop_request.request_stop()
+
+    result = run_training_coordinator(
+        run_dir=tmp_path,
+        run_id=tmp_path.name,
+        model_config=model_config,
+        train_config=train_config,
+        checkpoint_policy=CheckpointPolicy(),
+        execution_config=execution_config,
+        max_samples=0,
+        resume=initialized.value.checkpoint_path,
+        stop_request=stop_request,
+    )
+
+    assert isinstance(result, Ok)
+    assert result.value.outcome == "stopped"
+    assert result.value.total_updates == 0
+    assert result.value.checkpoint_path.exists()
 
 
 @pytest.mark.asyncio

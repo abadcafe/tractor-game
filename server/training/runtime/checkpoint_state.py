@@ -7,8 +7,8 @@ from pathlib import Path
 
 import torch
 
-from server import result as _result
-from server.result import Ok, Rejected
+from server.foundation import result as _result
+from server.foundation.result import Ok, Rejected
 from server.training.config import ModelConfig, TrainConfig
 from server.training.runtime.config import ExecutionConfig
 from server.training.runtime.state import (
@@ -16,9 +16,9 @@ from server.training.runtime.state import (
     capture_runtime_training_state,
     load_runtime_training_state,
 )
-from server.training.torch_checkpoints import (
+from server.training.torch_checkpoints.load import load_torch_checkpoint
+from server.training.torch_checkpoints.save import (
     TorchCheckpointSaveResult,
-    load_torch_checkpoint,
     save_torch_checkpoint,
 )
 from server.training.training_state import (

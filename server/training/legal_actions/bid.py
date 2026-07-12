@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from server.protocol import StateSnapshot
-from server.rules import bid as bid_rules
+from server.game.protocol import StateSnapshot
+from server.game.rules import bid as bid_rules
 from server.training.legal_actions.complete_trace import (
     CompleteTraceLegalActionIndex,
     pass_action,

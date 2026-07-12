@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import torch
 
-from server.player.test_helpers import card, make_snapshot
-from server.protocol import TrickSlotSnapshot, TrickSnapshot
-from server.result import Ok, Rejected
-from server.rules.cards import Card
+from server.foundation.result import Ok, Rejected
+from server.game.players.test_helpers import card, make_snapshot
+from server.game.protocol import TrickSlotSnapshot, TrickSnapshot
+from server.game.rules.cards import Card
 from server.training.feature_schema import NUMERIC_FEATURE_COUNT
 from server.training.legal_actions import (
     LegalActionIndex,

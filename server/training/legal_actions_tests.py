@@ -6,17 +6,17 @@ from dataclasses import dataclass
 
 import torch
 
-from server.player.test_helpers import card, make_snapshot
-from server.protocol import (
+from server.foundation.result import Ok, Rejected
+from server.game.players.test_helpers import card, make_snapshot
+from server.game.protocol import (
     BidEventSnapshot,
     StirDeclarationEventSnapshot,
     StirringStateSnapshot,
     TrickSlotSnapshot,
     TrickSnapshot,
 )
-from server.result import Ok, Rejected
-from server.rules.card_faces import CardFace, FaceCount
-from server.rules.cards import Card
+from server.game.rules.card_faces import CardFace, FaceCount
+from server.game.rules.cards import Card
 from server.training.legal_actions import (
     LegalActionIndex,
     build_legal_action_index,

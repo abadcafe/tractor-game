@@ -5,8 +5,8 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
-from server import result as _result
-from server.result import Ok, Rejected
+from server.foundation import result as _result
+from server.foundation.result import Ok, Rejected
 from server.training.feature_schema import NUMERIC_FEATURE_COUNT
 from server.training.packed_observation import (
     OBSERVATION_COMPONENT_COUNT,

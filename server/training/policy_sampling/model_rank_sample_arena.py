@@ -8,8 +8,8 @@ from typing import Protocol, cast
 import torch
 from torch import Tensor
 
-from server import result as _result
-from server.result import Ok, Rejected
+from server.foundation import result as _result
+from server.foundation.result import Ok, Rejected
 from server.training.policy_sampling.records import (
     CompactPolicyDecisionBatch,
     CompactTraceTokenBatch,

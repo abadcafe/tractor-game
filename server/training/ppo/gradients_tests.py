@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
-from server.result import Ok, Rejected
+from server.foundation.result import Ok, Rejected
 from server.training.ppo.gradients import (
     clip_grad_norm_on_device,
     reject_if_gradients_non_finite,

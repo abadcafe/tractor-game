@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from server.result import Ok, Rejected
-from server.rules.card_faces import (
+from server.foundation.result import Ok, Rejected
+from server.game.rules.card_faces import (
     CardFace,
     FaceCount,
     face_sort_key,

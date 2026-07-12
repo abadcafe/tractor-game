@@ -6,9 +6,9 @@ import pytest
 import torch
 from torch import Tensor
 
-from server.player.test_helpers import card, make_snapshot
-from server.result import Ok, Rejected
-from server.rules.card_faces import CardFace, FaceCount
+from server.foundation.result import Ok, Rejected
+from server.game.players.test_helpers import card, make_snapshot
+from server.game.rules.card_faces import CardFace, FaceCount
 from server.training.config import ModelConfig, TrainConfig
 from server.training.legal_actions import (
     LegalActionIndex,

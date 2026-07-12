@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from server.result import Ok, Rejected
+from server.foundation.result import Ok, Rejected
 from server.training.config import ModelConfig, TrainConfig
 from server.training.runtime import training_runtime
 from server.training.runtime.async_ipc import (

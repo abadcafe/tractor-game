@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import torch
 
-from server import result as _result
+from server.foundation import result as _result
 from server.training.config import (
     ModelConfig,
     TrainConfig,

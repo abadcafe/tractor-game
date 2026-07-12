@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from server.sm.constants import PLAYER_COUNT
+from server.game.state_machine.constants import PLAYER_COUNT
 
 type RelativeRole = Literal[
     "self",

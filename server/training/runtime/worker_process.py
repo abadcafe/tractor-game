@@ -8,8 +8,8 @@ from dataclasses import dataclass
 
 import torch
 
-from server import result as _result
-from server.result import Ok, Rejected
+from server.foundation import result as _result
+from server.foundation.result import Ok, Rejected
 from server.training.config import ModelConfig, TrainConfig
 from server.training.policy import TrainingPolicy
 from server.training.ppo.distributed import (
@@ -64,12 +64,12 @@ from server.training.runtime.shared_rollout_arena import (
     attach_rollout_arena_reader,
     attach_rollout_arena_writer,
 )
-from server.training.runtime.telemetry import (
+from server.training.runtime.threads import apply_torch_thread_config
+from server.training.telemetry import (
     TelemetryEvent,
     TelemetryMeasurement,
     TelemetrySink,
 )
-from server.training.runtime.threads import apply_torch_thread_config
 
 
 @dataclass(slots=True)
@@ -969,7 +969,6 @@ def _record_worker_stage(
     assert stage in ("rollout", "update")
     return telemetry_sink.append(
         TelemetryEvent(
-            run_id=run_id,
             process_label=f"worker-{worker_index}",
             stage=stage,
             total_rounds=total_rounds,

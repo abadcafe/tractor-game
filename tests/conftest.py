@@ -20,7 +20,7 @@ def live_server() -> Generator[str, None, None]:
             "python",
             "-m",
             "uvicorn",
-            "server.server:app",
+            "server.web.app:app",
             "--host",
             "127.0.0.1",
             "--port",

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from server.result import Ok, Rejected
+from server.foundation.result import Ok, Rejected
 from server.training.runtime.rendezvous import create_file_rendezvous
 
 

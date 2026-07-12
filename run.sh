@@ -7,4 +7,4 @@ export TRACTOR_AI_HTTP_MAX_RETRIES=10
 #export TRACTOR_AI_HTTP_RETRY_DELAY_SECONDS
 #export TRACTOR_AI_DECISION_MAX_RETRIES
 #export TRACTOR_AI_MAX_OUTPUT_TOKENS
-exec python -m uvicorn server.server:app --ws websockets-sansio --host 127.0.0.1 --port 8000
+exec python -m uvicorn server.web.app:app --ws websockets-sansio --host 127.0.0.1 --port 8000

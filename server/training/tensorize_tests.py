@@ -7,7 +7,7 @@ import sys
 
 import torch
 
-from server.player.test_helpers import card, make_snapshot
+from server.game.players.test_helpers import card, make_snapshot
 from server.training.feature_schema import NUMERIC_FEATURE_COUNT
 from server.training.observation import build_observation
 from server.training.tensorize import (
@@ -113,7 +113,8 @@ def test_tensorize_observation_crashes_on_oversized_observation() -> (
             "-c",
             (
                 "import torch\n"
-                "from server.player.test_helpers import make_snapshot\n"
+                "from server.game.players.test_helpers import "
+                "make_snapshot\n"
                 "from server.training.observation import "
                 "build_observation\n"
                 "from server.training.tensorize import "

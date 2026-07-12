@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from types import MappingProxyType
 
-from server.rules.card_faces import CardColor
-from server.rules.cards import Rank, Suit
+from server.game.rules.card_faces import CardColor
+from server.game.rules.cards import Rank, Suit
 from server.training import vocab_schema as _schema
 from server.training.feature_schema import (
     MAX_EVENT_AGE,

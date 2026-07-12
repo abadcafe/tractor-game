@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from server.rules.card_faces import (
+from server.game.rules.card_faces import (
     CardFace,
     FaceCount,
     canonical_face_counts,
 )
-from server.rules.cards import Rank, Suit
+from server.game.rules.cards import Rank, Suit
 from server.training.legal_actions.complete_trace import (
     CompleteTraceLegalActionIndex,
 )

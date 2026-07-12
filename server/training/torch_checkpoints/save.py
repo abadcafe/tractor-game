@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from server import result as _result
+from server.foundation import result as _result
 from server.training.config import ModelConfig, TrainConfig
 from server.training.model import (
     TractorPolicyModel as _TractorPolicyModel,

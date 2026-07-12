@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from server.result import Ok, Rejected
-from server.rules.card_faces import face_count_width
+from server.foundation.result import Ok, Rejected
+from server.game.rules.card_faces import face_count_width
 from server.training.legal_actions.contract import LegalActionIndex
 from server.training.legal_actions.selection import (
     trace_is_selection_only,

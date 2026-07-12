@@ -6,15 +6,15 @@ from collections.abc import Sequence
 
 import pytest
 
-from server.player.base import Player
-from server.player.test_helpers import make_snapshot
-from server.protocol import (
+from server.foundation.result import Ok, Rejected
+from server.game.players.base import Player
+from server.game.players.test_helpers import make_snapshot
+from server.game.protocol import (
     PlayerMessage,
     ScoringSnapshot,
     StateMessage,
     StateSnapshot,
 )
-from server.result import Ok, Rejected
 from server.training import runner
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation

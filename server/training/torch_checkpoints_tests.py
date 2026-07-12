@@ -12,7 +12,7 @@ from typing import TypeGuard
 import pytest
 import torch
 
-from server.result import Ok, Rejected
+from server.foundation.result import Ok, Rejected
 from server.training import training_state
 from server.training.config import ModelConfig, TrainConfig
 from server.training.model import TractorPolicyModel
@@ -23,29 +23,26 @@ from server.training.runtime import (
     ModelRankKind,
     ModelRankPlacement,
 )
-from server.training.torch_checkpoints import (
-    TorchCheckpointMetadata,
-)
-from server.training.torch_checkpoints import (
-    load_torch_checkpoint as _load_torch_checkpoint,
+from server.training.session_config import (
+    ExecutionConfigOverrides,
+    resolve_execution_config,
 )
 from server.training.torch_checkpoints import (
     pruning as _checkpoint_pruning,
 )
-from server.training.torch_checkpoints import (
+from server.training.torch_checkpoints import save as _checkpoint_save
+from server.training.torch_checkpoints.load import (
+    load_torch_checkpoint as _load_torch_checkpoint,
+)
+from server.training.torch_checkpoints.load import (
     read_torch_checkpoint_metadata as _read_torch_checkpoint_metadata,
 )
-from server.training.torch_checkpoints import save as _checkpoint_save
-from server.training.torch_checkpoints import (
+from server.training.torch_checkpoints.save import (
     save_torch_checkpoint as _save_torch_checkpoint,
 )
-from server.training.torch_checkpoints.schema import CheckpointManifest
-from server.training.train import (
-    ExecutionConfigOverrides,
-    TrainConfigOverrides,
-    resolve_execution_config,
-    resolve_model_config,
-    resolve_train_config,
+from server.training.torch_checkpoints.schema import (
+    CheckpointManifest,
+    TorchCheckpointMetadata,
 )
 from server.training.training_state import (
     LoadedTrainingState,
@@ -111,12 +108,6 @@ def test_torch_checkpoint_metadata_drives_resume_model_config(
     assert metadata.train_config == train_config
     assert metadata.total_rounds == 7
     assert metadata.total_updates == 3
-    resolved_model_config = resolve_model_config(
-        cli_model_config=ModelConfig(d_model=128),
-        resume_path=path,
-    )
-    assert isinstance(resolved_model_config, Ok)
-    assert resolved_model_config.value == model_config
 
 
 def test_read_metadata_uses_manifest_without_torch_load(
@@ -687,7 +678,7 @@ def test_torch_checkpoint_state_payload_is_weights_only_safe(
     )
 
     assert isinstance(loaded, dict)
-    assert loaded["schema_version"] == 19
+    assert loaded["schema_version"] == 20
     assert isinstance(loaded["checkpoint_id"], str)
     assert "model_config" not in loaded
     assert "train_config" not in loaded
@@ -1902,51 +1893,7 @@ def test_torch_checkpoint_cuda_resume_loads_payload_on_cpu(
     assert model_devices == [torch.device("cuda")]
 
 
-def test_resolve_train_config_defaults_and_resume_overrides(
-    tmp_path: Path,
-) -> None:
-    model_config = ModelConfig(
-        d_model=8,
-        layers=1,
-        heads=2,
-        max_tokens=192,
-    )
-    train_config = TrainConfig(
-        learning_rate=0.0007,
-        ppo_epochs=7,
-        minibatch_size=11,
-    )
-    state = create_training_state(
-        model_config=model_config,
-        train_config=train_config,
-        execution_config=ExecutionConfig(),
-        device=torch.device("cpu"),
-    )
-    path = tmp_path / "latest.json"
-    save_torch_checkpoint(
-        manifest_paths=(path,),
-        model=state.model,
-        trainer=state.trainer,
-        model_config=model_config,
-        train_config=train_config,
-        total_rounds=7,
-        total_samples=0,
-        total_updates=3,
-        retained_update_count=5,
-    )
-
-    fresh = resolve_train_config(
-        cli_overrides=TrainConfigOverrides(),
-        resume_path=None,
-    )
-    resumed = resolve_train_config(
-        cli_overrides=TrainConfigOverrides(),
-        resume_path=path,
-    )
-    resumed_with_same_seed = resolve_train_config(
-        cli_overrides=TrainConfigOverrides(seed=train_config.seed),
-        resume_path=path,
-    )
+def test_resolve_execution_config_overrides_process_defaults() -> None:
     execution = resolve_execution_config(
         ExecutionConfigOverrides(
             model_ranks=ModelRankPlacement(
@@ -1961,13 +1908,7 @@ def test_resolve_train_config_defaults_and_resume_overrides(
             update_timeout_seconds=444.0,
         )
     )
-    assert isinstance(fresh, Ok)
-    assert isinstance(resumed, Ok)
-    assert isinstance(resumed_with_same_seed, Ok)
     assert isinstance(execution, Ok)
-    assert fresh.value == TrainConfig()
-    assert resumed.value == train_config
-    assert resumed_with_same_seed.value.seed == train_config.seed
     assert execution.value.model_ranks.kind == "cuda"
     assert execution.value.ppo_profile == "detailed"
     assert execution.value.timeouts == ExecutionTimeouts(

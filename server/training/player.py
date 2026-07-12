@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
-from server.player.base import GameView, Player
-from server.protocol import PlayerMessage, StateMessage
-from server.result import Ok, Rejected
-from server.rules.cards import Card
+from server.foundation.result import Ok, Rejected
+from server.game.players.base import GameView, Player
+from server.game.protocol import PlayerMessage, StateMessage
+from server.game.rules.cards import Card
 from server.training.legal_actions import build_legal_action_index
 from server.training.observation import (
     PublicHistoryRecorder,

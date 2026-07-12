@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from server.result import Ok, Rejected
+from server.foundation.result import Ok, Rejected
 from server.training.runtime import affinity
 from server.training.runtime.affinity import (
     apply_cpu_affinity,

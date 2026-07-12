@@ -8,15 +8,15 @@ from dataclasses import dataclass
 import pytest
 import torch
 
-from server.player.test_helpers import (
+from server.foundation.result import Ok, Rejected
+from server.game.players.test_helpers import (
     card,
     make_game,
     make_snapshot,
     make_state_message,
 )
-from server.protocol import ScoringSnapshot
-from server.result import Ok, Rejected
-from server.rules.card_faces import CardFace, FaceCount
+from server.game.protocol import ScoringSnapshot
+from server.game.rules.card_faces import CardFace, FaceCount
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
 from server.training.player import TrainingPlayer

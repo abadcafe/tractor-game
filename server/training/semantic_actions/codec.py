@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from server.result import Ok, Rejected
-from server.rules.card_faces import MAX_FACE_COUNT, CardFace, FaceCount
-from server.rules.cards import Rank, Suit
+from server.foundation.result import Ok, Rejected
+from server.game.rules.card_faces import (
+    MAX_FACE_COUNT,
+    CardFace,
+    FaceCount,
+)
+from server.game.rules.cards import Rank, Suit
 from server.training.semantic_actions.arguments import (
     InvalidSemanticActionRejected,
     SemanticArgument,

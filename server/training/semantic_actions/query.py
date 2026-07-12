@@ -5,13 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from server.protocol import StateSnapshot
-from server.rules.card_faces import (
+from server.game.protocol import StateSnapshot
+from server.game.rules.card_faces import (
     FaceCount,
     canonical_face_counts,
     face_count_width,
 )
-from server.rules.cards import Rank, Suit
+from server.game.rules.cards import Rank, Suit
 from server.training.token_context import RelativeRole, relative_role
 
 type DecisionKind = Literal[

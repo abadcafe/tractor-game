@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from server.rules.card_faces import CardColor, FaceCount
-from server.rules.cards import Rank, Suit
+from server.game.rules.card_faces import CardColor, FaceCount
+from server.game.rules.cards import Rank, Suit
 from server.training.token_context import (
     ObservationSegment,
     RelativeRole,

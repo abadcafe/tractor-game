@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from server.player.test_helpers import card, make_snapshot
-from server.protocol import TrickSlotSnapshot, TrickSnapshot
-from server.result import Ok, Rejected
-from server.rules.card_faces import CardFace, FaceCount
+from server.foundation.result import Ok, Rejected
+from server.game.players.test_helpers import card, make_snapshot
+from server.game.protocol import TrickSlotSnapshot, TrickSnapshot
+from server.game.rules.card_faces import CardFace, FaceCount
 from server.training.semantic_actions import (
     GeneratedAction,
     SemanticArgument,

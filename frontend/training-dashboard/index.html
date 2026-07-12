@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Training Console</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/training/style.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">Training Console</div>
+      <div class="connection">
+        <span id="connection-state" class="connection-label"
+        >CONNECTING</span>
+      </div>
+    </header>
+    <form class="directory-bar" id="directory-form">
+      <label for="run-directory">Run directory</label>
+      <input
+        id="run-directory"
+        class="directory-input"
+        autocomplete="off"
+        required
+      >
+      <button
+        class="button"
+        id="use-run-directory"
+        type="submit"
+        disabled
+      >
+        Change
+      </button>
+      <span id="directory-error" class="error-value"></span>
+    </form>
+    <div class="app-shell">
+      <nav class="sidebar" aria-label="Training console navigation">
+        <a class="nav-link" data-route="overview" href="#overview"
+        >Overview</a>
+        <a class="nav-link" data-route="metrics" href="#metrics"
+        >Metrics</a>
+        <a class="nav-link" data-route="logs" href="#logs">Logs</a>
+        <a class="nav-link" data-route="checkpoints" href="#checkpoints"
+        >Checkpoints</a>
+      </nav>
+      <main class="content">
+        <section class="view" data-view="overview">
+          <header class="page-head">
+            <div>
+              <h1>Training Run</h1>
+              <p id="run-caption" class="subtitle"></p>
+            </div>
+            <div class="head-actions">
+              <button
+                class="icon-button"
+                data-refresh
+                title="Refresh"
+                aria-label="Refresh"
+              >
+                ↻
+              </button>
+              <button class="button" id="open-init" disabled>
+                Initialize
+              </button>
+              <button
+                class="button button-primary"
+                id="open-resume"
+                disabled
+              >
+                Resume
+              </button>
+              <button
+                class="button button-danger"
+                id="stop-training"
+                disabled
+              >
+                Stop
+              </button>
+            </div>
+          </header>
+          <section class="overview" id="overview"></section>
+          <div class="two-column">
+            <section class="panel">
+              <header class="section-head">
+                <h2>Managed process</h2><span
+                  id="process-presence"
+                  class="badge neutral"
+                >-</span>
+              </header>
+              <div id="process-details" class="detail-list"></div>
+            </section>
+            <section class="panel">
+              <header class="section-head">
+                <h2>Current runtime</h2>
+              </header>
+              <div id="runtime-details" class="detail-list"></div>
+            </section>
+          </div>
+          <section class="panel command-panel">
+            <header class="section-head"><h2>Process argv</h2></header>
+            <pre id="process-command" class="code-block"></pre>
+          </section>
+        </section>
+
+        <section class="view" data-view="metrics" hidden>
+          <header class="page-head">
+            <div>
+              <h1>Training Metrics</h1>
+              <p class="subtitle">
+                Persistent PPO updates and recent process telemetry
+              </p>
+            </div>
+            <button
+              class="icon-button"
+              data-refresh
+              title="Refresh"
+              aria-label="Refresh"
+            >
+              ↻
+            </button>
+          </header>
+          <section class="metric-strip" id="metric-strip"></section>
+          <section class="panel chart-panel">
+            <header class="section-head">
+              <h2>Sample throughput</h2>
+            </header><canvas
+              id="metric-chart"
+              width="1200"
+              height="280"
+            ></canvas>
+          </section>
+          <section class="panel table-panel">
+            <header class="section-head">
+              <h2>Latest update metrics</h2>
+            </header>
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Update</th>
+                    <th>Samples</th>
+                    <th>Policy loss</th>
+                    <th>Value loss</th>
+                    <th>Entropy</th>
+                    <th>KL</th>
+                    <th>Update time</th>
+                  </tr>
+                </thead>
+                <tbody id="metric-rows"></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="panel table-panel">
+            <header class="section-head">
+              <h2>Runtime telemetry</h2><span class="section-note"
+              >Latest event per process</span>
+            </header>
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Process</th>
+                    <th>Stage</th>
+                    <th>Updates</th>
+                    <th>Progress</th>
+                    <th>Measurements</th>
+                    <th>Observed</th>
+                  </tr>
+                </thead>
+                <tbody id="telemetry-rows"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <section class="view" data-view="logs" hidden>
+          <header class="page-head">
+            <div>
+              <h1>Training Logs</h1>
+              <p class="subtitle">Detached coordinator output</p>
+            </div>
+            <button
+              class="icon-button"
+              data-refresh
+              title="Refresh"
+              aria-label="Refresh"
+            >
+              ↻
+            </button>
+          </header>
+          <section class="panel log-panel">
+            <div class="log-toolbar segmented">
+              <button class="segment active" data-stream="stdout">
+                stdout
+              </button>
+              <button class="segment" data-stream="stderr">
+                stderr
+              </button>
+            </div>
+            <pre id="log-content" class="raw-log"></pre>
+          </section>
+        </section>
+
+        <section class="view" data-view="checkpoints" hidden>
+          <header class="page-head">
+            <div>
+              <h1>Checkpoints</h1>
+              <p id="checkpoint-directory" class="subtitle"></p>
+            </div>
+            <button
+              class="icon-button"
+              data-refresh
+              title="Refresh"
+              aria-label="Refresh"
+            >
+              ↻
+            </button>
+          </header>
+          <section class="checkpoint-summary" id="checkpoint-summary">
+          </section>
+          <section class="panel table-panel">
+            <header class="section-head"><h2>Manifests</h2></header>
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Manifest</th>
+                    <th>Update</th>
+                    <th>Samples</th>
+                    <th>State</th>
+                    <th>Size</th>
+                    <th>Integrity</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="manifest-rows"></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="panel table-panel">
+            <header class="section-head">
+              <h2>Immutable objects</h2>
+            </header>
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Checkpoint ID</th>
+                    <th>State path</th>
+                    <th>Size</th>
+                    <th>References</th>
+                    <th>Condition</th>
+                  </tr>
+                </thead>
+                <tbody id="object-rows"></tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="init-dialog" class="modal launch-modal">
+      <form id="init-form" class="modal-shell launch-shell">
+        <header class="modal-head">
+          <div>
+            <h2>Initialize run</h2>
+            <p>Create portable zero-update model and optimizer state</p>
+          </div>
+          <button
+            class="modal-close"
+            type="button"
+            data-close-dialog
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </header>
+        <section id="init-fields" class="launch-fields"></section>
+        <section class="command-preview">
+          <span>Command preview</span><code
+            id="init-command-preview"
+          ></code>
+        </section>
+        <footer class="modal-actions">
+          <span id="init-status" class="status-value"></span><button
+            class="button"
+            type="button"
+            data-close-dialog
+          >
+            Cancel
+          </button>
+          <button
+            class="button button-primary"
+            id="confirm-init"
+            type="submit"
+          >
+            Initialize
+          </button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="replace-dialog" class="modal replace-modal">
+      <form id="replace-form" class="modal-shell replace-shell">
+        <header class="modal-head">
+          <div>
+            <h2>Replace existing training run?</h2>
+            <p id="replace-status"></p>
+          </div>
+          <button
+            class="modal-close"
+            type="button"
+            data-close-dialog
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </header>
+        <section class="replace-body">
+          <p class="replace-warning">
+            This will permanently delete the existing checkpoints,
+            metrics, and telemetry in this directory.
+          </p>
+          <code id="replace-run-directory" class="replace-path"></code>
+          <label for="replace-existing">
+            To confirm, type <code>yes</code> below.
+          </label>
+          <input
+            id="replace-existing"
+            class="input"
+            name="replace_existing"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+            pattern="yes"
+            required
+          >
+        </section>
+        <footer class="modal-actions">
+          <span id="replace-result" class="status-value"></span><button
+            class="button"
+            type="button"
+            data-close-dialog
+          >
+            Cancel
+          </button>
+          <button
+            class="button button-danger-primary"
+            id="confirm-replace"
+            type="submit"
+            disabled
+          >
+            Replace and initialize
+          </button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="resume-dialog" class="modal launch-modal">
+      <form id="resume-form" class="modal-shell launch-shell">
+        <header class="modal-head">
+          <div>
+            <h2>Resume training</h2>
+            <p>
+              Select a checkpoint and configure this training process
+            </p>
+          </div>
+          <button
+            class="modal-close"
+            type="button"
+            data-close-dialog
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </header>
+        <section id="resume-fields" class="launch-fields"></section>
+        <section class="command-preview">
+          <span>Command preview</span><code
+            id="resume-command-preview"
+          ></code>
+        </section>
+        <footer class="modal-actions">
+          <span id="resume-status" class="status-value"></span><button
+            class="button"
+            type="button"
+            data-close-dialog
+          >
+            Cancel
+          </button>
+          <button
+            class="button button-primary"
+            id="confirm-resume"
+            type="submit"
+          >
+            Resume
+          </button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog id="checkpoint-dialog" class="modal">
+      <div class="modal-shell checkpoint-dialog-shell">
+        <header class="modal-head">
+          <h2 id="checkpoint-dialog-title">Checkpoint</h2>
+          <button
+            class="modal-close"
+            id="close-checkpoint"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </header>
+        <pre
+          id="checkpoint-dialog-content"
+          class="code-block checkpoint-json"
+        ></pre>
+      </div>
+    </dialog>
+    <script type="module" src="/training/main.js"></script>
+  </body>
+</html>

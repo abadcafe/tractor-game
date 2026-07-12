@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from server.result import Ok, Rejected
+from server.foundation.result import Ok, Rejected
 from server.training.semantic_actions.arguments import (
     SemanticArgument,
     SemanticArgumentTrace,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from server.result import Ok, Rejected
+from server.foundation.result import Ok, Rejected
 from server.training.config import ModelConfig, TrainConfig
 from server.training.runtime.config import ExecutionConfig
 from server.training.runtime.state import (

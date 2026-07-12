@@ -7,7 +7,7 @@ import math
 import torch
 from torch import Tensor
 
-from server import result as _result
+from server.foundation import result as _result
 from server.training.tensor_finiteness import (
     NamedTensorCheck,
     reject_if_non_finite,

@@ -6,10 +6,10 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from server import result as _result
+from server.foundation import result as _result
 from server.training.config import ModelConfig, TrainConfig
 
-CHECKPOINT_SCHEMA_VERSION = 19
+CHECKPOINT_SCHEMA_VERSION = 20
 CHECKPOINT_OBJECTS_DIR = "objects"
 CHECKPOINT_STATE_FILENAME = "state.pt"
 

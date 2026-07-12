@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from multiprocessing import shared_memory
 from multiprocessing.context import SpawnContext
 
-from server import result as _result
-from server.result import Ok, Rejected
+from server.foundation import result as _result
+from server.foundation.result import Ok, Rejected
 from server.training.runtime.shared_rollout_arena.schema import (
     RolloutArenaHeader,
     arena_byte_size,

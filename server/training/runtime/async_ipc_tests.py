@@ -6,7 +6,7 @@ import asyncio
 import struct
 from dataclasses import dataclass, field
 
-from server.result import Ok, Rejected
+from server.foundation.result import Ok, Rejected
 from server.training.runtime.async_ipc import (
     ControlCommandBroadcastFailure,
     ProcessControlProtocol,

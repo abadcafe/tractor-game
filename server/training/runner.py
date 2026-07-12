@@ -6,10 +6,10 @@ import asyncio
 import time
 from dataclasses import dataclass
 
-from server import result as _result
-from server.game import Game
-from server.protocol import StateSnapshot
-from server.rules.required_progress import TerminalProgress
+from server.foundation import result as _result
+from server.game.protocol import StateSnapshot
+from server.game.room.game import Game
+from server.game.rules.required_progress import TerminalProgress
 from server.training.player import TrainingPlayer
 from server.training.policy import TrainingPolicy
 from server.training.progress import (

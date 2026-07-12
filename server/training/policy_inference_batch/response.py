@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import struct
 
-from server import result as _result
-from server.result import Ok, Rejected
+from server.foundation import result as _result
+from server.foundation.result import Ok, Rejected
 from server.training.legal_actions import LegalActionIndex
 from server.training.policy import PolicyDecision
 from server.training.policy_inference_batch.response_types import (

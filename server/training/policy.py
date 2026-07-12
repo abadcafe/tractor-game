@@ -7,7 +7,7 @@ from typing import Protocol
 
 import torch
 
-from server.result import Ok, Rejected
+from server.foundation.result import Ok, Rejected
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
 from server.training.policy_sampling.records import DecisionHandle

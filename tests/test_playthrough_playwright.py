@@ -969,7 +969,7 @@ def start_server(config: Config, recorder: Recorder) -> ManagedServer:
         sys.executable,
         "-m",
         "uvicorn",
-        "server.server:app",
+        "server.web.app:app",
         "--host",
         "127.0.0.1",
         "--port",

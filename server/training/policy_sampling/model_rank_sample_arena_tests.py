@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
-from server.result import Ok
+from server.foundation.result import Ok
 from server.training.policy_sampling.model_rank_sample_arena import (
     ModelRankSampleArena,
 )

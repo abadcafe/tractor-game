@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from server.rules.cards import Rank
-from server.rules.required_progress import (
+from server.game.rules.cards import Rank
+from server.game.rules.required_progress import (
     TerminalProgress,
     progress_target_index,
     stage_target,

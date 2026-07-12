@@ -9,8 +9,8 @@ from typing import Literal
 import torch
 from torch import Tensor
 
-from server import result as _result
-from server.result import Ok, Rejected
+from server.foundation import result as _result
+from server.foundation.result import Ok, Rejected
 from server.training.policy_sampling import RankReturnTargets
 from server.training.runtime.shared_rollout_arena.schema import (
     sample_reference_column_views,

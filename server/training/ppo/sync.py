@@ -9,7 +9,7 @@ import torch.distributed as dist
 import torch.distributed.nn.functional as dist_functional
 from torch import Tensor
 
-from server import result as _result
+from server.foundation import result as _result
 from server.training.ppo.distributed import PPOUpdatePartition
 
 

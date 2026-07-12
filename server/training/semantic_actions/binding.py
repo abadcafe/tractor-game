@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from server.result import Ok, Rejected
-from server.rules.card_faces import (
+from server.foundation.result import Ok, Rejected
+from server.game.rules.card_faces import (
     CardFace,
     FaceCount,
     bind_face_counts,
 )
-from server.rules.cards import Card
+from server.game.rules.cards import Card
 from server.training.semantic_actions.arguments import (
     InvalidSemanticActionRejected,
 )

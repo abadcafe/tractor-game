@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from server.result import Ok, Rejected
+from server.foundation.result import Ok, Rejected
 from server.training.tensor_finiteness import (
     NamedTensorCheck,
     reject_if_non_finite,

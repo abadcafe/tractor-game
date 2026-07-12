@@ -6,7 +6,7 @@ from pathlib import Path
 
 import torch
 
-from server.result import Ok
+from server.foundation.result import Ok
 from server.training.config import ModelConfig, TrainConfig
 from server.training.runtime.checkpoint_state import (
     create_initial_runtime_checkpoint_state,

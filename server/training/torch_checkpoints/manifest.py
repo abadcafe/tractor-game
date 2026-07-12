@@ -7,8 +7,8 @@ import os
 from pathlib import Path
 from typing import TypeGuard, cast
 
-from server import result as _result
-from server.training.json_types import JsonObject, JsonValue
+from server.foundation import result as _result
+from server.foundation.json_value import JsonObject, JsonValue
 from server.training.torch_checkpoints.filesystem import (
     validate_checkpoint_manifest_file,
 )

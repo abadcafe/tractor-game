@@ -1,0 +1,480 @@
+"""Stirring (炒地皮) state machine for Shengji/Tractor.
+
+After the declarer is determined, other players can change the trump
+suit
+by revealing pairs of trump-rank cards or jokers.
+
+Rules:
+- Only pairs are valid (singles cannot stir).
+- Joker pair > pair_♠ > pair_♥ > pair_♣ > pair_♦.
+- Joker pair always accepted (sets trump_suit=None).
+- For non-trump-suit pairs: must have higher priority than current
+trump.
+- For 空主 (trump_suit=None): any trump-rank pair is accepted.
+- Declarer and team never change during stirring.
+- Each time trump suit is established or changed, the stirring player
+must
+  pick up bottom cards and discard the same number back (EXCHANGING
+  sub-phase).
+- After exchange, stirring continues (WAITING sub-phase).
+- After an exchange, the exchanging player is skipped; if the other 3
+pass,
+  stirring completes and play starts.
+"""
+
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from server.foundation.result import Ok, Rejected
+from server.game.rules.cards import POINTS_MAP, Card, Rank, Suit
+from server.game.rules.ordering import bid_value
+from server.game.rules.rejections.bid import MixedJokerPairRejected
+
+from . import exchange_sm as exc
+from .constants import next_player_ccw
+from .rejections.stirring import (
+    CannotPassStirWhileExchangingRejected,
+    CannotStirConsecutivelyRejected,
+    CannotStirNowRejected,
+    JokerCannotPairWithNormalRejected,
+    NotStirExchangePhaseRejected,
+    NotStirringExchangerRejected,
+    PairSuitMismatchRejected,
+    StirCardNotTrumpRankRejected,
+    StirMustBePairRejected,
+    StirPriorityTooLowRejected,
+    StirringMissingExchangeStateRejected,
+)
+from .rejections.turn import WrongTurnRejected
+from .types import (
+    BottomExchangeEvent,
+    StirDeclarationEvent,
+    StirringPhase,
+)
+
+# ---- Priority Mapping ----
+
+# Priority order for stirring: higher value = higher priority
+# Matches bid_value's suit ordering: ♦=0, ♣=1, ♥=2, ♠=3, 小王=4, 大王=5
+# For stirring, we compare pair values directly using bid_value.
+
+# Big joker pair = 2*100 + 5 = 205; nothing can beat it.
+_MAX_STIR_PRIORITY: int = 205
+
+
+def _empty_cards() -> list[Card]:
+    return []
+
+
+# ---- Input / Output Models ----
+
+
+class StirInput(BaseModel):
+    """Input to create a stirring phase."""
+
+    model_config = ConfigDict(frozen=True)
+
+    trump_suit: Suit | None
+    trump_rank: Rank
+    initial_bid_cards: list[Card] = Field(default_factory=_empty_cards)
+    declarer_player: int
+    bottom_cards: list[Card]
+    players_hand: list[list[Card]]
+
+
+class StirResult(BaseModel):
+    """Output from a completed stirring phase."""
+
+    model_config = ConfigDict(frozen=True)
+
+    final_trump_suit: Suit | None
+    stir_count: int
+    final_bottom_cards: list[Card]
+    final_players_hand: list[list[Card]]
+
+
+class StirringState(BaseModel):
+    """Internal state of the stirring phase."""
+
+    model_config = ConfigDict(frozen=True)
+
+    phase: StirringPhase
+    trump_suit: Suit | None
+    trump_rank: Rank
+    declarer_player: int
+    current_player: int
+    pass_set: frozenset[int]
+    stir_events: tuple[StirDeclarationEvent, ...]
+    bottom_exchange_events: tuple[BottomExchangeEvent, ...]
+    last_stir_player: int | None = None
+    current_priority: int = 0
+    bottom_cards: list[Card]
+    bottom_owner_player: int | None
+    players_hand: list[list[Card]]
+    exchange_state: exc.ExchangeState | None = None
+    exchanging_player: int | None = None
+    pending_exchange_trigger: Literal["initial", "stir"] | None = None
+    pending_stir_event_index: int | None = None
+
+
+# ---- Operations ----
+
+
+def create_stirring(input: StirInput) -> StirringState:
+    """Create initial stirring state.
+
+    Starts in EXCHANGING sub-phase: the declarer must first pick up
+    bottom
+    cards and discard the same number back (first exchange after bid).
+    current_player is set to declarer_player for the exchange.
+    """
+    initial_priority = _initial_priority(
+        input.initial_bid_cards,
+        input.trump_suit,
+        input.trump_rank,
+    )
+
+    # Create exchange state for the initial declarer
+    declarer_hand = list(input.players_hand[input.declarer_player])
+    exchange_input = exc.ExchangeInput(
+        declarer_player=input.declarer_player,
+        bottom_cards=list(input.bottom_cards),
+        declarer_hand=declarer_hand,
+    )
+    exchange_state = exc.create_exchange(exchange_input)
+
+    return StirringState(
+        phase="EXCHANGING",
+        trump_suit=input.trump_suit,
+        trump_rank=input.trump_rank,
+        declarer_player=input.declarer_player,
+        current_player=input.declarer_player,
+        pass_set=frozenset(),
+        stir_events=(),
+        bottom_exchange_events=(),
+        current_priority=initial_priority,
+        bottom_cards=list(input.bottom_cards),
+        bottom_owner_player=None,
+        players_hand=[list(h) for h in input.players_hand],
+        exchange_state=exchange_state,
+        exchanging_player=input.declarer_player,
+        pending_exchange_trigger="initial",
+        pending_stir_event_index=None,
+    )
+
+
+def pass_stir(
+    state: StirringState, player: int
+) -> Ok[StirringState] | Rejected:
+    """Player passes. Add to pass_set and advance current_player.
+
+    If every player has passed or been skipped for this stir cycle,
+    phase becomes COMPLETE.
+    Returns Rejected if player is not the current player or if in
+    EXCHANGING sub-phase.
+    """
+    if state.phase == "EXCHANGING":
+        return CannotPassStirWhileExchangingRejected()
+
+    if player != state.current_player:
+        return WrongTurnRejected()
+
+    new_pass_set = state.pass_set | {player}
+    new_event = StirDeclarationEvent(
+        player=player,
+        kind="pass",
+        cards=[],
+        new_suit=None,
+        priority=None,
+    )
+
+    if len(new_pass_set) == 4:
+        return Ok(
+            StirringState(
+                phase="COMPLETE",
+                trump_suit=state.trump_suit,
+                trump_rank=state.trump_rank,
+                declarer_player=state.declarer_player,
+                current_player=state.current_player,
+                pass_set=new_pass_set,
+                stir_events=state.stir_events + (new_event,),
+                bottom_exchange_events=state.bottom_exchange_events,
+                last_stir_player=state.last_stir_player,
+                current_priority=state.current_priority,
+                bottom_cards=state.bottom_cards,
+                bottom_owner_player=state.bottom_owner_player,
+                players_hand=state.players_hand,
+                pending_exchange_trigger=state.pending_exchange_trigger,
+                pending_stir_event_index=state.pending_stir_event_index,
+            )
+        )
+
+    return Ok(
+        StirringState(
+            phase="WAITING",
+            trump_suit=state.trump_suit,
+            trump_rank=state.trump_rank,
+            declarer_player=state.declarer_player,
+            current_player=next_player_ccw(state.current_player),
+            pass_set=new_pass_set,
+            stir_events=state.stir_events + (new_event,),
+            bottom_exchange_events=state.bottom_exchange_events,
+            last_stir_player=state.last_stir_player,
+            current_priority=state.current_priority,
+            bottom_cards=state.bottom_cards,
+            bottom_owner_player=state.bottom_owner_player,
+            players_hand=state.players_hand,
+            pending_exchange_trigger=state.pending_exchange_trigger,
+            pending_stir_event_index=state.pending_stir_event_index,
+        )
+    )
+
+
+def stir(
+    state: StirringState, player: int, cards: list[Card]
+) -> Ok[StirringState] | Rejected:
+    """Attempt to stir (change trump suit) with a pair of cards.
+
+    Validation:
+    1. Must be in WAITING sub-phase.
+    2. Must be current_player.
+    3. Must be exactly 2 cards (pair).
+    4. Must be a valid pair (same suit, or both same joker type).
+    5. Cards must be trump rank or jokers.
+    6. Priority must be higher than current trump suit priority.
+
+    If valid: returns Ok(new_state) with updated trump_suit, reset
+    pass_set,
+    phase transitions to EXCHANGING (stirring player must exchange
+    bottom cards).
+    """
+    if state.phase != "WAITING":
+        return CannotStirNowRejected()
+
+    # 1. Wrong player
+    if player != state.current_player:
+        return WrongTurnRejected()
+
+    # 1b. Cannot stir one's own trump (prevents infinite stir loops)
+    if state.last_stir_player == player:
+        return CannotStirConsecutivelyRejected()
+
+    # 2. Must be exactly 2 cards
+    if len(cards) != 2:
+        return StirMustBePairRejected()
+
+    # 3. Must be a valid pair
+    # Joker pair: both jokers of same type
+    if cards[0].is_joker and cards[1].is_joker:
+        if cards[0].rank != cards[1].rank:
+            return MixedJokerPairRejected()
+        # Valid joker pair
+        new_suit: Suit | None = None  # Joker pair → 无主
+    else:
+        # Non-joker: both must be trump rank, same suit
+        if cards[0].is_joker or cards[1].is_joker:
+            return JokerCannotPairWithNormalRejected()
+        if (
+            cards[0].rank != state.trump_rank
+            or cards[1].rank != state.trump_rank
+        ):
+            return StirCardNotTrumpRankRejected()
+        if cards[0].suit != cards[1].suit:
+            return PairSuitMismatchRejected()
+        new_suit = cards[0].suit
+
+    # 4. Priority check (unified for all cases, including empty trump +
+    # joker)
+    new_priority = bid_value(cards, state.trump_rank)
+    if new_priority <= state.current_priority:
+        return StirPriorityTooLowRejected()
+
+    # 5. Valid stir: create exchange state for the stirring player
+    stir_event_index = len(state.stir_events)
+    new_event = StirDeclarationEvent(
+        player=player,
+        kind="stir",
+        cards=list(cards),
+        new_suit=new_suit,
+        priority=new_priority,
+    )
+
+    stirring_player_hand = list(state.players_hand[player])
+    exchange_input = exc.ExchangeInput(
+        declarer_player=player,
+        bottom_cards=list(state.bottom_cards),
+        declarer_hand=stirring_player_hand,
+    )
+    new_exchange_state = exc.create_exchange(exchange_input)
+
+    return Ok(
+        StirringState(
+            phase="EXCHANGING",
+            trump_suit=new_suit,
+            trump_rank=state.trump_rank,
+            declarer_player=state.declarer_player,
+            current_player=player,
+            pass_set=frozenset(),
+            stir_events=state.stir_events + (new_event,),
+            bottom_exchange_events=state.bottom_exchange_events,
+            last_stir_player=player,
+            current_priority=new_priority,
+            bottom_cards=list(state.bottom_cards),
+            bottom_owner_player=None,
+            players_hand=[list(h) for h in state.players_hand],
+            exchange_state=new_exchange_state,
+            exchanging_player=player,
+            pending_exchange_trigger="stir",
+            pending_stir_event_index=stir_event_index,
+        )
+    )
+
+
+def stir_discard(
+    state: StirringState, player: int, cards: list[Card]
+) -> Ok[StirringState] | Rejected:
+    """Discard cards during EXCHANGING sub-phase.
+
+    The player who just stirred (or the declarer on initial exchange)
+    must
+    pick up the bottom cards and discard the same number back.
+
+    After successful discard, transitions to WAITING sub-phase with
+    updated hands and bottom cards. The next player is CCW after the
+    exchanging player.
+    """
+    if state.phase != "EXCHANGING":
+        return NotStirExchangePhaseRejected()
+
+    if player != state.exchanging_player:
+        return NotStirringExchangerRejected()
+
+    if state.exchange_state is None:
+        return StirringMissingExchangeStateRejected()
+
+    match exc.discard(state.exchange_state, cards):
+        case Ok(value=new_exc):
+            pass
+        case Rejected() as rejected:
+            return rejected
+
+    if new_exc.phase == "COMPLETE" and new_exc.result is not None:
+        # Update hands and bottom cards
+        new_hands = [list(h) for h in state.players_hand]
+        assert state.exchanging_player is not None
+        exchanging = state.exchanging_player
+        new_hands[exchanging] = list(new_exc.result.new_hand)
+        new_bottom_cards = list(new_exc.result.new_bottom_cards)
+        assert state.pending_exchange_trigger is not None
+        exchange_event = BottomExchangeEvent(
+            player=exchanging,
+            trigger=state.pending_exchange_trigger,
+            stir_event_index=state.pending_stir_event_index,
+            picked_up_bottom_cards=list(state.bottom_cards),
+            discarded_bottom_cards=list(cards),
+            resulting_bottom_cards=new_bottom_cards,
+        )
+        bottom_exchange_events = state.bottom_exchange_events + (
+            exchange_event,
+        )
+
+        # If current_priority is already the maximum (big joker pair),
+        # no higher stir is possible — skip WAITING, go directly to
+        # COMPLETE.
+        if state.current_priority >= _MAX_STIR_PRIORITY:
+            return Ok(
+                StirringState(
+                    phase="COMPLETE",
+                    trump_suit=state.trump_suit,
+                    trump_rank=state.trump_rank,
+                    declarer_player=state.declarer_player,
+                    current_player=exchanging,
+                    pass_set=frozenset(),
+                    stir_events=state.stir_events,
+                    bottom_exchange_events=bottom_exchange_events,
+                    last_stir_player=state.last_stir_player,
+                    current_priority=state.current_priority,
+                    bottom_cards=new_bottom_cards,
+                    bottom_owner_player=exchanging,
+                    players_hand=new_hands,
+                    pending_exchange_trigger=None,
+                    pending_stir_event_index=None,
+                )
+            )
+
+        # Next player is CCW after the exchanging player
+        next_player = next_player_ccw(exchanging)
+
+        return Ok(
+            StirringState(
+                phase="WAITING",
+                trump_suit=state.trump_suit,
+                trump_rank=state.trump_rank,
+                declarer_player=state.declarer_player,
+                current_player=next_player,
+                pass_set=frozenset({exchanging}),
+                stir_events=state.stir_events,
+                bottom_exchange_events=bottom_exchange_events,
+                last_stir_player=state.last_stir_player,
+                current_priority=state.current_priority,
+                bottom_cards=new_bottom_cards,
+                bottom_owner_player=exchanging,
+                players_hand=new_hands,
+                pending_exchange_trigger=None,
+                pending_stir_event_index=None,
+            )
+        )
+
+    # Should not reach here (exchange discard always completes in one
+    # step)
+    return Ok(state.model_copy(update={"exchange_state": new_exc}))
+
+
+def get_stir_result(state: StirringState) -> StirResult:
+    """Extract the result from a completed stirring phase.
+
+    Returns the final trump suit, the number of stir actions taken,
+    the final bottom cards, and the final player hands.
+    """
+    stir_count = sum(
+        1 for event in state.stir_events if event.kind == "stir"
+    )
+    return StirResult(
+        final_trump_suit=state.trump_suit,
+        stir_count=stir_count,
+        final_bottom_cards=state.bottom_cards,
+        final_players_hand=state.players_hand,
+    )
+
+
+def _initial_priority(
+    initial_bid_cards: list[Card],
+    trump_suit: Suit | None,
+    trump_rank: Rank,
+) -> int:
+    """Return the priority that later stir actions must beat."""
+    if initial_bid_cards:
+        return bid_value(initial_bid_cards, trump_rank)
+    if trump_suit is None:
+        return 0
+    return bid_value(
+        _make_trump_cards(trump_suit, trump_rank, 2),
+        trump_rank,
+    )
+
+
+def _make_trump_cards(suit: Suit, rank: Rank, count: int) -> list[Card]:
+    """Create dummy trump-rank cards for priority comparison."""
+    result: list[Card] = []
+    deck_values: tuple[Literal[1], Literal[2]] = (1, 2)
+    for deck in deck_values[:count]:
+        result.append(
+            Card(
+                id=f"D{deck}-{suit.value}-{rank.value}",
+                suit=suit,
+                rank=rank,
+                points=POINTS_MAP[rank],
+            )
+        )
+    return result

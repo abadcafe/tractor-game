@@ -7,9 +7,9 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from server.result import Ok, Rejected
-from server.rules.card_faces import CardFace, FaceCount
-from server.rules.cards import Rank, Suit
+from server.foundation.result import Ok, Rejected
+from server.game.rules.card_faces import CardFace, FaceCount
+from server.game.rules.cards import Rank, Suit
 from server.training.semantic_action_plan import (
     ACTION_FACE_COUNT,
     ActionPlanFrame,

@@ -6,33 +6,18 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from server import result as _result
+from server.foundation import result as _result
 from server.training.config import ModelConfig, TrainConfig
-from server.training.dashboard import write_dashboard
 from server.training.metrics import (
     TrainingMetric,
     append_metric,
-    metrics_path,
 )
-from server.training.runtime.affinity import preflight_cpu_affinity
+from server.training.persistence.schema import database_path
 from server.training.runtime.config import ExecutionConfig
-from server.training.torch_checkpoints import (
-    save_torch_checkpoint,
-)
-from server.training.training_state import (
-    create_training_state,
-    validate_model_rank_runtime,
-)
+from server.training.torch_checkpoints.save import save_torch_checkpoint
+from server.training.training_state import create_training_state
 
 _CHECKPOINTS_DIR_NAME = "checkpoints"
-
-
-@dataclass(frozen=True, slots=True)
-class PreparedTrainingRun:
-    """Files prepared for a training run."""
-
-    run_dir: Path
-    dashboard_path: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,45 +25,18 @@ class InitializedTrainingRun:
     """Files and initial checkpoint created for a new training run."""
 
     run_dir: Path
-    dashboard_path: Path
     checkpoint_path: Path
-
-
-def prepare_training_run(
-    *,
-    run_dir: Path,
-    telemetry_interval_seconds: float = 1.0,
-) -> _result.Ok[PreparedTrainingRun] | _result.Rejected:
-    """Create dashboard files without changing training progress."""
-    dashboard_result = write_dashboard(
-        run_dir,
-        title="Tractor Training",
-        telemetry_interval_seconds=telemetry_interval_seconds,
-    )
-    if isinstance(dashboard_result, _result.Rejected):
-        return dashboard_result
-    return _result.Ok(
-        value=PreparedTrainingRun(
-            run_dir=run_dir,
-            dashboard_path=dashboard_result.value,
-        )
-    )
 
 
 def initialize_training_run(
     *,
     run_dir: Path,
-    run_id: str,
     model_config: ModelConfig,
     train_config: TrainConfig,
-    execution_config: ExecutionConfig,
-    force_new_run: bool = False,
+    replace_existing: bool = False,
 ) -> _result.Ok[InitializedTrainingRun] | _result.Rejected:
-    """Create dashboard, initial metric, and torch checkpoint."""
-    runtime_check = _preflight_training_runtime(execution_config)
-    if isinstance(runtime_check, _result.Rejected):
-        return runtime_check
-    if force_new_run:
+    """Create portable zero-update state without runtime preflight."""
+    if replace_existing:
         cleanup_result = _clear_training_artifacts(run_dir)
         if isinstance(cleanup_result, _result.Rejected):
             return cleanup_result
@@ -86,20 +44,11 @@ def initialize_training_run(
         guard = _reject_existing_training_run(run_dir)
         if isinstance(guard, _result.Rejected):
             return guard
-    prepared_result = prepare_training_run(
-        run_dir=run_dir,
-        telemetry_interval_seconds=(
-            execution_config.telemetry_interval_seconds
-        ),
-    )
-    if isinstance(prepared_result, _result.Rejected):
-        return prepared_result
-    prepared = prepared_result.value
     checkpoint_path = run_dir / _CHECKPOINTS_DIR_NAME / "latest.json"
     state = create_training_state(
         model_config=model_config,
         train_config=train_config,
-        execution_config=execution_config,
+        execution_config=ExecutionConfig(),
     )
     save_result = save_torch_checkpoint(
         manifest_paths=(checkpoint_path,),
@@ -110,7 +59,7 @@ def initialize_training_run(
         total_rounds=0,
         total_samples=0,
         total_updates=0,
-        retained_update_count=train_config.checkpoint_retention_updates,
+        retained_update_count=0,
     )
     if isinstance(save_result, _result.Rejected):
         return save_result
@@ -118,7 +67,6 @@ def initialize_training_run(
     metric_result = append_metric(
         run_dir,
         TrainingMetric(
-            run_id=run_id,
             total_games=0,
             total_samples=0,
             total_updates=0,
@@ -165,8 +113,7 @@ def initialize_training_run(
         return prune_failure
     return _result.Ok(
         value=InitializedTrainingRun(
-            run_dir=prepared.run_dir,
-            dashboard_path=prepared.dashboard_path,
+            run_dir=run_dir,
             checkpoint_path=checkpoint_path,
         )
     )
@@ -180,56 +127,36 @@ def _reject_existing_training_run(
     return _result.Rejected(
         reason=(
             f"training run already exists: {run_dir}; use --resume or "
-            "--force-new-run"
+            "--replace-existing"
         )
     )
 
 
-def _preflight_training_runtime(
-    execution_config: ExecutionConfig,
-) -> _result.Ok[None] | _result.Rejected:
-    model_rank_check = validate_model_rank_runtime(execution_config)
-    if isinstance(model_rank_check, _result.Rejected):
-        return model_rank_check
-    for worker_index in range(execution_config.worker_process_count()):
-        affinity_check = preflight_cpu_affinity(
-            label=f"worker-{worker_index}",
-            cpus=execution_config.worker_cpu_set(worker_index),
-        )
-        if isinstance(affinity_check, _result.Rejected):
-            return affinity_check
-    return _result.Ok(value=None)
-
-
 def _has_training_artifacts(run_dir: Path) -> bool:
-    return (
-        metrics_path(run_dir).exists()
-        or (run_dir / _CHECKPOINTS_DIR_NAME).exists()
+    return any(
+        path.exists()
+        for path in (
+            database_path(run_dir),
+            Path(f"{database_path(run_dir)}-wal"),
+            Path(f"{database_path(run_dir)}-shm"),
+            run_dir / _CHECKPOINTS_DIR_NAME,
+        )
     )
 
 
 def _clear_training_artifacts(
     run_dir: Path,
 ) -> _result.Ok[None] | _result.Rejected:
-    path = metrics_path(run_dir)
-    try:
-        metrics_exists = path.exists()
-    except OSError:
-        return _result.Rejected(
-            reason=f"training artifact is not readable: {path}"
-        )
-    if metrics_exists:
-        if not path.is_file():
-            return _result.Rejected(
-                reason=f"training artifact is not a file: {path}"
-            )
-        try:
-            path.unlink()
-        except OSError:
-            return _result.Rejected(
-                reason=f"training artifact cleanup failed: {path}"
-            )
+    for path in (
+        database_path(run_dir),
+        Path(f"{database_path(run_dir)}-wal"),
+        Path(f"{database_path(run_dir)}-shm"),
+    ):
+        removal = _remove_training_file(path)
+        if isinstance(removal, _result.Rejected):
+            return removal
     checkpoint_dir = run_dir / _CHECKPOINTS_DIR_NAME
+
     try:
         checkpoint_exists = checkpoint_dir.exists()
     except OSError:
@@ -254,5 +181,28 @@ def _clear_training_artifacts(
                     "training checkpoint cleanup failed: "
                     f"{checkpoint_dir}"
                 )
+            )
+    return _result.Ok(value=None)
+
+
+def _remove_training_file(
+    path: Path,
+) -> _result.Ok[None] | _result.Rejected:
+    try:
+        exists = path.exists()
+    except OSError:
+        return _result.Rejected(
+            reason=f"training artifact is not readable: {path}"
+        )
+    if exists:
+        if not path.is_file():
+            return _result.Rejected(
+                reason=f"training artifact is not a file: {path}"
+            )
+        try:
+            path.unlink()
+        except OSError:
+            return _result.Rejected(
+                reason=f"training artifact cleanup failed: {path}"
             )
     return _result.Ok(value=None)

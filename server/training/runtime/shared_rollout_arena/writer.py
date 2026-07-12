@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from multiprocessing import shared_memory
 
-from server import result as _result
-from server.result import Ok, Rejected
+from server.foundation import result as _result
+from server.foundation.result import Ok, Rejected
 from server.training.returns import ReturnCommit
 from server.training.runtime.shared_rollout_arena.schema import (
     RolloutArenaHeader,

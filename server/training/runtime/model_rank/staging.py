@@ -8,8 +8,8 @@ from dataclasses import dataclass, field
 import torch
 from torch import Tensor
 
-from server import result as _result
-from server.result import Ok, Rejected
+from server.foundation import result as _result
+from server.foundation.result import Ok, Rejected
 from server.training.policy_inference_batch import (
     DevicePolicyRequestBatch,
     PolicyRequestRoute,

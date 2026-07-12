@@ -6,7 +6,7 @@ import os
 import sys
 from dataclasses import dataclass
 
-from server import result as _result
+from server.foundation import result as _result
 from server.training.runtime.config import CpuSet
 
 

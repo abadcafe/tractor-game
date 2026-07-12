@@ -9,12 +9,12 @@ from typing import TypeGuard, cast
 
 from torch import Tensor
 
-from server import result as _result
+from server.foundation import result as _result
+from server.foundation.json_value import JsonObject
 from server.training.config import (
     ModelConfig,
     TrainConfig,
 )
-from server.training.json_types import JsonObject
 from server.training.torch_checkpoints.schema import (
     checkpoint_corruption,
 )
@@ -89,22 +89,6 @@ def train_config_from_json(
     )
     if isinstance(learning_rate, _result.Rejected):
         return learning_rate
-    checkpoint_every_updates = _json_int_field(
-        data,
-        "checkpoint_every_updates",
-        path,
-        label="train_config.checkpoint_every_updates",
-    )
-    if isinstance(checkpoint_every_updates, _result.Rejected):
-        return checkpoint_every_updates
-    checkpoint_retention_updates = _json_int_field(
-        data,
-        "checkpoint_retention_updates",
-        path,
-        label="train_config.checkpoint_retention_updates",
-    )
-    if isinstance(checkpoint_retention_updates, _result.Rejected):
-        return checkpoint_retention_updates
     ppo_clip = _json_float_field(
         data, "ppo_clip", path, label="train_config.ppo_clip"
     )
@@ -162,8 +146,6 @@ def train_config_from_json(
         path=path,
         seed=seed.value,
         learning_rate=learning_rate.value,
-        checkpoint_every_updates=checkpoint_every_updates.value,
-        checkpoint_retention_updates=checkpoint_retention_updates.value,
         ppo_clip=ppo_clip.value,
         value_clip=value_clip.value,
         entropy_coef=entropy_coef.value,
@@ -181,10 +163,6 @@ def train_config_from_json(
         value=TrainConfig(
             seed=seed.value,
             learning_rate=learning_rate.value,
-            checkpoint_every_updates=checkpoint_every_updates.value,
-            checkpoint_retention_updates=(
-                checkpoint_retention_updates.value
-            ),
             ppo_clip=ppo_clip.value,
             value_clip=value_clip.value,
             entropy_coef=entropy_coef.value,
@@ -288,8 +266,6 @@ def _validate_train_config_values(
     path: Path,
     seed: int,
     learning_rate: float,
-    checkpoint_every_updates: int,
-    checkpoint_retention_updates: int,
     ppo_clip: float,
     value_clip: float,
     entropy_coef: float,
@@ -308,18 +284,6 @@ def _validate_train_config_values(
     if learning_rate <= 0.0:
         return checkpoint_corruption(
             path, "manifest train_config.learning_rate must be > 0"
-        )
-    if checkpoint_every_updates <= 0:
-        return checkpoint_corruption(
-            path,
-            "manifest train_config.checkpoint_every_updates must be "
-            "> 0",
-        )
-    if checkpoint_retention_updates < 0:
-        return checkpoint_corruption(
-            path,
-            "manifest train_config.checkpoint_retention_updates must "
-            "be >= 0",
         )
     if ppo_clip <= 0.0 or ppo_clip > 1.0:
         return checkpoint_corruption(

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor, nn
 
-from server import result as _result
+from server.foundation import result as _result
 from server.training.config import TrainConfig
 from server.training.model import TractorPolicyModel
 from server.training.ppo.evaluation import evaluate_trace_batch

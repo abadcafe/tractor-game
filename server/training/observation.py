@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from server.protocol import (
+from server.game.protocol import (
     BidEventSnapshot,
     BottomExchangeSnapshot,
     CompletedTrickSnapshot,
@@ -14,19 +14,22 @@ from server.protocol import (
     StirDeclarationEventSnapshot,
     TrickSlotSnapshot,
 )
-from server.rules.card_faces import (
+from server.game.rules.card_faces import (
     FaceCount,
     canonical_face_counts,
     face_count_signature,
 )
-from server.rules.cards import Card
-from server.rules.required_progress import (
+from server.game.rules.cards import Card
+from server.game.rules.required_progress import (
     MANDATORY_LEVELS,
     distance_to_target,
     progress_target_value,
     stage_target,
 )
-from server.sm.constants import BOTTOM_CARD_COUNT, PLAYER_COUNT
+from server.game.state_machine.constants import (
+    BOTTOM_CARD_COUNT,
+    PLAYER_COUNT,
+)
 from server.training.semantic_actions.query import (
     ActionQuery,
     build_action_query,

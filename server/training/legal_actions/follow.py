@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from server.protocol import StateSnapshot, TrickSnapshot
-from server.result import Ok, Rejected
-from server.rules.cards import Card
-from server.rules.follow_action_space import (
+from server.foundation.result import Ok, Rejected
+from server.game.protocol import StateSnapshot, TrickSnapshot
+from server.game.rules.cards import Card
+from server.game.rules.follow_action_space import (
     FollowActionSpace,
     build_follow_action_space,
 )

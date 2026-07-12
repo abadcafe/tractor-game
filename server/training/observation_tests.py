@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import torch
 
-from server.player.test_helpers import card, make_snapshot
-from server.protocol import (
+from server.game.players.test_helpers import card, make_snapshot
+from server.game.protocol import (
     BidEventSnapshot,
     BottomExchangeSnapshot,
     CompletedTrickSnapshot,
@@ -14,7 +14,7 @@ from server.protocol import (
     TrickSlotSnapshot,
     TrickSnapshot,
 )
-from server.rules.cards import Card, create_decks
+from server.game.rules.cards import Card, create_decks
 from server.training.config import ModelConfig
 from server.training.observation import (
     HistoryTrick,

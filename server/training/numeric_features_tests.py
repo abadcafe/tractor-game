@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from server.player.test_helpers import card
-from server.rules.card_faces import (
+from server.game.players.test_helpers import card
+from server.game.rules.card_faces import (
     CardFace,
     FaceCount,
 )

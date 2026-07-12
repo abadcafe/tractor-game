@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from server.protocol import StateSnapshot
+from server.game.protocol import StateSnapshot
 from server.training.legal_actions.bid import build_bid_index
 from server.training.legal_actions.contract import (
     EmptyLegalActionIndex,

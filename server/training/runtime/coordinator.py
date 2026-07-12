@@ -7,9 +7,13 @@ import time
 from pathlib import Path
 from typing import Literal
 
-from server import result as _result
-from server.result import Ok, Rejected
-from server.training.config import ModelConfig, TrainConfig
+from server.foundation import result as _result
+from server.foundation.result import Ok, Rejected
+from server.training.config import (
+    CheckpointPolicy,
+    ModelConfig,
+    TrainConfig,
+)
 from server.training.metrics import (
     TrainingMetric,
     append_metric,
@@ -17,30 +21,32 @@ from server.training.metrics import (
 )
 from server.training.runtime.checkpoint_state import (
     RuntimeCheckpointState,
-    create_initial_runtime_checkpoint_state,
     load_runtime_checkpoint_state,
     save_runtime_checkpoint_state,
 )
 from server.training.runtime.config import ExecutionConfig
 from server.training.runtime.result import TrainingLoopResult
 from server.training.runtime.state import RuntimeTrainingState
-from server.training.runtime.telemetry import (
-    IntervalTelemetrySink,
-    JsonlTelemetrySink,
-    ProcessStage,
-    TelemetryEvent,
-    TelemetryMeasurement,
-    TelemetrySink,
-)
 from server.training.runtime.training_runtime import (
     TrainingRuntime,
     TrainingUpdateResult,
     open_training_runtime,
 )
+from server.training.stop import TrainingStopRequest
+from server.training.telemetry import (
+    IntervalTelemetrySink,
+    ProcessStage,
+    SqliteTelemetrySink,
+    TelemetryEvent,
+    TelemetryMeasurement,
+    TelemetrySink,
+    prune_telemetry,
+)
 
 type _CoordinatorStage = Literal["rollout", "update", "checkpoint"]
 
 _CHECKPOINTS_DIR_NAME = "checkpoints"
+_TELEMETRY_PRUNE_INTERVAL_SECONDS = 600.0
 
 
 def run_training_coordinator(
@@ -49,9 +55,11 @@ def run_training_coordinator(
     run_id: str,
     model_config: ModelConfig,
     train_config: TrainConfig,
+    checkpoint_policy: CheckpointPolicy,
     execution_config: ExecutionConfig,
     max_samples: int,
-    resume: Path | None,
+    resume: Path,
+    stop_request: TrainingStopRequest,
 ) -> _result.Ok[TrainingLoopResult] | _result.Rejected:
     """Run synchronized worker training and commit canonical state."""
     return asyncio.run(
@@ -60,9 +68,11 @@ def run_training_coordinator(
             run_id=run_id,
             model_config=model_config,
             train_config=train_config,
+            checkpoint_policy=checkpoint_policy,
             execution_config=execution_config,
             max_samples=max_samples,
             resume=resume,
+            stop_request=stop_request,
         )
     )
 
@@ -73,9 +83,11 @@ async def _run_training_coordinator_async(
     run_id: str,
     model_config: ModelConfig,
     train_config: TrainConfig,
+    checkpoint_policy: CheckpointPolicy,
     execution_config: ExecutionConfig,
     max_samples: int,
-    resume: Path | None,
+    resume: Path,
+    stop_request: TrainingStopRequest,
 ) -> _result.Ok[TrainingLoopResult] | _result.Rejected:
     """Run synchronized worker training inside the async runtime."""
     assert max_samples >= 0
@@ -85,14 +97,16 @@ async def _run_training_coordinator_async(
     if isinstance(setup_result, Rejected):
         return setup_result
     telemetry_sink = IntervalTelemetrySink(
-        sink=JsonlTelemetrySink(run_dir),
+        sink=SqliteTelemetrySink(run_dir),
         min_interval_seconds=(
             execution_config.telemetry_interval_seconds
         ),
     )
+    prune_result = prune_telemetry(run_dir)
+    if isinstance(prune_result, Rejected):
+        return prune_result
     start_result = telemetry_sink.append(
         TelemetryEvent(
-            run_id=run_id,
             process_label="coordinator",
             stage="coordinator",
             total_rounds=0,
@@ -104,8 +118,8 @@ async def _run_training_coordinator_async(
     )
     if isinstance(start_result, Rejected):
         return start_result
-    state_result = _load_or_create_state(
-        resume=resume,
+    state_result = load_runtime_checkpoint_state(
+        path=resume,
         model_config=model_config,
         train_config=train_config,
         execution_config=execution_config,
@@ -128,19 +142,38 @@ async def _run_training_coordinator_async(
             run_id=run_id,
             model_config=model_config,
             train_config=train_config,
+            checkpoint_policy=checkpoint_policy,
             execution_config=execution_config,
             state=state_result.value,
             max_samples=max_samples,
             telemetry_sink=telemetry_sink,
             runtime=runtime,
+            stop_request=stop_request,
         )
     finally:
         await runtime.close()
     if isinstance(training_result, Rejected):
+        failed_result = telemetry_sink.append(
+            TelemetryEvent(
+                process_label="coordinator",
+                stage="failed",
+                total_rounds=state_result.value.total_rounds,
+                total_updates=state_result.value.total_updates,
+                progress_numerator=0,
+                progress_denominator=_progress_denominator(max_samples),
+                unix_seconds=time.time(),
+            )
+        )
+        if isinstance(failed_result, Rejected):
+            return Rejected(
+                reason=(
+                    f"{training_result.reason}; {failed_result.reason}"
+                )
+            )
         return training_result
     complete_result = _record_coordinator_complete(
         telemetry_sink=telemetry_sink,
-        run_id=run_id,
+        outcome=training_result.value.outcome,
         max_samples=max_samples,
         total_rounds=training_result.value.total_rounds,
         total_samples=training_result.value.total_samples,
@@ -197,42 +230,22 @@ def _should_continue_training(
     return total_samples - start_total_samples < max_samples
 
 
-def _load_or_create_state(
-    *,
-    resume: Path | None,
-    model_config: ModelConfig,
-    train_config: TrainConfig,
-    execution_config: ExecutionConfig,
-) -> _result.Ok[RuntimeCheckpointState] | _result.Rejected:
-    if resume is None:
-        return Ok(
-            value=create_initial_runtime_checkpoint_state(
-                model_config=model_config,
-                train_config=train_config,
-                execution_config=execution_config,
-            )
-        )
-    return load_runtime_checkpoint_state(
-        path=resume,
-        model_config=model_config,
-        train_config=train_config,
-        execution_config=execution_config,
-    )
-
-
 async def _run_synchronized_training(
     *,
     run_dir: Path,
     run_id: str,
     model_config: ModelConfig,
     train_config: TrainConfig,
+    checkpoint_policy: CheckpointPolicy,
     execution_config: ExecutionConfig,
     state: RuntimeCheckpointState,
     max_samples: int,
     telemetry_sink: TelemetrySink,
     runtime: TrainingRuntime,
+    stop_request: TrainingStopRequest,
 ) -> _result.Ok[TrainingLoopResult] | _result.Rejected:
     start = time.monotonic()
+    next_telemetry_prune = start + _TELEMETRY_PRUNE_INTERVAL_SECONDS
     total_rounds = state.total_rounds
     total_samples = state.total_samples
     total_updates = state.total_updates
@@ -244,10 +257,13 @@ async def _run_synchronized_training(
     )
     if isinstance(load_result, Rejected):
         return load_result
-    while _should_continue_training(
-        max_samples=max_samples,
-        start_total_samples=start_total_samples,
-        total_samples=total_samples,
+    while (
+        _should_continue_training(
+            max_samples=max_samples,
+            start_total_samples=start_total_samples,
+            total_samples=total_samples,
+        )
+        and not stop_request.is_requested()
     ):
         processed_samples = total_samples - start_total_samples
         stage_result = _record_coordinator_stage(
@@ -302,6 +318,7 @@ async def _run_synchronized_training(
             run_id=run_id,
             model_config=model_config,
             train_config=train_config,
+            checkpoint_policy=checkpoint_policy,
             execution_config=execution_config,
             telemetry_sink=telemetry_sink,
             runtime=runtime,
@@ -316,7 +333,6 @@ async def _run_synchronized_training(
         elapsed = max(time.monotonic() - start, 0.000001)
         metric_result = _append_update_metric(
             run_dir=run_dir,
-            run_id=run_id,
             checkpoint_path=checkpoint_path_result.value,
             start_total_rounds=start_total_rounds,
             start_total_samples=start_total_samples,
@@ -328,15 +344,66 @@ async def _run_synchronized_training(
         )
         if isinstance(metric_result, Rejected):
             return metric_result
+        if time.monotonic() >= next_telemetry_prune:
+            prune_result = prune_telemetry(run_dir)
+            if isinstance(prune_result, Rejected):
+                return prune_result
+            next_telemetry_prune = (
+                time.monotonic() + _TELEMETRY_PRUNE_INTERVAL_SECONDS
+            )
+    final_checkpoint_result = await _save_final_checkpoint(
+        run_dir=run_dir,
+        model_config=model_config,
+        train_config=train_config,
+        checkpoint_policy=checkpoint_policy,
+        execution_config=execution_config,
+        runtime=runtime,
+        total_rounds=total_rounds,
+        total_samples=total_samples,
+        total_updates=total_updates,
+    )
+    if isinstance(final_checkpoint_result, Rejected):
+        return final_checkpoint_result
     return Ok(
         value=TrainingLoopResult(
             total_rounds=total_rounds,
             total_samples=total_samples,
             total_updates=total_updates,
-            checkpoint_path=run_dir
-            / _CHECKPOINTS_DIR_NAME
-            / "latest.json",
+            checkpoint_path=final_checkpoint_result.value,
+            outcome="stopped"
+            if stop_request.is_requested()
+            else "completed",
         )
+    )
+
+
+async def _save_final_checkpoint(
+    *,
+    run_dir: Path,
+    model_config: ModelConfig,
+    train_config: TrainConfig,
+    checkpoint_policy: CheckpointPolicy,
+    execution_config: ExecutionConfig,
+    runtime: TrainingRuntime,
+    total_rounds: int,
+    total_samples: int,
+    total_updates: int,
+) -> _result.Ok[Path] | _result.Rejected:
+    snapshot_result = await runtime.snapshot(
+        policy_version=total_updates
+    )
+    if isinstance(snapshot_result, Rejected):
+        return snapshot_result
+    return _save_checkpoint(
+        run_dir=run_dir,
+        model_config=model_config,
+        train_config=train_config,
+        checkpoint_policy=checkpoint_policy,
+        execution_config=execution_config,
+        state=snapshot_result.value,
+        total_rounds=total_rounds,
+        total_samples=total_samples,
+        total_updates=total_updates,
     )
 
 
@@ -346,6 +413,7 @@ async def _maybe_save_checkpoint(
     run_id: str,
     model_config: ModelConfig,
     train_config: TrainConfig,
+    checkpoint_policy: CheckpointPolicy,
     execution_config: ExecutionConfig,
     telemetry_sink: TelemetrySink,
     runtime: TrainingRuntime,
@@ -357,7 +425,7 @@ async def _maybe_save_checkpoint(
 ) -> _result.Ok[Path | None] | _result.Rejected:
     if not _checkpoint_due(
         total_updates=total_updates,
-        train_config=train_config,
+        checkpoint_policy=checkpoint_policy,
     ):
         return Ok(value=None)
     checkpoint_stage = _record_coordinator_stage(
@@ -383,6 +451,7 @@ async def _maybe_save_checkpoint(
         run_dir=run_dir,
         model_config=model_config,
         train_config=train_config,
+        checkpoint_policy=checkpoint_policy,
         execution_config=execution_config,
         state=snapshot_result.value,
         total_rounds=total_rounds,
@@ -395,10 +464,10 @@ async def _maybe_save_checkpoint(
 
 
 def _checkpoint_due(
-    *, total_updates: int, train_config: TrainConfig
+    *, total_updates: int, checkpoint_policy: CheckpointPolicy
 ) -> bool:
     assert total_updates > 0
-    return total_updates % train_config.checkpoint_every_updates == 0
+    return total_updates % checkpoint_policy.every_updates == 0
 
 
 def _save_checkpoint(
@@ -406,6 +475,7 @@ def _save_checkpoint(
     run_dir: Path,
     model_config: ModelConfig,
     train_config: TrainConfig,
+    checkpoint_policy: CheckpointPolicy,
     execution_config: ExecutionConfig,
     state: RuntimeTrainingState,
     total_rounds: int,
@@ -416,7 +486,7 @@ def _save_checkpoint(
     archive_checkpoint = _archive_checkpoint_path(
         run_dir=run_dir,
         total_updates=total_updates,
-        train_config=train_config,
+        checkpoint_policy=checkpoint_policy,
     )
     checkpoint_path = (
         latest_checkpoint
@@ -436,7 +506,7 @@ def _save_checkpoint(
         total_rounds=total_rounds,
         total_samples=total_samples,
         total_updates=total_updates,
-        retained_update_count=train_config.checkpoint_retention_updates,
+        retained_update_count=checkpoint_policy.retention_updates,
     )
     if isinstance(save_result, Rejected):
         return save_result
@@ -450,13 +520,13 @@ def _archive_checkpoint_path(
     *,
     run_dir: Path,
     total_updates: int,
-    train_config: TrainConfig,
+    checkpoint_policy: CheckpointPolicy,
 ) -> Path | None:
-    if train_config.checkpoint_retention_updates == 0:
+    if total_updates == 0 or checkpoint_policy.retention_updates == 0:
         return None
     assert _checkpoint_due(
         total_updates=total_updates,
-        train_config=train_config,
+        checkpoint_policy=checkpoint_policy,
     )
     return (
         run_dir / _CHECKPOINTS_DIR_NAME / f"update-{total_updates}.json"
@@ -466,7 +536,6 @@ def _archive_checkpoint_path(
 def _append_update_metric(
     *,
     run_dir: Path,
-    run_id: str,
     checkpoint_path: Path | None,
     start_total_rounds: int,
     start_total_samples: int,
@@ -483,7 +552,6 @@ def _append_update_metric(
     assert process_samples > 0
     stats = update.update_stats
     metric = TrainingMetric(
-        run_id=run_id,
         total_games=total_rounds,
         total_samples=total_samples,
         total_updates=total_updates,
@@ -557,7 +625,10 @@ def _append_update_metric(
     validation = validate_training_metric(metric)
     if isinstance(validation, Rejected):
         return validation
-    return append_metric(run_dir, metric)
+    appended = append_metric(run_dir, metric)
+    if isinstance(appended, Rejected):
+        return appended
+    return Ok(value=None)
 
 
 def _record_coordinator_stage(
@@ -574,7 +645,6 @@ def _record_coordinator_stage(
     process_stage: ProcessStage = stage
     return telemetry_sink.append(
         TelemetryEvent(
-            run_id=run_id,
             process_label="coordinator",
             stage=process_stage,
             total_rounds=total_rounds,
@@ -590,7 +660,7 @@ def _record_coordinator_stage(
 def _record_coordinator_complete(
     *,
     telemetry_sink: TelemetrySink,
-    run_id: str,
+    outcome: Literal["completed", "stopped"],
     max_samples: int,
     total_rounds: int,
     total_samples: int,
@@ -598,9 +668,8 @@ def _record_coordinator_complete(
 ) -> _result.Ok[None] | _result.Rejected:
     return telemetry_sink.append(
         TelemetryEvent(
-            run_id=run_id,
             process_label="coordinator",
-            stage="complete",
+            stage=outcome,
             total_rounds=total_rounds,
             total_updates=total_updates,
             progress_numerator=_complete_progress_numerator(

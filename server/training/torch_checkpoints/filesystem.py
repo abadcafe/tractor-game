@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from server import result as _result
+from server.foundation import result as _result
 from server.training.torch_checkpoints.schema import (
     CHECKPOINT_OBJECTS_DIR,
     checkpoint_corruption,

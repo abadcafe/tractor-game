@@ -12,7 +12,7 @@ from typing import TypeGuard
 import torch
 from torch import Tensor
 
-from server import result as _result
+from server.foundation import result as _result
 from server.training.model import (
     TractorPolicyModel as _TractorPolicyModel,
 )

@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from server import result as _result
+from server.foundation import result as _result
 from server.training.torch_checkpoints.filesystem import (
     validate_checkpoint_dir,
     validate_checkpoint_object_dir,

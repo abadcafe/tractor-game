@@ -20,18 +20,17 @@ from server.training.runtime.rendezvous import (
     FileRendezvous,
     create_file_rendezvous,
 )
-from server.training.runtime.telemetry import (
-    IntervalTelemetrySink,
-    JsonlTelemetrySink,
-    NullTelemetrySink,
-    ProcessStage,
-    TelemetryEvent,
-    TelemetryMeasurement,
-    telemetry_path,
-)
 from server.training.runtime.threads import (
     TorchThreadStatus,
     apply_torch_thread_config,
+)
+from server.training.telemetry import (
+    IntervalTelemetrySink,
+    NullTelemetrySink,
+    ProcessStage,
+    SqliteTelemetrySink,
+    TelemetryEvent,
+    TelemetryMeasurement,
 )
 
 __all__ = [
@@ -41,7 +40,7 @@ __all__ = [
     "ExecutionTimeouts",
     "FileRendezvous",
     "IntervalTelemetrySink",
-    "JsonlTelemetrySink",
+    "SqliteTelemetrySink",
     "ModelRankDevice",
     "ModelRankKind",
     "ModelRankPlacement",
@@ -57,5 +56,4 @@ __all__ = [
     "current_cpu_affinity",
     "parse_model_rank_placement",
     "preflight_cpu_affinity",
-    "telemetry_path",
 ]

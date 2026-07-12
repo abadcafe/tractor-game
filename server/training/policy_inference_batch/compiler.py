@@ -5,8 +5,8 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass, field
 
-from server import result as _result
-from server.result import Ok, Rejected
+from server.foundation import result as _result
+from server.foundation.result import Ok, Rejected
 from server.training.feature_schema import NUMERIC_FEATURE_COUNT
 from server.training.numeric_features import (
     NumericFeatureValues,

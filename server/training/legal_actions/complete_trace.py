@@ -6,9 +6,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from server.result import Ok, Rejected
-from server.rules.card_faces import FaceCount, canonical_face_counts
-from server.rules.cards import Card
+from server.foundation.result import Ok, Rejected
+from server.game.rules.card_faces import (
+    FaceCount,
+    canonical_face_counts,
+)
+from server.game.rules.cards import Card
 from server.training.legal_actions.contract import (
     LegalActionIndex,
 )
