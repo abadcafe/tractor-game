@@ -4,24 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Annotated, Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from server.foundation import result as _result
 from server.foundation.json_value import JsonObject
-from server.training.checkpoint_catalog import (
-    CheckpointCatalog,
-    read_checkpoint_catalog,
-)
-from server.training.metrics import (
-    StoredTrainingMetric,
-    read_metric_records,
-)
 from server.training.stop import TrainingStopRequest
-from server.training.telemetry import (
-    StoredTelemetryEvent,
-    read_telemetry_records,
-)
 
 type ManagedCheckpointName = Annotated[
     str, Field(pattern=r"^(latest|update-[1-9][0-9]*)\.json$")
@@ -107,9 +96,6 @@ class TrainingResumeOptions(BaseModel):
     update_timeout_seconds: float | None = Field(
         default=None, gt=0.0, allow_inf_nan=False
     )
-    telemetry_interval_seconds: float | None = Field(
-        default=None, gt=0.0, allow_inf_nan=False
-    )
     model_inference_batch_size: int | None = Field(default=None, gt=0)
     game_envs_per_worker: int | None = Field(default=None, gt=0)
     samples_per_update: int | None = Field(default=None, gt=0)
@@ -171,17 +157,6 @@ class PersistedRunSummary(BaseModel):
     total_rounds: int = Field(ge=0)
     total_samples: int = Field(ge=0)
     total_updates: int = Field(ge=0)
-    metric_count: int = Field(gt=0)
-
-
-class TrainingObservation(BaseModel):
-    """Incremental records and the complete checkpoint inventory."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    metrics: tuple[StoredTrainingMetric, ...]
-    telemetry: tuple[StoredTelemetryEvent, ...]
-    checkpoints: CheckpointCatalog
 
 
 class TrainingService:
@@ -204,40 +179,23 @@ class TrainingService:
     ) -> _result.Ok[PersistedRunSummary] | _result.Rejected:
         return inspect_run(run_dir)
 
-    def observe(
-        self,
-        run_dir: Path,
-        *,
-        metric_after: int | None,
-        telemetry_after: int | None,
-        limit: int = 1000,
-    ) -> _result.Ok[TrainingObservation] | _result.Rejected:
-        metrics = read_metric_records(
-            run_dir, after_sequence=metric_after, limit=limit
+    def checkpoint_catalog(
+        self, run_dir: Path
+    ) -> _result.Ok[JsonObject] | _result.Rejected:
+        from server.training.checkpoint_catalog import (
+            read_checkpoint_catalog,
         )
-        if isinstance(metrics, _result.Rejected):
-            return metrics
-        telemetry = read_telemetry_records(
-            run_dir, after_sequence=telemetry_after, limit=limit
-        )
-        if isinstance(telemetry, _result.Rejected):
-            return telemetry
-        checkpoints = read_checkpoint_catalog(run_dir)
-        if isinstance(checkpoints, _result.Rejected):
-            return checkpoints
-        return _result.Ok(
-            value=TrainingObservation(
-                metrics=metrics.value,
-                telemetry=telemetry.value,
-                checkpoints=checkpoints.value,
-            )
-        )
+
+        result = read_checkpoint_catalog(run_dir)
+        if isinstance(result, _result.Rejected):
+            return result
+        return _result.Ok(value=result.value.model_dump(mode="json"))
 
 
 def initialize_run(
     options: TrainingInitOptions,
 ) -> _result.Ok[InitializedRun] | _result.Rejected:
-    """Create a portable zero-update checkpoint and metric timeline."""
+    """Create a portable zero-update checkpoint and event store."""
     from server.training.config import ModelConfig, TrainConfig
     from server.training.run_setup import initialize_training_run
 
@@ -329,7 +287,7 @@ def resume_run(
         return timeline_result
     result = run_training_coordinator(
         run_dir=resolved.run_dir,
-        run_id=resolved.run_dir.name,
+        session_id=str(uuid4()),
         model_config=resolved.model_config,
         train_config=resolved.train_config,
         checkpoint_policy=resolved.checkpoint_policy,

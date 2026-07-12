@@ -32,7 +32,11 @@ def test_initialize_and_inspect_run_through_public_interface(
     inspected = service.inspect(run_dir)
     assert isinstance(inspected, Ok)
     assert inspected.value.total_updates == 0
-    assert inspected.value.metric_count == 1
+    catalog = service.checkpoint_catalog(run_dir)
+    assert isinstance(catalog, Ok)
+    manifests = catalog.value["manifests"]
+    assert isinstance(manifests, list)
+    assert len(manifests) == 1
 
 
 def test_initialize_requires_explicit_replacement_confirmation(

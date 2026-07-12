@@ -17,6 +17,134 @@
   --red-soft: #fff0f1;
 }
 
+.metrics-toolbar {
+  display: flex;
+  align-items: end;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.compact-field {
+  display: grid;
+  gap: 4px;
+  color: #56616c;
+  font-size: 12px;
+}
+
+.compact-input {
+  min-width: 132px;
+  height: 34px;
+  padding: 5px 28px 5px 9px;
+}
+
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.chart-panel {
+  min-width: 0;
+  background: #fff;
+  border: 1px solid #d9dee3;
+  border-radius: 6px;
+  padding: 16px 12px 10px;
+}
+
+.chart-panel h2 {
+  margin: 0 8px 4px;
+  color: #20262d;
+  font-size: 15px;
+}
+
+.chart-wide {
+  grid-column: 1 / -1;
+}
+
+.chart {
+  width: 100%;
+  height: 320px;
+}
+
+.structured-log {
+  height: min(72vh, 760px);
+  overflow: auto;
+  background: #15191d;
+  color: #e4e8ec;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+}
+
+.log-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #d9dee3;
+}
+
+.log-row {
+  border-bottom: 1px solid #2b3239;
+}
+
+.log-row summary {
+  display: grid;
+  grid-template-columns: 86px 72px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.log-row summary:hover {
+  background: #20262d;
+}
+
+.log-row pre {
+  margin: 0;
+  padding: 12px 24px 16px;
+  overflow: auto;
+  background: #0f1215;
+  color: #cfd6dc;
+}
+
+.log-level {
+  color: #8ea1b2;
+  font-weight: 700;
+}
+
+.level-warning .log-level {
+  color: #e3ae52;
+}
+
+.level-error .log-level {
+  color: #ef7a86;
+}
+
+@media (max-width: 900px) {
+  .chart-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .chart-wide {
+    grid-column: auto;
+  }
+
+  .chart {
+    height: 280px;
+  }
+
+  .log-row summary {
+    grid-template-columns: 72px 62px minmax(0, 1fr);
+  }
+
+  .log-row summary code {
+    display: none;
+  }
+}
+
 * {
   box-sizing: border-box;
 }
@@ -258,6 +386,9 @@ p {
 }
 .checkpoint-summary {
   grid-template-columns: repeat(4, minmax(130px, 1fr));
+}
+.metric-strip {
+  grid-template-columns: repeat(6, minmax(110px, 1fr));
 }
 .overview-cell, .metric-cell {
   min-width: 0;
@@ -701,6 +832,10 @@ tbody tr:last-child td {
   }
   .content {
     padding: 14px 10px 24px;
+  }
+  .nav-link {
+    min-width: 90px;
+    padding: 0 8px;
   }
   .page-head {
     align-items: stretch;

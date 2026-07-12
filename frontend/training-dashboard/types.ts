@@ -1,5 +1,12 @@
 import { recordValue } from "../browser/json.ts";
 
+export type JsonPrimitive = string | number | boolean | null;
+export type JsonValue = JsonPrimitive | JsonArray | JsonObject;
+export interface JsonArray extends ReadonlyArray<JsonValue> {}
+export interface JsonObject {
+  readonly [key: string]: JsonValue;
+}
+
 export interface TrainingConfig {
   readonly default_run_dir: string;
   readonly stop_timeout_seconds: number;
@@ -11,18 +18,12 @@ export interface TrainingProcess {
   readonly kernel_state: string;
   readonly executable: string;
   readonly working_directory: string;
-  readonly run_dir: string;
+  readonly run_dir: string | null;
   readonly argv: readonly string[];
   readonly process_group_id: number;
   readonly session_id: number;
   readonly start_ticks: number;
 }
-
-export type TrainingRunState =
-  | "NOT_INITIALIZED"
-  | "BROKEN"
-  | "READY"
-  | "RUNNING";
 
 export interface TrainingRunDetails {
   readonly checkpoint_id: string;
@@ -33,71 +34,6 @@ export interface TrainingRunDetails {
   readonly total_rounds: number;
   readonly total_samples: number;
   readonly total_updates: number;
-  readonly metric_count: number;
-}
-
-export interface TrainingRunStatus {
-  readonly state: TrainingRunState;
-  readonly reason: string | null;
-  readonly process: TrainingProcess | null;
-  readonly details: TrainingRunDetails | null;
-}
-
-export interface TrainingMetric {
-  readonly sequence: number;
-  readonly recorded_at_ms: number;
-  readonly total_games: number;
-  readonly total_samples: number;
-  readonly total_updates: number;
-  readonly process_games_per_second: number;
-  readonly process_samples_per_second: number;
-  readonly last_round_decisions_per_second: number;
-  readonly last_team0_reward: number;
-  readonly last_team1_reward: number;
-  readonly last_generated_action_count: number;
-  readonly last_accepted_action_count: number;
-  readonly last_decision_count: number;
-  readonly last_average_action_choices: number;
-  readonly policy_loss: number | null;
-  readonly value_loss: number | null;
-  readonly entropy: number | null;
-  readonly approx_kl: number | null;
-  readonly clip_fraction: number | null;
-  readonly ppo_update_seconds: number | null;
-  readonly ppo_minibatch_loss_seconds: number | null;
-  readonly ppo_observation_batch_seconds: number | null;
-  readonly ppo_observation_encode_seconds: number | null;
-  readonly ppo_value_head_seconds: number | null;
-  readonly ppo_argument_select_seconds: number | null;
-  readonly ppo_argument_decode_seconds: number | null;
-  readonly ppo_argument_distribution_seconds: number | null;
-  readonly ppo_backward_seconds: number | null;
-  readonly ppo_optimizer_step_seconds: number | null;
-  readonly ppo_argument_decode_fraction: number | null;
-  readonly ppo_argument_trace_batch_count: number | null;
-  readonly ppo_argument_trace_row_count: number | null;
-  readonly ppo_argument_trace_token_count: number | null;
-  readonly ppo_argument_trace_valid_token_count: number | null;
-  readonly ppo_argument_trace_padding_token_count: number | null;
-  readonly checkpoint_path: string | null;
-}
-
-export interface TelemetryMeasurement {
-  readonly key: string;
-  readonly value: number;
-}
-
-export interface TelemetryEvent {
-  readonly sequence: number;
-  readonly recorded_at_ms: number;
-  readonly process_label: string;
-  readonly stage: string;
-  readonly total_rounds: number;
-  readonly total_updates: number;
-  readonly progress_numerator: number;
-  readonly progress_denominator: number;
-  readonly unix_seconds: number;
-  readonly measurements: readonly TelemetryMeasurement[];
 }
 
 export interface CheckpointManifest {
@@ -141,31 +77,66 @@ export interface CheckpointCatalog {
   readonly total_unique_state_bytes: number;
 }
 
-export interface TrainingStreamSnapshot {
-  readonly type: "snapshot";
-  readonly summary: TrainingSummary;
-  readonly log_stream: "stdout" | "stderr" | null;
-  readonly log_content: string | null;
-}
-
-export interface TrainingSummary extends TrainingRunStatus {
-  readonly schema_version: 1;
+export interface TrainingSummary {
+  readonly schema_version: 2;
   readonly run_dir: string;
-  readonly metrics: readonly TrainingMetric[];
-  readonly telemetry: readonly TelemetryEvent[];
+  readonly state: "NOT_INITIALIZED" | "BROKEN" | "READY" | "RUNNING";
+  readonly reason: string | null;
+  readonly process: TrainingProcess | null;
+  readonly details: TrainingRunDetails | null;
   readonly checkpoints: CheckpointCatalog;
 }
 
-export interface TrainingStreamError {
-  readonly type: "error";
-  readonly message: string;
+export interface MetricPoint {
+  readonly update: number | null;
+  readonly elapsed_seconds: number;
+  readonly recorded_at_ms: number;
+  readonly values: Readonly<Record<string, JsonPrimitive>>;
 }
 
-export type TrainingStreamMessage =
-  | TrainingStreamSnapshot
-  | TrainingStreamError;
+export interface MetricDatasets {
+  readonly throughput: readonly MetricPoint[];
+  readonly optimization: readonly MetricPoint[];
+  readonly ppo_timing: readonly MetricPoint[];
+  readonly rollout: readonly MetricPoint[];
+  readonly rewards: readonly MetricPoint[];
+  readonly inference: readonly MetricPoint[];
+  readonly processes: readonly MetricPoint[];
+}
 
-type JsonPrimitive = string | number | boolean | null;
+export interface TrainingMetrics {
+  readonly schema_version: 1;
+  readonly through_sequence: number;
+  readonly session_id: string | null;
+  readonly sessions: readonly {
+    readonly session_id: string;
+    readonly started_at_ms: number;
+  }[];
+  readonly complete: boolean;
+  readonly dropped_event_count: number;
+  readonly totals: Readonly<Record<string, JsonPrimitive>>;
+  readonly datasets: MetricDatasets;
+}
+
+export interface TrainingEvent {
+  readonly schema_version: number;
+  readonly event: string;
+  readonly level: "DEBUG" | "INFO" | "WARNING" | "ERROR";
+  readonly recorded_at_ms: number;
+  readonly session_id: string | null;
+  readonly process: JsonObject;
+  readonly context: JsonObject;
+  readonly fields: JsonObject;
+}
+
+export type TrainingLogMessage =
+  | { readonly type: "reset"; readonly window: number }
+  | {
+    readonly type: "event";
+    readonly sequence: number;
+    readonly event: TrainingEvent;
+  }
+  | { readonly type: "error"; readonly message: string };
 
 export function parseConfig(value: unknown): TrainingConfig {
   const record = requiredRecord(value, "training config");
@@ -194,10 +165,7 @@ export function parseProcess(value: unknown): TrainingProcess | null {
       record.working_directory,
       "working_directory",
     ),
-    run_dir: requiredString(
-      record.run_dir,
-      "run_dir",
-    ),
+    run_dir: nullableString(record.run_dir, "run_dir"),
     argv: stringArray(record.argv, "argv"),
     process_group_id: requiredNumber(
       record.process_group_id,
@@ -208,117 +176,29 @@ export function parseProcess(value: unknown): TrainingProcess | null {
   };
 }
 
-export function parseMetrics(
-  value: unknown,
-): readonly TrainingMetric[] {
-  const envelope = requiredRecord(value, "metrics response");
-  if (!Array.isArray(envelope.records)) {
-    throw new Error("Invalid metrics records");
-  }
-  return envelope.records.map((item) => {
-    const record = requiredRecord(item, "metric");
-    return record as unknown as TrainingMetric;
-  });
+export function parseSummary(value: unknown): TrainingSummary {
+  return value as TrainingSummary;
 }
 
-export function parseTelemetry(
-  value: unknown,
-): readonly TelemetryEvent[] {
-  const envelope = requiredRecord(value, "telemetry response");
-  if (!Array.isArray(envelope.records)) {
-    throw new Error("Invalid telemetry records");
-  }
-  return envelope.records.map((item) => {
-    const record = requiredRecord(item, "telemetry event");
-    if (!Array.isArray(record.measurements)) {
-      throw new Error("Invalid telemetry measurements");
-    }
-    return record as unknown as TelemetryEvent;
-  });
+export function parseMetrics(value: unknown): TrainingMetrics {
+  return value as TrainingMetrics;
 }
 
-export function parseCheckpointCatalog(
-  value: unknown,
-): CheckpointCatalog {
-  const record = requiredRecord(value, "checkpoint catalog");
-  if (
-    !Array.isArray(record.manifests) || !Array.isArray(record.objects)
-  ) {
-    throw new Error("Invalid checkpoint catalog");
+export function parseLogMessage(value: unknown): TrainingLogMessage {
+  const record = requiredRecord(value, "training log message");
+  const type = requiredString(record.type, "type");
+  if (type === "reset") {
+    return { type, window: requiredNumber(record.window, "window") };
   }
-  return record as unknown as CheckpointCatalog;
-}
-
-export function parseTrainingStreamMessage(
-  value: unknown,
-): TrainingStreamMessage {
-  const record = requiredRecord(value, "training stream message");
-  if (record.type === "error") {
-    return {
-      type: "error",
-      message: requiredString(record.message, "message"),
-    };
+  if (type === "error") {
+    return { type, message: requiredString(record.message, "message") };
   }
-  if (record.type !== "snapshot") {
-    throw new Error("Invalid training stream message type");
-  }
-  const logStream = optionalLogStream(record.log_stream);
-  const logContent = optionalString(record.log_content, "log_content");
-  if ((logStream === null) !== (logContent === null)) {
-    throw new Error("Invalid training stream log subscription");
-  }
+  if (type !== "event") throw new Error("Unknown training log message");
   return {
-    type: "snapshot",
-    summary: parseSummary(record.summary),
-    log_stream: logStream,
-    log_content: logContent,
+    type,
+    sequence: requiredNumber(record.sequence, "sequence"),
+    event: record.event as TrainingEvent,
   };
-}
-
-function parseSummary(value: unknown): TrainingSummary {
-  const record = requiredRecord(value, "training summary");
-  if (record.schema_version !== 1) {
-    throw new Error("Unsupported training summary schema");
-  }
-  return {
-    ...parseRunStatus(record),
-    schema_version: 1,
-    run_dir: requiredString(record.run_dir, "run_dir"),
-    metrics: parseMetrics({ records: record.metrics }),
-    telemetry: parseTelemetry({ records: record.telemetry }),
-    checkpoints: parseCheckpointCatalog(record.checkpoints),
-  };
-}
-
-function parseRunStatus(value: unknown): TrainingRunStatus {
-  const record = requiredRecord(value, "training run status");
-  const state = record.state;
-  if (
-    state !== "NOT_INITIALIZED" && state !== "BROKEN" &&
-    state !== "READY" && state !== "RUNNING"
-  ) {
-    throw new Error("Invalid training run state");
-  }
-  const reason = optionalString(record.reason, "reason");
-  const process = parseProcess({ process: record.process });
-  const details = record.details === null
-    ? null
-    : parseRunDetails(record.details);
-  return { state, reason, process, details };
-}
-
-function parseRunDetails(value: unknown): TrainingRunDetails {
-  const record = requiredRecord(value, "training run details");
-  requiredString(record.checkpoint_id, "checkpoint_id");
-  requiredString(record.checkpoint_path, "checkpoint_path");
-  requiredNumber(record.state_size_bytes, "state_size_bytes");
-  requiredRecord(record.model_config_values, "model_config_values");
-  requiredRecord(record.train_config_values, "train_config_values");
-  requiredNumber(record.total_rounds, "total_rounds");
-  requiredNumber(record.total_samples, "total_samples");
-  requiredNumber(record.total_updates, "total_updates");
-  requiredNumber(record.metric_count, "metric_count");
-  return record as unknown as TrainingRunDetails;
 }
 
 function requiredRecord(
@@ -330,41 +210,29 @@ function requiredRecord(
   return record;
 }
 
-function requiredString(value: unknown, field: string): string {
-  if (typeof value !== "string") throw new Error(`Invalid ${field}`);
+function requiredString(value: unknown, label: string): string {
+  if (typeof value !== "string") throw new Error(`Invalid ${label}`);
   return value;
 }
 
-function requiredNumber(value: unknown, field: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`Invalid ${field}`);
-  }
-  return value;
-}
-
-function optionalString(
-  value: unknown,
-  field: string,
-): string | null {
+function nullableString(value: unknown, label: string): string | null {
   if (value === null) return null;
-  return requiredString(value, field);
+  return requiredString(value, label);
 }
 
-function optionalLogStream(
-  value: unknown,
-): "stdout" | "stderr" | null {
-  if (value === null || value === "stdout" || value === "stderr") {
-    return value;
+function requiredNumber(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new Error(`Invalid ${label}`);
   }
-  throw new Error("Invalid log_stream");
+  return value;
 }
 
-function stringArray(value: unknown, field: string): readonly string[] {
+function stringArray(value: unknown, label: string): readonly string[] {
   if (
     !Array.isArray(value) ||
     !value.every((item) => typeof item === "string")
   ) {
-    throw new Error(`Invalid ${field}`);
+    throw new Error(`Invalid ${label}`);
   }
   return value;
 }

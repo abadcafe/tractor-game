@@ -60,7 +60,6 @@ Deno.test("command previews include explicit subcommands", () => {
     sampling_stop_timeout_seconds: null,
     state_sync_timeout_seconds: null,
     update_timeout_seconds: null,
-    telemetry_interval_seconds: null,
     model_inference_batch_size: null,
     game_envs_per_worker: null,
     samples_per_update: null,
@@ -147,6 +146,24 @@ Deno.test("modal close controls are explicit non-submit buttons", async () => {
   ) {
     throw new Error(
       "Run directory action must use a stable Change label",
+    );
+  }
+});
+
+Deno.test("logs expose a free window input with no maximum", async () => {
+  const html = await Deno.readTextFile(
+    new URL("../index.html", import.meta.url),
+  );
+  const windowInput = html.match(/<input\s+[^>]*id="log-window"[^>]*>/)
+    ?.[0];
+  if (
+    windowInput === undefined ||
+    !windowInput.includes('type="number"') ||
+    !windowInput.includes('value="5000"') ||
+    windowInput.includes("max=")
+  ) {
+    throw new Error(
+      "Log window must be a free unbounded numeric input",
     );
   }
 });

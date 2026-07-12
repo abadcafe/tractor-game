@@ -1,9 +1,8 @@
-"""Canonical training run summary and JSON command contract."""
+"""Canonical training run summary command contract."""
 
 from __future__ import annotations
 
 import json
-import stat
 from pathlib import Path
 from typing import Literal
 
@@ -21,83 +20,36 @@ type TrainingRunState = Literal[
     "NOT_INITIALIZED", "BROKEN", "READY", "RUNNING"
 ]
 
-SUMMARY_SCHEMA_VERSION = 1
-_ARTIFACT_NAMES: tuple[str, ...] = (
-    "checkpoints",
-    "training.sqlite3",
-    "training.sqlite3-wal",
-    "training.sqlite3-shm",
-)
+SUMMARY_SCHEMA_VERSION = 2
 
 
 class TrainingSummary(BaseModel):
-    """Versioned output for humans and control adapters."""
+    """Process and persisted-run state without observations."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    schema_version: Literal[1] = SUMMARY_SCHEMA_VERSION
+    schema_version: Literal[2] = SUMMARY_SCHEMA_VERSION
     run_dir: Path
     state: TrainingRunState
     reason: str | None
     process: TrainingProcess | None
     details: JsonObject | None
-    metrics: tuple[JsonObject, ...]
-    telemetry: tuple[JsonObject, ...]
     checkpoints: JsonObject
 
 
 def build_training_summary(
     run_dir: Path,
-    *,
-    metric_after: int | None,
-    telemetry_after: int | None,
 ) -> _result.Ok[TrainingSummary] | _result.Rejected:
-    """Inspect process identity, persistence, and observations."""
+    """Inspect PID identity, persisted state, and checkpoints."""
     canonical = run_dir.resolve()
     process_result = ProcessInspector().inspect(canonical)
     if isinstance(process_result, _result.Rejected):
-        return _summary_for_broken(
-            canonical,
-            process_result.reason,
-            metric_after=metric_after,
-            telemetry_after=telemetry_after,
-        )
+        return _broken_summary(canonical, process_result.reason)
     process = process_result.value
-    if process is not None:
-        observation = _observe(
-            canonical,
-            metric_after=metric_after,
-            telemetry_after=telemetry_after,
-            tolerate_failure=False,
-        )
-        if isinstance(observation, _result.Rejected):
-            return observation
-        return _result.Ok(
-            value=_summary(
-                run_dir=canonical,
-                state="RUNNING",
-                reason=None,
-                process=process,
-                details=None,
-                observation=observation.value,
-            )
-        )
-    artifact_result = _has_training_artifacts(canonical)
-    if isinstance(artifact_result, _result.Rejected):
-        return _summary_for_broken(
-            canonical,
-            artifact_result.reason,
-            metric_after=metric_after,
-            telemetry_after=telemetry_after,
-        )
-    if not artifact_result.value:
-        observation = _observe(
-            canonical,
-            metric_after=metric_after,
-            telemetry_after=telemetry_after,
-            tolerate_failure=True,
-        )
-        assert isinstance(observation, _result.Ok)
+    contents_result = _run_directory_has_contents(canonical)
+    if isinstance(contents_result, _result.Rejected):
+        return _broken_summary(canonical, contents_result.reason)
+    if not contents_result.value:
         return _result.Ok(
             value=_summary(
                 run_dir=canonical,
@@ -105,39 +57,29 @@ def build_training_summary(
                 reason=None,
                 process=None,
                 details=None,
-                observation=observation.value,
+                checkpoints=_empty_checkpoints(canonical),
             )
         )
     inspected = TrainingService().inspect(canonical)
     if isinstance(inspected, _result.Rejected):
-        return _summary_for_broken(
-            canonical,
-            inspected.reason,
-            metric_after=metric_after,
-            telemetry_after=telemetry_after,
-        )
-    observation = _observe(
-        canonical,
-        metric_after=metric_after,
-        telemetry_after=telemetry_after,
-        tolerate_failure=False,
-    )
-    if isinstance(observation, _result.Rejected):
-        return observation
+        return _broken_summary(canonical, inspected.reason)
+    catalog = TrainingService().checkpoint_catalog(canonical)
+    if isinstance(catalog, _result.Rejected):
+        return _broken_summary(canonical, catalog.reason)
     return _result.Ok(
         value=_summary(
             run_dir=canonical,
-            state="READY",
+            state="RUNNING" if process is not None else "READY",
             reason=None,
-            process=None,
+            process=process,
             details=inspected.value.model_dump(mode="json"),
-            observation=observation.value,
+            checkpoints=catalog.value,
         )
     )
 
 
 def format_training_summary(summary: TrainingSummary) -> str:
-    """Render the canonical model without adding semantics."""
+    """Render the canonical model for terminal users."""
     lines = [
         f"state: {summary.state}",
         f"run directory: {summary.run_dir}",
@@ -152,22 +94,16 @@ def format_training_summary(summary: TrainingSummary) -> str:
             )
         )
     if summary.details is not None:
-        lines.append(
-            "checkpoint: "
-            + _required_string(summary.details, "checkpoint_path")
-        )
-        lines.append(
-            "updates: "
-            + str(_required_int(summary.details, "total_updates"))
-        )
-    if summary.metrics:
-        latest = summary.metrics[-1]
         lines.extend(
             (
-                f"games: {_required_int(latest, 'total_games')}",
-                f"samples: {_required_int(latest, 'total_samples')}",
-                "current updates: "
-                + str(_required_int(latest, "total_updates")),
+                "checkpoint: "
+                + _required_string(summary.details, "checkpoint_path"),
+                "rounds: "
+                + str(_required_int(summary.details, "total_rounds")),
+                "samples: "
+                + str(_required_int(summary.details, "total_samples")),
+                "updates: "
+                + str(_required_int(summary.details, "total_updates")),
             )
         )
     manifests = summary.checkpoints["manifests"]
@@ -176,20 +112,15 @@ def format_training_summary(summary: TrainingSummary) -> str:
     return "\n".join(lines)
 
 
-def _summary_for_broken(
-    run_dir: Path,
-    reason: str,
-    *,
-    metric_after: int | None,
-    telemetry_after: int | None,
+def _broken_summary(
+    run_dir: Path, reason: str
 ) -> _result.Ok[TrainingSummary]:
-    observation = _observe(
-        run_dir,
-        metric_after=metric_after,
-        telemetry_after=telemetry_after,
-        tolerate_failure=True,
+    catalog = TrainingService().checkpoint_catalog(run_dir)
+    checkpoints = (
+        _empty_checkpoints(run_dir)
+        if isinstance(catalog, _result.Rejected)
+        else catalog.value
     )
-    assert isinstance(observation, _result.Ok)
     return _result.Ok(
         value=_summary(
             run_dir=run_dir,
@@ -197,59 +128,8 @@ def _summary_for_broken(
             reason=reason,
             process=None,
             details=None,
-            observation=observation.value,
+            checkpoints=checkpoints,
         )
-    )
-
-
-class _ObservationJson(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    metrics: tuple[JsonObject, ...]
-    telemetry: tuple[JsonObject, ...]
-    checkpoints: JsonObject
-
-
-def _observe(
-    run_dir: Path,
-    *,
-    metric_after: int | None,
-    telemetry_after: int | None,
-    tolerate_failure: bool,
-) -> _result.Ok[_ObservationJson] | _result.Rejected:
-    observed = TrainingService().observe(
-        run_dir,
-        metric_after=metric_after,
-        telemetry_after=telemetry_after,
-    )
-    if isinstance(observed, _result.Rejected):
-        if not tolerate_failure:
-            return observed
-        return _result.Ok(value=_empty_observation(run_dir))
-    value = observed.value
-    return _result.Ok(
-        value=_ObservationJson(
-            metrics=tuple(
-                item.model_dump(mode="json") for item in value.metrics
-            ),
-            telemetry=tuple(
-                item.model_dump(mode="json") for item in value.telemetry
-            ),
-            checkpoints=value.checkpoints.model_dump(mode="json"),
-        )
-    )
-
-
-def _empty_observation(run_dir: Path) -> _ObservationJson:
-    return _ObservationJson(
-        metrics=(),
-        telemetry=(),
-        checkpoints={
-            "checkpoint_directory": str(run_dir / "checkpoints"),
-            "manifests": [],
-            "objects": [],
-            "total_unique_state_bytes": 0,
-        },
     )
 
 
@@ -260,7 +140,7 @@ def _summary(
     reason: str | None,
     process: TrainingProcess | None,
     details: JsonObject | None,
-    observation: _ObservationJson,
+    checkpoints: JsonObject,
 ) -> TrainingSummary:
     return TrainingSummary(
         run_dir=run_dir,
@@ -268,50 +148,36 @@ def _summary(
         reason=reason,
         process=process,
         details=details,
-        metrics=observation.metrics,
-        telemetry=observation.telemetry,
-        checkpoints=observation.checkpoints,
+        checkpoints=checkpoints,
     )
 
 
-def _has_training_artifacts(
+def _empty_checkpoints(run_dir: Path) -> JsonObject:
+    return {
+        "checkpoint_directory": str(run_dir / "checkpoints"),
+        "manifests": [],
+        "objects": [],
+        "total_unique_state_bytes": 0,
+    }
+
+
+def _run_directory_has_contents(
     run_dir: Path,
 ) -> _result.Ok[bool] | _result.Rejected:
     try:
-        if run_dir.is_symlink():
-            return _result.Rejected(
-                reason=f"training run directory is a symlink: {run_dir}"
-            )
         if not run_dir.exists():
             return _result.Ok(value=False)
-        if not run_dir.is_dir():
+        if run_dir.is_symlink() or not run_dir.is_dir():
             return _result.Rejected(
-                reason=(
-                    f"training run path is not a directory: {run_dir}"
-                )
+                reason=f"training run directory is unsafe: {run_dir}"
             )
-        for name in _ARTIFACT_NAMES:
-            path = run_dir / name
-            try:
-                metadata = path.lstat()
-            except FileNotFoundError:
-                continue
-            if stat.S_ISLNK(metadata.st_mode):
-                return _result.Rejected(
-                    reason=f"training artifact is a symlink: {path}"
-                )
-            return _result.Ok(value=True)
+        return _result.Ok(
+            value=next(run_dir.iterdir(), None) is not None
+        )
     except OSError:
         return _result.Rejected(
             reason=f"training run directory is unreadable: {run_dir}"
         )
-    return _result.Ok(value=False)
-
-
-def _required_int(value: JsonObject, key: str) -> int:
-    item = value[key]
-    assert isinstance(item, int)
-    return item
 
 
 def _required_string(value: JsonObject, key: str) -> str:
@@ -320,5 +186,11 @@ def _required_string(value: JsonObject, key: str) -> str:
     return item
 
 
+def _required_int(value: JsonObject, key: str) -> int:
+    item = value[key]
+    assert isinstance(item, int)
+    return item
+
+
 def _shell_join(argv: tuple[str, ...]) -> str:
-    return " ".join(json.dumps(item) for item in argv)
+    return " ".join(json.dumps(value) for value in argv)

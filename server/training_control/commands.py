@@ -122,9 +122,6 @@ class TrainingResumeRequest(BaseModel):
     update_timeout_seconds: (
         Annotated[float, Field(gt=0.0, allow_inf_nan=False)] | None
     ) = None
-    telemetry_interval_seconds: (
-        Annotated[float, Field(gt=0.0, allow_inf_nan=False)] | None
-    ) = None
     model_inference_batch_size: Annotated[int, Field(gt=0)] | None = (
         None
     )
@@ -196,10 +193,6 @@ class TrainingResumeRequest(BaseModel):
                 self.state_sync_timeout_seconds,
             ),
             ("--update-timeout-seconds", self.update_timeout_seconds),
-            (
-                "--telemetry-interval-seconds",
-                self.telemetry_interval_seconds,
-            ),
             (
                 "--model-inference-batch-size",
                 self.model_inference_batch_size,

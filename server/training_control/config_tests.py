@@ -33,6 +33,7 @@ def test_training_control_config_ignores_removed_task_environment(
     assert (
         config.default_run_dir == (tmp_path / "training_runs").resolve()
     )
+    assert config.stop_timeout_seconds == 1800.0
 
 
 def test_training_control_config_resolves_run_directory(

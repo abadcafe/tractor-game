@@ -15,6 +15,7 @@ from server.training import (
     TrainingResumeOptions,
     TrainingService,
     TrainingStopRequest,
+    training_stop_signals,
 )
 from server.training_cli.process_inspection import ProcessInspector
 from server.training_cli.summary import (
@@ -46,30 +47,24 @@ def main(
             )
             return
         if command == "resume":
-            _execute_resume(
-                parser,
-                TrainingResumeOptions.model_validate(
-                    {"run_dir": run_dir, **values}
-                ),
-                stop_request or TrainingStopRequest(),
+            options = TrainingResumeOptions.model_validate(
+                {"run_dir": run_dir, **values}
             )
+            if stop_request is not None:
+                _execute_resume(parser, options, stop_request)
+                return
+            request = TrainingStopRequest()
+            with training_stop_signals(request):
+                _execute_resume(parser, options, request)
             return
     except ValidationError as error:
         parser.error(_validation_reason(error))
     assert command == "summary"
     output_format = values.pop("format")
-    metric_after = values.pop("metric_after")
-    telemetry_after = values.pop("telemetry_after")
     assert not values
     assert output_format in ("text", "json")
-    assert metric_after is None or isinstance(metric_after, int)
-    assert telemetry_after is None or isinstance(telemetry_after, int)
     _execute_summary(
-        parser,
-        run_dir=run_dir,
-        output_format=output_format,
-        metric_after=metric_after,
-        telemetry_after=telemetry_after,
+        parser, run_dir=run_dir, output_format=output_format
     )
 
 
@@ -113,14 +108,8 @@ def _execute_summary(
     *,
     run_dir: Path,
     output_format: SummaryFormat,
-    metric_after: int | None,
-    telemetry_after: int | None,
 ) -> None:
-    result = build_training_summary(
-        run_dir,
-        metric_after=metric_after,
-        telemetry_after=telemetry_after,
-    )
+    result = build_training_summary(run_dir)
     if isinstance(result, _result.Rejected):
         parser.error(result.reason)
     if output_format == "json":
@@ -191,7 +180,6 @@ def _add_resume_arguments(parser: argparse.ArgumentParser) -> None:
         "update",
     ):
         parser.add_argument(f"--{name}-timeout-seconds", type=float)
-    parser.add_argument("--telemetry-interval-seconds", type=float)
     parser.add_argument("--model-inference-batch-size", type=int)
     parser.add_argument("--game-envs-per-worker", type=int)
     parser.add_argument("--samples-per-update", type=int)
@@ -211,8 +199,6 @@ def _add_summary_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--format", choices=("text", "json"), default="text"
     )
-    parser.add_argument("--metric-after", type=int, default=None)
-    parser.add_argument("--telemetry-after", type=int, default=None)
 
 
 def _validation_reason(error: ValidationError) -> str:

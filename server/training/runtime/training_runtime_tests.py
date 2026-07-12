@@ -14,6 +14,7 @@ import pytest
 
 from server.foundation.result import Ok, Rejected
 from server.training.config import ModelConfig, TrainConfig
+from server.training.event_log import NullEventSink
 from server.training.runtime import training_runtime
 from server.training.runtime.async_ipc import (
     AsyncChildControlEndpoint,
@@ -253,12 +254,14 @@ def _open_fake_runtime(
         *,
         run_dir: Path,
         run_id: str,
+        session_id: str,
         model_config: ModelConfig,
         train_config: TrainConfig,
         execution_config: ExecutionConfig,
     ) -> Ok[_FakeRuntimePools] | Rejected:
         assert run_dir == Path("unused")
         assert run_id == "poisoned-runtime"
+        assert session_id == "test-session"
         assert model_config.d_model == 4
         assert train_config.ppo_epochs == 1
         assert execution_config.samples_per_update == 1
@@ -277,6 +280,8 @@ def _open_fake_runtime(
     runtime_result = training_runtime.open_training_runtime(
         run_dir=Path("unused"),
         run_id="poisoned-runtime",
+        session_id="test-session",
+        event_sink=NullEventSink(session_id="test-session"),
         model_config=ModelConfig(d_model=4, layers=1, heads=1),
         train_config=TrainConfig(ppo_epochs=1),
         execution_config=execution_config,
@@ -566,12 +571,14 @@ async def test_runtime_poisoned_after_sampling_stop_failure(
         *,
         run_dir: Path,
         run_id: str,
+        session_id: str,
         model_config: ModelConfig,
         train_config: TrainConfig,
         execution_config: ExecutionConfig,
     ) -> Ok[_FakeRuntimePools] | Rejected:
         assert run_dir == Path("unused")
         assert run_id == "poisoned-runtime"
+        assert session_id == "test-session"
         assert model_config.d_model == 4
         assert train_config.ppo_epochs == 1
         assert execution_config.samples_per_update == 1
@@ -605,6 +612,8 @@ async def test_runtime_poisoned_after_sampling_stop_failure(
     runtime_result = training_runtime.open_training_runtime(
         run_dir=Path("unused"),
         run_id="poisoned-runtime",
+        session_id="test-session",
+        event_sink=NullEventSink(session_id="test-session"),
         model_config=ModelConfig(d_model=4, layers=1, heads=1),
         train_config=TrainConfig(ppo_epochs=1),
         execution_config=ExecutionConfig(
@@ -1201,6 +1210,8 @@ def test_start_runtime_pools_cleans_worker_started_before_interrupt(
         training_runtime.open_training_runtime(
             run_dir=tmp_path,
             run_id="interrupt-worker",
+            session_id="test-session",
+            event_sink=NullEventSink(session_id="test-session"),
             model_config=ModelConfig(d_model=4, layers=1, heads=1),
             train_config=TrainConfig(),
             execution_config=ExecutionConfig(
@@ -1245,6 +1256,8 @@ def test_start_runtime_pools_cleans_model_rank_started_before_interrupt(
         training_runtime.open_training_runtime(
             run_dir=tmp_path,
             run_id="interrupt-model-rank",
+            session_id="test-session",
+            event_sink=NullEventSink(session_id="test-session"),
             model_config=ModelConfig(d_model=4, layers=1, heads=1),
             train_config=TrainConfig(),
             execution_config=ExecutionConfig(

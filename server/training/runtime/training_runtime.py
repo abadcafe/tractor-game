@@ -13,6 +13,12 @@ from typing import Protocol, assert_never
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
 from server.training.config import ModelConfig, TrainConfig
+from server.training.event_log import (
+    EventContext,
+    EventSink,
+    ProcessIdentity,
+    StructuredEventSink,
+)
 from server.training.ppo import PPOUpdateProfile, PPOUpdateStats
 from server.training.runtime.async_ipc import (
     AsyncCoordinatorControlEndpoint,
@@ -85,11 +91,6 @@ from server.training.runtime.worker_sampling_lifecycle import (
     WorkerSamplingCleanupFailed,
     start_worker_sampling_session,
     stop_worker_sampling_session,
-)
-from server.training.telemetry import (
-    IntervalTelemetrySink,
-    SqliteTelemetrySink,
-    TelemetrySink,
 )
 
 _GRACEFUL_PROCESS_STOP_SECONDS = 1.0
@@ -212,6 +213,7 @@ _MODEL_RANK_CONTROL_PROTOCOL: ProcessControlProtocol[
 class _ProcessTrainingRuntime:
     execution_config: ExecutionConfig
     pools: _RuntimePools
+    event_sink: EventSink
     _poisoned: Rejected | None = None
     _closed: bool = False
 
@@ -243,6 +245,7 @@ class _ProcessTrainingRuntime:
             pools=self.pools,
             execution_config=self.execution_config,
             policy_version=policy_version,
+            event_sink=self.event_sink,
         )
         if isinstance(result, _UnrecoverableRuntimeFailure):
             await self._poison_and_close(result.rejection)
@@ -286,6 +289,8 @@ def open_training_runtime(
     *,
     run_dir: Path,
     run_id: str,
+    session_id: str,
+    event_sink: EventSink,
     model_config: ModelConfig,
     train_config: TrainConfig,
     execution_config: ExecutionConfig,
@@ -294,6 +299,7 @@ def open_training_runtime(
     pools_result = _start_runtime_pools(
         run_dir=run_dir,
         run_id=run_id,
+        session_id=session_id,
         model_config=model_config,
         train_config=train_config,
         execution_config=execution_config,
@@ -304,6 +310,7 @@ def open_training_runtime(
         value=_ProcessTrainingRuntime(
             execution_config=execution_config,
             pools=pools_result.value,
+            event_sink=event_sink,
         )
     )
 
@@ -312,6 +319,7 @@ def _start_runtime_pools(
     *,
     run_dir: Path,
     run_id: str,
+    session_id: str,
     model_config: ModelConfig,
     train_config: TrainConfig,
     execution_config: ExecutionConfig,
@@ -347,6 +355,7 @@ def _start_runtime_pools(
             context=context,
             run_dir=run_dir,
             run_id=run_id,
+            session_id=session_id,
             model_config=model_config,
             train_config=train_config,
             execution_config=execution_config,
@@ -383,9 +392,11 @@ def _start_runtime_pools(
                         index
                     ),
                     "control": control_link.child,
-                    "telemetry_sink": _telemetry_sink(
+                    "event_sink": _event_sink(
                         run_dir=run_dir,
-                        execution_config=execution_config,
+                        session_id=session_id,
+                        process_kind="worker",
+                        process_index=index,
                     ),
                     "inference_peer": inference_peer,
                     "rollout_arena_handle": arena_group.handles[index],
@@ -452,6 +463,7 @@ def _start_model_rank_pool(
     context: SpawnContext,
     run_dir: Path,
     run_id: str,
+    session_id: str,
     model_config: ModelConfig,
     train_config: TrainConfig,
     execution_config: ExecutionConfig,
@@ -488,9 +500,11 @@ def _start_model_rank_pool(
                             model_rank_index=index,
                         )
                     ),
-                    "telemetry_sink": _telemetry_sink(
+                    "event_sink": _event_sink(
                         run_dir=run_dir,
-                        execution_config=execution_config,
+                        session_id=session_id,
+                        process_kind="model_rank",
+                        process_index=index,
                     ),
                     "distributed_rank_config": (
                         _model_rank_distributed_rank_config(
@@ -619,14 +633,17 @@ def _distributed_update_group(
     )
 
 
-def _telemetry_sink(
-    *, run_dir: Path, execution_config: ExecutionConfig
-) -> TelemetrySink:
-    return IntervalTelemetrySink(
-        sink=SqliteTelemetrySink(run_dir),
-        min_interval_seconds=(
-            execution_config.telemetry_interval_seconds
-        ),
+def _event_sink(
+    *,
+    run_dir: Path,
+    session_id: str,
+    process_kind: str,
+    process_index: int,
+) -> StructuredEventSink:
+    return StructuredEventSink(
+        run_dir=run_dir,
+        session_id=session_id,
+        process=ProcessIdentity(kind=process_kind, index=process_index),
     )
 
 
@@ -670,6 +687,7 @@ async def _run_training_update(
     pools: _RuntimePools,
     execution_config: ExecutionConfig,
     policy_version: int,
+    event_sink: EventSink,
 ) -> _TrainingUpdateCycleResult:
     reset_result = reset_rollout_arenas(
         group=pools.rollout_arena_group,
@@ -716,6 +734,17 @@ async def _run_training_update(
     )
     if isinstance(stopped_result, Rejected):
         return _UnrecoverableRuntimeFailure(rejection=stopped_result)
+    event_sink.emit(
+        "update.started",
+        context=EventContext(
+            policy_version=policy_version,
+            rollout_id=f"{event_sink.session_id}:{policy_version}",
+        ),
+        fields={
+            "sample_count": target_snapshot_result.value.sample_count,
+            "round_count": target_snapshot_result.value.round_count,
+        },
+    )
     update_result = await _run_compute_updates(
         worker_pool=pools.worker_pool,
         model_rank_pool=pools.model_rank_pool,

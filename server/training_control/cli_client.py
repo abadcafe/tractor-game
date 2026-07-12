@@ -1,4 +1,4 @@
-"""Strict JSON client for the external training CLI command contract."""
+"""Strict client for external training CLI summary commands."""
 
 from __future__ import annotations
 
@@ -49,70 +49,6 @@ class TrainingRunDetails(BaseModel):
     total_rounds: int = Field(ge=0)
     total_samples: int = Field(ge=0)
     total_updates: int = Field(ge=0)
-    metric_count: int = Field(gt=0)
-
-
-class TrainingMetricRecord(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    sequence: int = Field(gt=0)
-    recorded_at_ms: int = Field(ge=0)
-    total_games: int = Field(ge=0)
-    total_samples: int = Field(ge=0)
-    total_updates: int = Field(ge=0)
-    process_games_per_second: float
-    process_samples_per_second: float
-    last_round_decisions_per_second: float
-    last_team0_reward: float
-    last_team1_reward: float
-    last_generated_action_count: int = Field(ge=0)
-    last_accepted_action_count: int = Field(ge=0)
-    last_decision_count: int = Field(ge=0)
-    last_average_action_choices: float
-    policy_loss: float | None
-    value_loss: float | None
-    entropy: float | None
-    approx_kl: float | None
-    clip_fraction: float | None
-    ppo_update_seconds: float | None = Field(ge=0.0)
-    ppo_minibatch_loss_seconds: float | None = Field(ge=0.0)
-    ppo_observation_batch_seconds: float | None = Field(ge=0.0)
-    ppo_observation_encode_seconds: float | None = Field(ge=0.0)
-    ppo_value_head_seconds: float | None = Field(ge=0.0)
-    ppo_argument_select_seconds: float | None = Field(ge=0.0)
-    ppo_argument_decode_seconds: float | None = Field(ge=0.0)
-    ppo_argument_distribution_seconds: float | None = Field(ge=0.0)
-    ppo_backward_seconds: float | None = Field(ge=0.0)
-    ppo_optimizer_step_seconds: float | None = Field(ge=0.0)
-    ppo_argument_decode_fraction: float | None = Field(ge=0.0, le=1.0)
-    ppo_argument_trace_batch_count: int | None = Field(ge=0)
-    ppo_argument_trace_row_count: int | None = Field(ge=0)
-    ppo_argument_trace_token_count: int | None = Field(ge=0)
-    ppo_argument_trace_valid_token_count: int | None = Field(ge=0)
-    ppo_argument_trace_padding_token_count: int | None = Field(ge=0)
-    checkpoint_path: str | None
-
-
-class TelemetryMeasurement(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    key: str = Field(min_length=1)
-    value: int | float
-
-
-class TelemetryRecord(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    sequence: int = Field(gt=0)
-    recorded_at_ms: int = Field(ge=0)
-    process_label: str = Field(min_length=1)
-    stage: str = Field(min_length=1)
-    total_rounds: int = Field(ge=0)
-    total_updates: int = Field(ge=0)
-    progress_numerator: int = Field(ge=0)
-    progress_denominator: int = Field(ge=0)
-    unix_seconds: float
-    measurements: tuple[TelemetryMeasurement, ...]
 
 
 class CheckpointManifestRecord(BaseModel):
@@ -161,21 +97,19 @@ class CheckpointCatalogRecord(BaseModel):
 class TrainingCliSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    schema_version: Literal[1]
+    schema_version: Literal[2]
     run_dir: Path
     state: TrainingRunState
     reason: str | None
     process: TrainingProcess | None
     details: TrainingRunDetails | None
-    metrics: tuple[TrainingMetricRecord, ...]
-    telemetry: tuple[TelemetryRecord, ...]
     checkpoints: CheckpointCatalogRecord
 
     @model_validator(mode="after")
     def validate_state_payload(self) -> Self:
         if self.state == "RUNNING":
             assert self.process is not None
-            assert self.reason is None and self.details is None
+            assert self.reason is None and self.details is not None
         elif self.state == "READY":
             assert self.details is not None
             assert self.reason is None and self.process is None
@@ -189,20 +123,16 @@ class TrainingCliSummary(BaseModel):
 
 
 class TrainingCliClient:
-    """Execute summary without importing producer modules."""
+    """Execute summary without importing training producer modules."""
 
     def __init__(self, *, timeout_seconds: float = 120.0) -> None:
         assert timeout_seconds > 0.0
         self._timeout_seconds = timeout_seconds
 
     async def summary(
-        self,
-        run_dir: Path,
-        *,
-        metric_after: int | None = None,
-        telemetry_after: int | None = None,
+        self, run_dir: Path
     ) -> _result.Ok[TrainingCliSummary] | _result.Rejected:
-        argv = [
+        argv = (
             sys.executable,
             "-m",
             "server.training_cli",
@@ -211,11 +141,7 @@ class TrainingCliClient:
             "summary",
             "--format",
             "json",
-        ]
-        if metric_after is not None:
-            argv.extend(("--metric-after", str(metric_after)))
-        if telemetry_after is not None:
-            argv.extend(("--telemetry-after", str(telemetry_after)))
+        )
         try:
             process = await asyncio.create_subprocess_exec(
                 *argv,
@@ -231,6 +157,10 @@ class TrainingCliClient:
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(), timeout=self._timeout_seconds
             )
+        except asyncio.CancelledError:
+            process.kill()
+            await process.wait()
+            raise
         except TimeoutError:
             process.kill()
             await process.wait()

@@ -91,7 +91,10 @@
             </section>
             <section class="panel">
               <header class="section-head">
-                <h2>Current runtime</h2>
+                <h2>Current runtime</h2><span
+                  id="session-presence"
+                  class="badge neutral"
+                >-</span>
               </header>
               <div id="runtime-details" class="detail-list"></div>
             </section>
@@ -106,78 +109,95 @@
           <header class="page-head">
             <div>
               <h1>Training Metrics</h1>
-              <p class="subtitle">
-                Persistent PPO updates and recent process telemetry
-              </p>
+              <p class="subtitle" id="metrics-session">No session</p>
             </div>
-            <button
-              class="icon-button"
-              data-refresh
-              title="Refresh"
-              aria-label="Refresh"
-            >
-              ↻
-            </button>
+            <div class="metrics-toolbar">
+              <label class="compact-field">Session
+                <select
+                  id="metrics-session-select"
+                  class="input compact-input"
+                >
+                  <option value="">Latest session</option>
+                </select>
+              </label>
+              <div class="segmented" aria-label="Chart axis">
+                <button class="segment active" data-axis="update">
+                  Update
+                </button>
+                <button class="segment" data-axis="elapsed">
+                  Elapsed time
+                </button>
+              </div>
+              <label class="compact-field">Range
+                <select id="metrics-range" class="input compact-input">
+                  <option value="50">50 updates</option>
+                  <option value="200" selected>200 updates</option>
+                  <option value="500">500 updates</option>
+                  <option value="5000">All available</option>
+                </select>
+              </label>
+              <label class="compact-field">Resolution
+                <select
+                  id="metrics-resolution"
+                  class="input compact-input"
+                >
+                  <option value="200">200 points</option>
+                  <option value="500" selected>500 points</option>
+                  <option value="1000">1000 points</option>
+                </select>
+              </label>
+              <button
+                class="icon-button"
+                data-refresh
+                title="Refresh"
+                aria-label="Refresh"
+              >
+                ↻
+              </button>
+            </div>
           </header>
           <section class="metric-strip" id="metric-strip"></section>
-          <section class="panel chart-panel">
-            <header class="section-head">
-              <h2>Sample throughput</h2>
-            </header><canvas
-              id="metric-chart"
-              width="1200"
-              height="280"
-            ></canvas>
-          </section>
-          <section class="panel table-panel">
-            <header class="section-head">
-              <h2>Latest update metrics</h2>
-            </header>
-            <div class="table-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Update</th>
-                    <th>Samples</th>
-                    <th>Policy loss</th>
-                    <th>Value loss</th>
-                    <th>Entropy</th>
-                    <th>KL</th>
-                    <th>Update time</th>
-                  </tr>
-                </thead>
-                <tbody id="metric-rows"></tbody>
-              </table>
-            </div>
-          </section>
-          <section class="panel table-panel">
-            <header class="section-head">
-              <h2>Runtime telemetry</h2><span class="section-note"
-              >Latest event per process</span>
-            </header>
-            <div class="table-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Process</th>
-                    <th>Stage</th>
-                    <th>Updates</th>
-                    <th>Progress</th>
-                    <th>Measurements</th>
-                    <th>Observed</th>
-                  </tr>
-                </thead>
-                <tbody id="telemetry-rows"></tbody>
-              </table>
-            </div>
-          </section>
+          <div class="chart-grid">
+            <section class="chart-panel chart-wide">
+              <h2>Training throughput</h2>
+              <div class="chart" id="chart-throughput"></div>
+            </section>
+            <section class="chart-panel">
+              <h2>Optimization loss</h2>
+              <div class="chart" id="chart-loss"></div>
+            </section>
+            <section class="chart-panel">
+              <h2>Policy behavior</h2>
+              <div class="chart" id="chart-policy"></div>
+            </section>
+            <section class="chart-panel chart-wide">
+              <h2>PPO timing</h2>
+              <div class="chart" id="chart-ppo-timing"></div>
+            </section>
+            <section class="chart-panel">
+              <h2>Rollout efficiency</h2>
+              <div class="chart" id="chart-rollout"></div>
+            </section>
+            <section class="chart-panel">
+              <h2>Rewards</h2>
+              <div class="chart" id="chart-rewards"></div>
+            </section>
+            <section class="chart-panel chart-wide">
+              <h2>Inference utilization and latency</h2>
+              <div class="chart" id="chart-inference"></div>
+            </section>
+            <section class="chart-panel chart-wide">
+              <h2>Worker comparison</h2>
+              <div class="chart" id="chart-processes"></div>
+            </section>
+          </div>
         </section>
 
         <section class="view" data-view="logs" hidden>
           <header class="page-head">
             <div>
               <h1>Training Logs</h1>
-              <p class="subtitle">Detached coordinator output</p>
+              <p class="subtitle">Structured training events</p>
             </div>
             <button
               class="icon-button"
@@ -189,15 +209,22 @@
             </button>
           </header>
           <section class="panel log-panel">
-            <div class="log-toolbar segmented">
-              <button class="segment active" data-stream="stdout">
-                stdout
-              </button>
-              <button class="segment" data-stream="stderr">
-                stderr
-              </button>
+            <div class="log-toolbar">
+              <label class="compact-field">Window
+                <input
+                  id="log-window"
+                  class="input compact-input"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value="5000"
+                  required
+                >
+              </label>
+              <button class="button" id="toggle-follow">Pause</button>
+              <span id="log-count" class="section-note">0 events</span>
             </div>
-            <pre id="log-content" class="raw-log"></pre>
+            <div id="log-content" class="structured-log"></div>
           </section>
         </section>
 
@@ -320,7 +347,7 @@
         <section class="replace-body">
           <p class="replace-warning">
             This will permanently delete the existing checkpoints,
-            metrics, and telemetry in this directory.
+            structured logs, and all other files in this directory.
           </p>
           <code id="replace-run-directory" class="replace-path"></code>
           <label for="replace-existing">

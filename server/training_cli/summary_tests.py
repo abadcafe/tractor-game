@@ -57,8 +57,25 @@ def test_summary_reports_initialized_run_with_details(
     assert parsed.state == "READY"
     assert parsed.details is not None
     assert parsed.details.total_updates == 0
-    assert len(parsed.metrics) == 1
+    assert parsed.schema_version == 2
     assert len(parsed.checkpoints.manifests) == 1
+
+
+def test_summary_reports_nonempty_uninitialized_directory_as_broken(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "stderr.log").write_text(
+        "old failure\n", encoding="utf-8"
+    )
+
+    completed = _summary(run_dir)
+
+    assert completed.returncode == 0
+    parsed = _parse_summary(completed.stdout)
+    assert parsed.state == "BROKEN"
+    assert parsed.reason is not None
 
 
 def _summary(run_dir: Path) -> subprocess.CompletedProcess[str]:

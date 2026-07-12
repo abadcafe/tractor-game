@@ -54,7 +54,6 @@ class ExecutionConfigOverrides:
     sampling_stop_timeout_seconds: float | None = None
     state_sync_timeout_seconds: float | None = None
     update_timeout_seconds: float | None = None
-    telemetry_interval_seconds: float | None = None
     model_inference_batch_size: int | None = None
     game_envs_per_worker: int | None = None
     samples_per_update: int | None = None
@@ -145,10 +144,6 @@ def resolve_execution_config(
                     base.timeouts.update_seconds,
                 ),
             ),
-            telemetry_interval_seconds=_or_base(
-                overrides.telemetry_interval_seconds,
-                base.telemetry_interval_seconds,
-            ),
             model_inference_batch_size=_or_base(
                 overrides.model_inference_batch_size,
                 base.model_inference_batch_size,
@@ -190,7 +185,6 @@ def _resolve_execution_config(
             ),
             state_sync_timeout_seconds=request.state_sync_timeout_seconds,
             update_timeout_seconds=request.update_timeout_seconds,
-            telemetry_interval_seconds=request.telemetry_interval_seconds,
             model_inference_batch_size=request.model_inference_batch_size,
             game_envs_per_worker=request.game_envs_per_worker,
             samples_per_update=request.samples_per_update,

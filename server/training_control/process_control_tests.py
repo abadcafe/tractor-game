@@ -48,9 +48,6 @@ async def test_start_and_stop_detached_training_command(
         "resume",
         "latest.json",
     )
-    run_dir.joinpath("stdout.log").write_text(
-        "previous session\n", encoding="utf-8"
-    )
     control = TrainingProcessControl()
 
     started = await control.start(
@@ -74,9 +71,7 @@ async def test_start_and_stop_detached_training_command(
 
     assert isinstance(stopped, Ok)
     assert stopped.value.forced is False
-    assert "previous session" not in run_dir.joinpath(
-        "stdout.log"
-    ).read_text(encoding="utf-8")
+    assert not run_dir.joinpath("stdout.log").exists()
     pid_result = read_pid(run_dir)
     assert isinstance(pid_result, Ok)
     assert pid_result.value is None

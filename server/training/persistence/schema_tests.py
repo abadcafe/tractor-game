@@ -32,8 +32,7 @@ def test_initialize_database_creates_strict_schema(
         ).fetchall()
     assert application_id == (APPLICATION_ID,)
     assert user_version == (SCHEMA_VERSION,)
-    assert ("training_metrics",) in tables
-    assert ("runtime_telemetry",) in tables
+    assert tables == [("sqlite_sequence",), ("training_logs",)]
 
 
 def test_open_reader_missing_database_returns_none(

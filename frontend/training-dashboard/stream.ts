@@ -1,13 +1,16 @@
-import {
-  parseTrainingStreamMessage,
-  type TrainingStreamSnapshot,
-} from "./types.ts";
+import { parseLogMessage, type TrainingLogMessage } from "./types.ts";
 
 export interface TrainingStreamTarget {
   readonly runDir: string;
-  readonly metricSequence: number | null;
-  readonly telemetrySequence: number | null;
-  readonly logStream: "stdout" | "stderr" | null;
+  readonly window: number;
+  readonly eventTypes: readonly string[];
+  readonly sessionId: string | null;
+}
+
+export interface TrainingStreamHandlers {
+  readonly onMessage: (message: TrainingLogMessage) => void;
+  readonly onConnectionChange: (connected: boolean) => void;
+  readonly onError: (message: string) => void;
 }
 
 export interface WebSocketLocation {
@@ -15,17 +18,9 @@ export interface WebSocketLocation {
   readonly host: string;
 }
 
-export interface TrainingStreamHandlers {
-  readonly onSnapshot: (snapshot: TrainingStreamSnapshot) => void;
-  readonly onConnectionChange: (connected: boolean) => void;
-  readonly onError: (message: string) => void;
-}
-
 export class TrainingStreamClient {
   private socket: WebSocket | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private reconnectAttempts = 0;
-  private generation = 0;
   private stopped = true;
 
   constructor(
@@ -35,90 +30,47 @@ export class TrainingStreamClient {
 
   connect(): void {
     this.stopped = false;
-    this.replaceSocket();
+    if (this.reconnectTimer !== null) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.socket?.close();
+    const target = this.target();
+    if (target === null) return;
+    const socket = new WebSocket(trainingStreamUrl(target));
+    this.socket = socket;
+    socket.addEventListener("open", () => {
+      if (this.socket !== socket) return;
+      this.handlers.onConnectionChange(true);
+    });
+    socket.addEventListener("message", (event) => {
+      if (this.socket !== socket || typeof event.data !== "string") {
+        return;
+      }
+      try {
+        this.handlers.onMessage(
+          parseLogMessage(JSON.parse(event.data)),
+        );
+      } catch (error: unknown) {
+        this.handlers.onError(errorText(error));
+      }
+    });
+    socket.addEventListener("close", () => {
+      if (this.socket !== socket) return;
+      this.socket = null;
+      this.handlers.onConnectionChange(false);
+      if (!this.stopped) {
+        this.reconnectTimer = setTimeout(() => this.connect(), 1000);
+      }
+    });
   }
 
   disconnect(): void {
     this.stopped = true;
-    this.generation += 1;
-    this.clearReconnectTimer();
+    if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
     this.socket?.close();
     this.socket = null;
-  }
-
-  private replaceSocket(): void {
-    const target = this.target();
-    if (target === null) {
-      this.disconnect();
-      return;
-    }
-    this.generation += 1;
-    const generation = this.generation;
-    this.clearReconnectTimer();
-    this.socket?.close();
-    const socket = new WebSocket(trainingStreamUrl(target));
-    this.socket = socket;
-
-    socket.addEventListener("open", () => {
-      if (!this.isCurrent(socket, generation)) return;
-      this.reconnectAttempts = 0;
-      this.handlers.onConnectionChange(true);
-    });
-    socket.addEventListener("message", (event) => {
-      if (!this.isCurrent(socket, generation)) return;
-      this.receive(event.data);
-    });
-    socket.addEventListener("close", () => {
-      if (!this.isCurrent(socket, generation)) return;
-      this.socket = null;
-      this.handlers.onConnectionChange(false);
-      this.scheduleReconnect(generation);
-    });
-    socket.addEventListener("error", () => {
-      // The close event owns reconnection and connection state.
-    });
-  }
-
-  private receive(data: unknown): void {
-    try {
-      if (typeof data !== "string") {
-        throw new Error("Training stream message must be text");
-      }
-      const raw: unknown = JSON.parse(data);
-      const message = parseTrainingStreamMessage(raw);
-      if (message.type === "error") {
-        this.handlers.onError(message.message);
-      } else {
-        this.handlers.onSnapshot(message);
-      }
-    } catch (error: unknown) {
-      this.handlers.onError(errorText(error));
-    }
-  }
-
-  private scheduleReconnect(generation: number): void {
-    if (this.stopped || generation !== this.generation) return;
-    const delay = Math.min(
-      1000 * 2 ** this.reconnectAttempts,
-      10_000,
-    );
-    this.reconnectAttempts += 1;
-    this.reconnectTimer = globalThis.setTimeout(() => {
-      this.reconnectTimer = null;
-      if (!this.stopped && generation === this.generation) {
-        this.replaceSocket();
-      }
-    }, delay);
-  }
-
-  private clearReconnectTimer(): void {
-    if (this.reconnectTimer === null) return;
-    globalThis.clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = null;
-  }
-
-  private isCurrent(socket: WebSocket, generation: number): boolean {
-    return generation === this.generation && socket === this.socket;
   }
 }
 
@@ -127,28 +79,19 @@ export function trainingStreamUrl(
   location: WebSocketLocation = globalThis.location,
 ): string {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  const url = new URL(`${protocol}//${location.host}/ws/training`);
-  url.searchParams.set("run_dir", target.runDir);
-  if (target.metricSequence !== null) {
-    url.searchParams.set(
-      "metric_sequence",
-      String(target.metricSequence),
-    );
+  const search = new URLSearchParams({
+    run_dir: target.runDir,
+    window: String(target.window),
+  });
+  for (const eventType of target.eventTypes) {
+    search.append("event", eventType);
   }
-  if (target.telemetrySequence !== null) {
-    url.searchParams.set(
-      "telemetry_sequence",
-      String(target.telemetrySequence),
-    );
+  if (target.sessionId !== null) {
+    search.set("session_id", target.sessionId);
   }
-  if (target.logStream !== null) {
-    url.searchParams.set("log_stream", target.logStream);
-  }
-  return url.toString();
+  return `${protocol}//${location.host}/ws/training/logs?${search}`;
 }
 
 function errorText(error: unknown): string {
-  return error instanceof Error
-    ? error.message
-    : "Training stream failed";
+  return error instanceof Error ? error.message : String(error);
 }

@@ -92,42 +92,40 @@ def test_training_config_returns_server_default_directory(
     )
 
 
-def test_training_stream_pushes_dashboard_snapshot(
+def test_training_stream_pushes_structured_log_window(
     sync_client: SyncServerClient,
     tmp_path: Path,
 ) -> None:
-    (tmp_path / "stderr.log").write_text(
-        "training failure\n", encoding="utf-8"
+    initialized = sync_client.post(
+        "/api/training/init",
+        json={
+            "run_dir": str(tmp_path),
+            "d_model": 2,
+            "layers": 1,
+            "heads": 1,
+            "max_tokens": 512,
+        },
     )
+    assert initialized.status_code == 200
     query = urlencode(
         {
             "run_dir": str(tmp_path),
-            "metric_sequence": "0",
-            "telemetry_sequence": "0",
-            "log_stream": "stderr",
         }
     )
 
     with sync_client.websocket_connect(
-        f"/ws/training?{query}"
+        f"/ws/training/logs?{query}"
     ) as websocket:
         message = _receive_ws_json(websocket)
 
     assert _is_dict(message)
-    assert message["type"] == "snapshot"
-    summary = message["summary"]
-    assert _is_dict(summary)
-    assert summary["state"] == "NOT_INITIALIZED"
-    assert summary["process"] is None
-    assert summary["metrics"] == []
-    assert summary["telemetry"] == []
-    assert message["log_stream"] == "stderr"
-    assert message["log_content"] == "training failure\n"
-    checkpoints = summary["checkpoints"]
-    assert _is_dict(checkpoints)
-    assert checkpoints["checkpoint_directory"] == str(
-        tmp_path / "checkpoints"
-    )
+    assert message == {"type": "reset", "window": 5000}
+    with sync_client.websocket_connect(
+        f"/ws/training/logs?{query}&window=7"
+    ) as websocket:
+        configured_message = _receive_ws_json(websocket)
+    assert _is_dict(configured_message)
+    assert configured_message == {"type": "reset", "window": 7}
 
 
 def test_training_init_requires_yes_before_replacement(
@@ -143,6 +141,11 @@ def test_training_init_requires_yes_before_replacement(
     }
 
     initialized = sync_client.post("/api/training/init", json=request)
+    (tmp_path / "stdout.log").write_text(
+        "old output\n", encoding="utf-8"
+    )
+    (tmp_path / "runtime").mkdir()
+    (tmp_path / "runtime" / "stale").write_text("old", encoding="utf-8")
     rejected = sync_client.post("/api/training/init", json=request)
     request["replace_existing"] = "yes"
     replaced = sync_client.post("/api/training/init", json=request)
@@ -153,6 +156,8 @@ def test_training_init_requires_yes_before_replacement(
         "detail": "type yes to replace existing training artifacts"
     }
     assert replaced.status_code == 200
+    assert not (tmp_path / "stdout.log").exists()
+    assert not (tmp_path / "runtime").exists()
 
 
 def test_training_resume_rejects_broken_run(

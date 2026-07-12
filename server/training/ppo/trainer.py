@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol, cast
 
 import torch
 import torch.distributed as dist
-import torch.distributed.nn.functional as dist_functional
 from torch import Tensor
 
 from server.foundation import result as _result
 from server.training.config import TrainConfig
 from server.training.model import TractorPolicyModel
+from server.training.ppo.collectives import (
+    all_reduce_max,
+    all_reduce_sum,
+)
 from server.training.ppo.device_targets import shuffled_index_tensor
 from server.training.ppo.distributed import (
     PPOLossForwarder,
@@ -66,14 +68,6 @@ from server.training.ppo.validation import (
 )
 from server.training.runtime.config import PPOProfileMode
 from server.training.sampling import ShuffleKey, shuffled_indices
-
-
-class _AllReduceTensor(Protocol):
-    def __call__(self, tensor: Tensor, op: object) -> Tensor: ...
-
-
-_all_reduce_object: object = getattr(dist_functional, "all_reduce")
-_all_reduce_tensor = cast(_AllReduceTensor, _all_reduce_object)
 
 
 @dataclass(frozen=True, slots=True)
@@ -472,7 +466,7 @@ def _sync_validation_code(
                 "distributed PPO validation sync requires process group"
             )
         )
-    return _result.Ok(value=_all_reduce_tensor(code, dist.ReduceOp.MAX))
+    return _result.Ok(value=all_reduce_max(code))
 
 
 def _index_minibatch_spans(
@@ -564,7 +558,7 @@ def _sync_normalized_advantages(
             local_count,
         )
     )
-    totals = _all_reduce_tensor(totals, dist.ReduceOp.SUM)
+    totals = all_reduce_sum(totals)
     count = totals[2]
     mean = totals[0] / count
     variance = torch.clamp(totals[1] / count - mean * mean, min=0.0)
@@ -619,7 +613,7 @@ def _finalize_update_stats(
                     "distributed PPO stats sync requires process group"
                 )
             )
-        totals = _all_reduce_tensor(totals, dist.ReduceOp.SUM)
+        totals = all_reduce_sum(totals)
     count = totals[6]
     count_value = _float_tensor(count)
     if count_value <= 0.0:

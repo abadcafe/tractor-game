@@ -30,7 +30,7 @@ def training_control_config() -> TrainingControlConfig:
         os.environ.get("TRAINING_RUN_DIR", "training_runs")
     ).resolve()
     timeout = float(
-        os.environ.get("TRAINING_STOP_TIMEOUT_SECONDS", "300")
+        os.environ.get("TRAINING_STOP_TIMEOUT_SECONDS", "1800")
     )
     return TrainingControlConfig(
         default_run_dir=directory,

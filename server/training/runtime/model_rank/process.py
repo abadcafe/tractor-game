@@ -11,6 +11,7 @@ import torch
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
 from server.training.config import ModelConfig, TrainConfig
+from server.training.event_log import EventContext, StructuredEventSink
 from server.training.policy_inference_batch import (
     PolicyRequestRoute,
     build_completed_policy_responses,
@@ -63,11 +64,6 @@ from server.training.runtime.shared_rollout_arena import (
     SharedRolloutArenaReader,
     attach_rollout_arena_reader,
 )
-from server.training.telemetry import (
-    TelemetryEvent,
-    TelemetryMeasurement,
-    TelemetrySink,
-)
 
 
 @dataclass(slots=True)
@@ -93,7 +89,7 @@ def run_model_rank_process(
     ],
     inference_peers: tuple[AsyncPolicyPeer, ...],
     assigned_rollout_arena_handles: tuple[RolloutArenaHandle, ...],
-    telemetry_sink: TelemetrySink,
+    event_sink: StructuredEventSink,
     distributed_rank_config: DistributedRankConfig | None,
 ) -> None:
     """Model-rank process main loop."""
@@ -111,7 +107,7 @@ def run_model_rank_process(
             assigned_rollout_arena_handles=(
                 assigned_rollout_arena_handles
             ),
-            telemetry_sink=telemetry_sink,
+            event_sink=event_sink,
             distributed_rank_config=distributed_rank_config,
         )
     )
@@ -130,16 +126,29 @@ async def _run_model_rank_process_async(
     ],
     inference_peers: tuple[AsyncPolicyPeer, ...],
     assigned_rollout_arena_handles: tuple[RolloutArenaHandle, ...],
-    telemetry_sink: TelemetrySink,
+    event_sink: StructuredEventSink,
     distributed_rank_config: DistributedRankConfig | None,
 ) -> None:
     """Async model-rank process main loop."""
     assert model_rank_index >= 0
+    event_sink.emit(
+        "process.started",
+        fields={
+            "model_rank_index": model_rank_index,
+            "device": model_rank_device,
+        },
+    )
     setup_result = _setup_model_rank_runtime(
         model_rank_device=model_rank_device,
         execution_config=execution_config,
     )
     if isinstance(setup_result, Rejected):
+        event_sink.emit(
+            "process.failed",
+            level="ERROR",
+            fields={"reason": setup_result.reason},
+        )
+        event_sink.close()
         await control.send_response(
             ModelRankRejected(
                 model_rank_index=model_rank_index,
@@ -149,6 +158,12 @@ async def _run_model_rank_process_async(
         return
     sync_result = initialize_distributed_rank(distributed_rank_config)
     if isinstance(sync_result, Rejected):
+        event_sink.emit(
+            "process.failed",
+            level="ERROR",
+            fields={"reason": sync_result.reason},
+        )
+        event_sink.close()
         await control.send_response(
             ModelRankRejected(
                 model_rank_index=model_rank_index,
@@ -179,7 +194,7 @@ async def _run_model_rank_process_async(
             control=control,
             inference_peers=inference_peers,
             rollout_arena_reader=arena_reader,
-            telemetry_sink=telemetry_sink,
+            event_sink=event_sink,
         )
         if isinstance(loop_result, Rejected):
             await control.send_response(
@@ -192,6 +207,8 @@ async def _run_model_rank_process_async(
     finally:
         arena_reader.close()
         destroy_distributed_rank()
+        event_sink.emit("process.stopped")
+        event_sink.close()
 
 
 def _setup_model_rank_runtime(
@@ -264,7 +281,7 @@ async def _run_model_rank_event_loop(
     ],
     inference_peers: tuple[AsyncPolicyPeer, ...],
     rollout_arena_reader: SharedRolloutArenaReader,
-    telemetry_sink: TelemetrySink,
+    event_sink: StructuredEventSink,
 ) -> _result.Ok[None] | _result.Rejected:
     data_plane = ModelRankDataPlane(
         control=control,
@@ -285,7 +302,7 @@ async def _run_model_rank_event_loop(
             core=core,
             staged_batch=batch,
             response_peers=inference_peers,
-            telemetry_sink=telemetry_sink,
+            event_sink=event_sink,
             configured_batch_size=(
                 execution_config.model_inference_batch_size
             ),
@@ -352,7 +369,7 @@ async def _run_model_rank_event_loop(
             core=core,
             command=command,
             rollout_arena_reader=rollout_arena_reader,
-            telemetry_sink=telemetry_sink,
+            event_sink=event_sink,
         )
         update_send_result = await control.send_response(
             update_response
@@ -382,9 +399,22 @@ async def _process_staged_inference_batch(
     core: ModelReplica,
     staged_batch: ModelRankInferenceBatch,
     response_peers: tuple[AsyncPolicyPeer, ...],
-    telemetry_sink: TelemetrySink,
+    event_sink: StructuredEventSink,
     configured_batch_size: int,
 ) -> _result.Ok[None] | _result.Rejected:
+    batch_id = time.time_ns()
+    context = EventContext(
+        model_rank_index=model_rank_index,
+        batch_id=batch_id,
+    )
+    event_sink.emit(
+        "inference.batch_started",
+        context=context,
+        fields={
+            "batch_size": staged_batch.batch_size(),
+            "configured_batch_size": configured_batch_size,
+        },
+    )
     process_start = time.perf_counter()
     process_result = await _process_inference_batch(
         core=core,
@@ -393,62 +423,33 @@ async def _process_staged_inference_batch(
     )
     process_seconds = time.perf_counter() - process_start
     if isinstance(process_result, Rejected):
+        event_sink.emit(
+            "inference.batch_failed",
+            context=context,
+            level="ERROR",
+            fields={"reason": process_result.reason},
+        )
         return process_result
-    telemetry_result = _record_model_rank_stage(
-        telemetry_sink=telemetry_sink,
-        run_id=run_id,
-        model_rank_index=model_rank_index,
-        stage="inference",
-        total_rounds=0,
-        total_updates=0,
-        measurements=(
-            TelemetryMeasurement(
-                key="model_rank_inference_batch_size",
-                value=staged_batch.batch_size(),
+    event_sink.emit(
+        "inference.batch_completed",
+        context=context,
+        fields={
+            "batch_size": staged_batch.batch_size(),
+            "fill_ratio": (
+                staged_batch.batch_size() / float(configured_batch_size)
             ),
-            TelemetryMeasurement(
-                key="model_rank_inference_batch_fill_ratio",
-                value=(
-                    staged_batch.batch_size()
-                    / float(configured_batch_size)
-                ),
+            "wire_bytes": staged_batch.wire_byte_count,
+            "frame_count": staged_batch.frame_count,
+            "shape_bucket_count": staged_batch.shape_bucket_count,
+            "shape_padding_tokens_saved": (
+                staged_batch.shape_padding_tokens_saved
             ),
-            TelemetryMeasurement(
-                key="inference_wire_bytes",
-                value=staged_batch.wire_byte_count,
-            ),
-            TelemetryMeasurement(
-                key="model_rank_inference_frame_count",
-                value=staged_batch.frame_count,
-            ),
-            TelemetryMeasurement(
-                key="model_rank_shape_bucket_count",
-                value=staged_batch.shape_bucket_count,
-            ),
-            TelemetryMeasurement(
-                key="model_rank_shape_padding_tokens_saved",
-                value=staged_batch.shape_padding_tokens_saved,
-            ),
-            TelemetryMeasurement(
-                key="model_rank_recv_seconds",
-                value=staged_batch.recv_seconds,
-            ),
-            TelemetryMeasurement(
-                key="model_rank_h2d_seconds",
-                value=staged_batch.h2d_seconds,
-            ),
-            TelemetryMeasurement(
-                key="model_rank_device_decode_seconds",
-                value=staged_batch.device_decode_seconds,
-            ),
-            TelemetryMeasurement(
-                key="model_rank_inference_seconds",
-                value=process_seconds,
-            ),
-        ),
+            "recv_seconds": staged_batch.recv_seconds,
+            "h2d_seconds": staged_batch.h2d_seconds,
+            "device_decode_seconds": staged_batch.device_decode_seconds,
+            "inference_seconds": process_seconds,
+        },
     )
-    if isinstance(telemetry_result, Rejected):
-        return telemetry_result
     return Ok(value=None)
 
 
@@ -476,21 +477,13 @@ def _run_model_rank_update(
     core: ModelReplica,
     command: ModelRankUpdateCommand,
     rollout_arena_reader: SharedRolloutArenaReader,
-    telemetry_sink: TelemetrySink,
+    event_sink: StructuredEventSink,
 ) -> ModelRankUpdateCompleted | ModelRankRejected:
-    telemetry_result = _record_model_rank_stage(
-        telemetry_sink=telemetry_sink,
-        run_id=run_id,
+    context = EventContext(
+        policy_version=command.policy_version,
         model_rank_index=model_rank_index,
-        stage="update",
-        total_rounds=0,
-        total_updates=command.policy_version,
     )
-    if isinstance(telemetry_result, Rejected):
-        return ModelRankRejected(
-            model_rank_index=model_rank_index,
-            reason=telemetry_result.reason,
-        )
+    event_sink.emit("update.rank_started", context=context)
     read_start = time.perf_counter()
     returns_result = rollout_arena_reader.read_rank_batch(
         policy_version=command.policy_version,
@@ -499,6 +492,12 @@ def _run_model_rank_update(
     )
     arena_read_seconds = time.perf_counter() - read_start
     if isinstance(returns_result, Rejected):
+        event_sink.emit(
+            "update.rank_failed",
+            context=context,
+            level="ERROR",
+            fields={"reason": returns_result.reason},
+        )
         return ModelRankRejected(
             model_rank_index=model_rank_index,
             reason=returns_result.reason,
@@ -507,45 +506,29 @@ def _run_model_rank_update(
     update_result = core.update_returns(returns=returns_result.value)
     update_seconds = time.perf_counter() - update_start
     if isinstance(update_result, Rejected):
+        event_sink.emit(
+            "update.rank_failed",
+            context=context,
+            level="ERROR",
+            fields={"reason": update_result.reason},
+        )
         return ModelRankRejected(
             model_rank_index=model_rank_index,
             reason=update_result.reason,
         )
-    completed_telemetry = _record_model_rank_stage(
-        telemetry_sink=telemetry_sink,
-        run_id=run_id,
-        model_rank_index=model_rank_index,
-        stage="update",
-        total_rounds=returns_result.value.round_count,
-        total_updates=command.policy_version,
-        measurements=(
-            TelemetryMeasurement(
-                key="model_rank_arena_read_seconds",
-                value=arena_read_seconds,
+    event_sink.emit(
+        "update.rank_completed",
+        context=context,
+        fields={
+            "arena_read_seconds": arena_read_seconds,
+            "update_seconds": update_seconds,
+            "sample_count": int(
+                returns_result.value.row_indices.shape[0]
             ),
-            TelemetryMeasurement(
-                key="model_rank_update_seconds",
-                value=update_seconds,
-            ),
-            TelemetryMeasurement(
-                key="model_rank_update_sample_count",
-                value=int(returns_result.value.row_indices.shape[0]),
-            ),
-            TelemetryMeasurement(
-                key="model_rank_update_step_count",
-                value=returns_result.value.total_step_count,
-            ),
-            TelemetryMeasurement(
-                key="model_rank_update_round_count",
-                value=returns_result.value.round_count,
-            ),
-        ),
+            "step_count": returns_result.value.total_step_count,
+            "round_count": returns_result.value.round_count,
+        },
     )
-    if isinstance(completed_telemetry, Rejected):
-        return ModelRankRejected(
-            model_rank_index=model_rank_index,
-            reason=completed_telemetry.reason,
-        )
     return ModelRankUpdateCompleted(
         model_rank_index=model_rank_index,
         rank_index=model_rank_index,
@@ -700,28 +683,3 @@ def _validate_response_routes(
             reason="policy request worker route is out of shard"
         )
     return Ok(value=None)
-
-
-def _record_model_rank_stage(
-    *,
-    telemetry_sink: TelemetrySink,
-    run_id: str,
-    model_rank_index: int,
-    stage: str,
-    total_rounds: int,
-    total_updates: int,
-    measurements: tuple[TelemetryMeasurement, ...] = (),
-) -> _result.Ok[None] | _result.Rejected:
-    assert stage in ("inference", "update")
-    return telemetry_sink.append(
-        TelemetryEvent(
-            process_label=f"model-rank-{model_rank_index}",
-            stage=stage,
-            total_rounds=total_rounds,
-            total_updates=total_updates,
-            progress_numerator=0,
-            progress_denominator=1,
-            unix_seconds=time.time(),
-            measurements=measurements,
-        )
-    )

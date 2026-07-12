@@ -2,23 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Protocol, cast
-
 import torch
 import torch.distributed as dist
-import torch.distributed.nn.functional as dist_functional
 from torch import Tensor
 
 from server.foundation import result as _result
+from server.training.ppo.collectives import all_reduce_sum
 from server.training.ppo.distributed import PPOUpdatePartition
-
-
-class _AllReduceTensor(Protocol):
-    def __call__(self, tensor: Tensor, op: object) -> Tensor: ...
-
-
-_all_reduce_object: object = getattr(dist_functional, "all_reduce")
-_all_reduce_tensor = cast(_AllReduceTensor, _all_reduce_object)
 
 
 def synchronized_count_sum(
@@ -36,9 +26,7 @@ def synchronized_count_sum(
         return _result.Rejected(
             reason="distributed PPO count sync requires process group"
         )
-    return _result.Ok(
-        value=_all_reduce_tensor(tensor, dist.ReduceOp.SUM)
-    )
+    return _result.Ok(value=all_reduce_sum(tensor))
 
 
 def synchronized_count_vector_sum(
@@ -57,9 +45,7 @@ def synchronized_count_vector_sum(
         return _result.Rejected(
             reason="distributed PPO count sync requires process group"
         )
-    return _result.Ok(
-        value=_all_reduce_tensor(values, dist.ReduceOp.SUM)
-    )
+    return _result.Ok(value=all_reduce_sum(values))
 
 
 def positive_count_value(

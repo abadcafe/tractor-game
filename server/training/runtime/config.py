@@ -47,10 +47,10 @@ class ModelRankPlacement:
 class ExecutionTimeouts:
     """Watchdog limits for distinct runtime stages."""
 
-    round_seconds: float = 120.0
+    round_seconds: float = 600.0
     sampling_start_seconds: float = 240.0
-    rollout_sample_seconds: float = 240.0
-    sampling_stop_seconds: float = 240.0
+    rollout_sample_seconds: float = 900.0
+    sampling_stop_seconds: float = 600.0
     state_sync_seconds: float = 300.0
     update_seconds: float = 3600.0
 
@@ -77,7 +77,6 @@ class ExecutionConfig:
     timeouts: ExecutionTimeouts = field(
         default_factory=ExecutionTimeouts
     )
-    telemetry_interval_seconds: float = 1.0
     model_inference_batch_size: int = 64
     game_envs_per_worker: int = 1
     samples_per_update: int = 1024
@@ -85,8 +84,6 @@ class ExecutionConfig:
     def __post_init__(self) -> None:
         assert _cpu_set_is_valid(self.worker_cpus)
         assert self.ppo_profile in ("off", "basic", "detailed")
-        assert _is_finite(self.telemetry_interval_seconds)
-        assert self.telemetry_interval_seconds > 0.0
         assert self.model_inference_batch_size > 0
         assert self.game_envs_per_worker > 0
         assert self.samples_per_update > 0
@@ -237,10 +234,6 @@ def _cuda_device_index(device: str) -> int:
     index = device.removeprefix("cuda:")
     assert index.isdecimal()
     return int(index)
-
-
-def _is_finite(value: float) -> bool:
-    return math.isfinite(value)
 
 
 def _positive_finite(value: float) -> bool:

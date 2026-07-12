@@ -10,6 +10,7 @@ from typing import Protocol
 import torch
 
 from server.foundation.result import Ok, Rejected
+from server.training.event_log import EventContext, EventSink
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
 from server.training.policy import PolicyDecision
@@ -204,6 +205,7 @@ class BatchedPolicyClient:
     transport: PolicyBatchTransport
     timeout_seconds: float
     batch_size: int
+    event_sink: EventSink
     _next_request_id: int = 0
     _in_flight: dict[int, _PendingPolicyRequest] = field(
         default_factory=_in_flight_request_dict
@@ -259,6 +261,21 @@ class BatchedPolicyClient:
             legal_actions=legal_actions,
             decision_key=decision_key,
         )
+        context = EventContext(
+            policy_version=decision_key.policy_version,
+            rollout_id=(
+                f"{self.event_sink.session_id}:"
+                f"{decision_key.policy_version}"
+            ),
+            worker_index=self.worker_index,
+            episode_id=decision_key.episode_id,
+            player_index=decision_key.player_index,
+            decision_index=decision_key.decision_index,
+            request_id=request_id,
+        )
+        self.event_sink.emit(
+            "decision.inference_started", context=context
+        )
         self._send_queue.append(
             _QueuedPolicyRequest(
                 request_id=request_id,
@@ -271,9 +288,35 @@ class BatchedPolicyClient:
         wait_start = time.perf_counter()
         try:
             result = await asyncio.shield(future)
-            self._record_wait(wait_start=wait_start)
+            wait_seconds = self._record_wait(wait_start=wait_start)
+            if isinstance(result, Rejected):
+                self.event_sink.emit(
+                    "decision.rejected",
+                    context=context,
+                    level="ERROR",
+                    fields={
+                        "reason": result.reason,
+                        "wait_seconds": wait_seconds,
+                    },
+                )
+            else:
+                self.event_sink.emit(
+                    "decision.completed",
+                    context=context,
+                    fields={
+                        "wait_seconds": wait_seconds,
+                        "choice_count": result.value.choice_count,
+                        "model_rank_index": (
+                            result.value.decision_handle.model_rank_index
+                        ),
+                        "row_index": (
+                            result.value.decision_handle.row_index
+                        ),
+                    },
+                )
             return result
         except asyncio.CancelledError:
+            self.event_sink.emit("decision.cancelled", context=context)
             await self._cancel_request(request_id=request_id)
             future.cancel()
             raise
@@ -283,17 +326,23 @@ class BatchedPolicyClient:
 
     def drain_stats(self) -> PolicyClientStats:
         """Return and reset accumulated policy wait counters."""
-        stats = PolicyClientStats(
-            decision_count=self._decision_count,
-            wait_seconds=self._wait_seconds,
-        )
+        stats = self.stats()
         self._decision_count = 0
         self._wait_seconds = 0.0
         return stats
 
-    def _record_wait(self, *, wait_start: float) -> None:
+    def stats(self) -> PolicyClientStats:
+        """Return accumulated policy wait counters without resetting."""
+        return PolicyClientStats(
+            decision_count=self._decision_count,
+            wait_seconds=self._wait_seconds,
+        )
+
+    def _record_wait(self, *, wait_start: float) -> float:
+        wait_seconds = max(time.perf_counter() - wait_start, 0.0)
         self._decision_count += 1
-        self._wait_seconds += max(time.perf_counter() - wait_start, 0.0)
+        self._wait_seconds += wait_seconds
+        return wait_seconds
 
     def _ensure_send_task(self) -> None:
         task = self._send_task
@@ -336,15 +385,66 @@ class BatchedPolicyClient:
                         )
                         return
                     sent_requests = batch_result.value.requests
+                    local_batch = isinstance(
+                        self.transport, LocalPolicyBatchTransport
+                    )
+                    batch_context = EventContext(
+                        policy_version=(
+                            sent_requests[
+                                0
+                            ].request.decision_key.policy_version
+                        ),
+                        worker_index=self.worker_index,
+                        batch_id=sent_requests[0].request_id,
+                    )
+                    if local_batch:
+                        self.event_sink.emit(
+                            "inference.batch_started",
+                            context=batch_context,
+                            fields={
+                                "batch_size": len(sent_requests),
+                                "configured_batch_size": (
+                                    self.batch_size
+                                ),
+                            },
+                        )
+                    inference_started = time.perf_counter()
                     submit_result = await self.transport.submit_batch(
                         batch=batch_result.value.batch,
                     )
                     if isinstance(submit_result, Rejected):
+                        if local_batch:
+                            self.event_sink.emit(
+                                "inference.batch_failed",
+                                context=batch_context,
+                                level="ERROR",
+                                fields={"reason": submit_result.reason},
+                            )
                         self._reject_queued_requests(
                             sent_requests, submit_result.reason
                         )
                         self._reject_all(submit_result.reason)
                         return
+                    if local_batch:
+                        self.event_sink.emit(
+                            "inference.batch_completed",
+                            context=batch_context,
+                            fields={
+                                "batch_size": len(sent_requests),
+                                "fill_ratio": (
+                                    len(sent_requests)
+                                    / float(self.batch_size)
+                                ),
+                                "recv_seconds": 0.0,
+                                "h2d_seconds": 0.0,
+                                "device_decode_seconds": 0.0,
+                                "inference_seconds": max(
+                                    time.perf_counter()
+                                    - inference_started,
+                                    0.0,
+                                ),
+                            },
+                        )
                     await self._register_sent_requests(sent_requests)
                     self._ensure_receive_task()
         finally:
@@ -407,7 +507,10 @@ class BatchedPolicyClient:
     async def _receive_loop(self) -> None:
         try:
             while True:
-                if not self._in_flight:
+                if (
+                    not self._in_flight
+                    and not self._ignored_response_request_ids
+                ):
                     return
                 response_result = await self.transport.receive(
                     timeout_seconds=self.timeout_seconds,

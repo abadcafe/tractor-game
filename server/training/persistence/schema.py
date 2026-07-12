@@ -1,4 +1,4 @@
-"""Strict SQLite schema and connection policy for training data."""
+"""Strict SQLite schema and connection policy for training events."""
 
 from __future__ import annotations
 
@@ -9,144 +9,68 @@ from server.foundation import result as _result
 
 DATABASE_FILENAME = "training.sqlite3"
 APPLICATION_ID = 0x54524149
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
-_METRIC_COLUMNS = """
-    total_games INTEGER NOT NULL CHECK (total_games >= 0),
-    total_samples INTEGER NOT NULL CHECK (total_samples >= 0),
-    total_updates INTEGER NOT NULL UNIQUE CHECK (total_updates >= 0),
-    process_games_per_second REAL NOT NULL,
-    process_samples_per_second REAL NOT NULL,
-    last_round_decisions_per_second REAL NOT NULL,
-    last_team0_reward REAL NOT NULL,
-    last_team1_reward REAL NOT NULL,
-    last_generated_action_count INTEGER NOT NULL CHECK (
-        last_generated_action_count >= 0
-    ),
-    last_accepted_action_count INTEGER NOT NULL CHECK (
-        last_accepted_action_count >= 0
-    ),
-    last_decision_count INTEGER NOT NULL CHECK (
-        last_decision_count >= 0
-    ),
-    last_average_action_choices REAL NOT NULL,
-    policy_loss REAL,
-    value_loss REAL,
-    entropy REAL,
-    approx_kl REAL,
-    clip_fraction REAL,
-    ppo_update_seconds REAL CHECK (
-        ppo_update_seconds IS NULL OR ppo_update_seconds >= 0
-    ),
-    ppo_minibatch_loss_seconds REAL CHECK (
-        ppo_minibatch_loss_seconds IS NULL
-        OR ppo_minibatch_loss_seconds >= 0
-    ),
-    ppo_observation_batch_seconds REAL CHECK (
-        ppo_observation_batch_seconds IS NULL
-        OR ppo_observation_batch_seconds >= 0
-    ),
-    ppo_observation_encode_seconds REAL CHECK (
-        ppo_observation_encode_seconds IS NULL
-        OR ppo_observation_encode_seconds >= 0
-    ),
-    ppo_value_head_seconds REAL CHECK (
-        ppo_value_head_seconds IS NULL OR ppo_value_head_seconds >= 0
-    ),
-    ppo_argument_select_seconds REAL CHECK (
-        ppo_argument_select_seconds IS NULL
-        OR ppo_argument_select_seconds >= 0
-    ),
-    ppo_argument_decode_seconds REAL CHECK (
-        ppo_argument_decode_seconds IS NULL
-        OR ppo_argument_decode_seconds >= 0
-    ),
-    ppo_argument_distribution_seconds REAL CHECK (
-        ppo_argument_distribution_seconds IS NULL
-        OR ppo_argument_distribution_seconds >= 0
-    ),
-    ppo_backward_seconds REAL CHECK (
-        ppo_backward_seconds IS NULL OR ppo_backward_seconds >= 0
-    ),
-    ppo_optimizer_step_seconds REAL CHECK (
-        ppo_optimizer_step_seconds IS NULL
-        OR ppo_optimizer_step_seconds >= 0
-    ),
-    ppo_argument_decode_fraction REAL CHECK (
-        ppo_argument_decode_fraction IS NULL
-        OR (
-            ppo_argument_decode_fraction >= 0
-            AND ppo_argument_decode_fraction <= 1
-        )
-    ),
-    ppo_argument_trace_batch_count INTEGER CHECK (
-        ppo_argument_trace_batch_count IS NULL
-        OR ppo_argument_trace_batch_count >= 0
-    ),
-    ppo_argument_trace_row_count INTEGER CHECK (
-        ppo_argument_trace_row_count IS NULL
-        OR ppo_argument_trace_row_count >= 0
-    ),
-    ppo_argument_trace_token_count INTEGER CHECK (
-        ppo_argument_trace_token_count IS NULL
-        OR ppo_argument_trace_token_count >= 0
-    ),
-    ppo_argument_trace_valid_token_count INTEGER CHECK (
-        ppo_argument_trace_valid_token_count IS NULL
-        OR ppo_argument_trace_valid_token_count >= 0
-    ),
-    ppo_argument_trace_padding_token_count INTEGER CHECK (
-        ppo_argument_trace_padding_token_count IS NULL
-        OR ppo_argument_trace_padding_token_count >= 0
-    ),
-    checkpoint_path TEXT
-"""
-
-_CREATE_SCHEMA = f"""
-CREATE TABLE training_metrics (
+_CREATE_SCHEMA = """
+CREATE TABLE training_logs (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-    recorded_at_ms INTEGER NOT NULL CHECK (recorded_at_ms >= 0),
-    {_METRIC_COLUMNS}
+    event_json TEXT NOT NULL CHECK (
+        json_valid(event_json) AND json_type(event_json) = 'object'
+    ),
+    event_type TEXT GENERATED ALWAYS AS (
+        json_extract(event_json, '$.event')
+    ) STORED NOT NULL,
+    recorded_at_ms INTEGER GENERATED ALWAYS AS (
+        json_extract(event_json, '$.recorded_at_ms')
+    ) STORED NOT NULL CHECK (recorded_at_ms >= 0),
+    session_id TEXT GENERATED ALWAYS AS (
+        json_extract(event_json, '$.session_id')
+    ) STORED,
+    process_kind TEXT GENERATED ALWAYS AS (
+        json_extract(event_json, '$.process.kind')
+    ) STORED NOT NULL,
+    process_index INTEGER GENERATED ALWAYS AS (
+        json_extract(event_json, '$.process.index')
+    ) STORED,
+    policy_version INTEGER GENERATED ALWAYS AS (
+        json_extract(event_json, '$.context.policy_version')
+    ) STORED,
+    episode_id INTEGER GENERATED ALWAYS AS (
+        json_extract(event_json, '$.context.episode_id')
+    ) STORED,
+    CHECK (length(event_type) > 0),
+    CHECK (length(process_kind) > 0),
+    CHECK (process_index IS NULL OR process_index >= 0),
+    CHECK (policy_version IS NULL OR policy_version >= 0),
+    CHECK (episode_id IS NULL OR episode_id >= 0)
 ) STRICT;
 
-CREATE TABLE runtime_telemetry (
-    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-    recorded_at_ms INTEGER NOT NULL CHECK (recorded_at_ms >= 0),
-    process_label TEXT NOT NULL CHECK (length(process_label) > 0),
-    stage TEXT NOT NULL CHECK (stage IN (
-        'coordinator', 'loading', 'rollout', 'inference', 'update',
-        'checkpoint', 'idle', 'failed', 'completed', 'stopped'
-    )),
-    total_rounds INTEGER NOT NULL CHECK (total_rounds >= 0),
-    total_updates INTEGER NOT NULL CHECK (total_updates >= 0),
-    progress_numerator INTEGER NOT NULL CHECK (progress_numerator >= 0),
-    progress_denominator INTEGER NOT NULL CHECK (
-        progress_denominator >= 0
-    ),
-    measurements_json TEXT NOT NULL CHECK (
-        json_valid(measurements_json)
-        AND json_type(measurements_json) = 'object'
-    ),
-    CHECK (progress_numerator <= progress_denominator)
-) STRICT;
+CREATE INDEX training_logs_event_sequence
+ON training_logs(event_type, sequence DESC);
 
-CREATE INDEX runtime_telemetry_process_sequence
-ON runtime_telemetry(process_label, sequence DESC);
+CREATE INDEX training_logs_session_event_sequence
+ON training_logs(session_id, event_type, sequence DESC);
 
-CREATE INDEX runtime_telemetry_recorded_at
-ON runtime_telemetry(recorded_at_ms);
+CREATE INDEX training_logs_session_policy_event
+ON training_logs(session_id, policy_version, event_type);
+
+CREATE INDEX training_logs_session_episode_sequence
+ON training_logs(session_id, episode_id, sequence);
+
+CREATE INDEX training_logs_recorded_at
+ON training_logs(recorded_at_ms);
 """
 
 
 def database_path(run_dir: Path) -> Path:
-    """Return the canonical SQLite path for one training task."""
+    """Return the canonical SQLite path for one training run."""
     return run_dir / DATABASE_FILENAME
 
 
 def initialize_database(
     run_dir: Path,
 ) -> _result.Ok[None] | _result.Rejected:
-    """Create or strictly validate the training database."""
+    """Create or strictly validate the event database."""
     path = database_path(run_dir)
     try:
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -212,9 +136,7 @@ def open_reader(
         return _result.Ok(value=None)
     try:
         connection = sqlite3.connect(
-            f"file:{path}?mode=ro",
-            uri=True,
-            timeout=5.0,
+            f"file:{path}?mode=ro", uri=True, timeout=5.0
         )
         connection.execute("PRAGMA query_only = ON")
         connection.execute("PRAGMA busy_timeout = 5000")
@@ -240,7 +162,7 @@ def _configure_writer(connection: sqlite3.Connection) -> None:
     connection.execute("PRAGMA synchronous = NORMAL")
     connection.execute("PRAGMA busy_timeout = 5000")
     connection.execute("PRAGMA foreign_keys = ON")
-    connection.execute("PRAGMA trusted_schema = OFF")
+    connection.execute("PRAGMA trusted_schema = ON")
 
 
 def _pragma_int(connection: sqlite3.Connection, name: str) -> int:

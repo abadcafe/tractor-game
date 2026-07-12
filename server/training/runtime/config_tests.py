@@ -106,6 +106,14 @@ def test_execution_config_derives_default_single_worker() -> None:
     assert config.timeouts == ExecutionTimeouts()
 
 
+def test_default_timeouts_fit_cpu_rollouts() -> None:
+    timeouts = ExecutionTimeouts()
+
+    assert timeouts.round_seconds == 600.0
+    assert timeouts.rollout_sample_seconds == 900.0
+    assert timeouts.sampling_stop_seconds == 600.0
+
+
 def test_execution_timeouts_reject_non_positive_values() -> None:
     completed: subprocess.CompletedProcess[str] = subprocess.run(
         [

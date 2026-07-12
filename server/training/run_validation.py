@@ -8,10 +8,11 @@ import torch
 
 from server.foundation import result as _result
 from server.training.interface import PersistedRunSummary
-from server.training.metrics import read_metric_boundaries
-from server.training.persistence.schema import database_path
+from server.training.persistence.schema import (
+    database_path,
+    open_reader,
+)
 from server.training.runtime.config import ExecutionConfig
-from server.training.telemetry import read_telemetry_records
 from server.training.torch_checkpoints.load import load_torch_checkpoint
 from server.training.torch_checkpoints.manifest import (
     managed_checkpoint_manifest_paths,
@@ -27,7 +28,7 @@ from server.training.torch_checkpoints.pruning import (
 def validate_training_run(
     run_dir: Path,
 ) -> _result.Ok[PersistedRunSummary] | _result.Rejected:
-    """Prove checkpoints and SQLite form one resumable timeline."""
+    """Prove checkpoints and the event database are readable."""
     safety_result = _validate_run_paths(run_dir)
     if isinstance(safety_result, _result.Rejected):
         return safety_result
@@ -79,32 +80,15 @@ def validate_training_run(
         if path == latest_path:
             latest_manifest = manifest
     assert latest_manifest is not None
-    metric_result = read_metric_boundaries(run_dir)
-    if isinstance(metric_result, _result.Rejected):
-        return metric_result
-    boundaries = metric_result.value
-    if boundaries is None:
+    database_result = open_reader(run_dir)
+    if isinstance(database_result, _result.Rejected):
+        return database_result
+    database = database_result.value
+    if database is None:
         return _result.Rejected(
-            reason=f"training database has no metrics: {run_dir}"
+            reason=f"training database is missing: {run_dir}"
         )
-    metrics_check = _validate_metric_timeline(
-        run_dir=run_dir,
-        total_rounds=latest_manifest.metadata.total_rounds,
-        total_samples=latest_manifest.metadata.total_samples,
-        total_updates=latest_manifest.metadata.total_updates,
-        metric_count=boundaries.count,
-        first_rounds=boundaries.first.total_games,
-        first_samples=boundaries.first.total_samples,
-        first_updates=boundaries.first.total_updates,
-        latest_rounds=boundaries.latest.total_games,
-        latest_samples=boundaries.latest.total_samples,
-        latest_updates=boundaries.latest.total_updates,
-    )
-    if isinstance(metrics_check, _result.Rejected):
-        return metrics_check
-    telemetry_result = read_telemetry_records(run_dir, limit=1)
-    if isinstance(telemetry_result, _result.Rejected):
-        return telemetry_result
+    database.close()
     state_path = manifest_state_file_path(
         manifest_path=latest_path,
         manifest=latest_manifest,
@@ -126,45 +110,8 @@ def validate_training_run(
             total_rounds=metadata.total_rounds,
             total_samples=metadata.total_samples,
             total_updates=metadata.total_updates,
-            metric_count=boundaries.count,
         )
     )
-
-
-def _validate_metric_timeline(
-    *,
-    run_dir: Path,
-    total_rounds: int,
-    total_samples: int,
-    total_updates: int,
-    metric_count: int,
-    first_rounds: int,
-    first_samples: int,
-    first_updates: int,
-    latest_rounds: int,
-    latest_samples: int,
-    latest_updates: int,
-) -> _result.Ok[None] | _result.Rejected:
-    if (first_rounds, first_samples, first_updates) != (0, 0, 0):
-        return _result.Rejected(
-            reason=f"training database has no initial metric: {run_dir}"
-        )
-    if metric_count != total_updates + 1:
-        return _result.Rejected(
-            reason=f"training metric timeline has gaps: {run_dir}"
-        )
-    if (latest_rounds, latest_samples, latest_updates) != (
-        total_rounds,
-        total_samples,
-        total_updates,
-    ):
-        return _result.Rejected(
-            reason=(
-                "training metrics do not match latest checkpoint: "
-                f"{run_dir}"
-            )
-        )
-    return _result.Ok(value=None)
 
 
 def _validate_run_paths(

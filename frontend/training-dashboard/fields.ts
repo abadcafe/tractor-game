@@ -44,7 +44,6 @@ export interface ResumeRequest {
   sampling_stop_timeout_seconds: number | null;
   state_sync_timeout_seconds: number | null;
   update_timeout_seconds: number | null;
-  telemetry_interval_seconds: number | null;
   model_inference_batch_size: number | null;
   game_envs_per_worker: number | null;
   samples_per_update: number | null;
@@ -301,14 +300,6 @@ export const RESUME_FIELDS: readonly TrainingField[] = [
     optional: true,
   },
   number(
-    "telemetry_interval_seconds",
-    "Telemetry interval",
-    "Runtime",
-    "",
-    "0.001",
-    "any",
-  ),
-  number(
     "model_inference_batch_size",
     "Inference batch size",
     "Runtime",
@@ -459,10 +450,6 @@ export function resumeRequestFromForm(
     update_timeout_seconds: optionalNumber(
       form,
       "update_timeout_seconds",
-    ),
-    telemetry_interval_seconds: optionalNumber(
-      form,
-      "telemetry_interval_seconds",
     ),
     model_inference_batch_size: optionalNumber(
       form,

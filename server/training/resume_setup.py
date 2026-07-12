@@ -5,8 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from server.foundation import result as _result
-from server.training.metrics import reconcile_metrics_with_checkpoint
-from server.training.telemetry import clear_telemetry
 from server.training.torch_checkpoints.manifest import (
     read_checkpoint_manifest,
     update_checkpoint_manifest_paths,
@@ -52,17 +50,6 @@ def canonicalize_resume_timeline(
             return _result.Rejected(
                 reason=f"future checkpoint could not be deleted: {path}"
             )
-    metrics_result = reconcile_metrics_with_checkpoint(
-        run_dir,
-        total_rounds=selected.metadata.total_rounds,
-        total_samples=selected.metadata.total_samples,
-        total_updates=selected.metadata.total_updates,
-    )
-    if isinstance(metrics_result, _result.Rejected):
-        return metrics_result
-    telemetry_result = clear_telemetry(run_dir)
-    if isinstance(telemetry_result, _result.Rejected):
-        return telemetry_result
     remaining_count = sum(
         1
         for update_number, _ in update_paths_result.value

@@ -10,7 +10,6 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO
 
 from server.foundation import result as _result
 from server.training_control.cli_client import (
@@ -24,9 +23,6 @@ from server.training_control.pid_file import (
     remove_stale_pid,
     write_pid,
 )
-
-STDOUT_FILENAME = "stdout.log"
-STDERR_FILENAME = "stderr.log"
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,49 +271,20 @@ def _spawn(
     command: tuple[str, ...],
     working_directory: Path,
 ) -> _result.Ok[subprocess.Popen[bytes]] | _result.Rejected:
-    stdout_result = _open_log(run_dir / STDOUT_FILENAME)
-    if isinstance(stdout_result, _result.Rejected):
-        return stdout_result
-    stderr_result = _open_log(run_dir / STDERR_FILENAME)
-    if isinstance(stderr_result, _result.Rejected):
-        stdout_result.value.close()
-        return stderr_result
-    stdout = stdout_result.value
-    stderr = stderr_result.value
     try:
         process = subprocess.Popen(
             command,
             cwd=working_directory,
             stdin=subprocess.DEVNULL,
-            stdout=stdout,
-            stderr=stderr,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
     except OSError:
-        stdout.close()
-        stderr.close()
         return _result.Rejected(
             reason="training process could not be started"
         )
-    stdout.close()
-    stderr.close()
     return _result.Ok(value=process)
-
-
-def _open_log(
-    path: Path,
-) -> _result.Ok[BinaryIO] | _result.Rejected:
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.is_symlink():
-            return _result.Rejected(
-                reason=f"training log must not be a symlink: {path}"
-            )
-        return _result.Ok(value=path.open("wb", buffering=0))
-    except OSError:
-        return _result.Rejected(
-            reason=f"training log could not be opened: {path}"
-        )
 
 
 def _kill_spawned_process(process: subprocess.Popen[bytes]) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import pytest
@@ -10,6 +11,7 @@ import torch
 
 from server.foundation.result import Ok, Rejected
 from server.game.players.test_helpers import card, make_snapshot
+from server.training.event_log import NullEventSink
 from server.training.legal_actions import (
     LegalActionIndex,
     build_legal_action_index,
@@ -87,6 +89,7 @@ async def test_local_policy_client_batches_same_loop() -> None:
         transport=LocalPolicyBatchTransport(replica=replica),
         timeout_seconds=1.0,
         batch_size=4,
+        event_sink=NullEventSink(),
     )
     first_task = asyncio.create_task(
         client.decide(observation, legal_actions, _decision_key())
@@ -109,6 +112,51 @@ async def test_local_policy_client_batches_same_loop() -> None:
     assert second_result.value.choice_count == 1
     assert replica.calls == ("decide_batch",)
     assert replica.batch_sizes == (2,)
+
+    first_snapshot = client.stats()
+    second_snapshot = client.stats()
+    drained = client.drain_stats()
+
+    assert first_snapshot.decision_count == 2
+    assert first_snapshot.wait_seconds >= 0.0
+    assert second_snapshot == first_snapshot
+    assert drained == first_snapshot
+    assert client.stats().decision_count == 0
+    assert client.stats().wait_seconds == 0.0
+
+
+@pytest.mark.asyncio
+async def test_local_policy_client_drains_cancelled_response() -> None:
+    observation = _observation()
+    legal_actions = _legal_actions(observation)
+    transport = _CancelBeforeReceiveLocalTransport(
+        LocalPolicyBatchTransport(
+            replica=_FakeReplica(state=_runtime_state())
+        )
+    )
+    client = BatchedPolicyClient(
+        worker_index=0,
+        max_observation_tokens=512,
+        transport=transport,
+        timeout_seconds=1.0,
+        batch_size=1,
+        event_sink=NullEventSink(),
+    )
+    first = asyncio.create_task(
+        client.decide(observation, legal_actions, _decision_key())
+    )
+    transport.cancel_on_next_submit(first.cancel)
+
+    cancelled = await asyncio.gather(first, return_exceptions=True)
+    assert isinstance(cancelled[0], asyncio.CancelledError)
+    await asyncio.sleep(0)
+
+    second = await client.decide(
+        observation, legal_actions, _decision_key()
+    )
+
+    assert isinstance(second, Ok)
+    assert second.value.action.semantic_trace == _pass_trace()
 
 
 def test_local_model_rank_loads_updates_and_snapshots_replica() -> None:
@@ -151,6 +199,7 @@ async def test_remote_policy_client_roundtrips_async_payload() -> None:
                 ),
                 timeout_seconds=1.0,
                 batch_size=4,
+                event_sink=NullEventSink(),
             ).decide(
                 observation,
                 legal_actions,
@@ -202,6 +251,7 @@ async def test_remote_policy_client_rejects_response_mismatch() -> None:
                 ),
                 timeout_seconds=1.0,
                 batch_size=4,
+                event_sink=NullEventSink(),
             ).decide(
                 observation,
                 legal_actions,
@@ -254,6 +304,7 @@ async def test_remote_policy_client_sends_concurrent_frames() -> None:
             ),
             timeout_seconds=1.0,
             batch_size=1,
+            event_sink=NullEventSink(),
         )
         first = asyncio.create_task(
             client.decide(observation, legal_actions, _decision_key())
@@ -309,6 +360,7 @@ async def test_remote_policy_client_rejects_unsent_route_response() -> (
         transport=transport,
         timeout_seconds=1.0,
         batch_size=1,
+        event_sink=NullEventSink(),
     )
 
     first = asyncio.create_task(
@@ -454,6 +506,33 @@ class _MismatchedFirstResponseTransport:
                     )
                 ),
             )
+        )
+
+
+class _CancelBeforeReceiveLocalTransport:
+    def __init__(self, inner: LocalPolicyBatchTransport) -> None:
+        self._inner = inner
+        self._cancel: Callable[[], bool] | None = None
+
+    def cancel_on_next_submit(self, cancel: Callable[[], bool]) -> None:
+        self._cancel = cancel
+
+    async def submit_batch(
+        self, *, batch: BorrowedPolicyRequestBatch
+    ) -> Ok[None] | Rejected:
+        result = await self._inner.submit_batch(batch=batch)
+        cancel = self._cancel
+        if cancel is not None:
+            self._cancel = None
+            asyncio.get_running_loop().call_soon(cancel)
+            await asyncio.sleep(0)
+        return result
+
+    async def receive(
+        self, *, timeout_seconds: float
+    ) -> Ok[tuple[PolicyResponse, ...]] | Rejected:
+        return await self._inner.receive(
+            timeout_seconds=timeout_seconds
         )
 
 

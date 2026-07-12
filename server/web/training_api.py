@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from functools import partial
 from pathlib import Path
 from typing import Annotated, Never
 
-from fastapi import FastAPI, HTTPException
+from anyio import to_thread
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, BeforeValidator, ConfigDict
 
 from server.foundation.result import Rejected
@@ -18,6 +20,10 @@ from server.training_control.commands import (
     resume_command_argv,
 )
 from server.training_control.init_control import TrainingInitialization
+from server.training_control.metric_queries import (
+    TrainingMetrics,
+    query_training_metrics,
+)
 from server.training_control.process_control import StopResult
 from server.web.state import ServerState
 
@@ -152,6 +158,35 @@ def register_training_routes(app: FastAPI, state: ServerState) -> None:
             _raise_rejected(result, status_code=409)
         return result.value
 
+    async def training_summary(
+        run_dir: Path | None = None,
+    ) -> object:
+        result = await state.training_cli_client.summary(
+            state.training_control_config.resolve_run_dir(run_dir)
+        )
+        if isinstance(result, Rejected):
+            _raise_rejected(result, status_code=409)
+        return result.value
+
+    async def training_metrics(
+        run_dir: Path | None = None,
+        session_id: str | None = None,
+        update_limit: Annotated[int, Query(ge=1, le=5000)] = 500,
+        series_points: Annotated[int, Query(ge=1, le=1000)] = 500,
+    ) -> TrainingMetrics:
+        result = await to_thread.run_sync(
+            partial(
+                query_training_metrics,
+                state.training_control_config.resolve_run_dir(run_dir),
+                session_id=session_id,
+                update_limit=update_limit,
+                series_points=series_points,
+            )
+        )
+        if isinstance(result, Rejected):
+            _raise_rejected(result, status_code=409)
+        return result.value
+
     app.add_api_route(
         "/api/training/config", training_config, methods=["GET"]
     )
@@ -169,6 +204,12 @@ def register_training_routes(app: FastAPI, state: ServerState) -> None:
     )
     app.add_api_route(
         "/api/training/stop", stop_training, methods=["POST"]
+    )
+    app.add_api_route(
+        "/api/training/summary", training_summary, methods=["GET"]
+    )
+    app.add_api_route(
+        "/api/training/metrics", training_metrics, methods=["GET"]
     )
 
 

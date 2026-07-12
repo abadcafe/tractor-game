@@ -2,18 +2,25 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
 import torch
+from pydantic import TypeAdapter
 
+from server.foundation.json_value import JsonObject
 from server.foundation.result import Ok, Rejected
 from server.training.config import (
     CheckpointPolicy,
     ModelConfig,
     TrainConfig,
 )
-from server.training.metrics import read_metrics
+from server.training.event_log import NullEventSink
+from server.training.persistence.schema import (
+    database_path,
+    initialize_database,
+)
 from server.training.run_setup import initialize_training_run
 from server.training.runtime.affinity import current_cpu_affinity
 from server.training.runtime.checkpoint_state import (
@@ -30,10 +37,11 @@ from server.training.runtime.training_runtime import (
     open_training_runtime,
 )
 from server.training.stop import TrainingStopRequest
-from server.training.telemetry import read_telemetry_records
 from server.training.torch_checkpoints.load import (
     read_torch_checkpoint_metadata,
 )
+
+_JSON_OBJECT_ADAPTER: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
 
 
 def test_run_training_coordinator_spawns_worker_and_commits_progress(
@@ -47,9 +55,11 @@ def test_run_training_coordinator_spawns_worker_and_commits_progress(
     )
     train_config = TrainConfig(ppo_epochs=1, minibatch_size=512)
     checkpoint_policy = CheckpointPolicy(
-        every_updates=1, retention_updates=1
+        every_updates=50, retention_updates=1
     )
-    execution_config = ExecutionConfig(samples_per_update=32)
+    execution_config = ExecutionConfig(
+        samples_per_update=32,
+    )
     initialized = initialize_training_run(
         run_dir=tmp_path,
         model_config=model_config,
@@ -59,7 +69,7 @@ def test_run_training_coordinator_spawns_worker_and_commits_progress(
 
     result = run_training_coordinator(
         run_dir=tmp_path,
-        run_id=tmp_path.name,
+        session_id="test-session",
         model_config=model_config,
         train_config=train_config,
         checkpoint_policy=checkpoint_policy,
@@ -81,19 +91,11 @@ def test_run_training_coordinator_spawns_worker_and_commits_progress(
     assert metadata.value.total_rounds == result.value.total_rounds
     assert metadata.value.total_samples == result.value.total_samples
     assert metadata.value.total_updates == 1
-    metrics = read_metrics(tmp_path)
-    assert isinstance(metrics, Ok)
-    assert [metric.total_games for metric in metrics.value] == [
-        0,
-        result.value.total_rounds,
-    ]
-    assert [metric.total_samples for metric in metrics.value] == [
-        0,
-        result.value.total_samples,
-    ]
-    telemetry = read_telemetry_records(tmp_path)
-    assert isinstance(telemetry, Ok)
-    assert telemetry.value[-1].stage == "completed"
+    assert not (tmp_path / "checkpoints" / "update-1.json").exists()
+    event_types = _event_types(tmp_path)
+    assert "update.completed" in event_types
+    assert "session.completed" in event_types
+    assert "decision.completed" in event_types
 
 
 @pytest.mark.timeout(120.0)
@@ -142,10 +144,12 @@ def test_run_training_coordinator_synchronizes_cpu_arena_update(
         retained_update_count=1,
     )
     assert isinstance(saved, Ok)
+    database = initialize_database(tmp_path)
+    assert isinstance(database, Ok)
 
     result = run_training_coordinator(
         run_dir=tmp_path,
-        run_id=tmp_path.name,
+        session_id="test-session",
         model_config=model_config,
         train_config=train_config,
         checkpoint_policy=checkpoint_policy,
@@ -180,7 +184,7 @@ def test_coordinator_honors_pre_requested_stop_and_saves_checkpoint(
 
     result = run_training_coordinator(
         run_dir=tmp_path,
-        run_id=tmp_path.name,
+        session_id="test-session",
         model_config=model_config,
         train_config=train_config,
         checkpoint_policy=CheckpointPolicy(),
@@ -224,6 +228,8 @@ async def test_runtime_stops_sampling_after_rollout_wait_failure(
     runtime_result = open_training_runtime(
         run_dir=tmp_path,
         run_id=tmp_path.name,
+        session_id="test-session",
+        event_sink=NullEventSink(session_id="test-session"),
         model_config=model_config,
         train_config=train_config,
         execution_config=execution_config,
@@ -250,3 +256,19 @@ async def test_runtime_stops_sampling_after_rollout_wait_failure(
         assert isinstance(snapshot_result, Ok)
     finally:
         await runtime.close()
+
+
+def _event_types(run_dir: Path) -> tuple[str, ...]:
+    with sqlite3.connect(database_path(run_dir)) as connection:
+        rows = connection.execute(
+            "SELECT event_json FROM training_logs ORDER BY sequence"
+        ).fetchall()
+    event_types: list[str] = []
+    for row in rows:
+        event_json = row[0]
+        assert isinstance(event_json, str)
+        event = _JSON_OBJECT_ADAPTER.validate_json(event_json)
+        event_type = event["event"]
+        assert isinstance(event_type, str)
+        event_types.append(event_type)
+    return tuple(event_types)

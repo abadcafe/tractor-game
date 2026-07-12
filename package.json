@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "dependencies": {
+    "echarts": "6.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.3"
+  }
+}
