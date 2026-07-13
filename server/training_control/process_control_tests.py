@@ -60,6 +60,7 @@ async def test_start_and_stop_detached_training_command(
     assert started.value.run_dir == run_dir.resolve()
     assert isinstance(read_pid(run_dir), Ok)
 
+    run_dir.joinpath("checkpoints", "latest.json").unlink()
     restarted_control = TrainingProcessControl()
     recovered = await restarted_control.inspect(run_dir)
     assert isinstance(recovered, Ok)

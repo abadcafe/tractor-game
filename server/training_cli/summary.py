@@ -44,11 +44,13 @@ def build_training_summary(
     canonical = run_dir.resolve()
     process_result = ProcessInspector().inspect(canonical)
     if isinstance(process_result, _result.Rejected):
-        return _broken_summary(canonical, process_result.reason)
+        return process_result
     process = process_result.value
     contents_result = _run_directory_has_contents(canonical)
     if isinstance(contents_result, _result.Rejected):
-        return _broken_summary(canonical, contents_result.reason)
+        return _broken_summary(
+            canonical, contents_result.reason, process=process
+        )
     if not contents_result.value:
         return _result.Ok(
             value=_summary(
@@ -62,10 +64,14 @@ def build_training_summary(
         )
     inspected = TrainingService().inspect(canonical)
     if isinstance(inspected, _result.Rejected):
-        return _broken_summary(canonical, inspected.reason)
+        return _broken_summary(
+            canonical, inspected.reason, process=process
+        )
     catalog = TrainingService().checkpoint_catalog(canonical)
     if isinstance(catalog, _result.Rejected):
-        return _broken_summary(canonical, catalog.reason)
+        return _broken_summary(
+            canonical, catalog.reason, process=process
+        )
     return _result.Ok(
         value=_summary(
             run_dir=canonical,
@@ -113,7 +119,10 @@ def format_training_summary(summary: TrainingSummary) -> str:
 
 
 def _broken_summary(
-    run_dir: Path, reason: str
+    run_dir: Path,
+    reason: str,
+    *,
+    process: TrainingProcess | None,
 ) -> _result.Ok[TrainingSummary]:
     catalog = TrainingService().checkpoint_catalog(run_dir)
     checkpoints = (
@@ -126,7 +135,7 @@ def _broken_summary(
             run_dir=run_dir,
             state="BROKEN",
             reason=reason,
-            process=None,
+            process=process,
             details=None,
             checkpoints=checkpoints,
         )

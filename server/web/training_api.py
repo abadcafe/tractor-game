@@ -82,7 +82,7 @@ def register_training_routes(app: FastAPI, state: ServerState) -> None:
         if isinstance(summary_result, Rejected):
             _raise_rejected(summary_result, status_code=409)
         run_status = summary_result.value
-        if run_status.state == "RUNNING":
+        if run_status.process is not None:
             raise HTTPException(
                 status_code=409,
                 detail="training process is already running",

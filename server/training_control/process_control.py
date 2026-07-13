@@ -53,9 +53,6 @@ class TrainingProcessControl:
         summary = await self._cli_client.summary(run_dir)
         if isinstance(summary, _result.Rejected):
             return summary
-        if summary.value.state == "BROKEN":
-            assert summary.value.reason is not None
-            return _result.Rejected(reason=summary.value.reason)
         return _result.Ok(value=summary.value.process)
 
     async def start(

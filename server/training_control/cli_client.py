@@ -115,7 +115,7 @@ class TrainingCliSummary(BaseModel):
             assert self.reason is None and self.process is None
         elif self.state == "BROKEN":
             assert self.reason is not None
-            assert self.process is None and self.details is None
+            assert self.details is None
         else:
             assert self.reason is None
             assert self.process is None and self.details is None

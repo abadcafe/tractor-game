@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import math
+import sqlite3
 from pathlib import Path
 
 from server.foundation.result import Ok
@@ -11,7 +13,10 @@ from server.training.event_log import (
     ProcessIdentity,
     StructuredEventSink,
 )
-from server.training.persistence.schema import initialize_database
+from server.training.persistence.schema import (
+    database_path,
+    initialize_database,
+)
 from server.training_control.metric_queries import (
     query_training_metrics,
 )
@@ -57,6 +62,76 @@ def test_metric_query_selects_latest_session_and_chart_series(
     assert len(result.value.datasets.throughput) == 1
     assert result.value.complete is True
     assert result.value.sessions[0].session_id == "session-1"
+
+
+def test_metric_query_uses_predecessor_before_limiting_updates(
+    tmp_path: Path,
+) -> None:
+    initialized = initialize_database(tmp_path)
+    assert isinstance(initialized, Ok)
+    events: tuple[tuple[int, str, dict[str, int]], ...] = (
+        (
+            0,
+            "session.started",
+            {"total_rounds": 0, "total_samples": 0, "total_updates": 0},
+        ),
+        (
+            1_000,
+            "update.completed",
+            {
+                "total_rounds": 1_000,
+                "total_samples": 10_000,
+                "total_updates": 1,
+            },
+        ),
+        (
+            2_000,
+            "update.completed",
+            {
+                "total_rounds": 1_010,
+                "total_samples": 10_100,
+                "total_updates": 2,
+            },
+        ),
+        (
+            3_000,
+            "update.completed",
+            {
+                "total_rounds": 1_020,
+                "total_samples": 10_200,
+                "total_updates": 3,
+            },
+        ),
+    )
+    with sqlite3.connect(database_path(tmp_path)) as connection:
+        for recorded_at_ms, event_type, fields in events:
+            event = {
+                "schema_version": 1,
+                "event": event_type,
+                "level": "INFO",
+                "recorded_at_ms": recorded_at_ms,
+                "session_id": "session-window",
+                "process": {"kind": "coordinator", "index": None},
+                "context": {},
+                "fields": fields,
+            }
+            connection.execute(
+                "INSERT INTO training_logs(event_json) VALUES (?)",
+                (json.dumps(event),),
+            )
+
+    result = query_training_metrics(
+        tmp_path,
+        session_id="session-window",
+        update_limit=2,
+        series_points=1,
+    )
+
+    assert isinstance(result, Ok)
+    throughput = result.value.datasets.throughput
+    assert len(throughput) == 1
+    assert throughput[0].values["rounds_per_second"] == 10.0
+    assert throughput[0].values["samples_per_second"] == 100.0
 
 
 def test_metric_query_aggregates_inference_percentiles_and_workers(

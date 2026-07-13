@@ -282,7 +282,7 @@ def _update_points(
             WHERE session_id = ? AND event_type = 'session.started'
             ORDER BY sequence LIMIT 1
         ),
-        bounded AS (
+        recent AS (
             SELECT * FROM (
                 SELECT
                     sequence,
@@ -373,7 +373,13 @@ def _update_points(
                         recorded_at_ms
                     )
                 ) OVER (ORDER BY sequence) AS elapsed_ms
-            FROM bounded
+            FROM recent
+        ),
+        bounded AS (
+            SELECT * FROM (
+                SELECT * FROM intervals
+                ORDER BY sequence DESC LIMIT ?
+            ) ORDER BY sequence
         ),
         numbered AS (
             SELECT
@@ -382,7 +388,7 @@ def _update_points(
                     ((row_number() OVER (ORDER BY sequence) - 1) * ?)
                     / count(*) OVER () AS INTEGER
                 ) AS bucket
-            FROM intervals
+            FROM bounded
         )
         SELECT
             max(recorded_at_ms),
@@ -415,7 +421,13 @@ def _update_points(
         GROUP BY bucket
         ORDER BY bucket
         """,
-        (session_id, session_id, update_limit, series_points),
+        (
+            session_id,
+            session_id,
+            update_limit + 1,
+            update_limit,
+            series_points,
+        ),
     ).fetchall()
     value_names = (
         "total_rounds",

@@ -1,5 +1,7 @@
 """Black-box tests for Linux training process inspection."""
 
+import os
+import threading
 from pathlib import Path
 
 from server.foundation.result import Ok, Rejected
@@ -47,6 +49,62 @@ def test_inspect_matching_training_process_returns_proc_data(
     assert process.session_id == 123
     assert process.start_ticks == 98765
     assert process.run_dir == run_dir.resolve()
+
+
+def test_inspect_uses_stat_state_when_status_snapshot_disagrees(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    proc_root = tmp_path / "proc"
+    _write_pid(run_dir, 123)
+    _write_process(
+        proc_root,
+        123,
+        run_dir,
+        state="S",
+        status_state="R",
+    )
+    inspector = ProcessInspector(proc_root=proc_root)
+
+    result = inspector.inspect(run_dir)
+
+    assert isinstance(result, Ok)
+    process = result.value
+    assert process is not None
+    assert process.kernel_state == "S"
+
+
+def test_inspect_rejects_pid_recycled_during_proc_reads(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    proc_root = tmp_path / "proc"
+    _write_pid(run_dir, 123)
+    _write_process(proc_root, 123, run_dir)
+    stat_path = proc_root / "123" / "stat"
+    command_path = proc_root / "123" / "cmdline"
+    command_bytes = command_path.read_bytes()
+    command_path.unlink()
+    os.mkfifo(command_path)
+    writer = threading.Thread(
+        target=_replace_stat_while_cmdline_is_open,
+        args=(
+            stat_path,
+            command_path,
+            _stat_text(123, state="S", start_ticks=123_456),
+            command_bytes,
+        ),
+        daemon=True,
+    )
+    writer.start()
+    inspector = ProcessInspector(proc_root=proc_root)
+
+    result = inspector.inspect(run_dir)
+    writer.join(timeout=1.0)
+
+    assert not writer.is_alive()
+    assert isinstance(result, Rejected)
+    assert "process lifetime changed" in result.reason
 
 
 def test_inspect_rejects_pid_owned_by_other_process(
@@ -132,6 +190,7 @@ def _write_process(
     *,
     argv: tuple[str, ...] | None = None,
     state: str = "S",
+    status_state: str | None = None,
 ) -> None:
     process_dir = proc_root / str(pid)
     process_dir.mkdir(parents=True)
@@ -150,12 +209,11 @@ def _write_process(
         b"\0".join(part.encode("utf-8") for part in command) + b"\0"
     )
     process_dir.joinpath("status").write_text(
-        f"Name:\tpython\nState:\t{state} (sleeping)\n",
+        f"Name:\tpython\nState:\t{status_state or state} (sleeping)\n",
         encoding="utf-8",
     )
-    fields = [state, "1", "123", "123"] + ["0"] * 15 + ["98765"]
     process_dir.joinpath("stat").write_text(
-        f"{pid} (python worker) {' '.join(fields)}\n",
+        _stat_text(pid, state=state, start_ticks=98_765),
         encoding="ascii",
     )
     process_dir.joinpath("cwd").symlink_to(proc_root.parent)
@@ -167,3 +225,21 @@ def _write_pid(run_dir: Path, pid: int) -> None:
     run_dir.joinpath("training.pid").write_text(
         f"{pid}\n", encoding="ascii"
     )
+
+
+def _stat_text(pid: int, *, state: str, start_ticks: int) -> str:
+    fields = (
+        [state, "1", "123", "123"] + ["0"] * 15 + [str(start_ticks)]
+    )
+    return f"{pid} (python worker) {' '.join(fields)}\n"
+
+
+def _replace_stat_while_cmdline_is_open(
+    stat_path: Path,
+    command_path: Path,
+    final_stat: str,
+    command_bytes: bytes,
+) -> None:
+    with command_path.open("wb") as command_stream:
+        stat_path.write_text(final_stat, encoding="ascii")
+        command_stream.write(command_bytes)
