@@ -22,6 +22,12 @@ from server.foundation.json_value import JsonObject
 from server.training_events.store import open_reader, training_store_id
 
 _JSON_OBJECT_ADAPTER: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
+_METRICS_CURSOR_QUERY = (
+    "SELECT coalesce(max(sequence), 0) FROM training_logs "
+    "WHERE event_type IN "
+    "('update', 'training', 'logging.drop', 'rollout', "
+    "'sampling', 'inference.batch')"
+)
 
 
 class MetricPoint(BaseModel):
@@ -64,8 +70,8 @@ class TrainingMetrics(BaseModel):
     datasets: MetricDatasets
 
 
-class MetricsInvalidation(BaseModel):
-    """Store-aware Metrics invalidation cursor."""
+class MetricsCursor(BaseModel):
+    """Store-aware cursor for Metrics-relevant persisted events."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -107,10 +113,7 @@ def query_training_metrics(
     try:
         connection.execute("BEGIN")
         store_id = training_store_id(connection)
-        through_sequence = _scalar_int(
-            connection,
-            "SELECT coalesce(max(sequence), 0) FROM training_logs",
-        )
+        through_sequence = _metrics_through_sequence(connection)
         started_at_ms = _scalar_int(
             connection,
             "SELECT coalesce(min(recorded_at_ms), 0) "
@@ -209,27 +212,21 @@ def query_training_metrics(
     )
 
 
-def query_metrics_through_sequence(
+def query_metrics_cursor(
     run_dir: Path,
-) -> _result.Ok[MetricsInvalidation] | _result.Rejected:
-    """Return the newest sequence that can invalidate Metrics."""
+) -> _result.Ok[MetricsCursor] | _result.Rejected:
+    """Return the newest event cursor represented by Metrics."""
     opened = open_reader(run_dir)
     if isinstance(opened, _result.Rejected):
         return opened
     connection = opened.value
     if connection is None:
         return _result.Ok(
-            value=MetricsInvalidation(store_id=None, through_sequence=0)
+            value=MetricsCursor(store_id=None, through_sequence=0)
         )
     try:
         store_id = training_store_id(connection)
-        through_sequence = _scalar_int(
-            connection,
-            "SELECT coalesce(max(sequence), 0) FROM training_logs "
-            "WHERE event_type IN "
-            "('update', 'training', 'logging.drop', 'rollout', "
-            "'sampling', 'inference.batch')",
-        )
+        through_sequence = _metrics_through_sequence(connection)
     except sqlite3.Error:
         return _result.Rejected(
             reason="training metrics revision query failed"
@@ -237,7 +234,7 @@ def query_metrics_through_sequence(
     finally:
         connection.close()
     return _result.Ok(
-        value=MetricsInvalidation(
+        value=MetricsCursor(
             store_id=store_id, through_sequence=through_sequence
         )
     )
@@ -611,6 +608,10 @@ def _scalar_int(connection: sqlite3.Connection, query: str) -> int:
     if row is None or not isinstance(row[0], int):
         raise ValueError("metric scalar is invalid")
     return row[0]
+
+
+def _metrics_through_sequence(connection: sqlite3.Connection) -> int:
+    return _scalar_int(connection, _METRICS_CURSOR_QUERY)
 
 
 def _empty_metrics(*, through_sequence: int = 0) -> TrainingMetrics:

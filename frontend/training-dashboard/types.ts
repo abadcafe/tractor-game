@@ -106,21 +106,6 @@ export interface TrainingMetrics {
   readonly datasets: MetricDatasets;
 }
 
-export type MetricsStreamMessage =
-  | MetricsInvalidation
-  | MetricsReplacement;
-
-export interface MetricsInvalidation {
-  readonly type: "invalidation";
-  readonly store_id: string | null;
-  readonly through_sequence: number;
-}
-
-export interface MetricsReplacement {
-  readonly type: "replacement";
-  readonly store_id: string | null;
-}
-
 export interface CheckpointStreamMessage {
   readonly type: "invalidation" | "replacement";
   readonly store_id: string | null;
@@ -286,26 +271,6 @@ export function parseMetrics(value: unknown): TrainingMetrics {
       inference: metricPoints(datasets.inference, "inference"),
       processes: metricPoints(datasets.processes, "processes"),
     },
-  };
-}
-
-export function parseMetricsStreamMessage(
-  value: unknown,
-): MetricsStreamMessage {
-  const record = requiredRecord(value, "metrics stream message");
-  const type = requiredString(record.type, "type");
-  const store_id = nullableStoreId(record.store_id);
-  if (type === "replacement") return { type, store_id };
-  if (type !== "invalidation") {
-    throw new Error("Unknown metrics stream message");
-  }
-  return {
-    type,
-    store_id,
-    through_sequence: nonNegativeInteger(
-      record.through_sequence,
-      "through_sequence",
-    ),
   };
 }
 

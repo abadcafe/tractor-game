@@ -6,7 +6,7 @@ import {
   parseCheckpointStreamMessage,
   parseLogMessage,
   parseLogPage,
-  parseMetricsStreamMessage,
+  parseMetrics,
 } from "../types.ts";
 
 Deno.test("training stream resumes strictly after the last sequence", () => {
@@ -46,7 +46,11 @@ Deno.test("streams omit store_id before a database exists", () => {
     afterSequence: 0,
     storeId: null,
   }, location));
-  const metrics = new URL(metricsStreamUrl("/tmp/run", null, location));
+  const metrics = new URL(metricsStreamUrl({
+    runDir: "/tmp/run",
+    updateLimit: 200,
+    seriesPoints: 500,
+  }, location));
   const checkpoints = new URL(
     checkpointStreamUrl("/tmp/run", null, location),
   );
@@ -57,16 +61,31 @@ Deno.test("streams omit store_id before a database exists", () => {
   ) throw new Error("Null store IDs must be omitted");
 });
 
+Deno.test("metrics stream owns snapshot projection parameters", () => {
+  const url = new URL(metricsStreamUrl({
+    runDir: "/tmp/run with spaces",
+    updateLimit: 50,
+    seriesPoints: 200,
+  }, { protocol: "https:", host: "training.example:8443" }));
+
+  if (
+    url.protocol !== "wss:" || url.pathname !== "/ws/training/metrics"
+  ) {
+    throw new Error(url.toString());
+  }
+  if (
+    url.searchParams.get("run_dir") !== "/tmp/run with spaces" ||
+    url.searchParams.get("update_limit") !== "50" ||
+    url.searchParams.get("series_points") !== "200" ||
+    url.searchParams.has("store_id")
+  ) throw new Error(url.toString());
+});
+
 Deno.test("replacement messages preserve strict store generations", () => {
   const storeId = "0123456789abcdef0123456789abcdef";
   const logs = parseLogMessage({
     type: "replacement",
     store_id: storeId,
-  });
-  const metrics = parseMetricsStreamMessage({
-    type: "replacement",
-    store_id: storeId,
-    through_sequence: 0,
   });
   const checkpoints = parseCheckpointStreamMessage({
     type: "replacement",
@@ -80,10 +99,34 @@ Deno.test("replacement messages preserve strict store generations", () => {
   });
   if (
     logs.type !== "replacement" ||
-    metrics.type !== "replacement" ||
     checkpoints.type !== "replacement" ||
     page.store_id !== storeId
   ) throw new Error("Replacement generation was lost");
+});
+
+Deno.test("metrics stream frames are complete snapshots", () => {
+  const metrics = parseMetrics({
+    schema_version: 2,
+    store_id: null,
+    through_sequence: 0,
+    complete: true,
+    dropped_event_count: 0,
+    totals: {},
+    datasets: {
+      throughput: [],
+      optimization: [],
+      ppo_timing: [],
+      rollout: [],
+      rewards: [],
+      inference: [],
+      processes: [],
+    },
+  });
+
+  if (
+    metrics.store_id !== null || metrics.through_sequence !== 0 ||
+    metrics.datasets.inference.length !== 0
+  ) throw new Error("Metrics snapshot was not preserved");
 });
 
 Deno.test("structured log parser rejects legacy lifecycle suffixes", () => {

@@ -31,10 +31,6 @@ from server.training_events.queries import (
     TrainingLogHistoryPage,
     query_training_log_history,
 )
-from server.training_metrics.queries import (
-    TrainingMetrics,
-    query_training_metrics,
-)
 from server.web.state import ServerState
 
 
@@ -159,23 +155,6 @@ def register_training_routes(app: FastAPI, state: ServerState) -> None:
             _raise_rejected(result, status_code=409)
         return result.value
 
-    async def training_metrics(
-        run_dir: Path | None = None,
-        update_limit: Annotated[int, Query(ge=1, le=5000)] = 500,
-        series_points: Annotated[int, Query(ge=1, le=1000)] = 500,
-    ) -> TrainingMetrics:
-        result = await to_thread.run_sync(
-            partial(
-                query_training_metrics,
-                state.training_control_config.resolve_run_dir(run_dir),
-                update_limit=update_limit,
-                series_points=series_points,
-            )
-        )
-        if isinstance(result, Rejected):
-            _raise_rejected(result, status_code=409)
-        return result.value
-
     async def training_logs(
         run_dir: Path | None = None,
         before_sequence: Annotated[int | None, Query(gt=0)] = None,
@@ -215,9 +194,6 @@ def register_training_routes(app: FastAPI, state: ServerState) -> None:
         "/api/training/checkpoints",
         training_checkpoints,
         methods=["GET"],
-    )
-    app.add_api_route(
-        "/api/training/metrics", training_metrics, methods=["GET"]
     )
     app.add_api_route(
         "/api/training/logs", training_logs, methods=["GET"]

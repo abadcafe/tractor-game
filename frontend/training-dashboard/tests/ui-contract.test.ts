@@ -145,6 +145,34 @@ Deno.test("live metrics precede completed-update metrics", async () => {
   }
 });
 
+Deno.test("Metrics owns one route-scoped WebSocket transport", async () => {
+  const domain = await Deno.readTextFile(
+    new URL("../metrics-domain.ts", import.meta.url),
+  );
+  const main = await Deno.readTextFile(
+    new URL("../main.ts", import.meta.url),
+  );
+  for (
+    const forbidden of [
+      "fetchMetrics",
+      "MetricsInvalidationStream",
+      "dirtyThrough",
+      "DEBOUNCE_MS",
+    ]
+  ) {
+    if (domain.includes(forbidden)) {
+      throw new Error(`Forbidden dual Metrics transport: ${forbidden}`);
+    }
+  }
+  if (
+    !domain.includes("MetricsSnapshotStream") ||
+    !domain.includes("this.#stream.disconnect()") ||
+    !main.includes("metricsDomain.deactivate()")
+  ) {
+    throw new Error("Metrics WebSocket must follow the active route");
+  }
+});
+
 function rule(css: string, selector: string): string {
   const start = css.indexOf(`${selector} {`);
   if (start < 0) throw new Error(`Missing CSS rule: ${selector}`);

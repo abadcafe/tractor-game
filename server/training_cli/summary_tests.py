@@ -63,7 +63,8 @@ def test_summary_composes_metrics_and_checkpoint_catalog(
     assert completed.returncode == 0, completed.stderr
     parsed = _parse_summary(completed.stdout)
     assert parsed.process is None
-    assert parsed.metrics.through_sequence >= 1
+    assert parsed.metrics.store_id is not None
+    assert parsed.metrics.through_sequence == 0
     assert len(parsed.checkpoints.manifests) == 1
 
 

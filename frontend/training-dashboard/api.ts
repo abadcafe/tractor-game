@@ -5,14 +5,12 @@ import {
   parseCheckpointCatalog,
   parseConfig,
   parseLogPage,
-  parseMetrics,
   parseProcessEnvelope,
   parseStopEnvelope,
   type ProcessEnvelope,
   type StopEnvelope,
   type TrainingConfig,
   type TrainingLogPage,
-  type TrainingMetrics,
 } from "./types.ts";
 
 const REPLACEMENT_REQUIRED_STATUS = 412;
@@ -58,19 +56,6 @@ export async function stopTraining(
   );
 }
 
-export async function fetchMetrics(
-  runDir: string,
-  updateLimit: number,
-  seriesPoints: number,
-): Promise<TrainingMetrics> {
-  return parseMetrics(
-    await requestJson(
-      metricsRequestPath(runDir, updateLimit, seriesPoints),
-      "GET",
-    ),
-  );
-}
-
 export async function fetchCheckpoints(
   runDir: string,
 ): Promise<CheckpointCatalog> {
@@ -90,20 +75,6 @@ export async function fetchLogPage(
       "GET",
     ),
   );
-}
-
-export function metricsRequestPath(
-  runDir: string,
-  updateLimit: number,
-  seriesPoints: number,
-): string {
-  return `/api/training/metrics?${
-    query({
-      run_dir: runDir,
-      update_limit: String(updateLimit),
-      series_points: String(seriesPoints),
-    })
-  }`;
 }
 
 export function checkpointRequestPath(runDir: string): string {

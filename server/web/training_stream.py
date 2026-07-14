@@ -17,7 +17,8 @@ from server.training_artifacts import query_checkpoint_invalidation
 from server.training_control.process_control import ProcessEnvelope
 from server.training_events.queries import query_training_log_tail
 from server.training_metrics.queries import (
-    query_metrics_through_sequence,
+    query_metrics_cursor,
+    query_training_metrics,
 )
 from server.web.state import ServerState
 
@@ -91,52 +92,55 @@ def register_training_stream_route(
     async def training_metrics(
         websocket: WebSocket,
         run_dir: Path | None = None,
-        store_id: _StoreId | None = None,
+        update_limit: Annotated[int, Query(ge=1, le=5000)] = 500,
+        series_points: Annotated[int, Query(ge=1, le=1000)] = 500,
     ) -> None:
         await websocket.accept()
         canonical = state.training_control_config.resolve_run_dir(
             run_dir
         )
-        observed_store = store_id
+        observed_store: str | None = None
         observed_sequence = -1
         disconnect = asyncio.create_task(
             _wait_for_disconnect(websocket)
         )
         try:
             while True:
-                result = await to_thread.run_sync(
-                    partial(query_metrics_through_sequence, canonical)
+                cursor_result = await to_thread.run_sync(
+                    partial(query_metrics_cursor, canonical)
                 )
-                if isinstance(result, _result.Rejected):
+                if isinstance(cursor_result, _result.Rejected):
                     await _reject_stream(
-                        websocket, disconnect, result.reason
+                        websocket, disconnect, cursor_result.reason
                     )
                     return
-                invalidation = result.value
+                cursor = cursor_result.value
                 if (
-                    observed_store is not None
-                    and invalidation.store_id != observed_store
+                    cursor.store_id == observed_store
+                    and cursor.through_sequence == observed_sequence
                 ):
-                    await websocket.send_json(
-                        {
-                            "type": "replacement",
-                            "store_id": invalidation.store_id,
-                            "through_sequence": (
-                                invalidation.through_sequence
-                            ),
-                        }
+                    if await _sleep_or_disconnected(disconnect):
+                        return
+                    continue
+                snapshot_result = await to_thread.run_sync(
+                    partial(
+                        query_training_metrics,
+                        canonical,
+                        update_limit=update_limit,
+                        series_points=series_points,
+                    )
+                )
+                if isinstance(snapshot_result, _result.Rejected):
+                    await _reject_stream(
+                        websocket, disconnect, snapshot_result.reason
                     )
                     return
-                observed_store = invalidation.store_id
-                if invalidation.through_sequence != observed_sequence:
-                    observed_sequence = invalidation.through_sequence
-                    await websocket.send_json(
-                        {
-                            "type": "invalidation",
-                            "store_id": invalidation.store_id,
-                            "through_sequence": observed_sequence,
-                        }
-                    )
+                snapshot = snapshot_result.value
+                observed_store = snapshot.store_id
+                observed_sequence = snapshot.through_sequence
+                await websocket.send_json(
+                    snapshot.model_dump(mode="json")
+                )
                 if await _sleep_or_disconnected(disconnect):
                     return
         except WebSocketDisconnect:

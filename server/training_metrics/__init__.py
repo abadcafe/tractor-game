@@ -3,17 +3,17 @@
 from server.training_metrics.queries import (
     MetricDatasets,
     MetricPoint,
-    MetricsInvalidation,
+    MetricsCursor,
     TrainingMetrics,
-    query_metrics_through_sequence,
+    query_metrics_cursor,
     query_training_metrics,
 )
 
 __all__ = [
     "MetricDatasets",
     "MetricPoint",
-    "MetricsInvalidation",
+    "MetricsCursor",
     "TrainingMetrics",
-    "query_metrics_through_sequence",
+    "query_metrics_cursor",
     "query_training_metrics",
 ]

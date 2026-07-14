@@ -13,7 +13,7 @@ from server.training_events import (
 )
 from server.training_events.store import initialize_database
 from server.training_metrics.queries import (
-    query_metrics_through_sequence,
+    query_metrics_cursor,
     query_training_metrics,
 )
 
@@ -167,7 +167,7 @@ def test_metrics_project_live_inference_before_first_update(
     assert point.values["inference_seconds_avg"] == 0.25
 
 
-def test_metrics_invalidation_advances_for_live_inference(
+def test_metrics_cursor_advances_for_live_inference(
     tmp_path: Path,
 ) -> None:
     initialized = initialize_database(tmp_path)
@@ -186,10 +186,41 @@ def test_metrics_invalidation_advances_for_live_inference(
     )
     sink.close()
 
-    result = query_metrics_through_sequence(tmp_path)
+    result = query_metrics_cursor(tmp_path)
 
     assert isinstance(result, Ok)
     assert result.value.through_sequence == 1
+
+
+def test_metrics_snapshot_and_cursor_ignore_non_metric_events(
+    tmp_path: Path,
+) -> None:
+    initialized = initialize_database(tmp_path)
+    assert isinstance(initialized, Ok)
+    sink = StructuredEventSink(
+        run_dir=tmp_path,
+        process=ProcessIdentity(kind="worker", index=0),
+    )
+    sink.emit(
+        "inference.batch",
+        context=EventContext(policy_version=0, rollout_id="rollout-a"),
+        fields={"batch_size": 1},
+    )
+    sink.emit(
+        "decision",
+        context=EventContext(policy_version=0, rollout_id="rollout-a"),
+    )
+    sink.close()
+
+    snapshot = query_training_metrics(
+        tmp_path, update_limit=200, series_points=200
+    )
+    cursor = query_metrics_cursor(tmp_path)
+
+    assert isinstance(snapshot, Ok)
+    assert isinstance(cursor, Ok)
+    assert snapshot.value.through_sequence == 1
+    assert cursor.value.through_sequence == 1
 
 
 def test_metrics_keep_pending_rollout_logged_before_previous_update(

@@ -2,7 +2,6 @@ import {
   checkpointRequestPath,
   initializeTraining,
   logPageRequestPath,
-  metricsRequestPath,
 } from "../api.ts";
 import type { InitRequest } from "../fields.ts";
 
@@ -27,20 +26,26 @@ const INIT_REQUEST: InitRequest = {
   weight_decay: 0,
 };
 
-Deno.test("artifact read APIs have disjoint strict paths", () => {
+Deno.test("REST artifact reads exclude Metrics snapshots", async () => {
   const runDir = "/tmp/run with spaces";
   const paths = [
-    metricsRequestPath(runDir, 200, 500),
     checkpointRequestPath(runDir),
     logPageRequestPath(runDir, 41, 200),
   ];
+  const source = await Deno.readTextFile(
+    new URL("../api.ts", import.meta.url),
+  );
   if (paths.some((path) => path.includes("summary"))) {
     throw new Error("Summary must not exist in the frontend contract");
   }
-  if (paths[0]?.includes("session")) {
-    throw new Error("Metrics must not carry a session selector");
+  if (
+    source.includes("/api/training/metrics") ||
+    source.includes("fetchMetrics") ||
+    source.includes("metricsRequestPath")
+  ) {
+    throw new Error("Metrics snapshots must be WebSocket-only");
   }
-  const logs = new URL(paths[2] ?? "", "https://example.test");
+  const logs = new URL(paths[1] ?? "", "https://example.test");
   if (
     logs.searchParams.get("before_sequence") !== "41" ||
     logs.searchParams.get("limit") !== "200"

@@ -27,6 +27,11 @@ from starlette.websockets import WebSocketDisconnect
 
 from server.game.players import AIPlayer, HumanPlayer
 from server.game.room.game_room import GameRoom
+from server.training_events import (
+    EventContext,
+    ProcessIdentity,
+    StructuredEventSink,
+)
 from server.web.app import app, state
 
 
@@ -153,6 +158,147 @@ def test_training_process_snapshot_is_websocket_only(
     )
 
 
+def test_training_metrics_snapshot_is_websocket_only(
+    sync_client: SyncServerClient,
+    tmp_path: Path,
+) -> None:
+    query = urlencode(
+        {
+            "run_dir": str(tmp_path),
+            "update_limit": 200,
+            "series_points": 500,
+        }
+    )
+
+    with sync_client.websocket_connect(
+        f"/ws/training/metrics?{query}"
+    ) as websocket:
+        snapshot = _receive_ws_json(websocket)
+
+    assert _is_dict(snapshot)
+    assert snapshot["schema_version"] == 2
+    assert snapshot["store_id"] is None
+    assert snapshot["through_sequence"] == 0
+    assert _is_dict(snapshot["datasets"])
+    assert (
+        sync_client.get(f"/api/training/metrics?{query}").status_code
+        == 404
+    )
+
+
+def test_training_metrics_stream_pushes_replacement_snapshot(
+    sync_client: SyncServerClient,
+    tmp_path: Path,
+) -> None:
+    query = urlencode(
+        {
+            "run_dir": str(tmp_path),
+            "update_limit": 200,
+            "series_points": 500,
+        }
+    )
+
+    with sync_client.websocket_connect(
+        f"/ws/training/metrics?{query}"
+    ) as websocket:
+        initial = _receive_ws_json(websocket)
+        initialized = sync_client.post(
+            "/api/training/init",
+            json={
+                "run_dir": str(tmp_path),
+                "d_model": 2,
+                "layers": 1,
+                "heads": 1,
+                "max_tokens": 512,
+            },
+        )
+        replacement = _receive_ws_json(websocket)
+        sink = StructuredEventSink(
+            run_dir=tmp_path,
+            process=ProcessIdentity(kind="worker", index=0),
+        )
+        sink.emit(
+            "inference.batch",
+            context=EventContext(
+                policy_version=0,
+                rollout_id="rollout-a",
+                worker_index=0,
+            ),
+            fields={"batch_size": 1},
+        )
+        sink.close()
+        updated = _receive_ws_json(websocket)
+
+    assert initialized.status_code == 200
+    assert _is_dict(initial)
+    assert initial["store_id"] is None
+    assert _is_dict(replacement)
+    assert isinstance(replacement["store_id"], str)
+    assert replacement["through_sequence"] == 0
+    assert _is_dict(updated)
+    assert updated["store_id"] == replacement["store_id"]
+    updated_sequence = updated["through_sequence"]
+    assert isinstance(updated_sequence, int)
+    assert updated_sequence >= 1
+    datasets = updated["datasets"]
+    assert _is_dict(datasets)
+    inference = datasets["inference"]
+    assert _is_list_of_dict(inference) and len(inference) == 1
+
+
+def test_training_metrics_stream_applies_projection_parameters(
+    sync_client: SyncServerClient,
+    tmp_path: Path,
+) -> None:
+    initialized = sync_client.post(
+        "/api/training/init",
+        json={
+            "run_dir": str(tmp_path),
+            "d_model": 2,
+            "layers": 1,
+            "heads": 1,
+            "max_tokens": 512,
+        },
+    )
+    assert initialized.status_code == 200
+    sink = StructuredEventSink(
+        run_dir=tmp_path,
+        process=ProcessIdentity(kind="coordinator"),
+    )
+    for update in (1, 2):
+        sink.emit(
+            "update",
+            context=EventContext(
+                policy_version=update - 1,
+                rollout_id=f"rollout-{update}",
+            ),
+            fields={"total_updates": update},
+        )
+    sink.close()
+    query = urlencode(
+        {
+            "run_dir": str(tmp_path),
+            "update_limit": 1,
+            "series_points": 1,
+        }
+    )
+
+    with sync_client.websocket_connect(
+        f"/ws/training/metrics?{query}"
+    ) as websocket:
+        snapshot = _receive_ws_json(websocket)
+
+    assert _is_dict(snapshot)
+    datasets = snapshot["datasets"]
+    assert _is_dict(datasets)
+    throughput = datasets["throughput"]
+    assert _is_list_of_dict(throughput)
+    assert len(throughput) == 1
+    values = throughput[0]["values"]
+    assert _is_dict(values)
+    assert values["total_updates"] == 2
+
+
 def test_training_streams_report_store_replacement(
     sync_client: SyncServerClient,
     tmp_path: Path,
@@ -175,7 +321,7 @@ def test_training_streams_report_store_replacement(
         }
     )
 
-    for path in ("logs", "metrics", "checkpoints"):
+    for path in ("logs", "checkpoints"):
         with sync_client.websocket_connect(
             f"/ws/training/{path}?{query}"
         ) as websocket:

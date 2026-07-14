@@ -1,9 +1,9 @@
-import { fetchMetrics } from "./api.ts";
 import { DashboardCharts, type MetricAxis } from "./charts.ts";
-import { MetricsInvalidationStream } from "./metrics.ts";
+import {
+  MetricsSnapshotStream,
+  type MetricsStreamTarget,
+} from "./metrics.ts";
 import type { JsonPrimitive, TrainingMetrics } from "./types.ts";
-
-const DEBOUNCE_MS = 350;
 
 export interface MetricsDomainCallbacks {
   readonly reportError: (message: string) => void;
@@ -13,37 +13,20 @@ export interface MetricsDomainCallbacks {
 export class MetricsDomain {
   #metrics: TrainingMetrics | null = null;
   #axis: MetricAxis = "update";
-  #running = false;
-  #followUp = false;
-  #dirtyThrough = -1;
-  #generation = 0;
-  #timer: ReturnType<typeof setTimeout> | null = null;
   readonly #charts = new DashboardCharts();
-  readonly #stream = new MetricsInvalidationStream(
-    () => this.runDir() || null,
-    () => this.#metrics?.store_id ?? null,
+  readonly #stream = new MetricsSnapshotStream(
+    () => this.#streamTarget(),
     {
-      onMessage: (message) => {
+      onSnapshot: (snapshot) => {
         if (
-          message.type === "replacement" ||
-          message.store_id !== (this.#metrics?.store_id ?? null)
+          snapshot.store_id === this.#metrics?.store_id &&
+          snapshot.through_sequence < this.#metrics.through_sequence
         ) {
-          this.#generation += 1;
-          this.#metrics = null;
-          this.#dirtyThrough = -1;
-          this.render();
-          if (this.isActive()) void this.refresh();
           return;
         }
-        if (
-          message.through_sequence <=
-            (this.#metrics?.through_sequence ?? -1)
-        ) return;
-        this.#dirtyThrough = Math.max(
-          this.#dirtyThrough,
-          message.through_sequence,
-        );
-        if (this.isActive() && !document.hidden) this.#schedule();
+        this.#metrics = snapshot;
+        this.callbacks.clearError();
+        this.render();
       },
       onError: (message) => this.callbacks.reportError(message),
     },
@@ -56,11 +39,11 @@ export class MetricsDomain {
   ) {
     element("metrics-range", HTMLSelectElement).addEventListener(
       "change",
-      () => void this.refresh(),
+      () => this.refresh(),
     );
     element("metrics-resolution", HTMLSelectElement).addEventListener(
       "change",
-      () => void this.refresh(),
+      () => this.refresh(),
     );
     for (
       const button of document.querySelectorAll<HTMLButtonElement>(
@@ -76,79 +59,29 @@ export class MetricsDomain {
       });
     }
     document.addEventListener("visibilitychange", () => {
-      if (
-        !document.hidden && this.isActive() &&
-        this.#dirtyThrough > (this.#metrics?.through_sequence ?? -1)
-      ) this.#schedule();
+      if (document.hidden) this.#stream.disconnect();
+      else if (this.isActive()) this.#stream.connect();
     });
-  }
-
-  connect(): void {
-    this.#stream.connect();
   }
 
   activate(): void {
     this.#charts.resize();
-    if (
-      this.#metrics === null ||
-      this.#dirtyThrough > this.#metrics.through_sequence
-    ) void this.refresh();
+    if (!document.hidden) this.#stream.connect();
+  }
+
+  deactivate(): void {
+    this.#stream.disconnect();
   }
 
   reset(): void {
-    this.#generation += 1;
+    this.#stream.disconnect();
     this.#metrics = null;
-    this.#dirtyThrough = -1;
-    this.#followUp = false;
-    if (this.#timer !== null) clearTimeout(this.#timer);
-    this.#timer = null;
     this.callbacks.clearError();
     this.render();
   }
 
-  async refresh(): Promise<void> {
-    if (this.#running) {
-      this.#followUp = true;
-      return;
-    }
-    const runDir = this.runDir();
-    if (runDir === "") return;
-    const generation = this.#generation;
-    this.#running = true;
-    try {
-      const value = await fetchMetrics(
-        runDir,
-        selectedNumber("metrics-range"),
-        selectedNumber("metrics-resolution"),
-      );
-      if (generation !== this.#generation || runDir !== this.runDir()) {
-        return;
-      }
-      if (
-        this.#metrics === null ||
-        value.store_id !== this.#metrics.store_id ||
-        value.through_sequence >= this.#metrics.through_sequence
-      ) {
-        const storeChanged = value.store_id !== this.#metrics?.store_id;
-        this.#metrics = value;
-        this.render();
-        if (storeChanged) this.#stream.connect();
-      }
-      this.callbacks.clearError();
-      if (value.through_sequence < this.#dirtyThrough) {
-        this.#followUp = true;
-      }
-    } catch (error: unknown) {
-      if (generation === this.#generation && runDir === this.runDir()) {
-        this.callbacks.reportError(errorText(error));
-      }
-    } finally {
-      this.#running = false;
-      if (this.#followUp && this.isActive()) {
-        this.#followUp = false;
-        this.#schedule();
-      }
-    }
+  refresh(): void {
+    if (this.isActive() && !document.hidden) this.#stream.connect();
   }
 
   render(): void {
@@ -172,12 +105,16 @@ export class MetricsDomain {
     else this.#charts.setData(this.#metrics, this.#axis);
   }
 
-  #schedule(): void {
-    if (this.#timer !== null) clearTimeout(this.#timer);
-    this.#timer = setTimeout(() => {
-      this.#timer = null;
-      void this.refresh();
-    }, DEBOUNCE_MS);
+  #streamTarget(): MetricsStreamTarget | null {
+    const runDir = this.runDir();
+    if (runDir === "" || !this.isActive() || document.hidden) {
+      return null;
+    }
+    return {
+      runDir,
+      updateLimit: selectedNumber("metrics-range"),
+      seriesPoints: selectedNumber("metrics-resolution"),
+    };
   }
 
   #renderAxisButtons(): void {
@@ -224,10 +161,6 @@ function selectedNumber(id: string): number {
     throw new Error(`Invalid selection: ${id}`);
   }
   return value;
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function element<T extends HTMLElement>(
