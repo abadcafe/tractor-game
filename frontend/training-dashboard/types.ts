@@ -194,8 +194,7 @@ export type TrainingLogMessage =
     readonly sequence: number;
     readonly event: TrainingEvent;
   }
-  | { readonly type: "replacement"; readonly store_id: string | null }
-  | { readonly type: "error"; readonly message: string };
+  | { readonly type: "replacement"; readonly store_id: string | null };
 
 export function parseConfig(value: unknown): TrainingConfig {
   const record = requiredRecord(value, "training config");
@@ -328,9 +327,6 @@ export function parseLogPage(value: unknown): TrainingLogPage {
 export function parseLogMessage(value: unknown): TrainingLogMessage {
   const record = requiredRecord(value, "training log message");
   const type = requiredString(record.type, "type");
-  if (type === "error") {
-    return { type, message: requiredString(record.message, "message") };
-  }
   if (type === "replacement") {
     return {
       type,

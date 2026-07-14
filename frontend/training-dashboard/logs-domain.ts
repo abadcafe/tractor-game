@@ -87,6 +87,7 @@ export class LogsDomain {
       cancelAnimationFrame(this.#renderFrame);
     }
     this.#renderFrame = null;
+    this.callbacks.clearError();
     this.render();
   }
 
@@ -178,10 +179,6 @@ export class LogsDomain {
   }
 
   #receive(message: TrainingLogMessage): void {
-    if (message.type === "error") {
-      this.callbacks.reportError(message.message);
-      return;
-    }
     if (message.type === "replacement") {
       this.#generation += 1;
       this.#storeId = message.store_id;

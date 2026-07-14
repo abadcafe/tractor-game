@@ -1,4 +1,5 @@
 import { parseProcessEnvelope, type ProcessEnvelope } from "./types.ts";
+import { parseTrainingStreamFrame } from "./stream-frame.ts";
 
 export interface WebSocketLocation {
   readonly protocol: string;
@@ -57,8 +58,14 @@ export class ProcessStreamClient {
         return;
       }
       try {
+        const frame = parseTrainingStreamFrame(JSON.parse(event.data));
+        if (frame.type === "rejected") {
+          this.#stopped = true;
+          this.handlers.onError(frame.error);
+          return;
+        }
         this.handlers.onSnapshot(
-          parseProcessEnvelope(JSON.parse(event.data)),
+          parseProcessEnvelope(frame.value),
         );
       } catch (error: unknown) {
         this.handlers.onError(errorText(error));

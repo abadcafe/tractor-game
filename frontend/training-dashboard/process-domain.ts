@@ -1,4 +1,3 @@
-import { fetchProcess } from "./api.ts";
 import { ProcessController, ProcessStreamClient } from "./process.ts";
 import type { ProcessEnvelope, ProcessSnapshot } from "./types.ts";
 
@@ -16,7 +15,6 @@ export interface ProcessOperations {
 
 export class ProcessDomain {
   #envelope: ProcessEnvelope | null = null;
-  #generation = 0;
   #operations: ProcessOperations = {
     initializing: false,
     resuming: false,
@@ -53,9 +51,9 @@ export class ProcessDomain {
   }
 
   reset(): void {
-    this.#generation += 1;
     this.#controller.reset();
     this.#envelope = null;
+    this.callbacks.clearError();
     this.render();
   }
 
@@ -66,23 +64,6 @@ export class ProcessDomain {
   setOperations(value: ProcessOperations): void {
     this.#operations = value;
     this.render();
-  }
-
-  async refresh(): Promise<void> {
-    const runDir = this.runDir();
-    if (runDir === "") return;
-    const generation = this.#generation;
-    try {
-      const value = await fetchProcess(runDir);
-      if (generation !== this.#generation || runDir !== this.runDir()) {
-        return;
-      }
-      this.apply(value);
-    } catch (error: unknown) {
-      if (generation === this.#generation && runDir === this.runDir()) {
-        this.callbacks.reportError(errorText(error));
-      }
-    }
   }
 
   render(): void {
@@ -202,10 +183,6 @@ function shellQuote(value: string): string {
   return /^[A-Za-z0-9_./,:+=-]+$/.test(value)
     ? value
     : `'${value.replaceAll("'", `'"'"'`)}'`;
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function element<T extends HTMLElement>(

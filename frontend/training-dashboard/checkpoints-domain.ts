@@ -74,6 +74,7 @@ export class CheckpointsDomain {
     this.#storeId = null;
     this.#dirtyThrough = -1;
     this.#appliedThrough = -1;
+    this.callbacks.clearError();
     this.render();
   }
 

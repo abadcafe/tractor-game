@@ -2333,6 +2333,7 @@ def _verify_game_over(
 # ---- Full Game Playthrough ----
 
 
+@pytest.mark.timeout(120.0)
 def test_full_game(sync_client: SyncServerClient) -> None:
     """Play a complete game from start to winning_team.
 

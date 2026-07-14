@@ -93,7 +93,7 @@ def register_training_routes(app: FastAPI, state: ServerState) -> None:
             _raise_rejected(has_contents, status_code=409)
         if has_contents.value and request.replace_existing != "yes":
             raise HTTPException(
-                status_code=409,
+                status_code=412,
                 detail=(
                     "type yes to replace existing training artifacts"
                 ),
@@ -141,16 +141,6 @@ def register_training_routes(app: FastAPI, state: ServerState) -> None:
                     state.training_control_config.stop_timeout_seconds
                 ),
             )
-        )
-        if isinstance(result, Rejected):
-            _raise_rejected(result, status_code=409)
-        return result.value
-
-    async def training_process(
-        run_dir: Path | None = None,
-    ) -> ProcessEnvelope:
-        result = await state.training_process_control.inspect(
-            state.training_control_config.resolve_run_dir(run_dir)
         )
         if isinstance(result, Rejected):
             _raise_rejected(result, status_code=409)
@@ -220,9 +210,6 @@ def register_training_routes(app: FastAPI, state: ServerState) -> None:
     )
     app.add_api_route(
         "/api/training/stop", stop_training, methods=["POST"]
-    )
-    app.add_api_route(
-        "/api/training/process", training_process, methods=["GET"]
     )
     app.add_api_route(
         "/api/training/checkpoints",

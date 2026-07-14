@@ -135,6 +135,7 @@ def query_training_metrics(
                 rollout_id := event.context.get("rollout_id"), str
             )
         }
+        selected_rollout_ids.update(_pending_rollout_ids(connection))
         rollout_events = _events(
             connection,
             event_type="rollout",
@@ -226,7 +227,8 @@ def query_metrics_through_sequence(
             connection,
             "SELECT coalesce(max(sequence), 0) FROM training_logs "
             "WHERE event_type IN "
-            "('update', 'training', 'logging.drop')",
+            "('update', 'training', 'logging.drop', 'rollout', "
+            "'sampling', 'inference.batch')",
         )
     except sqlite3.Error:
         return _result.Rejected(
@@ -305,6 +307,29 @@ def _events(
             )
         )
     return tuple(events)
+
+
+def _pending_rollout_ids(connection: sqlite3.Connection) -> set[str]:
+    rows = connection.execute(
+        "SELECT DISTINCT source.rollout_id "
+        "FROM training_logs AS source "
+        "WHERE source.event_type IN "
+        "('rollout', 'sampling', 'inference.batch') "
+        "AND source.rollout_id IS NOT NULL "
+        "AND json_type(source.event_json, '$.error') IS NULL "
+        "AND NOT EXISTS ("
+        "SELECT 1 FROM training_logs AS terminal "
+        "WHERE terminal.rollout_id = source.rollout_id "
+        "AND terminal.event_type = 'update'"
+        ")",
+    ).fetchall()
+    rollout_ids: set[str] = set()
+    for row in rows:
+        rollout_id = row[0]
+        if not isinstance(rollout_id, str):
+            raise ValueError("invalid pending rollout id")
+        rollout_ids.add(rollout_id)
+    return rollout_ids
 
 
 def _update_points(
@@ -521,7 +546,12 @@ def _rollout_ordinal(
     rollout_id = event.context.get("rollout_id")
     if not isinstance(rollout_id, str):
         return None
-    return rollout_ordinals.get(rollout_id)
+    ordinal = rollout_ordinals.get(rollout_id)
+    if ordinal is not None:
+        return ordinal
+    if event.policy_version is None:
+        return None
+    return event.policy_version + 1
 
 
 def _alias_rate(

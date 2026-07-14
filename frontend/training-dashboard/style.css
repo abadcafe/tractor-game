@@ -59,7 +59,7 @@ p {
   height: 48px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 16px;
   padding: 0 22px;
   background: var(--top);
@@ -76,17 +76,17 @@ p {
 
 .connection-label {
   flex: 0 0 auto;
-  color: #c5ccd2;
+  color: var(--muted);
   font-size: 11px;
   white-space: nowrap;
 }
 
 .connection-label.online {
-  color: #58d08a;
+  color: var(--green);
 }
 
 .connection-label.offline {
-  color: #ff8e94;
+  color: var(--red);
 }
 
 .directory-bar {
@@ -136,6 +136,10 @@ p {
   line-height: 1.45;
   overflow-wrap: break-word;
   white-space: normal;
+}
+
+.domain-error:not(:empty) {
+  margin-bottom: 12px;
 }
 
 .app-shell {
@@ -300,6 +304,12 @@ h3 {
   background: var(--red);
   color: #fff;
   font-weight: 700;
+}
+
+.button-danger-primary:hover {
+  border-color: #9f2028;
+  background: #9f2028;
+  color: #fff;
 }
 
 .icon-button {
@@ -765,6 +775,20 @@ th {
 
 .replace-shell {
   width: min(440px, calc(100vw - 32px));
+}
+
+.replace-shell .modal-actions {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+
+.replace-shell .modal-actions .status-value {
+  flex: 1 0 100%;
+  margin-right: 0;
+}
+
+.replace-shell .modal-actions .button {
+  width: auto;
 }
 
 .replace-body {

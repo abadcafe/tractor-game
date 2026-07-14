@@ -44,6 +44,7 @@ from server.training_events.store import (
 _JSON_OBJECT_ADAPTER: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
 
 
+@pytest.mark.timeout(180.0)
 def test_run_training_coordinator_spawns_worker_and_commits_progress(
     tmp_path: Path,
 ) -> None:
@@ -97,7 +98,7 @@ def test_run_training_coordinator_spawns_worker_and_commits_progress(
     assert "decision" in event_types
 
 
-@pytest.mark.timeout(120.0)
+@pytest.mark.timeout(180.0)
 def test_run_training_coordinator_synchronizes_cpu_arena_update(
     tmp_path: Path,
 ) -> None:

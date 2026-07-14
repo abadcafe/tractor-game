@@ -1,4 +1,5 @@
 import { parseLogMessage, type TrainingLogMessage } from "./types.ts";
+import { parseTrainingStreamFrame } from "./stream-frame.ts";
 
 export interface TrainingStreamTarget {
   readonly runDir: string;
@@ -44,8 +45,14 @@ export class TrainingStreamClient {
         return;
       }
       try {
+        const frame = parseTrainingStreamFrame(JSON.parse(event.data));
+        if (frame.type === "rejected") {
+          this.#stopped = true;
+          this.handlers.onError(frame.error);
+          return;
+        }
         this.handlers.onMessage(
-          parseLogMessage(JSON.parse(event.data)),
+          parseLogMessage(frame.value),
         );
       } catch (error: unknown) {
         this.handlers.onError(errorText(error));

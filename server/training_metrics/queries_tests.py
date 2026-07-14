@@ -12,7 +12,10 @@ from server.training_events import (
     StructuredEventSink,
 )
 from server.training_events.store import initialize_database
-from server.training_metrics.queries import query_training_metrics
+from server.training_metrics.queries import (
+    query_metrics_through_sequence,
+    query_training_metrics,
+)
 
 
 def test_metrics_project_all_updates_without_sessions(
@@ -126,6 +129,122 @@ def test_metrics_join_late_cross_process_events_by_rollout_id(
     process = result.value.datasets.processes[0]
     assert process.values["completed_rounds"] == 4.0
     assert process.values["decision_count"] == 16.0
+
+
+def test_metrics_project_live_inference_before_first_update(
+    tmp_path: Path,
+) -> None:
+    initialized = initialize_database(tmp_path)
+    assert isinstance(initialized, Ok)
+    sink = StructuredEventSink(
+        run_dir=tmp_path,
+        process=ProcessIdentity(kind="worker", index=0),
+    )
+    sink.emit(
+        "inference.batch",
+        context=EventContext(
+            policy_version=0,
+            rollout_id="rollout-a",
+            worker_index=0,
+        ),
+        fields={
+            "batch_size": 4,
+            "fill_ratio": 0.5,
+            "inference_seconds": 0.25,
+        },
+    )
+    sink.close()
+
+    result = query_training_metrics(
+        tmp_path, update_limit=200, series_points=200
+    )
+
+    assert isinstance(result, Ok)
+    assert len(result.value.datasets.inference) == 1
+    point = result.value.datasets.inference[0]
+    assert point.update == 1
+    assert point.values["batch_size"] == 4.0
+    assert point.values["inference_seconds_avg"] == 0.25
+
+
+def test_metrics_invalidation_advances_for_live_inference(
+    tmp_path: Path,
+) -> None:
+    initialized = initialize_database(tmp_path)
+    assert isinstance(initialized, Ok)
+    sink = StructuredEventSink(
+        run_dir=tmp_path,
+        process=ProcessIdentity(kind="model_rank", index=0),
+    )
+    sink.emit(
+        "inference.batch",
+        context=EventContext(
+            policy_version=0,
+            rollout_id="rollout-a",
+        ),
+        fields={"batch_size": 1},
+    )
+    sink.close()
+
+    result = query_metrics_through_sequence(tmp_path)
+
+    assert isinstance(result, Ok)
+    assert result.value.through_sequence == 1
+
+
+def test_metrics_keep_pending_rollout_logged_before_previous_update(
+    tmp_path: Path,
+) -> None:
+    initialized = initialize_database(tmp_path)
+    assert isinstance(initialized, Ok)
+    sink = StructuredEventSink(
+        run_dir=tmp_path,
+        process=ProcessIdentity(kind="coordinator"),
+    )
+    sink.emit(
+        "inference.batch",
+        context=EventContext(policy_version=1, rollout_id="rollout-b"),
+        fields={"batch_size": 4},
+    )
+    sink.emit(
+        "update",
+        context=EventContext(policy_version=0, rollout_id="rollout-a"),
+        fields={"total_updates": 1},
+    )
+    sink.close()
+
+    result = query_training_metrics(
+        tmp_path, update_limit=200, series_points=200
+    )
+
+    assert isinstance(result, Ok)
+    assert [
+        point.update for point in result.value.datasets.inference
+    ] == [2]
+
+
+def test_metrics_exclude_rollout_after_failed_terminal_update(
+    tmp_path: Path,
+) -> None:
+    initialized = initialize_database(tmp_path)
+    assert isinstance(initialized, Ok)
+    sink = StructuredEventSink(
+        run_dir=tmp_path,
+        process=ProcessIdentity(kind="coordinator"),
+    )
+    context = EventContext(policy_version=0, rollout_id="rollout-a")
+    sink.emit(
+        "inference.batch", context=context, fields={"batch_size": 4}
+    )
+    sink.emit("update", context=context, error="failed")
+    sink.close()
+
+    result = query_training_metrics(
+        tmp_path, update_limit=200, series_points=200
+    )
+
+    assert isinstance(result, Ok)
+    assert result.value.datasets.inference == ()
 
 
 def test_failed_actions_are_excluded_and_drop_marks_incomplete(

@@ -7,6 +7,7 @@ ASGI WebSocket testing natively.
 
 import json
 import logging
+import sqlite3
 import time
 from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
@@ -134,16 +135,22 @@ def test_training_summary_route_is_removed(
     assert sync_client.get("/api/training/summary").status_code == 404
 
 
-def test_training_process_is_a_revisioned_proc_snapshot(
+def test_training_process_snapshot_is_websocket_only(
     sync_client: SyncServerClient,
     tmp_path: Path,
 ) -> None:
     query = urlencode({"run_dir": str(tmp_path)})
 
-    response = sync_client.get(f"/api/training/process?{query}")
+    with sync_client.websocket_connect(
+        f"/ws/training/process?{query}"
+    ) as websocket:
+        snapshot = _receive_ws_json(websocket)
 
-    assert response.status_code == 200
-    assert response.json() == {"revision": 0, "process": None}
+    assert snapshot == {"revision": 0, "process": None}
+    assert (
+        sync_client.get(f"/api/training/process?{query}").status_code
+        == 404
+    )
 
 
 def test_training_streams_report_store_replacement(
@@ -178,6 +185,33 @@ def test_training_streams_report_store_replacement(
         assert message["store_id"] != "0" * 32
 
 
+def test_training_streams_hold_rejected_run_without_retry(
+    sync_client: SyncServerClient,
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / ("x" * 120)
+    run_dir.mkdir()
+    with sqlite3.connect(run_dir / "training.sqlite3") as connection:
+        connection.execute("CREATE TABLE invalid_store (value TEXT)")
+    query = urlencode({"run_dir": str(run_dir)})
+    expected_error = (
+        "unsupported training database schema: "
+        f"{run_dir / 'training.sqlite3'}"
+    )
+
+    for path in ("logs", "metrics", "checkpoints"):
+        with sync_client.websocket_connect(
+            f"/ws/training/{path}?{query}"
+        ) as websocket:
+            message = _receive_ws_json(websocket)
+            assert _is_dict(message)
+            assert message == {
+                "type": "rejected",
+                "error": expected_error,
+            }
+            _assert_ws_remains_open(websocket)
+
+
 def test_training_init_requires_yes_before_replacement(
     sync_client: SyncServerClient,
     tmp_path: Path,
@@ -201,7 +235,7 @@ def test_training_init_requires_yes_before_replacement(
     replaced = sync_client.post("/api/training/init", json=request)
 
     assert initialized.status_code == 200
-    assert rejected.status_code == 409
+    assert rejected.status_code == 412
     assert rejected.json() == {
         "detail": "type yes to replace existing training artifacts"
     }
@@ -388,6 +422,22 @@ def _receive_ws_json(
                     "timed out waiting for websocket message"
                 ) from exc
             time.sleep(0.001)
+
+
+def _assert_ws_remains_open(
+    ws: WebSocketTestSession,
+    *,
+    duration: float = 0.05,
+) -> None:
+    deadline = time.monotonic() + duration
+    while time.monotonic() < deadline:
+        try:
+            message = _private_send_rx(ws).receive_nowait()
+        except WouldBlock:
+            time.sleep(0.001)
+            continue
+        _private_raise_on_close(ws)(message)
+        assert False, f"unexpected websocket message: {message}"
 
 
 def _try_receive_ws_json(

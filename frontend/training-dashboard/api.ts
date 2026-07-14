@@ -15,14 +15,29 @@ import {
   type TrainingMetrics,
 } from "./types.ts";
 
+const REPLACEMENT_REQUIRED_STATUS = 412;
+
+export interface ReplacementRequired {
+  readonly error: string;
+}
+
 export async function fetchConfig(): Promise<TrainingConfig> {
   return parseConfig(await requestJson("/api/training/config", "GET"));
 }
 
 export async function initializeTraining(
   request: InitRequest,
-): Promise<void> {
-  await requestJson("/api/training/init", "POST", request);
+): Promise<ReplacementRequired | null> {
+  const response = await requestJsonResponse(
+    "/api/training/init",
+    "POST",
+    request,
+  );
+  if (response.status === REPLACEMENT_REQUIRED_STATUS) {
+    return { error: responseError(response) };
+  }
+  responseValue(response);
+  return null;
 }
 
 export async function resumeTraining(
@@ -40,14 +55,6 @@ export async function stopTraining(
     await requestJson("/api/training/stop", "POST", {
       run_dir: runDir,
     }),
-  );
-}
-
-export async function fetchProcess(
-  runDir: string,
-): Promise<ProcessEnvelope> {
-  return parseProcessEnvelope(
-    await requestJson(processRequestPath(runDir), "GET"),
   );
 }
 
@@ -83,10 +90,6 @@ export async function fetchLogPage(
       "GET",
     ),
   );
-}
-
-export function processRequestPath(runDir: string): string {
-  return `/api/training/process?${query({ run_dir: runDir })}`;
 }
 
 export function metricsRequestPath(
@@ -128,6 +131,20 @@ async function requestJson(
   method: "GET" | "POST",
   body?: unknown,
 ): Promise<unknown> {
+  return responseValue(await requestJsonResponse(path, method, body));
+}
+
+interface JsonResponse {
+  readonly ok: boolean;
+  readonly status: number;
+  readonly value: unknown;
+}
+
+async function requestJsonResponse(
+  path: string,
+  method: "GET" | "POST",
+  body?: unknown,
+): Promise<JsonResponse> {
   const response = await fetch(path, {
     method,
     headers: body === undefined
@@ -136,14 +153,20 @@ async function requestJson(
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const value: unknown = await response.json();
-  if (!response.ok) {
-    const record = recordValue(value);
-    const detail = record?.detail;
-    throw new Error(
-      typeof detail === "string" ? detail : `HTTP ${response.status}`,
-    );
-  }
-  return value;
+  return { ok: response.ok, status: response.status, value };
+}
+
+function responseValue(response: JsonResponse): unknown {
+  if (!response.ok) throw new Error(responseError(response));
+  return response.value;
+}
+
+function responseError(response: JsonResponse): string {
+  const record = recordValue(response.value);
+  const detail = record?.detail;
+  return typeof detail === "string"
+    ? detail
+    : `HTTP ${response.status}`;
 }
 
 function query(values: Readonly<Record<string, string>>): string {

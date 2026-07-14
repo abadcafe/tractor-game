@@ -1,6 +1,7 @@
 import { trainingStreamUrl } from "../stream.ts";
 import { metricsStreamUrl } from "../metrics.ts";
 import { checkpointStreamUrl } from "../checkpoints.ts";
+import { parseTrainingStreamFrame } from "../stream-frame.ts";
 import {
   parseCheckpointStreamMessage,
   parseLogMessage,
@@ -143,4 +144,30 @@ Deno.test("event parser rejects unknown correlation fields", () => {
     rejected = true;
   }
   if (!rejected) throw new Error("Unknown context field was accepted");
+});
+
+Deno.test("rejected stream frame preserves the terminal error", () => {
+  const frame = parseTrainingStreamFrame({
+    type: "rejected",
+    error: "unsupported training database schema",
+  });
+
+  if (
+    frame.type !== "rejected" ||
+    frame.error !== "unsupported training database schema"
+  ) {
+    throw new Error("Rejected run reason was lost");
+  }
+});
+
+Deno.test("domain stream frame passes through unchanged", () => {
+  const message: unknown = {
+    type: "invalidation",
+    through_sequence: 9,
+  };
+  const frame = parseTrainingStreamFrame(message);
+
+  if (frame.type !== "message" || frame.value !== message) {
+    throw new Error("Domain message was changed");
+  }
 });

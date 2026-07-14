@@ -3,6 +3,7 @@ import {
   parseMetricsStreamMessage,
 } from "./types.ts";
 import type { WebSocketLocation } from "./process.ts";
+import { parseTrainingStreamFrame } from "./stream-frame.ts";
 
 export interface MetricsStreamHandlers {
   readonly onMessage: (value: MetricsStreamMessage) => void;
@@ -34,8 +35,14 @@ export class MetricsInvalidationStream {
         return;
       }
       try {
+        const frame = parseTrainingStreamFrame(JSON.parse(event.data));
+        if (frame.type === "rejected") {
+          this.#stopped = true;
+          this.handlers.onError(frame.error);
+          return;
+        }
         this.handlers.onMessage(
-          parseMetricsStreamMessage(JSON.parse(event.data)),
+          parseMetricsStreamMessage(frame.value),
         );
       } catch (error: unknown) {
         this.handlers.onError(errorText(error));

@@ -47,7 +47,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class ProcessEnvelope(BaseModel):
-    """Revisioned process state used by REST and WebSocket clients."""
+    """Revisioned process state for control responses and streams."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 

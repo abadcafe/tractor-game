@@ -10,8 +10,6 @@
   <body>
     <header class="topbar">
       <div class="brand">Training Console</div>
-      <span id="connection-state" class="connection-label"
-      >CONNECTING</span>
     </header>
     <form class="directory-bar" id="directory-form">
       <label for="run-directory">Run directory</label>
@@ -54,14 +52,10 @@
               <p id="run-caption" class="subtitle code-value"></p>
             </div>
             <div class="head-actions">
-              <button
-                class="icon-button"
-                data-refresh-domain="process"
-                title="Refresh process"
-                aria-label="Refresh process"
-              >
-                ↻
-              </button>
+              <span
+                id="process-connection-state"
+                class="connection-label"
+              >CONNECTING</span>
               <button class="button" id="open-init" disabled>
                 Initialize
               </button>
@@ -81,6 +75,7 @@
               </button>
             </div>
           </header>
+          <p id="process-error" class="error-value domain-error"></p>
           <section class="panel">
             <header class="section-head">
               <h2>Managed CLI process</h2>
@@ -140,8 +135,17 @@
               </button>
             </div>
           </header>
+          <p id="metrics-error" class="error-value domain-error"></p>
           <section class="metric-strip" id="metric-strip"></section>
           <div class="chart-grid">
+            <section class="chart-panel chart-wide">
+              <h2>Inference utilization and latency</h2>
+              <div class="chart" id="chart-inference"></div>
+            </section>
+            <section class="chart-panel chart-wide">
+              <h2>Worker comparison</h2>
+              <div class="chart" id="chart-processes"></div>
+            </section>
             <section class="chart-panel chart-wide">
               <h2>Training throughput</h2>
               <div class="chart" id="chart-throughput"></div>
@@ -166,14 +170,6 @@
               <h2>Rewards</h2>
               <div class="chart" id="chart-rewards"></div>
             </section>
-            <section class="chart-panel chart-wide">
-              <h2>Inference utilization and latency</h2>
-              <div class="chart" id="chart-inference"></div>
-            </section>
-            <section class="chart-panel chart-wide">
-              <h2>Worker comparison</h2>
-              <div class="chart" id="chart-processes"></div>
-            </section>
           </div>
         </section>
 
@@ -192,6 +188,7 @@
               ↻
             </button>
           </header>
+          <p id="logs-error" class="error-value domain-error"></p>
           <section class="panel log-panel">
             <div class="log-toolbar">
               <button class="button" id="load-older">Load older</button>
@@ -220,6 +217,8 @@
               ↻
             </button>
           </header>
+          <p id="checkpoints-error" class="error-value domain-error">
+          </p>
           <section class="checkpoint-summary" id="checkpoint-summary">
           </section>
           <section class="panel table-panel">
@@ -288,13 +287,6 @@
         </section>
         <footer class="modal-actions">
           <span id="init-status" class="status-value"></span>
-          <button
-            class="button button-danger"
-            id="open-replace"
-            type="button"
-          >
-            Replace existing…
-          </button>
           <button class="button" type="button" data-close-dialog>
             Cancel
           </button>

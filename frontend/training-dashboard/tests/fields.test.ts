@@ -133,10 +133,20 @@ Deno.test("modal close controls are explicit non-submit buttons", async () => {
       "Replacement must use the compact confirmation dialog",
     );
   }
+  const initStart = html.indexOf('id="init-dialog"');
   const initEnd = html.indexOf(
     "</dialog>",
-    html.indexOf('id="init-dialog"'),
+    initStart,
   );
+  const initDialog = html.slice(initStart, initEnd);
+  if (
+    initDialog.includes('id="open-replace"') ||
+    initDialog.includes("Replace existing")
+  ) {
+    throw new Error(
+      "Initialize must not expose replacement before server rejection",
+    );
+  }
   const replaceStart = html.indexOf('id="replace-dialog"');
   if (replaceStart < initEnd) {
     throw new Error("Replacement confirmation must not be inside init");

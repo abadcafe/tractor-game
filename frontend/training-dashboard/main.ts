@@ -20,17 +20,17 @@ import {
 import { LogsDomain } from "./logs-domain.ts";
 import { MetricsDomain } from "./metrics-domain.ts";
 import { ProcessDomain } from "./process-domain.ts";
-import { DashboardSelection } from "./selection.ts";
 import {
-  type DashboardErrorSource,
-  DashboardStatus,
-} from "./status.ts";
+  type ProcessErrorSource,
+  ProcessStatus,
+} from "./process-status.ts";
+import { DashboardSelection } from "./selection.ts";
 import type { CheckpointManifest } from "./types.ts";
 
 type ViewName = "process" | "metrics" | "logs" | "checkpoints";
 
 const selection = new DashboardSelection();
-const dashboardStatus = new DashboardStatus();
+const processStatus = new ProcessStatus();
 let initializing = false;
 let resuming = false;
 let stopping = false;
@@ -56,13 +56,13 @@ const checkpointDialog = element(
 const processDomain = new ProcessDomain(
   () => selection.runDir,
   {
-    reportError: (message) => reportDashboardError("process", message),
-    clearError: () => clearDashboardError("process"),
+    reportError: (message) => reportProcessError("process", message),
+    clearError: () => clearProcessError("process"),
     connectionChanged: (connected) => {
-      dashboardStatus.setStreamConnection(
+      processStatus.setConnection(
         connected ? "online" : "reconnecting",
       );
-      renderDashboardStatus();
+      renderProcessStatus();
     },
   },
 );
@@ -71,13 +71,8 @@ const metricsDomain = new MetricsDomain(
   () => selection.runDir,
   () => currentRoute() === "metrics",
   {
-    reportError: (message) => reportDashboardError("metrics", message),
-    clearError: () => clearDashboardError("metrics"),
-    setPending: (pending) => {
-      if (pending) dashboardStatus.setRefreshPending();
-      else dashboardStatus.setRefreshIdle();
-      renderDashboardStatus();
-    },
+    reportError: (message) => setDomainError("metrics-error", message),
+    clearError: () => setDomainError("metrics-error", ""),
   },
 );
 
@@ -85,8 +80,8 @@ const logsDomain = new LogsDomain(
   () => selection.runDir,
   () => currentRoute() === "logs",
   {
-    reportError: (message) => reportDashboardError("logs", message),
-    clearError: () => clearDashboardError("logs"),
+    reportError: (message) => setDomainError("logs-error", message),
+    clearError: () => setDomainError("logs-error", ""),
   },
 );
 
@@ -95,8 +90,8 @@ const checkpointsDomain = new CheckpointsDomain(
   () => currentRoute() === "checkpoints",
   {
     reportError: (message) =>
-      reportDashboardError("checkpoints", message),
-    clearError: () => clearDashboardError("checkpoints"),
+      setDomainError("checkpoints-error", message),
+    clearError: () => setDomainError("checkpoints-error", ""),
     canResume: () =>
       processDomain.process === null && !initializing && !resuming &&
       !stopping,
@@ -126,10 +121,10 @@ function bindEvents(): void {
     event.preventDefault();
     const runDir = directoryInput.value.trim();
     if (runDir === "") {
-      reportDashboardError("directory", "Run directory is required");
+      setDomainError("directory-error", "Run directory is required");
       return;
     }
-    clearDashboardError("directory");
+    setDomainError("directory-error", "");
     selection.setRunDirectory(runDir);
     resetDomains();
     connectStreams();
@@ -143,10 +138,6 @@ function bindEvents(): void {
       renderInitCommand();
       initDialog.showModal();
     },
-  );
-  element("open-replace", HTMLButtonElement).addEventListener(
-    "click",
-    prepareReplacement,
   );
   element("open-resume", HTMLButtonElement).addEventListener(
     "click",
@@ -212,6 +203,7 @@ async function loadServerConfig(): Promise<void> {
   try {
     const config = await fetchConfig();
     if (!selection.ownsRun(origin)) return;
+    setDomainError("directory-error", "");
     selection.setRunDirectory(config.default_run_dir);
     directoryInput.value = selection.runDir;
     renderDirectoryAction();
@@ -220,7 +212,7 @@ async function loadServerConfig(): Promise<void> {
     await refreshCurrentDomain();
   } catch (error: unknown) {
     if (selection.ownsRun(origin)) {
-      reportDashboardError("config", errorText(error));
+      setDomainError("directory-error", errorText(error));
     }
   }
 }
@@ -230,8 +222,8 @@ function resetDomains(): void {
   metricsDomain.reset();
   logsDomain.reset();
   checkpointsDomain.reset();
-  dashboardStatus.reset();
-  renderDashboardStatus();
+  processStatus.reset();
+  renderProcessStatus();
 }
 
 function resetArtifactDomains(): void {
@@ -241,8 +233,8 @@ function resetArtifactDomains(): void {
 }
 
 function connectStreams(): void {
-  dashboardStatus.setStreamConnection("connecting");
-  renderDashboardStatus();
+  processStatus.setConnection("connecting");
+  renderProcessStatus();
   processDomain.connect();
   metricsDomain.connect();
   checkpointsDomain.connect();
@@ -252,7 +244,6 @@ function connectStreams(): void {
 async function refreshCurrentDomain(): Promise<void> {
   switch (currentRoute()) {
     case "process":
-      await processDomain.refresh();
       return;
     case "metrics":
       await metricsDomain.refresh();
@@ -281,9 +272,6 @@ function renderRoute(): void {
   if (route === "checkpoints" && !checkpointsDomain.loaded) {
     void checkpointsDomain.refresh();
   }
-  if (route === "process" && selection.runDir !== "") {
-    void processDomain.refresh();
-  }
 }
 
 function currentRoute(): ViewName {
@@ -298,15 +286,10 @@ function syncProcessOperations(): void {
   processDomain.setOperations({ initializing, resuming, stopping });
 }
 
-function prepareReplacement(): void {
-  if (!initForm.reportValidity()) return;
-  pendingInitRequest = initRequestFromForm(
-    initForm,
-    selection.runDir,
-    null,
-  );
+function openReplacement(request: InitRequest): void {
+  pendingInitRequest = request;
   element("replace-run-directory", HTMLElement).textContent =
-    selection.runDir;
+    request.run_dir;
   element("replace-result", HTMLElement).textContent = "";
   initDialog.close();
   replaceDialog.showModal();
@@ -345,12 +328,19 @@ async function runInitialization(
   status.className = "status-value";
   status.textContent = "Initializing…";
   try {
-    await initializeTraining(request);
+    const replacement = await initializeTraining(request);
     if (!selection.ownsRun(origin)) return;
+    if (replacement !== null) {
+      status.className = "error-value";
+      status.textContent = replacement.error;
+      if (request.replace_existing === null) {
+        openReplacement(request);
+      }
+      return;
+    }
     dialog.close();
     selection.markRunReplaced();
     resetArtifactDomains();
-    await processDomain.refresh();
   } catch (error: unknown) {
     if (selection.ownsRun(origin)) {
       status.className = "error-value";
@@ -404,20 +394,20 @@ async function stop(): Promise<void> {
     const value = await stopTraining(origin.runDir);
     if (!selection.ownsRun(origin)) return;
     processDomain.apply(value);
-    clearDashboardError("control");
+    clearProcessError("control");
     if (value.forced) {
-      dashboardStatus.reportWarning(
+      processStatus.reportWarning(
         "Stop timeout exceeded; the process group was killed",
       );
     }
   } catch (error: unknown) {
     if (selection.ownsRun(origin)) {
-      reportDashboardError("control", errorText(error));
+      reportProcessError("control", errorText(error));
     }
   } finally {
     stopping = false;
     syncProcessOperations();
-    renderDashboardStatus();
+    renderProcessStatus();
   }
 }
 
@@ -566,27 +556,31 @@ function resetLaunchStatus(statusId: string): void {
   status.textContent = "";
 }
 
-function reportDashboardError(
-  source: DashboardErrorSource,
+function reportProcessError(
+  source: ProcessErrorSource,
   message: string,
 ): void {
-  dashboardStatus.reportError(source, message);
-  renderDashboardStatus();
+  processStatus.reportError(source, message);
+  renderProcessStatus();
 }
 
-function clearDashboardError(source: DashboardErrorSource): void {
-  dashboardStatus.clearError(source);
-  renderDashboardStatus();
+function clearProcessError(source: ProcessErrorSource): void {
+  processStatus.clearError(source);
+  renderProcessStatus();
 }
 
-function renderDashboardStatus(): void {
-  const status = dashboardStatus.snapshot();
-  element("directory-error", HTMLElement).textContent = status.message;
-  const connection = element("connection-state", HTMLElement);
+function renderProcessStatus(): void {
+  const status = processStatus.snapshot();
+  element("process-error", HTMLElement).textContent = status.message;
+  const connection = element("process-connection-state", HTMLElement);
   connection.textContent = status.label;
   connection.className = status.tone === "pending"
     ? "connection-label"
     : `connection-label ${status.tone}`;
+}
+
+function setDomainError(id: string, message: string): void {
+  element(id, HTMLElement).textContent = message;
 }
 
 function errorText(error: unknown): string {

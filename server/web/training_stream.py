@@ -55,8 +55,8 @@ def register_training_stream_route(
                     )
                 )
                 if isinstance(result, _result.Rejected):
-                    await websocket.send_json(
-                        {"type": "error", "message": result.reason}
+                    await _reject_stream(
+                        websocket, disconnect, result.reason
                     )
                     return
                 tail = result.value
@@ -108,8 +108,8 @@ def register_training_stream_route(
                     partial(query_metrics_through_sequence, canonical)
                 )
                 if isinstance(result, _result.Rejected):
-                    await websocket.close(
-                        code=1011, reason=result.reason
+                    await _reject_stream(
+                        websocket, disconnect, result.reason
                     )
                     return
                 invalidation = result.value
@@ -177,8 +177,8 @@ def register_training_stream_route(
                     return
                 snapshot_result = await snapshot_task
                 if isinstance(snapshot_result, _result.Rejected):
-                    await websocket.close(
-                        code=1011, reason=snapshot_result.reason
+                    await _reject_stream(
+                        websocket, disconnect, snapshot_result.reason
                     )
                     return
                 await websocket.send_json(
@@ -212,8 +212,8 @@ def register_training_stream_route(
                     partial(query_checkpoint_invalidation, canonical)
                 )
                 if isinstance(result, _result.Rejected):
-                    await websocket.close(
-                        code=1011, reason=result.reason
+                    await _reject_stream(
+                        websocket, disconnect, result.reason
                     )
                     return
                 invalidation = result.value
@@ -291,3 +291,12 @@ async def _wait_for_disconnect(websocket: WebSocket) -> None:
             await websocket.receive_text()
         except WebSocketDisconnect:
             return
+
+
+async def _reject_stream(
+    websocket: WebSocket,
+    disconnect: asyncio.Task[None],
+    reason: str,
+) -> None:
+    await websocket.send_json({"type": "rejected", "error": reason})
+    await disconnect

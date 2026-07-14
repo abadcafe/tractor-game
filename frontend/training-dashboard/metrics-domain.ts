@@ -8,7 +8,6 @@ const DEBOUNCE_MS = 350;
 export interface MetricsDomainCallbacks {
   readonly reportError: (message: string) => void;
   readonly clearError: () => void;
-  readonly setPending: (pending: boolean) => void;
 }
 
 export class MetricsDomain {
@@ -103,6 +102,7 @@ export class MetricsDomain {
     this.#followUp = false;
     if (this.#timer !== null) clearTimeout(this.#timer);
     this.#timer = null;
+    this.callbacks.clearError();
     this.render();
   }
 
@@ -115,7 +115,6 @@ export class MetricsDomain {
     if (runDir === "") return;
     const generation = this.#generation;
     this.#running = true;
-    this.callbacks.setPending(true);
     try {
       const value = await fetchMetrics(
         runDir,
@@ -145,7 +144,6 @@ export class MetricsDomain {
       }
     } finally {
       this.#running = false;
-      this.callbacks.setPending(false);
       if (this.#followUp && this.isActive()) {
         this.#followUp = false;
         this.#schedule();
