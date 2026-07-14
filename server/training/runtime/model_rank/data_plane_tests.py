@@ -560,6 +560,7 @@ def _decision_key(*, policy_version: int) -> PolicyDecisionKey:
     return PolicyDecisionKey(
         base_seed=0,
         policy_version=policy_version,
+        rollout_id=f"rollout-{policy_version}",
         episode_id=0,
         player_index=0,
         decision_index=0,

@@ -6,12 +6,12 @@ from pathlib import Path
 
 from server.foundation.result import Ok, Rejected
 from server.training.config import ModelConfig, TrainConfig
-from server.training.event_log import (
+from server.training.run_setup import initialize_training_run
+from server.training.run_validation import validate_training_run
+from server.training_events import (
     ProcessIdentity,
     StructuredEventSink,
 )
-from server.training.run_setup import initialize_training_run
-from server.training.run_validation import validate_training_run
 
 
 def test_validate_training_run_accepts_initialized_run(
@@ -46,10 +46,9 @@ def test_validate_training_run_accepts_observation_tail(
     assert isinstance(initialized, Ok)
     sink = StructuredEventSink(
         run_dir=tmp_path,
-        session_id="test-session",
         process=ProcessIdentity(kind="coordinator"),
     )
-    sink.emit("update.completed", fields={"total_updates": 1})
+    sink.emit("update", fields={"total_updates": 1})
     sink.close()
 
     result = validate_training_run(tmp_path)

@@ -92,7 +92,7 @@ def test_training_config_returns_server_default_directory(
     )
 
 
-def test_training_stream_pushes_structured_log_window(
+def test_training_logs_have_rest_history_and_cursor_tail(
     sync_client: SyncServerClient,
     tmp_path: Path,
 ) -> None:
@@ -113,19 +113,69 @@ def test_training_stream_pushes_structured_log_window(
         }
     )
 
+    page = sync_client.get(f"/api/training/logs?{query}")
+    assert page.status_code == 200
+    document = page.json()
+    assert _is_dict(document)
+    events = document["events"]
+    assert isinstance(events, list) and events
     with sync_client.websocket_connect(
-        f"/ws/training/logs?{query}"
+        f"/ws/training/logs?{query}&after_sequence=0"
     ) as websocket:
         message = _receive_ws_json(websocket)
-
     assert _is_dict(message)
-    assert message == {"type": "reset", "window": 5000}
-    with sync_client.websocket_connect(
-        f"/ws/training/logs?{query}&window=7"
-    ) as websocket:
-        configured_message = _receive_ws_json(websocket)
-    assert _is_dict(configured_message)
-    assert configured_message == {"type": "reset", "window": 7}
+    assert message["type"] == "event"
+    assert isinstance(message["sequence"], int)
+
+
+def test_training_summary_route_is_removed(
+    sync_client: SyncServerClient,
+) -> None:
+    assert sync_client.get("/api/training/summary").status_code == 404
+
+
+def test_training_process_is_a_revisioned_proc_snapshot(
+    sync_client: SyncServerClient,
+    tmp_path: Path,
+) -> None:
+    query = urlencode({"run_dir": str(tmp_path)})
+
+    response = sync_client.get(f"/api/training/process?{query}")
+
+    assert response.status_code == 200
+    assert response.json() == {"revision": 0, "process": None}
+
+
+def test_training_streams_report_store_replacement(
+    sync_client: SyncServerClient,
+    tmp_path: Path,
+) -> None:
+    initialized = sync_client.post(
+        "/api/training/init",
+        json={
+            "run_dir": str(tmp_path),
+            "d_model": 2,
+            "layers": 1,
+            "heads": 1,
+            "max_tokens": 512,
+        },
+    )
+    assert initialized.status_code == 200
+    query = urlencode(
+        {
+            "run_dir": str(tmp_path),
+            "store_id": "0" * 32,
+        }
+    )
+
+    for path in ("logs", "metrics", "checkpoints"):
+        with sync_client.websocket_connect(
+            f"/ws/training/{path}?{query}"
+        ) as websocket:
+            message = _receive_ws_json(websocket)
+        assert _is_dict(message)
+        assert message["type"] == "replacement"
+        assert message["store_id"] != "0" * 32
 
 
 def test_training_init_requires_yes_before_replacement(
@@ -160,7 +210,7 @@ def test_training_init_requires_yes_before_replacement(
     assert not (tmp_path / "runtime").exists()
 
 
-def test_training_resume_rejects_broken_run(
+def test_training_resume_returns_cli_preflight_error(
     sync_client: SyncServerClient,
     tmp_path: Path,
 ) -> None:
@@ -172,9 +222,9 @@ def test_training_resume_rejects_broken_run(
     )
 
     assert response.status_code == 409
-    assert response.json() == {
-        "detail": "training run is not ready: BROKEN"
-    }
+    detail = response.json()["detail"]
+    assert isinstance(detail, str)
+    assert "latest.json" in detail
 
 
 def test_ai_debug_page_returns_html(

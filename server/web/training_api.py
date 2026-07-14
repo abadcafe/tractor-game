@@ -11,20 +11,30 @@ from anyio import to_thread
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, BeforeValidator, ConfigDict
 
-from server.foundation.result import Rejected
-from server.training_control.cli_client import TrainingProcess
+from server.foundation.result import Ok, Rejected
+from server.training_artifacts import (
+    CheckpointCatalog,
+    read_checkpoint_catalog,
+)
 from server.training_control.commands import (
     TrainingInitRequest,
     TrainingResumeRequest,
     init_command_argv,
     resume_command_argv,
 )
-from server.training_control.init_control import TrainingInitialization
-from server.training_control.metric_queries import (
+from server.training_control.process_control import (
+    ProcessEnvelope,
+    StopResult,
+    TrainingInitialization,
+)
+from server.training_events.queries import (
+    TrainingLogHistoryPage,
+    query_training_log_history,
+)
+from server.training_metrics.queries import (
     TrainingMetrics,
     query_training_metrics,
 )
-from server.training_control.process_control import StopResult
 from server.web.state import ServerState
 
 
@@ -76,21 +86,12 @@ def register_training_routes(app: FastAPI, state: ServerState) -> None:
         run_dir = state.training_control_config.resolve_run_dir(
             request.run_dir
         )
-        summary_result = await state.training_cli_client.summary(
-            run_dir
+        has_contents = await to_thread.run_sync(
+            partial(_run_directory_has_contents, run_dir)
         )
-        if isinstance(summary_result, Rejected):
-            _raise_rejected(summary_result, status_code=409)
-        run_status = summary_result.value
-        if run_status.process is not None:
-            raise HTTPException(
-                status_code=409,
-                detail="training process is already running",
-            )
-        if (
-            run_status.state in ("READY", "BROKEN")
-            and request.replace_existing != "yes"
-        ):
+        if isinstance(has_contents, Rejected):
+            _raise_rejected(has_contents, status_code=409)
+        if has_contents.value and request.replace_existing != "yes":
             raise HTTPException(
                 status_code=409,
                 detail=(
@@ -101,7 +102,7 @@ def register_training_routes(app: FastAPI, state: ServerState) -> None:
             update={"run_dir": run_dir}
         )
         result = await asyncio.shield(
-            state.training_init_control.initialize(
+            state.training_process_control.initialize(
                 run_dir=run_dir,
                 command=init_command_argv(resolved_request),
                 working_directory=Path.cwd(),
@@ -113,27 +114,14 @@ def register_training_routes(app: FastAPI, state: ServerState) -> None:
 
     async def resume_training(
         request: TrainingResumeRequest,
-    ) -> TrainingProcess:
+    ) -> ProcessEnvelope:
         run_dir = state.training_control_config.resolve_run_dir(
             request.run_dir
         )
-        summary_result = await state.training_cli_client.summary(
-            run_dir
-        )
-        if isinstance(summary_result, Rejected):
-            _raise_rejected(summary_result, status_code=409)
-        run_status = summary_result.value
-        if run_status.state != "READY":
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"training run is not ready: {run_status.state}"
-                ),
-            )
         resolved_request = request.model_copy(
             update={"run_dir": run_dir}
         )
-        result = await state.training_process_control.start(
+        result = await state.training_process_control.resume(
             run_dir=run_dir,
             command=resume_command_argv(resolved_request),
             working_directory=Path.cwd(),
@@ -158,11 +146,24 @@ def register_training_routes(app: FastAPI, state: ServerState) -> None:
             _raise_rejected(result, status_code=409)
         return result.value
 
-    async def training_summary(
+    async def training_process(
         run_dir: Path | None = None,
-    ) -> object:
-        result = await state.training_cli_client.summary(
+    ) -> ProcessEnvelope:
+        result = await state.training_process_control.inspect(
             state.training_control_config.resolve_run_dir(run_dir)
+        )
+        if isinstance(result, Rejected):
+            _raise_rejected(result, status_code=409)
+        return result.value
+
+    async def training_checkpoints(
+        run_dir: Path | None = None,
+    ) -> CheckpointCatalog:
+        result = await to_thread.run_sync(
+            partial(
+                read_checkpoint_catalog,
+                state.training_control_config.resolve_run_dir(run_dir),
+            )
         )
         if isinstance(result, Rejected):
             _raise_rejected(result, status_code=409)
@@ -170,7 +171,6 @@ def register_training_routes(app: FastAPI, state: ServerState) -> None:
 
     async def training_metrics(
         run_dir: Path | None = None,
-        session_id: str | None = None,
         update_limit: Annotated[int, Query(ge=1, le=5000)] = 500,
         series_points: Annotated[int, Query(ge=1, le=1000)] = 500,
     ) -> TrainingMetrics:
@@ -178,9 +178,25 @@ def register_training_routes(app: FastAPI, state: ServerState) -> None:
             partial(
                 query_training_metrics,
                 state.training_control_config.resolve_run_dir(run_dir),
-                session_id=session_id,
                 update_limit=update_limit,
                 series_points=series_points,
+            )
+        )
+        if isinstance(result, Rejected):
+            _raise_rejected(result, status_code=409)
+        return result.value
+
+    async def training_logs(
+        run_dir: Path | None = None,
+        before_sequence: Annotated[int | None, Query(gt=0)] = None,
+        limit: Annotated[int, Query(ge=1, le=1000)] = 200,
+    ) -> TrainingLogHistoryPage:
+        result = await to_thread.run_sync(
+            partial(
+                query_training_log_history,
+                state.training_control_config.resolve_run_dir(run_dir),
+                before_sequence=before_sequence,
+                limit=limit,
             )
         )
         if isinstance(result, Rejected):
@@ -206,12 +222,37 @@ def register_training_routes(app: FastAPI, state: ServerState) -> None:
         "/api/training/stop", stop_training, methods=["POST"]
     )
     app.add_api_route(
-        "/api/training/summary", training_summary, methods=["GET"]
+        "/api/training/process", training_process, methods=["GET"]
+    )
+    app.add_api_route(
+        "/api/training/checkpoints",
+        training_checkpoints,
+        methods=["GET"],
     )
     app.add_api_route(
         "/api/training/metrics", training_metrics, methods=["GET"]
+    )
+    app.add_api_route(
+        "/api/training/logs", training_logs, methods=["GET"]
     )
 
 
 def _raise_rejected(result: Rejected, *, status_code: int) -> Never:
     raise HTTPException(status_code=status_code, detail=result.reason)
+
+
+def _run_directory_has_contents(
+    run_dir: Path,
+) -> Ok[bool] | Rejected:
+    try:
+        if not run_dir.exists():
+            return Ok(value=False)
+        if run_dir.is_symlink() or not run_dir.is_dir():
+            return Rejected(
+                reason=f"training run directory is unsafe: {run_dir}"
+            )
+        return Ok(value=next(run_dir.iterdir(), None) is not None)
+    except OSError:
+        return Rejected(
+            reason=f"training run directory is unreadable: {run_dir}"
+        )

@@ -3,8 +3,10 @@ export type DashboardErrorSource =
   | "control"
   | "directory"
   | "metrics"
+  | "process"
   | "stream"
-  | "summary";
+  | "checkpoints"
+  | "logs";
 
 export type StreamConnectionState =
   | "connecting"

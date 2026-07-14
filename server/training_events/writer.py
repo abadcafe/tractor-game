@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import queue
 import sqlite3
@@ -10,13 +11,17 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Protocol
 
 from server.foundation.json_value import JsonObject, JsonValue
 from server.foundation.result import Rejected
-from server.training.persistence.schema import open_writer
-
-type EventLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
+from server.training_events.contract import (
+    EVENT_NAMES,
+    EventContext,
+    EventName,
+    ProcessIdentity,
+)
+from server.training_events.store import open_writer
 
 _QUEUE_CAPACITY = 8192
 _BATCH_SIZE = 256
@@ -24,42 +29,13 @@ _FLUSH_INTERVAL_SECONDS = 0.02
 
 
 @dataclass(frozen=True, slots=True)
-class ProcessIdentity:
-    """Stable process dimensions attached to every event."""
-
-    kind: str
-    index: int | None = None
-
-    def __post_init__(self) -> None:
-        assert self.kind
-        assert self.index is None or self.index >= 0
-
-
-@dataclass(frozen=True, slots=True)
-class EventContext:
-    """Correlation identifiers shared by related events."""
-
-    policy_version: int | None = None
-    rollout_id: str | None = None
-    worker_index: int | None = None
-    model_rank_index: int | None = None
-    game_env_index: int | None = None
-    episode_id: int | None = None
-    player_index: int | None = None
-    decision_index: int | None = None
-    request_id: int | None = None
-    batch_id: int | None = None
-
-
-@dataclass(frozen=True, slots=True)
 class _PendingEvent:
-    event_type: str
-    level: EventLevel
+    event_type: EventName
     recorded_at_ms: int
-    session_id: str | None
     process: ProcessIdentity
     context: EventContext
     fields: JsonObject
+    error: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,11 +75,14 @@ class _WriterState:
         thread = self.thread
         if thread is None:
             return
-        try:
-            self.items.put(_StopWriter(), timeout=1.0)
-        except queue.Full:
-            self._add_dropped(1)
-        thread.join(timeout=5.0)
+        while thread.is_alive():
+            try:
+                self.items.put(_StopWriter(), timeout=0.1)
+                break
+            except queue.Full:
+                continue
+        thread.join()
+        assert not thread.is_alive()
         self.thread = None
 
     def _run(self) -> None:
@@ -158,22 +137,12 @@ class _WriterState:
             recorded_at_ms = time.time_ns() // 1_000_000
             emitted = [
                 _PendingEvent(
-                    event_type="logging.dropped",
-                    level="WARNING",
+                    event_type="logging.drop",
                     recorded_at_ms=recorded_at_ms,
-                    session_id=reference.session_id,
                     process=reference.process,
                     context=EventContext(),
                     fields={"count": dropped},
-                ),
-                _PendingEvent(
-                    event_type="logging.recovered",
-                    level="WARNING",
-                    recorded_at_ms=recorded_at_ms,
-                    session_id=reference.session_id,
-                    process=reference.process,
-                    context=EventContext(),
-                    fields={"dropped_count": dropped},
+                    error=None,
                 ),
                 *events,
             ]
@@ -207,28 +176,29 @@ class StructuredEventSink:
     """Picklable producer facade with process-local writer ownership."""
 
     run_dir: Path
-    session_id: str | None
     process: ProcessIdentity
 
     def emit(
         self,
-        event_type: str,
+        event_type: EventName,
         *,
         fields: JsonObject | None = None,
         context: EventContext | None = None,
-        level: EventLevel = "INFO",
+        error: str | None = None,
     ) -> None:
-        assert event_type
+        assert event_type in EVENT_NAMES
+        emitted_fields = _validate_event(
+            fields=fields, context=context, error=error
+        )
         state = _writer_state(self.run_dir)
         state.offer(
             _PendingEvent(
                 event_type=event_type,
-                level=level,
                 recorded_at_ms=time.time_ns() // 1_000_000,
-                session_id=self.session_id,
                 process=self.process,
                 context=context or EventContext(),
-                fields=fields or {},
+                fields=emitted_fields,
+                error=error,
             )
         )
 
@@ -243,16 +213,13 @@ class StructuredEventSink:
 class EventSink(Protocol):
     """Ancillary event boundary consumed by hot training code."""
 
-    @property
-    def session_id(self) -> str | None: ...
-
     def emit(
         self,
-        event_type: str,
+        event_type: EventName,
         *,
         fields: JsonObject | None = None,
         context: EventContext | None = None,
-        level: EventLevel = "INFO",
+        error: str | None = None,
     ) -> None: ...
 
 
@@ -260,17 +227,16 @@ class EventSink(Protocol):
 class NullEventSink:
     """Explicit no-observation sink for isolated unit tests."""
 
-    session_id: str | None = None
-
     def emit(
         self,
-        event_type: str,
+        event_type: EventName,
         *,
         fields: JsonObject | None = None,
         context: EventContext | None = None,
-        level: EventLevel = "INFO",
+        error: str | None = None,
     ) -> None:
-        del event_type, fields, context, level
+        assert event_type in EVENT_NAMES
+        _validate_event(fields=fields, context=context, error=error)
 
 
 def _writer_state(run_dir: Path) -> _WriterState:
@@ -286,11 +252,9 @@ def _writer_state(run_dir: Path) -> _WriterState:
 
 def _serialize_event(event: _PendingEvent) -> str:
     payload: JsonObject = {
-        "schema_version": 1,
+        "schema_version": 2,
         "event": event.event_type,
-        "level": event.level,
         "recorded_at_ms": event.recorded_at_ms,
-        "session_id": event.session_id,
         "process": {
             "kind": event.process.kind,
             "index": event.process.index,
@@ -299,7 +263,14 @@ def _serialize_event(event: _PendingEvent) -> str:
         "context": _context_json(event.context),
         "fields": event.fields,
     }
-    return json.dumps(payload, separators=(",", ":"), sort_keys=True)
+    if event.error is not None:
+        payload["error"] = event.error
+    return json.dumps(
+        payload,
+        separators=(",", ":"),
+        sort_keys=True,
+        allow_nan=False,
+    )
 
 
 def _context_json(context: EventContext) -> JsonObject:
@@ -315,4 +286,38 @@ def _context_json(context: EventContext) -> JsonObject:
         ("request_id", context.request_id),
         ("batch_id", context.batch_id),
     )
-    return {key: value for key, value in values}
+    return {key: value for key, value in values if value is not None}
+
+
+def _assert_finite_json(value: JsonValue) -> None:
+    if isinstance(value, float):
+        assert math.isfinite(value)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _assert_finite_json(item)
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            _assert_finite_json(item)
+
+
+def _validate_event(
+    *,
+    fields: JsonObject | None,
+    context: EventContext | None,
+    error: str | None,
+) -> JsonObject:
+    assert error is None or (error.strip() == error and error)
+    if context is not None:
+        _context_json(context)
+    emitted_fields = fields or {}
+    assert not {
+        "reason",
+        "error",
+        "outcome",
+        "level",
+        "session_id",
+    }.intersection(emitted_fields)
+    _assert_finite_json(emitted_fields)
+    return emitted_fields

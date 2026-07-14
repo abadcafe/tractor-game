@@ -10,11 +10,11 @@ from pydantic import TypeAdapter
 from server.foundation.json_value import JsonObject
 from server.foundation.result import Ok, Rejected
 from server.training.config import ModelConfig, TrainConfig
-from server.training.persistence.schema import database_path
 from server.training.run_setup import initialize_training_run
 from server.training.torch_checkpoints.load import (
     read_torch_checkpoint_metadata,
 )
+from server.training_events.store import database_path
 
 _JSON_OBJECT_ADAPTER: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
 
@@ -38,7 +38,7 @@ def test_initialize_training_run_writes_zero_update_state(
     assert metadata.value.total_rounds == 0
     assert metadata.value.total_updates == 0
     assert [item["event"] for item in _event_documents(tmp_path)] == [
-        "run.initialized"
+        "initialize"
     ]
 
 
@@ -80,7 +80,6 @@ def test_initialize_training_run_replace_existing_rebuilds_state(
     outside.write_text("keep", encoding="utf-8")
     (tmp_path / "stdout.log").write_text("old stdout", encoding="utf-8")
     (tmp_path / "stderr.log").write_text("old stderr", encoding="utf-8")
-    (tmp_path / "training.pid").write_text("123\n", encoding="ascii")
     stale_directory = tmp_path / "runtime" / "nested"
     stale_directory.mkdir(parents=True)
     (stale_directory / "state").write_text("old", encoding="utf-8")
@@ -104,7 +103,6 @@ def test_initialize_training_run_replace_existing_rebuilds_state(
     assert outside.read_text(encoding="utf-8") == "keep"
     assert not (tmp_path / "stdout.log").exists()
     assert not (tmp_path / "stderr.log").exists()
-    assert not (tmp_path / "training.pid").exists()
     assert not (tmp_path / "runtime").exists()
     assert not (tmp_path / "outside-link").exists()
 

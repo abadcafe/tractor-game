@@ -13,12 +13,6 @@ from typing import Protocol, assert_never
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
 from server.training.config import ModelConfig, TrainConfig
-from server.training.event_log import (
-    EventContext,
-    EventSink,
-    ProcessIdentity,
-    StructuredEventSink,
-)
 from server.training.ppo import PPOUpdateProfile, PPOUpdateStats
 from server.training.runtime.async_ipc import (
     AsyncCoordinatorControlEndpoint,
@@ -92,6 +86,12 @@ from server.training.runtime.worker_sampling_lifecycle import (
     start_worker_sampling_session,
     stop_worker_sampling_session,
 )
+from server.training_events import (
+    EventSink,
+    ProcessIdentity,
+    ProcessKind,
+    StructuredEventSink,
+)
 
 _GRACEFUL_PROCESS_STOP_SECONDS = 1.0
 _TERMINATED_PROCESS_STOP_SECONDS = 1.0
@@ -113,7 +113,7 @@ class TrainingRuntime(Protocol):
     ) -> _result.Ok[None] | _result.Rejected: ...
 
     async def run_update(
-        self, *, policy_version: int
+        self, *, policy_version: int, rollout_id: str
     ) -> _result.Ok[TrainingUpdateResult] | _result.Rejected: ...
 
     async def snapshot(
@@ -237,7 +237,7 @@ class _ProcessTrainingRuntime:
         return result
 
     async def run_update(
-        self, *, policy_version: int
+        self, *, policy_version: int, rollout_id: str
     ) -> _result.Ok[TrainingUpdateResult] | _result.Rejected:
         if self._poisoned is not None:
             return self._poisoned
@@ -245,6 +245,7 @@ class _ProcessTrainingRuntime:
             pools=self.pools,
             execution_config=self.execution_config,
             policy_version=policy_version,
+            rollout_id=rollout_id,
             event_sink=self.event_sink,
         )
         if isinstance(result, _UnrecoverableRuntimeFailure):
@@ -289,7 +290,6 @@ def open_training_runtime(
     *,
     run_dir: Path,
     run_id: str,
-    session_id: str,
     event_sink: EventSink,
     model_config: ModelConfig,
     train_config: TrainConfig,
@@ -299,7 +299,6 @@ def open_training_runtime(
     pools_result = _start_runtime_pools(
         run_dir=run_dir,
         run_id=run_id,
-        session_id=session_id,
         model_config=model_config,
         train_config=train_config,
         execution_config=execution_config,
@@ -319,7 +318,6 @@ def _start_runtime_pools(
     *,
     run_dir: Path,
     run_id: str,
-    session_id: str,
     model_config: ModelConfig,
     train_config: TrainConfig,
     execution_config: ExecutionConfig,
@@ -355,7 +353,6 @@ def _start_runtime_pools(
             context=context,
             run_dir=run_dir,
             run_id=run_id,
-            session_id=session_id,
             model_config=model_config,
             train_config=train_config,
             execution_config=execution_config,
@@ -394,7 +391,6 @@ def _start_runtime_pools(
                     "control": control_link.child,
                     "event_sink": _event_sink(
                         run_dir=run_dir,
-                        session_id=session_id,
                         process_kind="worker",
                         process_index=index,
                     ),
@@ -463,7 +459,6 @@ def _start_model_rank_pool(
     context: SpawnContext,
     run_dir: Path,
     run_id: str,
-    session_id: str,
     model_config: ModelConfig,
     train_config: TrainConfig,
     execution_config: ExecutionConfig,
@@ -502,7 +497,6 @@ def _start_model_rank_pool(
                     ),
                     "event_sink": _event_sink(
                         run_dir=run_dir,
-                        session_id=session_id,
                         process_kind="model_rank",
                         process_index=index,
                     ),
@@ -636,13 +630,11 @@ def _distributed_update_group(
 def _event_sink(
     *,
     run_dir: Path,
-    session_id: str,
-    process_kind: str,
+    process_kind: ProcessKind,
     process_index: int,
 ) -> StructuredEventSink:
     return StructuredEventSink(
         run_dir=run_dir,
-        session_id=session_id,
         process=ProcessIdentity(kind=process_kind, index=process_index),
     )
 
@@ -687,6 +679,7 @@ async def _run_training_update(
     pools: _RuntimePools,
     execution_config: ExecutionConfig,
     policy_version: int,
+    rollout_id: str,
     event_sink: EventSink,
 ) -> _TrainingUpdateCycleResult:
     reset_result = reset_rollout_arenas(
@@ -699,6 +692,7 @@ async def _run_training_update(
         handles=pools.worker_pool.handles,
         execution_config=execution_config,
         policy_version=policy_version,
+        rollout_id=rollout_id,
     )
     if isinstance(session_result, WorkerSamplingCleanupFailed):
         return _UnrecoverableRuntimeFailure(
@@ -734,21 +728,11 @@ async def _run_training_update(
     )
     if isinstance(stopped_result, Rejected):
         return _UnrecoverableRuntimeFailure(rejection=stopped_result)
-    event_sink.emit(
-        "update.started",
-        context=EventContext(
-            policy_version=policy_version,
-            rollout_id=f"{event_sink.session_id}:{policy_version}",
-        ),
-        fields={
-            "sample_count": target_snapshot_result.value.sample_count,
-            "round_count": target_snapshot_result.value.round_count,
-        },
-    )
     update_result = await _run_compute_updates(
         worker_pool=pools.worker_pool,
         model_rank_pool=pools.model_rank_pool,
         policy_version=policy_version,
+        rollout_id=rollout_id,
         update_timeout_seconds=execution_config.timeouts.update_seconds,
     )
     if isinstance(update_result, _UnrecoverableRuntimeFailure):
@@ -812,17 +796,20 @@ async def _run_compute_updates(
     worker_pool: _WorkerPool,
     model_rank_pool: _ModelRankPool | None,
     policy_version: int,
+    rollout_id: str,
     update_timeout_seconds: float,
 ) -> _RuntimeOperationResult[_UpdateResult]:
     if model_rank_pool is not None:
         return await _run_model_rank_updates(
             model_rank_pool=model_rank_pool,
             policy_version=policy_version,
+            rollout_id=rollout_id,
             update_timeout_seconds=update_timeout_seconds,
         )
     return await _run_worker_updates(
         worker_pool=worker_pool,
         policy_version=policy_version,
+        rollout_id=rollout_id,
         update_timeout_seconds=update_timeout_seconds,
     )
 
@@ -831,11 +818,13 @@ async def _run_worker_updates(
     *,
     worker_pool: _WorkerPool,
     policy_version: int,
+    rollout_id: str,
     update_timeout_seconds: float,
 ) -> _RuntimeOperationResult[_UpdateResult]:
     send_result = await _send_worker_update_commands(
         worker_pool=worker_pool,
         policy_version=policy_version,
+        rollout_id=rollout_id,
     )
     if isinstance(send_result, _UnrecoverableRuntimeFailure):
         return send_result
@@ -862,12 +851,14 @@ async def _send_worker_update_commands(
     *,
     worker_pool: _WorkerPool,
     policy_version: int,
+    rollout_id: str,
 ) -> _RuntimeOperationResult[None]:
     send_result = await broadcast_control_commands(
         targets=worker_pool.handles,
         sender=_worker_control_sender,
         command=lambda _handle: WorkerUpdateCommand(
             policy_version=policy_version,
+            rollout_id=rollout_id,
         ),
     )
     if isinstance(send_result, ControlCommandBroadcastFailure):
@@ -1377,11 +1368,13 @@ async def _run_model_rank_updates(
     *,
     model_rank_pool: _ModelRankPool,
     policy_version: int,
+    rollout_id: str,
     update_timeout_seconds: float,
 ) -> _RuntimeOperationResult[_UpdateResult]:
     send_result = await _send_model_rank_update_commands(
         model_rank_pool=model_rank_pool,
         policy_version=policy_version,
+        rollout_id=rollout_id,
     )
     if isinstance(send_result, _UnrecoverableRuntimeFailure):
         return send_result
@@ -1436,12 +1429,14 @@ async def _send_model_rank_update_commands(
     *,
     model_rank_pool: _ModelRankPool,
     policy_version: int,
+    rollout_id: str,
 ) -> _RuntimeOperationResult[None]:
     send_result = await broadcast_control_commands(
         targets=model_rank_pool.handles,
         sender=_model_rank_control_sender,
         command=lambda _handle: ModelRankUpdateCommand(
             policy_version=policy_version,
+            rollout_id=rollout_id,
         ),
     )
     if isinstance(send_result, ControlCommandBroadcastFailure):

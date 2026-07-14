@@ -9,6 +9,7 @@ import { init, use } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
 import type { ECharts, EChartsOption, LineSeriesOption } from "echarts";
 
+import { recordValue } from "../browser/json.ts";
 import type { MetricPoint, TrainingMetrics } from "./types.ts";
 
 use([
@@ -270,14 +271,18 @@ function option(
     color: spec.series.map((item) => item.color),
     grid: { left: 58, right: 24, top: 48, bottom: 54 },
     legend: { top: 4, type: "scroll" },
-    tooltip: { trigger: "axis", confine: true },
+    tooltip: {
+      trigger: "axis",
+      confine: true,
+      formatter: metricTooltip(points, axis),
+    },
     dataZoom: [
       { type: "inside", filterMode: "none" },
       { type: "slider", height: 18, bottom: 8, filterMode: "none" },
     ],
     xAxis: {
       type: "value",
-      name: axis === "update" ? "Update" : "Elapsed seconds",
+      name: axis === "update" ? "Update event" : "Elapsed seconds",
       nameLocation: "middle",
       nameGap: 32,
       minInterval: axis === "update" ? 1 : undefined,
@@ -289,6 +294,43 @@ function option(
       splitLine: { lineStyle: { color: "#e4e8ec" } },
     },
     series: buildSeries(spec.series, points, axis),
+  };
+}
+
+function metricTooltip(
+  points: readonly MetricPoint[],
+  axis: MetricAxis,
+): (params: unknown) => string {
+  return (params) => {
+    if (!Array.isArray(params) || params.length === 0) return "";
+    const first = recordValue(params[0]);
+    const axisValue = first?.axisValue;
+    const point = points.find((item) =>
+      (axis === "update" ? item.update : item.elapsed_seconds) ===
+        axisValue
+    );
+    const lines = axis === "update"
+      ? [`Update event: ${String(axisValue ?? "-")}`]
+      : [`Elapsed seconds: ${String(axisValue ?? "-")}`];
+    if (point !== undefined) {
+      lines.push(
+        `Training total_updates: ${
+          String(point.values.total_updates ?? "-")
+        }`,
+        `Log sequence: ${point.sequence}`,
+      );
+    }
+    for (const item of params) {
+      const record = recordValue(item);
+      const values = record?.value;
+      const value = Array.isArray(values) ? values[1] : null;
+      lines.push(
+        `${String(record?.seriesName ?? "Series")}: ${
+          String(value ?? "-")
+        }`,
+      );
+    }
+    return lines.join("<br>");
   };
 }
 

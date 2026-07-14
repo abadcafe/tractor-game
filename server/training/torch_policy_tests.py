@@ -414,6 +414,7 @@ def _decision_key(*, decision_index: int = 0) -> PolicyDecisionKey:
     return PolicyDecisionKey(
         base_seed=0,
         policy_version=0,
+        rollout_id="rollout-0",
         episode_id=0,
         player_index=0,
         decision_index=decision_index,

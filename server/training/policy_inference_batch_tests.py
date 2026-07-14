@@ -351,6 +351,7 @@ def _play_request_input() -> PolicyRequestInput:
         decision_key=PolicyDecisionKey(
             base_seed=0,
             policy_version=3,
+            rollout_id="rollout-3",
             episode_id=0,
             player_index=0,
             decision_index=1,
@@ -393,6 +394,7 @@ def _follow_pair_request_input() -> PolicyRequestInput:
         decision_key=PolicyDecisionKey(
             base_seed=0,
             policy_version=3,
+            rollout_id="rollout-3",
             episode_id=0,
             player_index=2,
             decision_index=2,
@@ -430,6 +432,7 @@ def _decision_key() -> PolicyDecisionKey:
     return PolicyDecisionKey(
         base_seed=0,
         policy_version=3,
+        rollout_id="rollout-3",
         episode_id=0,
         player_index=0,
         decision_index=0,

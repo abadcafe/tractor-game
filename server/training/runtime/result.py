@@ -4,9 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
-
-type TrainingOutcome = Literal["completed", "stopped"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,4 +14,3 @@ class TrainingLoopResult:
     total_samples: int
     total_updates: int
     checkpoint_path: Path
-    outcome: TrainingOutcome

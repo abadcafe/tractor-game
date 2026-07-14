@@ -1,8 +1,9 @@
-"""Read-only checkpoint catalog hidden behind the training facade."""
+"""Torch-free checkpoint artifact catalog."""
 
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -11,6 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from server.foundation import result as _result
 from server.foundation.json_value import JsonObject
 
+_CHECKPOINT_ID_PATTERN = r"^[0-9a-f]{32}$"
+
 
 class _ManifestDocument(BaseModel):
     """Torch-free representation of the on-disk manifest contract."""
@@ -18,7 +21,7 @@ class _ManifestDocument(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     schema_version: Literal[20]
-    checkpoint_id: str = Field(min_length=1)
+    checkpoint_id: str = Field(pattern=_CHECKPOINT_ID_PATTERN)
     state_path: str = Field(min_length=1)
     state_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     model_config_values: JsonObject = Field(alias="model_config")
@@ -220,7 +223,12 @@ def _object_views(
     for object_dir in children:
         state_path = object_dir / "state.pt"
         error: str | None = None
-        if object_dir.is_symlink() or not object_dir.is_dir():
+        if (
+            re.fullmatch(_CHECKPOINT_ID_PATTERN, object_dir.name)
+            is None
+        ):
+            error = f"invalid checkpoint object id: {object_dir}"
+        elif object_dir.is_symlink() or not object_dir.is_dir():
             error = f"invalid checkpoint object: {object_dir}"
         elif state_path.is_symlink():
             error = (

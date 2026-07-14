@@ -2,9 +2,8 @@ import { parseLogMessage, type TrainingLogMessage } from "./types.ts";
 
 export interface TrainingStreamTarget {
   readonly runDir: string;
-  readonly window: number;
-  readonly eventTypes: readonly string[];
-  readonly sessionId: string | null;
+  readonly afterSequence: number;
+  readonly storeId: string | null;
 }
 
 export interface TrainingStreamHandlers {
@@ -19,9 +18,9 @@ export interface WebSocketLocation {
 }
 
 export class TrainingStreamClient {
-  private socket: WebSocket | null = null;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private stopped = true;
+  #socket: WebSocket | null = null;
+  #reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  #stopped = true;
 
   constructor(
     private readonly target: () => TrainingStreamTarget | null,
@@ -29,22 +28,19 @@ export class TrainingStreamClient {
   ) {}
 
   connect(): void {
-    this.stopped = false;
-    if (this.reconnectTimer !== null) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    this.socket?.close();
+    this.disconnect();
+    this.#stopped = false;
     const target = this.target();
     if (target === null) return;
     const socket = new WebSocket(trainingStreamUrl(target));
-    this.socket = socket;
+    this.#socket = socket;
     socket.addEventListener("open", () => {
-      if (this.socket !== socket) return;
-      this.handlers.onConnectionChange(true);
+      if (this.#socket === socket) {
+        this.handlers.onConnectionChange(true);
+      }
     });
     socket.addEventListener("message", (event) => {
-      if (this.socket !== socket || typeof event.data !== "string") {
+      if (this.#socket !== socket || typeof event.data !== "string") {
         return;
       }
       try {
@@ -56,21 +52,23 @@ export class TrainingStreamClient {
       }
     });
     socket.addEventListener("close", () => {
-      if (this.socket !== socket) return;
-      this.socket = null;
+      if (this.#socket !== socket) return;
+      this.#socket = null;
       this.handlers.onConnectionChange(false);
-      if (!this.stopped) {
-        this.reconnectTimer = setTimeout(() => this.connect(), 1000);
+      if (!this.#stopped) {
+        this.#reconnectTimer = setTimeout(() => this.connect(), 1000);
       }
     });
   }
 
   disconnect(): void {
-    this.stopped = true;
-    if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = null;
-    this.socket?.close();
-    this.socket = null;
+    this.#stopped = true;
+    if (this.#reconnectTimer !== null) {
+      clearTimeout(this.#reconnectTimer);
+    }
+    this.#reconnectTimer = null;
+    this.#socket?.close();
+    this.#socket = null;
   }
 }
 
@@ -81,14 +79,9 @@ export function trainingStreamUrl(
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   const search = new URLSearchParams({
     run_dir: target.runDir,
-    window: String(target.window),
+    after_sequence: String(target.afterSequence),
   });
-  for (const eventType of target.eventTypes) {
-    search.append("event", eventType);
-  }
-  if (target.sessionId !== null) {
-    search.set("session_id", target.sessionId);
-  }
+  if (target.storeId !== null) search.set("store_id", target.storeId);
   return `${protocol}//${location.host}/ws/training/logs?${search}`;
 }
 

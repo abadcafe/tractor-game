@@ -9,7 +9,6 @@ import torch
 
 from server.foundation.result import Ok
 from server.training.config import ModelConfig, TrainConfig
-from server.training.persistence.schema import database_path
 from server.training.resume_setup import canonicalize_resume_timeline
 from server.training.run_setup import initialize_training_run
 from server.training.runtime.config import ExecutionConfig
@@ -18,6 +17,7 @@ from server.training.torch_checkpoints.load import (
     read_torch_checkpoint_metadata,
 )
 from server.training.torch_checkpoints.save import save_torch_checkpoint
+from server.training_events.store import database_path
 
 
 def test_canonicalize_resume_timeline_removes_future_state(

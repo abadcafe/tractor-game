@@ -89,7 +89,7 @@ class TrainingInitRequest(BaseModel):
 
 
 class TrainingResumeRequest(BaseModel):
-    """Checkpoint and process policy for one training session."""
+    """Checkpoint and process policy for one training run."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
 

@@ -30,42 +30,16 @@ Deno.test("returning to a directory does not revive old snapshots", () => {
   }
 });
 
-Deno.test("metric snapshots bind the selected historical session", () => {
+Deno.test("run replacement invalidates every domain request", () => {
   const selection = new DashboardSelection();
   selection.setRunDirectory("/runs/first");
-  selection.setMetricSession("old-session");
-  const snapshot = selection.captureMetrics();
-
-  selection.setMetricSession(null);
-
-  if (selection.ownsMetrics(snapshot)) {
-    throw new Error(
-      "Old session metrics must not replace latest metrics",
-    );
-  }
-  if (snapshot.sessionId !== "old-session") {
-    throw new Error("Metric request must retain its selected session");
-  }
-});
-
-Deno.test("run replacement invalidates requests and clears session", () => {
-  const selection = new DashboardSelection();
-  selection.setRunDirectory("/runs/first");
-  selection.setMetricSession("deleted-session");
   const runSnapshot = selection.captureRun();
-  const metricSnapshot = selection.captureMetrics();
 
   selection.markRunReplaced();
 
-  if (selection.metricSession !== null) {
-    throw new Error("Replacement must select the latest session");
-  }
-  if (
-    selection.ownsRun(runSnapshot) ||
-    selection.ownsMetrics(metricSnapshot)
-  ) {
+  if (selection.ownsRun(runSnapshot)) {
     throw new Error(
-      "Replacement must invalidate old database requests",
+      "Replacement must invalidate old domain requests",
     );
   }
 });

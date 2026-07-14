@@ -5,10 +5,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from server.foundation.result import Ok, Rejected
-from server.training import TrainingInitOptions, TrainingService
+from server.training import (
+    TrainingInitOptions,
+    TrainingResumeOptions,
+    TrainingService,
+    TrainingStopRequest,
+)
 
 
-def test_initialize_and_inspect_run_through_public_interface(
+def test_initialize_run_through_public_interface(
     tmp_path: Path,
 ) -> None:
     run_dir = tmp_path / "run"
@@ -29,14 +34,6 @@ def test_initialize_and_inspect_run_through_public_interface(
     assert initialized.value.checkpoint_path == (
         run_dir / "checkpoints" / "latest.json"
     )
-    inspected = service.inspect(run_dir)
-    assert isinstance(inspected, Ok)
-    assert inspected.value.total_updates == 0
-    catalog = service.checkpoint_catalog(run_dir)
-    assert isinstance(catalog, Ok)
-    manifests = catalog.value["manifests"]
-    assert isinstance(manifests, list)
-    assert len(manifests) == 1
 
 
 def test_initialize_requires_explicit_replacement_confirmation(
@@ -61,3 +58,39 @@ def test_initialize_requires_explicit_replacement_confirmation(
         options.model_copy(update={"replace_existing": "yes"})
     )
     assert isinstance(replaced, Ok)
+
+
+def test_initialize_then_resume_through_public_interface(
+    tmp_path: Path,
+) -> None:
+    run_dir = tmp_path / "run"
+    service = TrainingService()
+    initialized = service.initialize(
+        TrainingInitOptions(
+            run_dir=run_dir,
+            d_model=4,
+            layers=1,
+            heads=1,
+            max_tokens=512,
+        )
+    )
+    assert isinstance(initialized, Ok)
+    stop_request = TrainingStopRequest()
+    stop_request.request_stop()
+
+    resumed = service.resume(
+        TrainingResumeOptions(
+            run_dir=run_dir,
+            checkpoint="latest.json",
+        ),
+        stop_request,
+    )
+
+    assert isinstance(resumed, Ok)
+    assert resumed.value.total_rounds == 0
+    assert resumed.value.total_samples == 0
+    assert resumed.value.total_updates == 0
+    assert (
+        resumed.value.checkpoint_path
+        == initialized.value.checkpoint_path
+    )

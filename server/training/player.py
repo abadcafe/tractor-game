@@ -68,6 +68,7 @@ class TrainingPlayer(Player):
         self._stats = TrainingPlayerStats()
         self._base_seed = 0
         self._policy_version = 0
+        self._rollout_id = "uninitialized"
         self._episode_id = 0
         self._decision_index = 0
 
@@ -114,11 +115,13 @@ class TrainingPlayer(Player):
         *,
         base_seed: int,
         policy_version: int,
+        rollout_id: str,
         episode_id: int,
     ) -> Ok[None] | Rejected:
         """Clear per-round history and action stats."""
         assert base_seed >= 0
         assert policy_version >= 0
+        assert rollout_id
         assert episode_id >= 0
         background_result = self.raise_background_errors()
         if isinstance(background_result, Rejected):
@@ -129,6 +132,7 @@ class TrainingPlayer(Player):
         self._stats = TrainingPlayerStats()
         self._base_seed = base_seed
         self._policy_version = policy_version
+        self._rollout_id = rollout_id
         self._episode_id = episode_id
         self._decision_index = 0
         return Ok(value=None)
@@ -216,6 +220,7 @@ class TrainingPlayer(Player):
             PolicyDecisionKey(
                 base_seed=self._base_seed,
                 policy_version=self._policy_version,
+                rollout_id=self._rollout_id,
                 episode_id=self._episode_id,
                 player_index=self.index,
                 decision_index=self._decision_index,

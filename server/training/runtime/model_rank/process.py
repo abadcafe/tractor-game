@@ -11,7 +11,6 @@ import torch
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
 from server.training.config import ModelConfig, TrainConfig
-from server.training.event_log import EventContext, StructuredEventSink
 from server.training.policy_inference_batch import (
     PolicyRequestRoute,
     build_completed_policy_responses,
@@ -64,6 +63,7 @@ from server.training.runtime.shared_rollout_arena import (
     SharedRolloutArenaReader,
     attach_rollout_arena_reader,
 )
+from server.training_events import EventContext, StructuredEventSink
 
 
 @dataclass(slots=True)
@@ -131,22 +131,14 @@ async def _run_model_rank_process_async(
 ) -> None:
     """Async model-rank process main loop."""
     assert model_rank_index >= 0
-    event_sink.emit(
-        "process.started",
-        fields={
-            "model_rank_index": model_rank_index,
-            "device": model_rank_device,
-        },
-    )
     setup_result = _setup_model_rank_runtime(
         model_rank_device=model_rank_device,
         execution_config=execution_config,
     )
     if isinstance(setup_result, Rejected):
         event_sink.emit(
-            "process.failed",
-            level="ERROR",
-            fields={"reason": setup_result.reason},
+            "process.start",
+            error=setup_result.reason,
         )
         event_sink.close()
         await control.send_response(
@@ -159,9 +151,8 @@ async def _run_model_rank_process_async(
     sync_result = initialize_distributed_rank(distributed_rank_config)
     if isinstance(sync_result, Rejected):
         event_sink.emit(
-            "process.failed",
-            level="ERROR",
-            fields={"reason": sync_result.reason},
+            "process.start",
+            error=sync_result.reason,
         )
         event_sink.close()
         await control.send_response(
@@ -185,6 +176,13 @@ async def _run_model_rank_process_async(
     arena_reader = attach_rollout_arena_reader(
         assigned_rollout_arena_handles
     )
+    event_sink.emit(
+        "process.start",
+        fields={
+            "model_rank_index": model_rank_index,
+            "device": model_rank_device,
+        },
+    )
     try:
         loop_result = await _run_model_rank_event_loop(
             model_rank_index=model_rank_index,
@@ -207,7 +205,7 @@ async def _run_model_rank_process_async(
     finally:
         arena_reader.close()
         destroy_distributed_rank()
-        event_sink.emit("process.stopped")
+        event_sink.emit("process.stop")
         event_sink.close()
 
 
@@ -297,15 +295,9 @@ async def _run_model_rank_event_loop(
         batch: ModelRankInferenceBatch,
     ) -> _result.Ok[None] | _result.Rejected:
         return await _process_staged_inference_batch(
-            model_rank_index=model_rank_index,
-            run_id=run_id,
             core=core,
             staged_batch=batch,
             response_peers=inference_peers,
-            event_sink=event_sink,
-            configured_batch_size=(
-                execution_config.model_inference_batch_size
-            ),
         )
 
     async def reject_batch(
@@ -394,63 +386,15 @@ async def _run_model_rank_event_loop(
 
 async def _process_staged_inference_batch(
     *,
-    model_rank_index: int,
-    run_id: str,
     core: ModelReplica,
     staged_batch: ModelRankInferenceBatch,
     response_peers: tuple[AsyncPolicyPeer, ...],
-    event_sink: StructuredEventSink,
-    configured_batch_size: int,
 ) -> _result.Ok[None] | _result.Rejected:
-    batch_id = time.time_ns()
-    context = EventContext(
-        model_rank_index=model_rank_index,
-        batch_id=batch_id,
-    )
-    event_sink.emit(
-        "inference.batch_started",
-        context=context,
-        fields={
-            "batch_size": staged_batch.batch_size(),
-            "configured_batch_size": configured_batch_size,
-        },
-    )
-    process_start = time.perf_counter()
-    process_result = await _process_inference_batch(
+    return await _process_inference_batch(
         core=core,
         staged_batch=staged_batch,
         response_peers=response_peers,
     )
-    process_seconds = time.perf_counter() - process_start
-    if isinstance(process_result, Rejected):
-        event_sink.emit(
-            "inference.batch_failed",
-            context=context,
-            level="ERROR",
-            fields={"reason": process_result.reason},
-        )
-        return process_result
-    event_sink.emit(
-        "inference.batch_completed",
-        context=context,
-        fields={
-            "batch_size": staged_batch.batch_size(),
-            "fill_ratio": (
-                staged_batch.batch_size() / float(configured_batch_size)
-            ),
-            "wire_bytes": staged_batch.wire_byte_count,
-            "frame_count": staged_batch.frame_count,
-            "shape_bucket_count": staged_batch.shape_bucket_count,
-            "shape_padding_tokens_saved": (
-                staged_batch.shape_padding_tokens_saved
-            ),
-            "recv_seconds": staged_batch.recv_seconds,
-            "h2d_seconds": staged_batch.h2d_seconds,
-            "device_decode_seconds": staged_batch.device_decode_seconds,
-            "inference_seconds": process_seconds,
-        },
-    )
-    return Ok(value=None)
 
 
 def _cuda_device_index(model_rank_device: str) -> int | None:
@@ -481,9 +425,10 @@ def _run_model_rank_update(
 ) -> ModelRankUpdateCompleted | ModelRankRejected:
     context = EventContext(
         policy_version=command.policy_version,
+        rollout_id=command.rollout_id,
         model_rank_index=model_rank_index,
     )
-    event_sink.emit("update.rank_started", context=context)
+    started = time.perf_counter()
     read_start = time.perf_counter()
     returns_result = rollout_arena_reader.read_rank_batch(
         policy_version=command.policy_version,
@@ -493,10 +438,14 @@ def _run_model_rank_update(
     arena_read_seconds = time.perf_counter() - read_start
     if isinstance(returns_result, Rejected):
         event_sink.emit(
-            "update.rank_failed",
+            "update.rank",
             context=context,
-            level="ERROR",
-            fields={"reason": returns_result.reason},
+            fields={
+                "duration_seconds": max(
+                    time.perf_counter() - started, 0.0
+                )
+            },
+            error=returns_result.reason,
         )
         return ModelRankRejected(
             model_rank_index=model_rank_index,
@@ -507,17 +456,21 @@ def _run_model_rank_update(
     update_seconds = time.perf_counter() - update_start
     if isinstance(update_result, Rejected):
         event_sink.emit(
-            "update.rank_failed",
+            "update.rank",
             context=context,
-            level="ERROR",
-            fields={"reason": update_result.reason},
+            fields={
+                "duration_seconds": max(
+                    time.perf_counter() - started, 0.0
+                )
+            },
+            error=update_result.reason,
         )
         return ModelRankRejected(
             model_rank_index=model_rank_index,
             reason=update_result.reason,
         )
     event_sink.emit(
-        "update.rank_completed",
+        "update.rank",
         context=context,
         fields={
             "arena_read_seconds": arena_read_seconds,

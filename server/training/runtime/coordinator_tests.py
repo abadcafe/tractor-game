@@ -16,11 +16,6 @@ from server.training.config import (
     ModelConfig,
     TrainConfig,
 )
-from server.training.event_log import NullEventSink
-from server.training.persistence.schema import (
-    database_path,
-    initialize_database,
-)
 from server.training.run_setup import initialize_training_run
 from server.training.runtime.affinity import current_cpu_affinity
 from server.training.runtime.checkpoint_state import (
@@ -39,6 +34,11 @@ from server.training.runtime.training_runtime import (
 from server.training.stop import TrainingStopRequest
 from server.training.torch_checkpoints.load import (
     read_torch_checkpoint_metadata,
+)
+from server.training_events import NullEventSink
+from server.training_events.store import (
+    database_path,
+    initialize_database,
 )
 
 _JSON_OBJECT_ADAPTER: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
@@ -69,7 +69,7 @@ def test_run_training_coordinator_spawns_worker_and_commits_progress(
 
     result = run_training_coordinator(
         run_dir=tmp_path,
-        session_id="test-session",
+        runtime_id="test-runtime",
         model_config=model_config,
         train_config=train_config,
         checkpoint_policy=checkpoint_policy,
@@ -83,7 +83,6 @@ def test_run_training_coordinator_spawns_worker_and_commits_progress(
     assert result.value.total_rounds >= 1
     assert result.value.total_samples > 0
     assert result.value.total_updates == 1
-    assert result.value.outcome == "completed"
     metadata = read_torch_checkpoint_metadata(
         result.value.checkpoint_path
     )
@@ -93,9 +92,9 @@ def test_run_training_coordinator_spawns_worker_and_commits_progress(
     assert metadata.value.total_updates == 1
     assert not (tmp_path / "checkpoints" / "update-1.json").exists()
     event_types = _event_types(tmp_path)
-    assert "update.completed" in event_types
-    assert "session.completed" in event_types
-    assert "decision.completed" in event_types
+    assert "update" in event_types
+    assert "training" in event_types
+    assert "decision" in event_types
 
 
 @pytest.mark.timeout(120.0)
@@ -149,7 +148,7 @@ def test_run_training_coordinator_synchronizes_cpu_arena_update(
 
     result = run_training_coordinator(
         run_dir=tmp_path,
-        session_id="test-session",
+        runtime_id="test-runtime",
         model_config=model_config,
         train_config=train_config,
         checkpoint_policy=checkpoint_policy,
@@ -181,10 +180,15 @@ def test_coordinator_honors_pre_requested_stop_and_saves_checkpoint(
     assert isinstance(initialized, Ok)
     stop_request = TrainingStopRequest()
     stop_request.request_stop()
+    ready_calls = 0
+
+    def on_ready() -> None:
+        nonlocal ready_calls
+        ready_calls += 1
 
     result = run_training_coordinator(
         run_dir=tmp_path,
-        session_id="test-session",
+        runtime_id="test-runtime",
         model_config=model_config,
         train_config=train_config,
         checkpoint_policy=CheckpointPolicy(),
@@ -192,12 +196,43 @@ def test_coordinator_honors_pre_requested_stop_and_saves_checkpoint(
         max_samples=0,
         resume=initialized.value.checkpoint_path,
         stop_request=stop_request,
+        on_ready=on_ready,
     )
 
     assert isinstance(result, Ok)
-    assert result.value.outcome == "stopped"
     assert result.value.total_updates == 0
     assert result.value.checkpoint_path.exists()
+    assert ready_calls == 1
+
+
+def test_coordinator_does_not_signal_ready_before_checkpoint_load(
+    tmp_path: Path,
+) -> None:
+    database = initialize_database(tmp_path)
+    assert isinstance(database, Ok)
+    ready_calls = 0
+
+    def on_ready() -> None:
+        nonlocal ready_calls
+        ready_calls += 1
+
+    result = run_training_coordinator(
+        run_dir=tmp_path,
+        runtime_id="test-runtime",
+        model_config=ModelConfig(
+            d_model=2, layers=1, heads=1, max_tokens=512
+        ),
+        train_config=TrainConfig(),
+        checkpoint_policy=CheckpointPolicy(),
+        execution_config=ExecutionConfig(),
+        max_samples=0,
+        resume=tmp_path / "checkpoints" / "missing.json",
+        stop_request=TrainingStopRequest(),
+        on_ready=on_ready,
+    )
+
+    assert isinstance(result, Rejected)
+    assert ready_calls == 0
 
 
 @pytest.mark.asyncio
@@ -228,8 +263,7 @@ async def test_runtime_stops_sampling_after_rollout_wait_failure(
     runtime_result = open_training_runtime(
         run_dir=tmp_path,
         run_id=tmp_path.name,
-        session_id="test-session",
-        event_sink=NullEventSink(session_id="test-session"),
+        event_sink=NullEventSink(),
         model_config=model_config,
         train_config=train_config,
         execution_config=execution_config,
@@ -248,7 +282,9 @@ async def test_runtime_stops_sampling_after_rollout_wait_failure(
         )
         assert isinstance(load_result, Ok)
 
-        update_result = await runtime.run_update(policy_version=0)
+        update_result = await runtime.run_update(
+            policy_version=0, rollout_id="rollout-0"
+        )
 
         assert isinstance(update_result, Rejected)
         assert "rollout sample target timed out" in update_result.reason

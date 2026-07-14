@@ -23,10 +23,12 @@ class WorkerStartSamplingCommand:
     """Start worker game envs for one policy version."""
 
     policy_version: int
+    rollout_id: str
     game_env_count: int
 
     def __post_init__(self) -> None:
         assert self.policy_version >= 0
+        assert self.rollout_id
         assert self.game_env_count > 0
 
 
@@ -46,9 +48,11 @@ class WorkerUpdateCommand:
     """Apply one synchronized PPO update rank."""
 
     policy_version: int
+    rollout_id: str
 
     def __post_init__(self) -> None:
         assert self.policy_version >= 0
+        assert self.rollout_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,9 +70,11 @@ class WorkerStopSamplingCommand:
     """Stop active worker game envs for one policy version."""
 
     policy_version: int
+    rollout_id: str
 
     def __post_init__(self) -> None:
         assert self.policy_version >= 0
+        assert self.rollout_id
 
 
 @dataclass(frozen=True, slots=True)

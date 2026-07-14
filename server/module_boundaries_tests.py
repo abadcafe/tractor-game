@@ -8,9 +8,7 @@ from pathlib import Path
 _SERVER_ROOT = Path(__file__).parent
 
 
-def test_training_control_depends_only_on_cli_process_contract() -> (
-    None
-):
+def test_training_control_is_process_only() -> None:
     imports = _package_imports("training_control")
 
     assert not _matching(
@@ -18,6 +16,9 @@ def test_training_control_depends_only_on_cli_process_contract() -> (
         (
             "server.training",
             "server.training_cli",
+            "server.training_events",
+            "server.training_metrics",
+            "server.training_artifacts",
             "server.game",
         ),
     )
@@ -30,6 +31,37 @@ def test_training_and_game_do_not_depend_on_control_or_cli() -> None:
     assert not _matching(
         _package_imports("game"),
         (*forbidden, "server.training"),
+    )
+
+
+def test_events_metrics_and_artifacts_follow_read_model_dag() -> None:
+    assert not _matching(
+        _package_imports("training_events"),
+        (
+            "server.training",
+            "server.training_control",
+            "server.training_metrics",
+            "server.training_artifacts",
+            "server.game",
+        ),
+    )
+    assert not _matching(
+        _package_imports("training_metrics"),
+        (
+            "server.training",
+            "server.training_control",
+            "server.training_artifacts",
+            "server.game",
+        ),
+    )
+    assert not _matching(
+        _package_imports("training_artifacts"),
+        (
+            "server.training",
+            "server.training_control",
+            "server.training_metrics",
+            "server.game",
+        ),
     )
 
 

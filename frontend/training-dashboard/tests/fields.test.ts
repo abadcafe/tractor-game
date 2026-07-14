@@ -150,20 +150,14 @@ Deno.test("modal close controls are explicit non-submit buttons", async () => {
   }
 });
 
-Deno.test("logs expose a free window input with no maximum", async () => {
+Deno.test("logs use cursor paging instead of a client window", async () => {
   const html = await Deno.readTextFile(
     new URL("../index.html", import.meta.url),
   );
-  const windowInput = html.match(/<input\s+[^>]*id="log-window"[^>]*>/)
-    ?.[0];
-  if (
-    windowInput === undefined ||
-    !windowInput.includes('type="number"') ||
-    !windowInput.includes('value="5000"') ||
-    windowInput.includes("max=")
-  ) {
-    throw new Error(
-      "Log window must be a free unbounded numeric input",
-    );
+  if (html.includes('id="log-window"')) {
+    throw new Error("Log window is a forbidden legacy stream option");
+  }
+  if (!html.includes('id="load-older"')) {
+    throw new Error("Logs must expose explicit cursor pagination");
   }
 });

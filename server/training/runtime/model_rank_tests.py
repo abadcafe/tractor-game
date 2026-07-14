@@ -11,7 +11,6 @@ import torch
 
 from server.foundation.result import Ok, Rejected
 from server.game.players.test_helpers import card, make_snapshot
-from server.training.event_log import NullEventSink
 from server.training.legal_actions import (
     LegalActionIndex,
     build_legal_action_index,
@@ -65,6 +64,7 @@ from server.training.semantic_actions.codec import (
     SEMANTIC_CODEC,
     semantic_argument_id,
 )
+from server.training_events import NullEventSink
 
 
 @dataclass(frozen=True, slots=True)
@@ -656,6 +656,7 @@ def _decision_key() -> PolicyDecisionKey:
     return PolicyDecisionKey(
         base_seed=0,
         policy_version=0,
+        rollout_id="rollout-0",
         episode_id=0,
         player_index=0,
         decision_index=0,

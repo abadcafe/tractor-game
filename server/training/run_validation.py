@@ -5,13 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import torch
+from pydantic import BaseModel, ConfigDict, Field
 
 from server.foundation import result as _result
-from server.training.interface import PersistedRunSummary
-from server.training.persistence.schema import (
-    database_path,
-    open_reader,
-)
+from server.foundation.json_value import JsonObject
 from server.training.runtime.config import ExecutionConfig
 from server.training.torch_checkpoints.load import load_torch_checkpoint
 from server.training.torch_checkpoints.manifest import (
@@ -23,11 +20,30 @@ from server.training.torch_checkpoints.manifest import (
 from server.training.torch_checkpoints.pruning import (
     preflight_managed_checkpoints,
 )
+from server.training_events.store import (
+    database_path,
+    open_reader,
+)
+
+
+class ValidatedTrainingRun(BaseModel):
+    """Fully validated internal persisted training state."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    checkpoint_id: str
+    checkpoint_path: Path
+    state_size_bytes: int = Field(ge=0)
+    model_config_values: JsonObject
+    train_config_values: JsonObject
+    total_rounds: int = Field(ge=0)
+    total_samples: int = Field(ge=0)
+    total_updates: int = Field(ge=0)
 
 
 def validate_training_run(
     run_dir: Path,
-) -> _result.Ok[PersistedRunSummary] | _result.Rejected:
+) -> _result.Ok[ValidatedTrainingRun] | _result.Rejected:
     """Prove checkpoints and the event database are readable."""
     safety_result = _validate_run_paths(run_dir)
     if isinstance(safety_result, _result.Rejected):
@@ -101,7 +117,7 @@ def validate_training_run(
         )
     metadata = latest_manifest.metadata
     return _result.Ok(
-        value=PersistedRunSummary(
+        value=ValidatedTrainingRun(
             checkpoint_id=latest_manifest.checkpoint_id,
             checkpoint_path=latest_path,
             state_size_bytes=state_size,

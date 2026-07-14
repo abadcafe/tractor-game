@@ -8,14 +8,14 @@ from pathlib import Path
 
 from server.foundation import result as _result
 from server.training.config import ModelConfig, TrainConfig
-from server.training.event_log import (
-    ProcessIdentity,
-    StructuredEventSink,
-)
-from server.training.persistence.schema import initialize_database
 from server.training.runtime.config import ExecutionConfig
 from server.training.torch_checkpoints.save import save_torch_checkpoint
 from server.training.training_state import create_training_state
+from server.training_events import (
+    ProcessIdentity,
+    StructuredEventSink,
+)
+from server.training_events.store import initialize_database
 
 _CHECKPOINTS_DIR_NAME = "checkpoints"
 
@@ -71,11 +71,10 @@ def initialize_training_run(
         return prune_failure
     event_sink = StructuredEventSink(
         run_dir=run_dir,
-        session_id=None,
         process=ProcessIdentity(kind="initializer"),
     )
     event_sink.emit(
-        "run.initialized",
+        "initialize",
         fields={
             "checkpoint_path": str(checkpoint_path),
             "model_config": model_config.to_json(),

@@ -61,18 +61,21 @@ class SelfPlaySession:
         *,
         base_seed: int,
         policy_version: int,
+        rollout_id: str,
         episode_id: int,
         max_seconds: float,
     ) -> _result.Ok[TrainingRoundResult] | _result.Rejected:
         """Play exactly one full round from the current Game state."""
         assert base_seed >= 0
         assert policy_version >= 0
+        assert rollout_id
         assert episode_id >= 0
         self._recorder.clear()
         for player in self._players:
             reset_result = player.reset_round_tracking(
                 base_seed=base_seed,
                 policy_version=policy_version,
+                rollout_id=rollout_id,
                 episode_id=episode_id,
             )
             if isinstance(reset_result, _result.Rejected):
@@ -150,6 +153,7 @@ async def play_training_round(
     policy: TrainingPolicy,
     base_seed: int,
     policy_version: int,
+    rollout_id: str,
     episode_id: int,
     max_seconds: float,
 ) -> _result.Ok[TrainingRoundResult] | _result.Rejected:
@@ -158,6 +162,7 @@ async def play_training_round(
     return await session.play_round(
         base_seed=base_seed,
         policy_version=policy_version,
+        rollout_id=rollout_id,
         episode_id=episode_id,
         max_seconds=max_seconds,
     )

@@ -24,9 +24,11 @@ class ModelRankUpdateCommand:
     """Run PPO update from shared rollout arenas."""
 
     policy_version: int
+    rollout_id: str
 
     def __post_init__(self) -> None:
         assert self.policy_version >= 0
+        assert self.rollout_id
 
 
 @dataclass(frozen=True, slots=True)

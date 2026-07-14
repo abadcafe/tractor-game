@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import sys
 import time
 from pathlib import Path
+from typing import Callable
+from uuid import uuid4
 
 from server.foundation import result as _result
 from server.foundation.json_value import JsonObject
@@ -14,11 +15,6 @@ from server.training.config import (
     CheckpointPolicy,
     ModelConfig,
     TrainConfig,
-)
-from server.training.event_log import (
-    EventContext,
-    ProcessIdentity,
-    StructuredEventSink,
 )
 from server.training.runtime.checkpoint_state import (
     RuntimeCheckpointState,
@@ -37,6 +33,11 @@ from server.training.runtime.training_runtime import (
     open_training_runtime,
 )
 from server.training.stop import TrainingStopRequest
+from server.training_events import (
+    EventContext,
+    ProcessIdentity,
+    StructuredEventSink,
+)
 
 _CHECKPOINTS_DIR_NAME = "checkpoints"
 
@@ -44,7 +45,7 @@ _CHECKPOINTS_DIR_NAME = "checkpoints"
 def run_training_coordinator(
     *,
     run_dir: Path,
-    session_id: str,
+    runtime_id: str,
     model_config: ModelConfig,
     train_config: TrainConfig,
     checkpoint_policy: CheckpointPolicy,
@@ -52,12 +53,13 @@ def run_training_coordinator(
     max_samples: int,
     resume: Path,
     stop_request: TrainingStopRequest,
+    on_ready: Callable[[], None] | None = None,
 ) -> _result.Ok[TrainingLoopResult] | _result.Rejected:
     """Run synchronized worker training and commit canonical state."""
     return asyncio.run(
         _run_training_coordinator_async(
             run_dir=run_dir,
-            session_id=session_id,
+            runtime_id=runtime_id,
             model_config=model_config,
             train_config=train_config,
             checkpoint_policy=checkpoint_policy,
@@ -65,6 +67,7 @@ def run_training_coordinator(
             max_samples=max_samples,
             resume=resume,
             stop_request=stop_request,
+            on_ready=on_ready,
         )
     )
 
@@ -72,7 +75,7 @@ def run_training_coordinator(
 async def _run_training_coordinator_async(
     *,
     run_dir: Path,
-    session_id: str,
+    runtime_id: str,
     model_config: ModelConfig,
     train_config: TrainConfig,
     checkpoint_policy: CheckpointPolicy,
@@ -80,6 +83,7 @@ async def _run_training_coordinator_async(
     max_samples: int,
     resume: Path,
     stop_request: TrainingStopRequest,
+    on_ready: Callable[[], None] | None,
 ) -> _result.Ok[TrainingLoopResult] | _result.Rejected:
     """Run synchronized worker training inside the async runtime."""
     assert max_samples >= 0
@@ -90,7 +94,6 @@ async def _run_training_coordinator_async(
         return setup_result
     event_sink = StructuredEventSink(
         run_dir=run_dir,
-        session_id=session_id,
         process=ProcessIdentity(kind="coordinator", index=0),
     )
     state_result = load_runtime_checkpoint_state(
@@ -101,52 +104,14 @@ async def _run_training_coordinator_async(
     )
     if isinstance(state_result, Rejected):
         event_sink.emit(
-            "session.failed",
-            level="ERROR",
-            fields={"reason": state_result.reason},
+            "training",
+            error=state_result.reason,
         )
         event_sink.close()
         return state_result
-    event_sink.emit(
-        "session.started",
-        fields={
-            "argv": list(sys.argv),
-            "checkpoint_path": str(resume),
-            "max_samples": max_samples,
-            "model_config": model_config.to_json(),
-            "train_config": train_config.to_json(),
-            "checkpoint_every_updates": (
-                checkpoint_policy.every_updates
-            ),
-            "checkpoint_retention_updates": (
-                checkpoint_policy.retention_updates
-            ),
-            "worker_count": execution_config.worker_process_count(),
-            "worker_cpus": list(execution_config.worker_cpus),
-            "model_rank_count": (
-                execution_config.model_rank_process_count()
-            ),
-            "model_rank_kind": execution_config.model_ranks.kind,
-            "model_rank_devices": list(
-                execution_config.model_ranks.devices
-            ),
-            "ppo_profile": execution_config.ppo_profile,
-            "game_envs_per_worker": (
-                execution_config.game_envs_per_worker
-            ),
-            "samples_per_update": execution_config.samples_per_update,
-            "model_inference_batch_size": (
-                execution_config.model_inference_batch_size
-            ),
-            "total_rounds": state_result.value.total_rounds,
-            "total_samples": state_result.value.total_samples,
-            "total_updates": state_result.value.total_updates,
-        },
-    )
     runtime_result = open_training_runtime(
         run_dir=run_dir,
-        run_id=session_id,
-        session_id=session_id,
+        run_id=runtime_id,
         event_sink=event_sink,
         model_config=model_config,
         train_config=train_config,
@@ -154,9 +119,8 @@ async def _run_training_coordinator_async(
     )
     if isinstance(runtime_result, Rejected):
         event_sink.emit(
-            "session.failed",
-            level="ERROR",
-            fields={"reason": runtime_result.reason},
+            "training",
+            error=runtime_result.reason,
         )
         event_sink.close()
         return runtime_result
@@ -164,7 +128,7 @@ async def _run_training_coordinator_async(
     try:
         training_result = await _run_synchronized_training(
             run_dir=run_dir,
-            session_id=session_id,
+            runtime_id=runtime_id,
             model_config=model_config,
             train_config=train_config,
             checkpoint_policy=checkpoint_policy,
@@ -174,23 +138,23 @@ async def _run_training_coordinator_async(
             event_sink=event_sink,
             runtime=runtime,
             stop_request=stop_request,
+            on_ready=on_ready,
         )
     finally:
         await runtime.close()
     if isinstance(training_result, Rejected):
         event_sink.emit(
-            "session.failed",
-            level="ERROR",
+            "training",
             fields={
-                "reason": training_result.reason,
                 "total_rounds": state_result.value.total_rounds,
                 "total_updates": state_result.value.total_updates,
             },
+            error=training_result.reason,
         )
         event_sink.close()
         return training_result
     event_sink.emit(
-        f"session.{training_result.value.outcome}",
+        "training",
         fields={
             "checkpoint_path": str(
                 training_result.value.checkpoint_path
@@ -229,7 +193,7 @@ def _should_continue_training(
 async def _run_synchronized_training(
     *,
     run_dir: Path,
-    session_id: str,
+    runtime_id: str,
     model_config: ModelConfig,
     train_config: TrainConfig,
     checkpoint_policy: CheckpointPolicy,
@@ -239,6 +203,7 @@ async def _run_synchronized_training(
     event_sink: StructuredEventSink,
     runtime: TrainingRuntime,
     stop_request: TrainingStopRequest,
+    on_ready: Callable[[], None] | None,
 ) -> _result.Ok[TrainingLoopResult] | _result.Rejected:
     start = time.monotonic()
     total_rounds = state.total_rounds
@@ -252,6 +217,8 @@ async def _run_synchronized_training(
     )
     if isinstance(load_result, Rejected):
         return load_result
+    if on_ready is not None:
+        on_ready()
     while (
         _should_continue_training(
             max_samples=max_samples,
@@ -260,36 +227,44 @@ async def _run_synchronized_training(
         )
         and not stop_request.is_requested()
     ):
-        processed_samples = total_samples - start_total_samples
+        rollout_id = str(uuid4())
         context = EventContext(
             policy_version=total_updates,
-            rollout_id=f"{session_id}:{total_updates}",
-        )
-        event_sink.emit(
-            "rollout.started",
-            context=context,
-            fields={
-                "target_samples": execution_config.samples_per_update,
-                "total_rounds": total_rounds,
-                "total_samples": total_samples,
-                "total_updates": total_updates,
-                "processed_samples": processed_samples,
-            },
+            rollout_id=rollout_id,
         )
         update_cycle_start = time.monotonic()
         update_result = await runtime.run_update(
             policy_version=total_updates,
+            rollout_id=rollout_id,
         )
         if isinstance(update_result, Rejected):
+            duration_seconds = max(
+                time.monotonic() - update_cycle_start, 0.0
+            )
+            event_sink.emit(
+                "rollout",
+                context=context,
+                fields={"duration_seconds": duration_seconds},
+                error=update_result.reason,
+            )
+            event_sink.emit(
+                "update",
+                context=context,
+                fields={"duration_seconds": duration_seconds},
+                error=update_result.reason,
+            )
             return update_result
         update = update_result.value
         update_cycle_seconds = max(
             time.monotonic() - update_cycle_start, 0.0
         )
         event_sink.emit(
-            "rollout.completed",
+            "rollout",
             context=context,
-            fields=_rollout_fields(update.snapshot),
+            fields={
+                **_rollout_fields(update.snapshot),
+                "duration_seconds": update_cycle_seconds,
+            },
         )
         total_updates += 1
         total_rounds += update.snapshot.round_count
@@ -309,7 +284,7 @@ async def _run_synchronized_training(
         )
         checkpoint_result = await _maybe_save_checkpoint(
             run_dir=run_dir,
-            session_id=session_id,
+            rollout_id=rollout_id,
             model_config=model_config,
             train_config=train_config,
             checkpoint_policy=checkpoint_policy,
@@ -324,15 +299,6 @@ async def _run_synchronized_training(
         )
         if isinstance(checkpoint_result, Rejected):
             return checkpoint_result
-    if stop_request.is_requested():
-        event_sink.emit(
-            "session.stop_requested",
-            fields={
-                "total_rounds": total_rounds,
-                "total_samples": total_samples,
-                "total_updates": total_updates,
-            },
-        )
     final_checkpoint_result = await _save_final_checkpoint(
         run_dir=run_dir,
         model_config=model_config,
@@ -353,9 +319,6 @@ async def _run_synchronized_training(
             total_samples=total_samples,
             total_updates=total_updates,
             checkpoint_path=final_checkpoint_result.value,
-            outcome="stopped"
-            if stop_request.is_requested()
-            else "completed",
         )
     )
 
@@ -374,20 +337,21 @@ async def _save_final_checkpoint(
     total_updates: int,
 ) -> _result.Ok[Path] | _result.Rejected:
     context = EventContext(policy_version=total_updates)
-    event_sink.emit(
-        "checkpoint.started",
-        context=context,
-        fields={"kind": "final", "total_updates": total_updates},
-    )
+    started = time.monotonic()
     snapshot_result = await runtime.snapshot(
         policy_version=total_updates
     )
     if isinstance(snapshot_result, Rejected):
         event_sink.emit(
-            "checkpoint.failed",
+            "checkpoint",
             context=context,
-            level="ERROR",
-            fields={"reason": snapshot_result.reason, "kind": "final"},
+            fields={
+                "kind": "final",
+                "duration_seconds": max(
+                    time.monotonic() - started, 0.0
+                ),
+            },
+            error=snapshot_result.reason,
         )
         return snapshot_result
     result = _save_checkpoint(
@@ -403,14 +367,19 @@ async def _save_final_checkpoint(
     )
     if isinstance(result, Rejected):
         event_sink.emit(
-            "checkpoint.failed",
+            "checkpoint",
             context=context,
-            level="ERROR",
-            fields={"reason": result.reason, "kind": "final"},
+            fields={
+                "kind": "final",
+                "duration_seconds": max(
+                    time.monotonic() - started, 0.0
+                ),
+            },
+            error=result.reason,
         )
         return result
     event_sink.emit(
-        "checkpoint.completed",
+        "checkpoint",
         context=context,
         fields={
             "kind": "final",
@@ -418,6 +387,7 @@ async def _save_final_checkpoint(
             "total_rounds": total_rounds,
             "total_samples": total_samples,
             "total_updates": total_updates,
+            "duration_seconds": max(time.monotonic() - started, 0.0),
         },
     )
     return result
@@ -426,7 +396,7 @@ async def _save_final_checkpoint(
 async def _maybe_save_checkpoint(
     *,
     run_dir: Path,
-    session_id: str,
+    rollout_id: str,
     model_config: ModelConfig,
     train_config: TrainConfig,
     checkpoint_policy: CheckpointPolicy,
@@ -446,22 +416,23 @@ async def _maybe_save_checkpoint(
         return Ok(value=None)
     context = EventContext(
         policy_version=total_updates,
-        rollout_id=f"{session_id}:{max(total_updates - 1, 0)}",
+        rollout_id=rollout_id,
     )
-    event_sink.emit(
-        "checkpoint.started",
-        context=context,
-        fields={"kind": "scheduled", "total_updates": total_updates},
-    )
+    started = time.monotonic()
     snapshot_result = await runtime.snapshot(
         policy_version=total_updates
     )
     if isinstance(snapshot_result, Rejected):
         event_sink.emit(
-            "checkpoint.failed",
+            "checkpoint",
             context=context,
-            level="ERROR",
-            fields={"reason": snapshot_result.reason},
+            fields={
+                "kind": "scheduled",
+                "duration_seconds": max(
+                    time.monotonic() - started, 0.0
+                ),
+            },
+            error=snapshot_result.reason,
         )
         return snapshot_result
     save_result = _save_checkpoint(
@@ -477,14 +448,19 @@ async def _maybe_save_checkpoint(
     )
     if isinstance(save_result, Rejected):
         event_sink.emit(
-            "checkpoint.failed",
+            "checkpoint",
             context=context,
-            level="ERROR",
-            fields={"reason": save_result.reason},
+            fields={
+                "kind": "scheduled",
+                "duration_seconds": max(
+                    time.monotonic() - started, 0.0
+                ),
+            },
+            error=save_result.reason,
         )
         return save_result
     event_sink.emit(
-        "checkpoint.completed",
+        "checkpoint",
         context=context,
         fields={
             "kind": "scheduled",
@@ -492,6 +468,7 @@ async def _maybe_save_checkpoint(
             "total_rounds": total_rounds,
             "total_samples": total_samples,
             "total_updates": total_updates,
+            "duration_seconds": max(time.monotonic() - started, 0.0),
         },
     )
     return Ok(value=save_result.value)
@@ -591,12 +568,15 @@ def _record_update_completed(
     stats = update.update_stats
     profile = stats.profile
     event_sink.emit(
-        "update.completed",
+        "update",
         context=context,
         fields={
             "total_rounds": total_rounds,
             "total_samples": total_samples,
             "total_updates": total_updates,
+            "round_count": snapshot.round_count,
+            "sample_count": snapshot.sample_count,
+            "duration_seconds": update_cycle_seconds,
             "process_rounds_per_second": process_rounds
             / elapsed_seconds,
             "process_samples_per_second": process_samples

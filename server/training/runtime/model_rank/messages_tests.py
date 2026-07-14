@@ -22,7 +22,9 @@ def test_model_rank_load_state_command_carries_state_snapshot() -> None:
 
 
 def test_model_rank_update_command_carries_no_state_snapshot() -> None:
-    command = ModelRankUpdateCommand(policy_version=4)
+    command = ModelRankUpdateCommand(
+        policy_version=4, rollout_id="rollout-4"
+    )
 
     assert command.policy_version == 4
     assert not hasattr(command, "state")

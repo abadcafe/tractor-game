@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -115,33 +114,3 @@ def test_main_init_rejects_too_small_token_limit(
 
     assert exit_code == 2
     assert "max_tokens" in capsys.readouterr().err
-
-
-def test_cli_init_rejects_conflicting_pid_without_mutation(
-    tmp_path: Path,
-) -> None:
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    run_dir.joinpath("training.pid").write_text(
-        f"{os.getpid()}\n", encoding="ascii"
-    )
-
-    completed = subprocess.run(
-        (
-            sys.executable,
-            "-m",
-            "server.training_cli",
-            "--run-dir",
-            str(run_dir),
-            "init",
-            "--replace-existing",
-            "yes",
-        ),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert completed.returncode == 2
-    assert "not the managed training process" in completed.stderr
-    assert not run_dir.joinpath("training.sqlite3").exists()

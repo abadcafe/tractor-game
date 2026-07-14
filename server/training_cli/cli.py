@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
@@ -17,7 +19,6 @@ from server.training import (
     TrainingStopRequest,
     training_stop_signals,
 )
-from server.training_cli.process_inspection import ProcessInspector
 from server.training_cli.summary import (
     build_training_summary,
     format_training_summary,
@@ -37,6 +38,11 @@ def main(
     command = values.pop("command")
     run_dir = values.pop("run_dir")
     assert isinstance(run_dir, Path)
+    notifier: _ReadyNotifier | None = None
+    if command == "resume":
+        ready_fd = values.pop("ready_fd")
+        assert ready_fd is None or isinstance(ready_fd, int)
+        notifier = _ReadyNotifier(ready_fd)
     try:
         if command == "init":
             _execute_init(
@@ -51,14 +57,21 @@ def main(
                 {"run_dir": run_dir, **values}
             )
             if stop_request is not None:
-                _execute_resume(parser, options, stop_request)
+                _execute_resume(
+                    parser, options, stop_request, notifier=notifier
+                )
                 return
             request = TrainingStopRequest()
             with training_stop_signals(request):
-                _execute_resume(parser, options, request)
+                _execute_resume(
+                    parser, options, request, notifier=notifier
+                )
             return
     except ValidationError as error:
-        parser.error(_validation_reason(error))
+        reason = _validation_reason(error)
+        if notifier is not None:
+            notifier.error(reason)
+        parser.error(reason)
     assert command == "summary"
     output_format = values.pop("format")
     assert not values
@@ -71,16 +84,6 @@ def main(
 def _execute_init(
     parser: argparse.ArgumentParser, options: TrainingInitOptions
 ) -> None:
-    process_result = ProcessInspector().inspect(
-        options.run_dir.resolve()
-    )
-    if isinstance(process_result, _result.Rejected):
-        parser.error(process_result.reason)
-    if process_result.value is not None:
-        parser.error(
-            "training process is already running: "
-            f"PID {process_result.value.pid}"
-        )
     result = TrainingService().initialize(options)
     if isinstance(result, _result.Rejected):
         parser.error(result.reason)
@@ -91,12 +94,19 @@ def _execute_resume(
     parser: argparse.ArgumentParser,
     options: TrainingResumeOptions,
     stop_request: TrainingStopRequest,
+    *,
+    notifier: _ReadyNotifier | None,
 ) -> None:
-    result = TrainingService().resume(options, stop_request)
+    result = TrainingService().resume(
+        options,
+        stop_request,
+        on_ready=None if notifier is None else notifier.ready,
+    )
     if isinstance(result, _result.Rejected):
+        if notifier is not None:
+            notifier.error(result.reason)
         parser.error(result.reason)
     value = result.value
-    print(f"outcome: {value.outcome}")
     print(f"checkpoint: {value.checkpoint_path}")
     print(f"rounds: {value.total_rounds}")
     print(f"samples: {value.total_samples}")
@@ -193,6 +203,9 @@ def _add_resume_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--adam-beta1", type=float)
     parser.add_argument("--adam-beta2", type=float)
     parser.add_argument("--weight-decay", type=float)
+    parser.add_argument(
+        "--ready-fd", type=int, default=None, help=argparse.SUPPRESS
+    )
 
 
 def _add_summary_arguments(parser: argparse.ArgumentParser) -> None:
@@ -206,3 +219,27 @@ def _validation_reason(error: ValidationError) -> str:
     location = ".".join(str(part) for part in first["loc"])
     message = first["msg"]
     return f"{location}: {message}" if location else message
+
+
+class _ReadyNotifier:
+    """Write exactly one startup result to the parent control pipe."""
+
+    def __init__(self, descriptor: int | None) -> None:
+        self._descriptor = descriptor
+
+    def ready(self) -> None:
+        self._send({"type": "ready"})
+
+    def error(self, error: str) -> None:
+        self._send({"type": "error", "error": error})
+
+    def _send(self, message: dict[str, str]) -> None:
+        descriptor = self._descriptor
+        if descriptor is None:
+            return
+        self._descriptor = None
+        data = json.dumps(message).encode("utf-8") + b"\n"
+        try:
+            os.write(descriptor, data)
+        finally:
+            os.close(descriptor)

@@ -1,12 +1,10 @@
 import {
   fetchConfig,
-  fetchMetrics,
-  fetchSummary,
   initializeTraining,
   resumeTraining,
   stopTraining,
 } from "./api.ts";
-import { DashboardCharts, type MetricAxis } from "./charts.ts";
+import { CheckpointsDomain } from "./checkpoints-domain.ts";
 import {
   INIT_FIELDS,
   INIT_GROUPS,
@@ -19,79 +17,25 @@ import {
   resumeRequestFromForm,
   type TrainingField,
 } from "./fields.ts";
-import {
-  TrainingStreamClient,
-  type TrainingStreamTarget,
-} from "./stream.ts";
+import { LogsDomain } from "./logs-domain.ts";
+import { MetricsDomain } from "./metrics-domain.ts";
+import { ProcessDomain } from "./process-domain.ts";
 import { DashboardSelection } from "./selection.ts";
-import { DashboardRefreshController } from "./refresh.ts";
 import {
   type DashboardErrorSource,
   DashboardStatus,
 } from "./status.ts";
-import type {
-  CheckpointManifest,
-  JsonPrimitive,
-  TrainingEvent,
-  TrainingLogMessage,
-  TrainingMetrics,
-  TrainingProcess,
-  TrainingSummary,
-} from "./types.ts";
+import type { CheckpointManifest } from "./types.ts";
 
-type ViewName = "overview" | "metrics" | "logs" | "checkpoints";
-type LogEntry = {
-  readonly sequence: number;
-  readonly event: TrainingEvent;
-};
+type ViewName = "process" | "metrics" | "logs" | "checkpoints";
 
-const SUMMARY_REFRESH_INTERVAL_MS = 5_000;
 const selection = new DashboardSelection();
 const dashboardStatus = new DashboardStatus();
-let summary: TrainingSummary | null = null;
-let metrics: TrainingMetrics | null = null;
-let process: TrainingProcess | null = null;
-let logEvents: readonly LogEntry[] = [];
-let pendingLogEvents: LogEntry[] = [];
-let logRenderFrame: number | null = null;
-let logWindow = 5000;
-let followLogs = true;
-let metricAxis: MetricAxis = "update";
-let stopping = false;
 let initializing = false;
 let resuming = false;
+let stopping = false;
 let pendingInitRequest: InitRequest | null = null;
-let metricRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-let summaryRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
-const charts = new DashboardCharts();
-const refreshController = new DashboardRefreshController(
-  selection,
-  { fetchSummary, fetchMetrics },
-  {
-    currentSummary: () => summary,
-    applySummary: (nextSummary) => {
-      summary = nextSummary;
-      process = nextSummary.process;
-      renderRun();
-      renderCheckpoints();
-    },
-    applyMetrics: (nextMetrics) => {
-      metrics = nextMetrics;
-      renderMetrics();
-    },
-    setRefreshPending: () => {
-      dashboardStatus.setRefreshPending();
-      renderDashboardStatus();
-    },
-    setRefreshIdle: () => {
-      dashboardStatus.setRefreshIdle();
-      renderDashboardStatus();
-    },
-    reportError: reportDashboardError,
-    clearError: clearDashboardError,
-  },
-);
 const directoryInput = element("run-directory", HTMLInputElement);
 const directoryForm = element("directory-form", HTMLFormElement);
 const useDirectoryButton = element(
@@ -108,17 +52,58 @@ const checkpointDialog = element(
   "checkpoint-dialog",
   HTMLDialogElement,
 );
-const stream = new TrainingStreamClient(streamTarget, {
-  onMessage: receiveLogMessage,
-  onConnectionChange: (connected) => {
-    dashboardStatus.setStreamConnection(
-      connected ? "online" : "reconnecting",
-    );
-    if (connected) dashboardStatus.clearError("stream");
-    renderDashboardStatus();
+
+const processDomain = new ProcessDomain(
+  () => selection.runDir,
+  {
+    reportError: (message) => reportDashboardError("process", message),
+    clearError: () => clearDashboardError("process"),
+    connectionChanged: (connected) => {
+      dashboardStatus.setStreamConnection(
+        connected ? "online" : "reconnecting",
+      );
+      renderDashboardStatus();
+    },
   },
-  onError: (message) => reportDashboardError("stream", message),
-});
+);
+
+const metricsDomain = new MetricsDomain(
+  () => selection.runDir,
+  () => currentRoute() === "metrics",
+  {
+    reportError: (message) => reportDashboardError("metrics", message),
+    clearError: () => clearDashboardError("metrics"),
+    setPending: (pending) => {
+      if (pending) dashboardStatus.setRefreshPending();
+      else dashboardStatus.setRefreshIdle();
+      renderDashboardStatus();
+    },
+  },
+);
+
+const logsDomain = new LogsDomain(
+  () => selection.runDir,
+  () => currentRoute() === "logs",
+  {
+    reportError: (message) => reportDashboardError("logs", message),
+    clearError: () => clearDashboardError("logs"),
+  },
+);
+
+const checkpointsDomain = new CheckpointsDomain(
+  () => selection.runDir,
+  () => currentRoute() === "checkpoints",
+  {
+    reportError: (message) =>
+      reportDashboardError("checkpoints", message),
+    clearError: () => clearDashboardError("checkpoints"),
+    canResume: () =>
+      processDomain.process === null && !initializing && !resuming &&
+      !stopping,
+    resumeFrom,
+    inspect: showCheckpoint,
+  },
+);
 
 initialize();
 
@@ -127,7 +112,10 @@ function initialize(): void {
   renderFormFields("resume-fields", RESUME_GROUPS, RESUME_FIELDS);
   bindEvents();
   renderRoute();
-  scheduleSummaryRefresh();
+  processDomain.render();
+  metricsDomain.render();
+  logsDomain.render();
+  checkpointsDomain.render();
   void loadServerConfig();
 }
 
@@ -136,33 +124,49 @@ function bindEvents(): void {
   directoryInput.addEventListener("input", renderDirectoryAction);
   directoryForm.addEventListener("submit", (event) => {
     event.preventDefault();
-    const next = directoryInput.value.trim();
-    if (next === "") {
+    const runDir = directoryInput.value.trim();
+    if (runDir === "") {
       reportDashboardError("directory", "Run directory is required");
       return;
     }
-    selection.setRunDirectory(next);
-    resetRunData();
+    clearDashboardError("directory");
+    selection.setRunDirectory(runDir);
+    resetDomains();
+    connectStreams();
     renderDirectoryAction();
-    void refreshAll();
-    connectStream();
+    void refreshCurrentDomain();
   });
   element("open-init", HTMLButtonElement).addEventListener(
     "click",
     () => {
-      element("init-status", HTMLElement).textContent = "";
+      resetLaunchStatus("init-status");
       renderInitCommand();
       initDialog.showModal();
     },
   );
+  element("open-replace", HTMLButtonElement).addEventListener(
+    "click",
+    prepareReplacement,
+  );
   element("open-resume", HTMLButtonElement).addEventListener(
     "click",
     () => {
+      resetLaunchStatus("resume-status");
       renderResumeCommand();
       resumeDialog.showModal();
     },
   );
-  initForm.addEventListener("submit", prepareInitialization);
+  initForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (!initForm.reportValidity()) return;
+    void runInitialization(
+      initRequestFromForm(initForm, selection.runDir, null),
+      initDialog,
+      "init-status",
+      "confirm-init",
+      "Initialize",
+    );
+  });
   replaceForm.addEventListener("submit", confirmReplacement);
   resumeForm.addEventListener("submit", (event) => void resume(event));
   initForm.addEventListener("input", renderInitCommand);
@@ -192,57 +196,15 @@ function bindEvents(): void {
   }
   for (
     const button of document.querySelectorAll<HTMLButtonElement>(
-      "[data-refresh]",
-    )
-  ) {
-    button.addEventListener("click", () => void refreshAll());
-  }
-  for (
-    const button of document.querySelectorAll<HTMLButtonElement>(
-      "[data-axis]",
+      "[data-refresh-domain]",
     )
   ) {
     button.addEventListener("click", () => {
-      metricAxis = button.dataset.axis === "elapsed"
-        ? "elapsed"
-        : "update";
-      renderAxisButtons();
-      renderMetrics();
+      if (button.dataset.refreshDomain === currentRoute()) {
+        void refreshCurrentDomain();
+      }
     });
   }
-  element("toggle-follow", HTMLButtonElement).addEventListener(
-    "click",
-    () => {
-      followLogs = !followLogs;
-      element("toggle-follow", HTMLButtonElement).textContent =
-        followLogs ? "Pause" : "Follow";
-      if (followLogs) scrollLogsToEnd();
-    },
-  );
-  element("log-window", HTMLInputElement).addEventListener(
-    "change",
-    updateLogWindow,
-  );
-  element("metrics-range", HTMLSelectElement).addEventListener(
-    "change",
-    () => void refreshMetrics(),
-  );
-  element("metrics-resolution", HTMLSelectElement).addEventListener(
-    "change",
-    () => void refreshMetrics(),
-  );
-  element("metrics-session-select", HTMLSelectElement).addEventListener(
-    "change",
-    () => {
-      selection.setMetricSession(
-        element(
-          "metrics-session-select",
-          HTMLSelectElement,
-        ).value || null,
-      );
-      void refreshMetrics();
-    },
-  );
 }
 
 async function loadServerConfig(): Promise<void> {
@@ -253,8 +215,9 @@ async function loadServerConfig(): Promise<void> {
     selection.setRunDirectory(config.default_run_dir);
     directoryInput.value = selection.runDir;
     renderDirectoryAction();
-    await refreshAll();
-    connectStream();
+    resetDomains();
+    connectStreams();
+    await refreshCurrentDomain();
   } catch (error: unknown) {
     if (selection.ownsRun(origin)) {
       reportDashboardError("config", errorText(error));
@@ -262,368 +225,92 @@ async function loadServerConfig(): Promise<void> {
   }
 }
 
-async function refreshAll(): Promise<void> {
-  await refreshController.refreshAll(metricRefreshOptions());
-}
-
-async function refreshMetrics(): Promise<void> {
-  await refreshController.refreshMetrics(metricRefreshOptions());
-}
-
-function streamTarget(): TrainingStreamTarget | null {
-  if (selection.runDir === "") return null;
-  return {
-    runDir: selection.runDir,
-    window: logWindow,
-    eventTypes: [],
-    sessionId: null,
-  };
-}
-
-function receiveLogMessage(message: TrainingLogMessage): void {
-  if (message.type === "error") {
-    reportDashboardError("stream", message.message);
-    return;
-  }
-  if (message.type === "reset") {
-    if (logRenderFrame !== null) cancelAnimationFrame(logRenderFrame);
-    logRenderFrame = null;
-    pendingLogEvents = [];
-    logEvents = [];
-    logWindow = message.window;
-    element("log-window", HTMLInputElement).value = String(logWindow);
-    renderRun();
-    renderLogs();
-    return;
-  }
-  pendingLogEvents.push({
-    sequence: message.sequence,
-    event: message.event,
-  });
-  scheduleLogRender();
-  if (isMetricBoundary(message.event.event)) scheduleMetricRefresh();
-  if (message.event.event.startsWith("session.")) {
-    void refreshSummaryOnly();
-  }
-}
-
-async function refreshSummaryOnly(): Promise<void> {
-  await refreshController.refreshSummary();
-}
-
-function scheduleSummaryRefresh(): void {
-  if (summaryRefreshTimer !== null) return;
-  summaryRefreshTimer = setTimeout(() => {
-    summaryRefreshTimer = null;
-    const refresh = process !== null
-      ? refreshSummaryOnly()
-      : Promise.resolve();
-    void refresh.finally(scheduleSummaryRefresh);
-  }, SUMMARY_REFRESH_INTERVAL_MS);
-}
-
-function scheduleMetricRefresh(): void {
-  if (currentRoute() !== "metrics") return;
-  if (metricRefreshTimer !== null) clearTimeout(metricRefreshTimer);
-  metricRefreshTimer = setTimeout(() => {
-    metricRefreshTimer = null;
-    void refreshMetrics();
-  }, 500);
-}
-
-function isMetricBoundary(eventType: string): boolean {
-  return eventType === "update.completed" ||
-    eventType === "rollout.completed" ||
-    eventType.startsWith("session.");
-}
-
-function resetRunData(): void {
-  if (logRenderFrame !== null) cancelAnimationFrame(logRenderFrame);
-  logRenderFrame = null;
-  pendingLogEvents = [];
-  if (metricRefreshTimer !== null) clearTimeout(metricRefreshTimer);
-  metricRefreshTimer = null;
-  summary = null;
-  process = null;
-  metrics = null;
-  logEvents = [];
-  selection.setMetricSession(null);
+function resetDomains(): void {
+  processDomain.reset();
+  metricsDomain.reset();
+  logsDomain.reset();
+  checkpointsDomain.reset();
   dashboardStatus.reset();
-  renderAll();
   renderDashboardStatus();
 }
 
-function renderAll(): void {
-  renderRun();
-  renderMetrics();
-  renderCheckpoints();
-  renderLogs();
+function resetArtifactDomains(): void {
+  metricsDomain.reset();
+  logsDomain.reset();
+  checkpointsDomain.reset();
 }
 
-function renderRun(): void {
-  element("run-caption", HTMLElement).textContent = selection.runDir;
-  const state = summary?.state ?? "-";
-  const presence = element("process-presence", HTMLElement);
-  presence.textContent = state;
-  presence.className = statusBadgeClass(state);
-  replaceWithRows(element("process-details", HTMLElement), [
-    ["PID", process === null ? "-" : String(process.pid)],
-    ["Kernel state", process?.kernel_state ?? "-"],
-    ["Executable", process?.executable ?? "-"],
-    ["Working directory", process?.working_directory ?? "-"],
-    [
-      "Process group",
-      process === null ? "-" : String(process.process_group_id),
-    ],
-  ]);
-  const latestEvent = logEvents.at(-1)?.event;
-  const sessionBadge = element("session-presence", HTMLElement);
-  sessionBadge.textContent = latestEvent?.event ?? "-";
-  sessionBadge.className = sessionBadgeClass(latestEvent?.event ?? "");
-  replaceWithRows(element("runtime-details", HTMLElement), [
-    ["Run status", state],
-    ["Status reason", summary?.reason ?? "-"],
-    ["Latest event", latestEvent?.event ?? "-"],
-    ["Last observed", formatTime(latestEvent?.recorded_at_ms ?? null)],
-    ["Rounds", formatValue(summary?.details?.total_rounds)],
-    ["Samples", formatValue(summary?.details?.total_samples)],
-    ["Updates", formatValue(summary?.details?.total_updates)],
-    ["Checkpoint", summary?.details?.checkpoint_path ?? "-"],
-  ]);
-  const launchArgv = latestLaunchArgv();
-  element("process-command", HTMLElement).textContent =
-    (process?.argv ?? launchArgv)?.map(shellQuote).join(" ") ??
-      "No training session";
-  element("overview", HTMLElement).replaceChildren(
-    overviewCell("State", state),
-    overviewCell("Rounds", formatValue(summary?.details?.total_rounds)),
-    overviewCell(
-      "Samples",
-      formatValue(summary?.details?.total_samples),
-    ),
-    overviewCell(
-      "Updates",
-      formatValue(summary?.details?.total_updates),
-    ),
-    overviewCell("Latest event", latestEvent?.event ?? "-"),
-  );
-  element("open-init", HTMLButtonElement).disabled = summary === null ||
-    process !== null || stopping || initializing || resuming;
-  element("open-resume", HTMLButtonElement).disabled =
-    state !== "READY" ||
-    stopping || initializing || resuming;
-  const stopButton = element("stop-training", HTMLButtonElement);
-  stopButton.disabled = process === null || stopping;
-  stopButton.textContent = stopping ? "Stopping..." : "Stop";
+function connectStreams(): void {
+  dashboardStatus.setStreamConnection("connecting");
+  renderDashboardStatus();
+  processDomain.connect();
+  metricsDomain.connect();
+  checkpointsDomain.connect();
+  if (currentRoute() === "logs") logsDomain.activate();
 }
 
-function renderMetrics(): void {
-  const totals = metrics?.totals ?? {};
-  element("metrics-session", HTMLElement).textContent =
-    metrics?.session_id ?? "No training session";
-  renderMetricSessions();
-  element("metric-strip", HTMLElement).replaceChildren(
-    metricCell("Rounds", formatValue(totals.total_rounds)),
-    metricCell("Samples", formatValue(totals.total_samples)),
-    metricCell("Updates", formatValue(totals.total_updates)),
-    metricCell("Samples/s", formatValue(totals.samples_per_second)),
-    metricCell("Update time", formatSeconds(totals.update_seconds)),
-    metricCell(
-      "Log integrity",
-      metrics?.complete === false ? "INCOMPLETE" : "COMPLETE",
-    ),
-  );
-  if (metrics !== null) charts.setData(metrics, metricAxis);
-  else charts.clear();
-}
-
-function latestLaunchArgv(): readonly string[] | null {
-  for (let index = logEvents.length - 1; index >= 0; index -= 1) {
-    const event = logEvents[index]?.event;
-    if (event?.event !== "session.started") continue;
-    const argv = event.fields.argv;
-    if (
-      Array.isArray(argv) &&
-      argv.every((item) => typeof item === "string")
-    ) {
-      return argv;
-    }
+async function refreshCurrentDomain(): Promise<void> {
+  switch (currentRoute()) {
+    case "process":
+      await processDomain.refresh();
+      return;
+    case "metrics":
+      await metricsDomain.refresh();
+      return;
+    case "logs":
+      await logsDomain.refresh();
+      return;
+    case "checkpoints":
+      await checkpointsDomain.refresh();
   }
-  return null;
 }
 
-function renderMetricSessions(): void {
-  const select = element("metrics-session-select", HTMLSelectElement);
-  const options: HTMLOptionElement[] = [];
-  const latest = document.createElement("option");
-  latest.value = "";
-  latest.textContent = "Latest session";
-  options.push(latest);
-  for (const session of metrics?.sessions ?? []) {
-    const option = document.createElement("option");
-    option.value = session.session_id;
-    option.textContent = new Date(session.started_at_ms).toLocaleString(
-      "en-GB",
-    );
-    options.push(option);
+function renderRoute(): void {
+  const route = currentRoute();
+  for (
+    const view of document.querySelectorAll<HTMLElement>("[data-view]")
+  ) {
+    view.hidden = view.dataset.view !== route;
   }
-  select.replaceChildren(...options);
-  select.value = selection.metricSession ?? "";
-}
-
-function renderLogs(): void {
-  const target = element("log-content", HTMLElement);
-  target.replaceChildren(
-    ...logEvents.map(({ sequence, event }) => logRow(sequence, event)),
-  );
-  element("log-count", HTMLElement).textContent = `${
-    logEvents.length.toLocaleString("en-US")
-  } events`;
-  if (followLogs) scrollLogsToEnd();
-}
-
-function scheduleLogRender(): void {
-  if (logRenderFrame !== null) return;
-  logRenderFrame = requestAnimationFrame(() => {
-    logRenderFrame = null;
-    appendPendingLogs();
-  });
-}
-
-function appendPendingLogs(): void {
-  if (pendingLogEvents.length === 0) return;
-  const additions = pendingLogEvents;
-  pendingLogEvents = [];
-  logEvents = [...logEvents, ...additions].slice(-logWindow);
-  renderRun();
-  const target = element("log-content", HTMLElement);
-  const fragment = document.createDocumentFragment();
-  for (const { sequence, event } of additions) {
-    fragment.append(logRow(sequence, event));
+  for (
+    const link of document.querySelectorAll<HTMLElement>("[data-route]")
+  ) link.classList.toggle("active", link.dataset.route === route);
+  if (route === "logs") logsDomain.activate();
+  else logsDomain.deactivate();
+  if (route === "metrics") metricsDomain.activate();
+  if (route === "checkpoints" && !checkpointsDomain.loaded) {
+    void checkpointsDomain.refresh();
   }
-  target.append(fragment);
-  while (target.childElementCount > logWindow) {
-    target.firstElementChild?.remove();
+  if (route === "process" && selection.runDir !== "") {
+    void processDomain.refresh();
   }
-  element("log-count", HTMLElement).textContent = `${
-    logEvents.length.toLocaleString("en-US")
-  } events`;
-  if (followLogs) scrollLogsToEnd();
 }
 
-function logRow(sequence: number, event: TrainingEvent): HTMLElement {
-  const details = document.createElement("details");
-  details.className = `log-row level-${event.level.toLowerCase()}`;
-  const summaryElement = document.createElement("summary");
-  const time = document.createElement("time");
-  time.textContent = new Date(event.recorded_at_ms).toLocaleTimeString(
-    "en-GB",
-  );
-  const level = document.createElement("span");
-  level.className = "log-level";
-  level.textContent = event.level;
-  const name = document.createElement("strong");
-  name.textContent = event.event;
-  const cursor = document.createElement("code");
-  cursor.textContent = `#${sequence}`;
-  summaryElement.append(time, level, name, cursor);
-  const body = document.createElement("pre");
-  body.textContent = JSON.stringify(event, null, 2);
-  details.append(summaryElement, body);
-  return details;
+function currentRoute(): ViewName {
+  const route = globalThis.location.hash.slice(1);
+  if (
+    route === "metrics" || route === "logs" || route === "checkpoints"
+  ) return route;
+  return "process";
 }
 
-function scrollLogsToEnd(): void {
-  const target = element("log-content", HTMLElement);
-  target.scrollTop = target.scrollHeight;
+function syncProcessOperations(): void {
+  processDomain.setOperations({ initializing, resuming, stopping });
 }
 
-function renderCheckpoints(): void {
-  const checkpoints = summary?.checkpoints;
-  element("checkpoint-directory", HTMLElement).textContent =
-    checkpoints?.checkpoint_directory ??
-      `${selection.runDir}/checkpoints`;
-  element("checkpoint-summary", HTMLElement).replaceChildren(
-    metricCell(
-      "Valid manifests",
-      String(
-        checkpoints?.manifests.filter((item) => item.valid).length ?? 0,
-      ),
-    ),
-    metricCell("Objects", String(checkpoints?.objects.length ?? 0)),
-    metricCell(
-      "Orphans",
-      String(
-        checkpoints?.objects.filter((item) => item.orphan).length ?? 0,
-      ),
-    ),
-    metricCell(
-      "Unique storage",
-      formatBytes(checkpoints?.total_unique_state_bytes ?? 0),
-    ),
+function prepareReplacement(): void {
+  if (!initForm.reportValidity()) return;
+  pendingInitRequest = initRequestFromForm(
+    initForm,
+    selection.runDir,
+    null,
   );
-  element("manifest-rows", HTMLTableSectionElement).replaceChildren(
-    ...(checkpoints?.manifests ?? []).map((manifest) => {
-      const actions = document.createElement("div");
-      actions.className = "table-actions";
-      actions.append(
-        actionButton("Inspect", () => showCheckpoint(manifest)),
-        actionButton(
-          "Resume",
-          () => resumeFrom(manifest),
-          manifest.valid && summary?.state === "READY",
-        ),
-      );
-      return rowWithNode(
-        [
-          manifest.name,
-          formatValue(manifest.total_updates),
-          formatValue(manifest.total_samples),
-          manifest.state_exists ? "Available" : "Missing",
-          formatBytes(manifest.state_size_bytes),
-          manifest.error ?? "Validated",
-        ],
-        actions,
-        manifest.valid ? "" : "invalid-row",
-      );
-    }),
-  );
-  element("object-rows", HTMLTableSectionElement).replaceChildren(
-    ...(checkpoints?.objects ?? []).map((item) =>
-      row([
-        item.checkpoint_id,
-        item.state_path,
-        formatBytes(item.state_size_bytes),
-        item.referenced_by.join(", ") || "None",
-        item.error ?? (item.orphan ? "Orphan" : "Referenced"),
-      ], item.valid ? "" : "invalid-row")
-    ),
-  );
-}
-
-function prepareInitialization(event: Event): void {
-  event.preventDefault();
-  if (initializing || !initForm.reportValidity()) return;
-  const request = initRequestFromForm(initForm, selection.runDir, null);
-  if (summary?.state === "READY" || summary?.state === "BROKEN") {
-    pendingInitRequest = request;
-    element("replace-status", HTMLElement).textContent =
-      `Current state: ${summary.state}`;
-    element("replace-run-directory", HTMLElement).textContent =
-      selection.runDir;
-    element("replace-result", HTMLElement).textContent = "";
-    initDialog.close();
-    replaceDialog.showModal();
-    element("replace-existing", HTMLInputElement).focus();
-    return;
-  }
-  void runInitialization(
-    request,
-    initDialog,
-    "init-status",
-    "confirm-init",
-    "Initialize",
-  );
+  element("replace-run-directory", HTMLElement).textContent =
+    selection.runDir;
+  element("replace-result", HTMLElement).textContent = "";
+  initDialog.close();
+  replaceDialog.showModal();
+  element("replace-existing", HTMLInputElement).focus();
 }
 
 function confirmReplacement(event: Event): void {
@@ -648,22 +335,22 @@ async function runInitialization(
   buttonId: string,
   idleLabel: string,
 ): Promise<void> {
+  if (initializing) return;
   const origin = selection.captureRun();
-  if (request.run_dir !== origin.runDir) return;
   initializing = true;
+  syncProcessOperations();
   const status = element(statusId, HTMLElement);
   const button = element(buttonId, HTMLButtonElement);
   button.disabled = true;
-  status.textContent = "Creating initial checkpoint...";
-  renderRun();
+  status.className = "status-value";
+  status.textContent = "Initializing…";
   try {
     await initializeTraining(request);
-    dialog.close();
     if (!selection.ownsRun(origin)) return;
+    dialog.close();
     selection.markRunReplaced();
-    metrics = null;
-    connectStream();
-    await refreshAll();
+    resetArtifactDomains();
+    await processDomain.refresh();
   } catch (error: unknown) {
     if (selection.ownsRun(origin)) {
       status.className = "error-value";
@@ -673,25 +360,29 @@ async function runInitialization(
     initializing = false;
     button.disabled = false;
     button.textContent = idleLabel;
-    renderRun();
+    syncProcessOperations();
   }
 }
 
 async function resume(event: Event): Promise<void> {
   event.preventDefault();
   if (resuming || !resumeForm.reportValidity()) return;
-  resuming = true;
-  const status = element("resume-status", HTMLElement);
   const origin = selection.captureRun();
-  const request = resumeRequestFromForm(resumeForm, origin.runDir);
+  const status = element("resume-status", HTMLElement);
+  const button = element("confirm-resume", HTMLButtonElement);
+  resuming = true;
+  syncProcessOperations();
+  button.disabled = true;
+  button.textContent = "Starting…";
+  status.className = "status-value";
+  status.textContent = "Waiting for CLI readiness…";
   try {
-    const nextProcess = await resumeTraining(request);
+    const value = await resumeTraining(
+      resumeRequestFromForm(resumeForm, origin.runDir),
+    );
     if (!selection.ownsRun(origin)) return;
-    process = nextProcess;
-    status.textContent = "";
+    processDomain.apply(value);
     resumeDialog.close();
-    connectStream();
-    await refreshSummaryOnly();
   } catch (error: unknown) {
     if (selection.ownsRun(origin)) {
       status.className = "error-value";
@@ -699,23 +390,24 @@ async function resume(event: Event): Promise<void> {
     }
   } finally {
     resuming = false;
-    renderRun();
+    button.disabled = false;
+    button.textContent = "Resume";
+    syncProcessOperations();
   }
 }
 
 async function stop(): Promise<void> {
   const origin = selection.captureRun();
   stopping = true;
-  renderRun();
+  syncProcessOperations();
   try {
-    const forced = await stopTraining(origin.runDir);
+    const value = await stopTraining(origin.runDir);
     if (!selection.ownsRun(origin)) return;
+    processDomain.apply(value);
     clearDashboardError("control");
-    await refreshAll();
-    if (!selection.ownsRun(origin)) return;
-    if (forced) {
-      showWarning(
-        "Stop timeout exceeded; process group was killed",
+    if (value.forced) {
+      dashboardStatus.reportWarning(
+        "Stop timeout exceeded; the process group was killed",
       );
     }
   } catch (error: unknown) {
@@ -724,8 +416,28 @@ async function stop(): Promise<void> {
     }
   } finally {
     stopping = false;
-    renderRun();
+    syncProcessOperations();
+    renderDashboardStatus();
   }
+}
+
+function resumeFrom(manifest: CheckpointManifest): void {
+  if (!manifest.valid) return;
+  const input = resumeForm.elements.namedItem("checkpoint");
+  if (!(input instanceof HTMLInputElement)) {
+    throw new Error("Missing checkpoint field");
+  }
+  input.value = manifest.name;
+  renderResumeCommand();
+  resumeDialog.showModal();
+}
+
+function showCheckpoint(manifest: CheckpointManifest): void {
+  element("checkpoint-dialog-title", HTMLElement).textContent =
+    manifest.name;
+  element("checkpoint-dialog-content", HTMLElement).textContent = JSON
+    .stringify(manifest, null, 2);
+  checkpointDialog.showModal();
 }
 
 function renderFormFields(
@@ -757,10 +469,13 @@ function renderTrainingField(field: TrainingField): HTMLElement {
     ? "field checkbox-field"
     : "field";
   const caption = document.createElement("span");
-  caption.textContent = field.label;
+  caption.className = "field-caption";
+  const fieldLabel = document.createElement("span");
+  fieldLabel.className = "field-label";
+  fieldLabel.textContent = field.label;
   const flag = document.createElement("code");
   flag.textContent = field.flag;
-  caption.append(flag);
+  caption.append(fieldLabel, flag);
   label.append(
     caption,
     field.kind === "profile"
@@ -804,68 +519,28 @@ function profileControl(field: TrainingField): HTMLSelectElement {
 }
 
 function renderInitCommand(): void {
-  try {
-    element("init-command-preview", HTMLElement).textContent =
-      initCommandPreview(
-        initRequestFromForm(initForm, selection.runDir, null),
-      );
-  } catch (error: unknown) {
-    element("init-command-preview", HTMLElement).textContent =
-      errorText(error);
-  }
+  renderCommandPreview("init-command-preview", () =>
+    initCommandPreview(
+      initRequestFromForm(initForm, selection.runDir, null),
+    ));
 }
 
 function renderResumeCommand(): void {
-  try {
-    element("resume-command-preview", HTMLElement).textContent =
+  renderCommandPreview(
+    "resume-command-preview",
+    () =>
       resumeCommandPreview(
         resumeRequestFromForm(resumeForm, selection.runDir),
-      );
+      ),
+  );
+}
+
+function renderCommandPreview(id: string, build: () => string): void {
+  try {
+    element(id, HTMLElement).textContent = build();
   } catch (error: unknown) {
-    element("resume-command-preview", HTMLElement).textContent =
-      errorText(error);
+    element(id, HTMLElement).textContent = errorText(error);
   }
-}
-
-function resumeFrom(manifest: CheckpointManifest): void {
-  if (!manifest.valid) return;
-  const input = resumeForm.elements.namedItem("checkpoint");
-  if (!(input instanceof HTMLInputElement)) {
-    throw new Error("Missing checkpoint field");
-  }
-  input.value = manifest.name;
-  renderResumeCommand();
-  resumeDialog.showModal();
-}
-
-function showCheckpoint(manifest: CheckpointManifest): void {
-  element("checkpoint-dialog-title", HTMLElement).textContent =
-    manifest.name;
-  element("checkpoint-dialog-content", HTMLElement).textContent = JSON
-    .stringify(manifest, null, 2);
-  checkpointDialog.showModal();
-}
-
-function renderRoute(): void {
-  const route = currentRoute();
-  for (
-    const view of document.querySelectorAll<HTMLElement>("[data-view]")
-  ) view.hidden = view.dataset.view !== route;
-  for (
-    const link of document.querySelectorAll<HTMLElement>("[data-route]")
-  ) link.classList.toggle("active", link.dataset.route === route);
-  if (route === "metrics") {
-    charts.resize();
-    void refreshMetrics();
-  }
-}
-
-function currentRoute(): ViewName {
-  const route = globalThis.location.hash.slice(1);
-  if (
-    route === "metrics" || route === "logs" || route === "checkpoints"
-  ) return route;
-  return "overview";
 }
 
 function renderDirectoryAction(): void {
@@ -885,142 +560,10 @@ function resetReplacementConfirmation(): void {
   renderReplacementAction();
 }
 
-function renderAxisButtons(): void {
-  for (
-    const button of document.querySelectorAll<HTMLButtonElement>(
-      "[data-axis]",
-    )
-  ) {
-    button.classList.toggle(
-      "active",
-      button.dataset.axis === metricAxis,
-    );
-  }
-}
-
-function updateLogWindow(): void {
-  const input = element("log-window", HTMLInputElement);
-  const value = input.valueAsNumber;
-  if (
-    !Number.isFinite(value) || !Number.isInteger(value) || value <= 0
-  ) {
-    input.setCustomValidity("Window must be a positive integer");
-    input.reportValidity();
-    return;
-  }
-  input.setCustomValidity("");
-  logWindow = value;
-  connectStream();
-}
-
-function replaceWithRows(
-  parent: HTMLElement,
-  rows: readonly (readonly [string, string])[],
-): void {
-  parent.replaceChildren(...rows.map(([label, value]) => {
-    const item = document.createElement("div");
-    item.className = "detail-row";
-    const key = document.createElement("span");
-    key.textContent = label;
-    const output = document.createElement("strong");
-    output.textContent = value;
-    item.append(key, output);
-    return item;
-  }));
-}
-
-function overviewCell(label: string, value: string): HTMLElement {
-  const cell = document.createElement("div");
-  cell.className = "overview-cell";
-  const caption = document.createElement("span");
-  caption.textContent = label;
-  const output = document.createElement("strong");
-  output.textContent = value;
-  cell.append(caption, output);
-  return cell;
-}
-
-function metricCell(label: string, value: string): HTMLElement {
-  const cell = document.createElement("div");
-  cell.className = "metric-cell";
-  const caption = document.createElement("span");
-  caption.textContent = label;
-  const output = document.createElement("strong");
-  output.textContent = value;
-  cell.append(caption, output);
-  return cell;
-}
-
-function row(
-  values: readonly string[],
-  className = "",
-): HTMLTableRowElement {
-  const item = document.createElement("tr");
-  item.className = className;
-  for (const value of values) {
-    const cell = document.createElement("td");
-    cell.textContent = value;
-    item.append(cell);
-  }
-  return item;
-}
-
-function rowWithNode(
-  values: readonly string[],
-  node: Node,
-  className: string,
-): HTMLTableRowElement {
-  const item = row(values, className);
-  const cell = document.createElement("td");
-  cell.append(node);
-  item.append(cell);
-  return item;
-}
-
-function actionButton(
-  label: string,
-  action: () => void,
-  enabled = true,
-): HTMLButtonElement {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "table-action";
-  button.textContent = label;
-  button.disabled = !enabled;
-  button.addEventListener("click", action);
-  return button;
-}
-
-function statusBadgeClass(state: string): string {
-  if (state === "READY") return "badge success";
-  if (state === "RUNNING") return "badge running";
-  if (state === "BROKEN") return "badge danger";
-  return "badge neutral";
-}
-
-function sessionBadgeClass(eventType: string): string {
-  if (eventType.endsWith("failed")) return "badge danger";
-  if (
-    eventType === "session.completed" || eventType === "session.stopped"
-  ) return "badge success";
-  return eventType === "" ? "badge neutral" : "badge running";
-}
-
-function setConnection(
-  label: string,
-  state: "online" | "offline" | "pending",
-): void {
-  const target = element("connection-state", HTMLElement);
-  target.textContent = label;
-  target.className = state === "pending"
-    ? "connection-label"
-    : `connection-label ${state}`;
-}
-
-function connectStream(): void {
-  dashboardStatus.setStreamConnection("connecting");
-  renderDashboardStatus();
-  stream.connect();
+function resetLaunchStatus(statusId: string): void {
+  const status = element(statusId, HTMLElement);
+  status.className = "status-value";
+  status.textContent = "";
 }
 
 function reportDashboardError(
@@ -1039,70 +582,11 @@ function clearDashboardError(source: DashboardErrorSource): void {
 function renderDashboardStatus(): void {
   const status = dashboardStatus.snapshot();
   element("directory-error", HTMLElement).textContent = status.message;
-  setConnection(status.label, status.tone);
-}
-
-function showWarning(message: string): void {
-  dashboardStatus.reportWarning(message);
-  renderDashboardStatus();
-}
-
-function formatValue(value: JsonPrimitive | undefined): string {
-  if (value === null || value === undefined) return "-";
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) return "-";
-    return value.toLocaleString("en-US", { maximumFractionDigits: 5 });
-  }
-  return String(value);
-}
-
-function formatBytes(value: number | null): string {
-  if (value === null) return "-";
-  if (value < 1024) return `${value} B`;
-  const units = ["KiB", "MiB", "GiB", "TiB"];
-  let output = value / 1024;
-  let unit = units[0] ?? "KiB";
-  for (
-    let index = 1;
-    index < units.length && output >= 1024;
-    index += 1
-  ) {
-    output /= 1024;
-    unit = units[index] ?? unit;
-  }
-  return `${output.toFixed(output >= 10 ? 1 : 2)} ${unit}`;
-}
-
-function formatSeconds(value: JsonPrimitive | undefined): string {
-  return typeof value === "number" ? `${formatValue(value)} s` : "-";
-}
-
-function formatTime(value: number | null): string {
-  return value === null ? "-" : new Date(value).toLocaleString("en-GB");
-}
-
-function shellQuote(value: string): string {
-  return /^[A-Za-z0-9_./,:+=-]+$/.test(value)
-    ? value
-    : `'${value.replaceAll("'", `'"'"'`)}'`;
-}
-
-function selectedNumber(id: string): number {
-  const value = Number(element(id, HTMLSelectElement).value);
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new Error(`Invalid selection: ${id}`);
-  }
-  return value;
-}
-
-function metricRefreshOptions(): {
-  readonly updateLimit: number;
-  readonly seriesPoints: number;
-} {
-  return {
-    updateLimit: selectedNumber("metrics-range"),
-    seriesPoints: selectedNumber("metrics-resolution"),
-  };
+  const connection = element("connection-state", HTMLElement);
+  connection.textContent = status.label;
+  connection.className = status.tone === "pending"
+    ? "connection-label"
+    : `connection-label ${status.tone}`;
 }
 
 function errorText(error: unknown): string {

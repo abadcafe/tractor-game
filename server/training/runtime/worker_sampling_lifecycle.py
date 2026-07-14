@@ -50,11 +50,13 @@ class WorkerSamplingSession:
     """Active sampling session across all commanded workers."""
 
     policy_version: int
+    rollout_id: str
     commanded_handles: tuple[WorkerControlHandle, ...]
     started_handles: tuple[WorkerControlHandle, ...]
 
     def __post_init__(self) -> None:
         assert self.policy_version >= 0
+        assert self.rollout_id
         assert self.commanded_handles
         assert self.started_handles
         assert len(self.commanded_handles) == len(self.started_handles)
@@ -75,6 +77,7 @@ async def start_worker_sampling_session(
     handles: tuple[WorkerControlHandle, ...],
     execution_config: ExecutionConfig,
     policy_version: int,
+    rollout_id: str,
 ) -> (
     _result.Ok[WorkerSamplingSession]
     | _result.Rejected
@@ -87,6 +90,7 @@ async def start_worker_sampling_session(
         sender=_worker_control_sender,
         command=lambda _handle: WorkerStartSamplingCommand(
             policy_version=policy_version,
+            rollout_id=rollout_id,
             game_env_count=execution_config.game_envs_per_worker,
         ),
     )
@@ -94,6 +98,7 @@ async def start_worker_sampling_session(
         return await _abort_worker_sampling_start(
             handles=send_result.sent_targets,
             policy_version=policy_version,
+            rollout_id=rollout_id,
             timeout_seconds=(
                 execution_config.timeouts.sampling_stop_seconds
             ),
@@ -102,6 +107,7 @@ async def start_worker_sampling_session(
     return await _receive_worker_sampling_session_started(
         commanded_handles=send_result.value,
         policy_version=policy_version,
+        rollout_id=rollout_id,
         start_timeout_seconds=(
             execution_config.timeouts.sampling_start_seconds
         ),
@@ -120,6 +126,7 @@ async def stop_worker_sampling_session(
     send_result = await _send_worker_stop_sampling_commands(
         handles=session.started_handles,
         policy_version=session.policy_version,
+        rollout_id=session.rollout_id,
     )
     if isinstance(send_result, Rejected):
         return send_result
@@ -143,13 +150,15 @@ async def _send_worker_stop_sampling_commands(
     *,
     handles: tuple[WorkerControlHandle, ...],
     policy_version: int,
+    rollout_id: str,
 ) -> _result.Ok[None] | _result.Rejected:
     assert handles
     send_result = await broadcast_control_commands(
         targets=handles,
         sender=_worker_control_sender,
         command=lambda _handle: WorkerStopSamplingCommand(
-            policy_version=policy_version
+            policy_version=policy_version,
+            rollout_id=rollout_id,
         ),
     )
     if isinstance(send_result, ControlCommandBroadcastFailure):
@@ -167,6 +176,7 @@ async def _receive_worker_sampling_session_started(
     *,
     commanded_handles: tuple[WorkerControlHandle, ...],
     policy_version: int,
+    rollout_id: str,
     start_timeout_seconds: float,
     stop_timeout_seconds: float,
 ) -> (
@@ -185,6 +195,7 @@ async def _receive_worker_sampling_session_started(
             return await _abort_worker_sampling_start(
                 handles=commanded_handles,
                 policy_version=policy_version,
+                rollout_id=rollout_id,
                 timeout_seconds=stop_timeout_seconds,
                 failure=ready_result,
             )
@@ -194,6 +205,7 @@ async def _receive_worker_sampling_session_started(
                 return await _abort_worker_sampling_start(
                     handles=commanded_handles,
                     policy_version=policy_version,
+                    rollout_id=rollout_id,
                     timeout_seconds=stop_timeout_seconds,
                     failure=response_result,
                 )
@@ -203,6 +215,7 @@ async def _receive_worker_sampling_session_started(
                 return await _abort_worker_sampling_start(
                     handles=commanded_handles,
                     policy_version=policy_version,
+                    rollout_id=rollout_id,
                     timeout_seconds=stop_timeout_seconds,
                     failure=_worker_command_rejection(response),
                 )
@@ -211,6 +224,7 @@ async def _receive_worker_sampling_session_started(
                     return await _abort_worker_sampling_start(
                         handles=commanded_handles,
                         policy_version=policy_version,
+                        rollout_id=rollout_id,
                         timeout_seconds=stop_timeout_seconds,
                         failure=Rejected(
                             reason=(
@@ -224,6 +238,7 @@ async def _receive_worker_sampling_session_started(
             return await _abort_worker_sampling_start(
                 handles=commanded_handles,
                 policy_version=policy_version,
+                rollout_id=rollout_id,
                 timeout_seconds=stop_timeout_seconds,
                 failure=Rejected(
                     reason=_unexpected_worker_response_reason(
@@ -235,6 +250,7 @@ async def _receive_worker_sampling_session_started(
     return Ok(
         value=WorkerSamplingSession(
             policy_version=policy_version,
+            rollout_id=rollout_id,
             commanded_handles=commanded_handles,
             started_handles=tuple(
                 sorted(started_handles, key=lambda item: item.index)
@@ -247,6 +263,7 @@ async def _abort_worker_sampling_start(
     *,
     handles: tuple[WorkerControlHandle, ...],
     policy_version: int,
+    rollout_id: str,
     timeout_seconds: float,
     failure: Rejected,
 ) -> Rejected | WorkerSamplingCleanupFailed:
@@ -255,6 +272,7 @@ async def _abort_worker_sampling_start(
     send_result = await _send_worker_stop_sampling_commands(
         handles=handles,
         policy_version=policy_version,
+        rollout_id=rollout_id,
     )
     if isinstance(send_result, Rejected):
         return WorkerSamplingCleanupFailed(

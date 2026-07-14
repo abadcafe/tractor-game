@@ -19,6 +19,7 @@ class PolicyDecisionKey:
 
     base_seed: int
     policy_version: int
+    rollout_id: str
     episode_id: int
     player_index: int
     decision_index: int
@@ -26,6 +27,7 @@ class PolicyDecisionKey:
     def __post_init__(self) -> None:
         assert self.base_seed >= 0
         assert self.policy_version >= 0
+        assert self.rollout_id
         assert self.episode_id >= 0
         assert self.player_index in (0, 1, 2, 3)
         assert self.decision_index >= 0

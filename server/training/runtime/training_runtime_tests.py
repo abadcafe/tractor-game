@@ -14,7 +14,6 @@ import pytest
 
 from server.foundation.result import Ok, Rejected
 from server.training.config import ModelConfig, TrainConfig
-from server.training.event_log import NullEventSink
 from server.training.runtime import training_runtime
 from server.training.runtime.async_ipc import (
     AsyncChildControlEndpoint,
@@ -66,6 +65,7 @@ from server.training.runtime.worker_sampling_lifecycle import (
     WorkerSamplingSession,
     start_worker_sampling_session,
 )
+from server.training_events import NullEventSink
 
 _WORKER_TEST_PROTOCOL: ProcessControlProtocol[
     WorkerCommand, WorkerResponse
@@ -254,14 +254,12 @@ def _open_fake_runtime(
         *,
         run_dir: Path,
         run_id: str,
-        session_id: str,
         model_config: ModelConfig,
         train_config: TrainConfig,
         execution_config: ExecutionConfig,
     ) -> Ok[_FakeRuntimePools] | Rejected:
         assert run_dir == Path("unused")
         assert run_id == "poisoned-runtime"
-        assert session_id == "test-session"
         assert model_config.d_model == 4
         assert train_config.ppo_epochs == 1
         assert execution_config.samples_per_update == 1
@@ -280,8 +278,7 @@ def _open_fake_runtime(
     runtime_result = training_runtime.open_training_runtime(
         run_dir=Path("unused"),
         run_id="poisoned-runtime",
-        session_id="test-session",
-        event_sink=NullEventSink(session_id="test-session"),
+        event_sink=NullEventSink(),
         model_config=ModelConfig(d_model=4, layers=1, heads=1),
         train_config=TrainConfig(ppo_epochs=1),
         execution_config=execution_config,
@@ -302,6 +299,7 @@ async def test_start_sampling_session_stops_commanded_workers() -> None:
                     game_envs_per_worker=2,
                 ),
                 policy_version=7,
+                rollout_id="rollout-7",
             )
         )
 
@@ -369,6 +367,7 @@ async def test_start_sampling_cleans_sent_worker_on_failure() -> None:
                     game_envs_per_worker=2,
                 ),
                 policy_version=7,
+                rollout_id="rollout-7",
             )
         )
 
@@ -410,6 +409,7 @@ async def test_start_sampling_reports_uncleaned_sent_workers() -> None:
                     ),
                 ),
                 policy_version=7,
+                rollout_id="rollout-7",
             )
         )
 
@@ -529,6 +529,7 @@ async def test_runtime_poisoned_after_sampling_stop_failure(
         handles: tuple[WorkerControlHandle, ...],
         execution_config: ExecutionConfig,
         policy_version: int,
+        rollout_id: str,
     ) -> Ok[WorkerSamplingSession] | Rejected:
         nonlocal start_calls
         assert execution_config.samples_per_update == 1
@@ -536,6 +537,7 @@ async def test_runtime_poisoned_after_sampling_stop_failure(
         return Ok(
             value=WorkerSamplingSession(
                 policy_version=policy_version,
+                rollout_id=rollout_id,
                 commanded_handles=handles,
                 started_handles=handles,
             )
@@ -571,14 +573,12 @@ async def test_runtime_poisoned_after_sampling_stop_failure(
         *,
         run_dir: Path,
         run_id: str,
-        session_id: str,
         model_config: ModelConfig,
         train_config: TrainConfig,
         execution_config: ExecutionConfig,
     ) -> Ok[_FakeRuntimePools] | Rejected:
         assert run_dir == Path("unused")
         assert run_id == "poisoned-runtime"
-        assert session_id == "test-session"
         assert model_config.d_model == 4
         assert train_config.ppo_epochs == 1
         assert execution_config.samples_per_update == 1
@@ -612,8 +612,7 @@ async def test_runtime_poisoned_after_sampling_stop_failure(
     runtime_result = training_runtime.open_training_runtime(
         run_dir=Path("unused"),
         run_id="poisoned-runtime",
-        session_id="test-session",
-        event_sink=NullEventSink(session_id="test-session"),
+        event_sink=NullEventSink(),
         model_config=ModelConfig(d_model=4, layers=1, heads=1),
         train_config=TrainConfig(ppo_epochs=1),
         execution_config=ExecutionConfig(
@@ -627,8 +626,12 @@ async def test_runtime_poisoned_after_sampling_stop_failure(
     assert isinstance(runtime_result, Ok)
     runtime = runtime_result.value
     try:
-        first = await runtime.run_update(policy_version=3)
-        second = await runtime.run_update(policy_version=4)
+        first = await runtime.run_update(
+            policy_version=3, rollout_id="rollout-3"
+        )
+        second = await runtime.run_update(
+            policy_version=4, rollout_id="rollout-4"
+        )
         await runtime.close()
     finally:
         if not group_closed:
@@ -670,6 +673,7 @@ async def test_runtime_poisoned_after_sampling_start_cleanup_failure(
         handles: tuple[WorkerControlHandle, ...],
         execution_config: ExecutionConfig,
         policy_version: int,
+        rollout_id: str,
     ) -> (
         Ok[WorkerSamplingSession]
         | Rejected
@@ -702,8 +706,12 @@ async def test_runtime_poisoned_after_sampling_start_cleanup_failure(
         failed_sampling_start,
     )
     try:
-        first = await runtime.run_update(policy_version=3)
-        second = await runtime.run_update(policy_version=4)
+        first = await runtime.run_update(
+            policy_version=3, rollout_id="rollout-3"
+        )
+        second = await runtime.run_update(
+            policy_version=4, rollout_id="rollout-4"
+        )
         await runtime.close()
     finally:
         fake_worker.close()
@@ -746,6 +754,7 @@ async def test_runtime_poisoned_after_worker_update_partial_broadcast(
         handles: tuple[WorkerControlHandle, ...],
         execution_config: ExecutionConfig,
         policy_version: int,
+        rollout_id: str,
     ) -> (
         Ok[WorkerSamplingSession]
         | Rejected
@@ -755,6 +764,7 @@ async def test_runtime_poisoned_after_worker_update_partial_broadcast(
         return Ok(
             value=WorkerSamplingSession(
                 policy_version=policy_version,
+                rollout_id=rollout_id,
                 commanded_handles=handles,
                 started_handles=handles,
             )
@@ -812,10 +822,14 @@ async def test_runtime_poisoned_after_worker_update_partial_broadcast(
     )
     try:
         first_worker.handle.control.close()
-        task = asyncio.create_task(runtime.run_update(policy_version=5))
+        task = asyncio.create_task(
+            runtime.run_update(policy_version=5, rollout_id="rollout-5")
+        )
         command = await _receive_worker_update_command(second_worker)
         first = await task
-        second = await runtime.run_update(policy_version=6)
+        second = await runtime.run_update(
+            policy_version=6, rollout_id="rollout-6"
+        )
         await runtime.close()
     finally:
         first_worker.close()
@@ -861,6 +875,7 @@ async def test_runtime_poisoned_after_model_rank_update_partial_send(
         handles: tuple[WorkerControlHandle, ...],
         execution_config: ExecutionConfig,
         policy_version: int,
+        rollout_id: str,
     ) -> (
         Ok[WorkerSamplingSession]
         | Rejected
@@ -869,6 +884,7 @@ async def test_runtime_poisoned_after_model_rank_update_partial_send(
         return Ok(
             value=WorkerSamplingSession(
                 policy_version=policy_version,
+                rollout_id=rollout_id,
                 commanded_handles=handles,
                 started_handles=handles,
             )
@@ -930,10 +946,14 @@ async def test_runtime_poisoned_after_model_rank_update_partial_send(
     )
     try:
         first_rank.handle.control.close()
-        task = asyncio.create_task(runtime.run_update(policy_version=5))
+        task = asyncio.create_task(
+            runtime.run_update(policy_version=5, rollout_id="rollout-5")
+        )
         command = await _receive_model_rank_update_command(second_rank)
         first = await task
-        second = await runtime.run_update(policy_version=6)
+        second = await runtime.run_update(
+            policy_version=6, rollout_id="rollout-6"
+        )
         await runtime.close()
     finally:
         worker.close()
@@ -979,6 +999,7 @@ async def test_runtime_poisoned_after_worker_update_response_timeout(
         handles: tuple[WorkerControlHandle, ...],
         execution_config: ExecutionConfig,
         policy_version: int,
+        rollout_id: str,
     ) -> (
         Ok[WorkerSamplingSession]
         | Rejected
@@ -987,6 +1008,7 @@ async def test_runtime_poisoned_after_worker_update_response_timeout(
         return Ok(
             value=WorkerSamplingSession(
                 policy_version=policy_version,
+                rollout_id=rollout_id,
                 commanded_handles=handles,
                 started_handles=handles,
             )
@@ -1045,7 +1067,9 @@ async def test_runtime_poisoned_after_worker_update_response_timeout(
         stopped_sampling_session,
     )
     try:
-        task = asyncio.create_task(runtime.run_update(policy_version=5))
+        task = asyncio.create_task(
+            runtime.run_update(policy_version=5, rollout_id="rollout-5")
+        )
         first_command = await _receive_worker_update_command(
             first_worker
         )
@@ -1053,7 +1077,9 @@ async def test_runtime_poisoned_after_worker_update_response_timeout(
             second_worker
         )
         first = await task
-        second = await runtime.run_update(policy_version=6)
+        second = await runtime.run_update(
+            policy_version=6, rollout_id="rollout-6"
+        )
         await runtime.close()
     finally:
         first_worker.close()
@@ -1210,8 +1236,7 @@ def test_start_runtime_pools_cleans_worker_started_before_interrupt(
         training_runtime.open_training_runtime(
             run_dir=tmp_path,
             run_id="interrupt-worker",
-            session_id="test-session",
-            event_sink=NullEventSink(session_id="test-session"),
+            event_sink=NullEventSink(),
             model_config=ModelConfig(d_model=4, layers=1, heads=1),
             train_config=TrainConfig(),
             execution_config=ExecutionConfig(
@@ -1256,8 +1281,7 @@ def test_start_runtime_pools_cleans_model_rank_started_before_interrupt(
         training_runtime.open_training_runtime(
             run_dir=tmp_path,
             run_id="interrupt-model-rank",
-            session_id="test-session",
-            event_sink=NullEventSink(session_id="test-session"),
+            event_sink=NullEventSink(),
             model_config=ModelConfig(d_model=4, layers=1, heads=1),
             train_config=TrainConfig(),
             execution_config=ExecutionConfig(

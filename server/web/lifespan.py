@@ -26,6 +26,7 @@ def lifespan_for(
             yield
         finally:
             task.cancel()
+            await state.training_process_control.close()
             try:
                 await task
             except asyncio.CancelledError:

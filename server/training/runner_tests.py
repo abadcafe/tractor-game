@@ -148,6 +148,7 @@ async def test_self_play_session_clears_round_history() -> None:
     first_result = await session.play_round(
         base_seed=7,
         policy_version=0,
+        rollout_id="rollout-0",
         episode_id=0,
         max_seconds=120.0,
     )
@@ -157,6 +158,7 @@ async def test_self_play_session_clears_round_history() -> None:
     second_result = await session.play_round(
         base_seed=7,
         policy_version=0,
+        rollout_id="rollout-0",
         episode_id=1,
         max_seconds=120.0,
     )
@@ -186,6 +188,7 @@ async def test_self_play_session_uses_new_round_boundary_for_rewards(
     first = await session.play_round(
         base_seed=7,
         policy_version=0,
+        rollout_id="rollout-0",
         episode_id=0,
         max_seconds=120.0,
     )
@@ -193,6 +196,7 @@ async def test_self_play_session_uses_new_round_boundary_for_rewards(
     second_result = await session.play_round(
         base_seed=7,
         policy_version=0,
+        rollout_id="rollout-0",
         episode_id=1,
         max_seconds=120.0,
     )
@@ -214,6 +218,7 @@ async def test_self_play_session_rejects_round_timeout(
     result = await session.play_round(
         base_seed=7,
         policy_version=0,
+        rollout_id="rollout-0",
         episode_id=0,
         max_seconds=0.0,
     )

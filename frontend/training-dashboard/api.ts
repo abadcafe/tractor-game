@@ -1,14 +1,18 @@
 import { recordValue } from "../browser/json.ts";
 import type { InitRequest, ResumeRequest } from "./fields.ts";
 import {
+  type CheckpointCatalog,
+  parseCheckpointCatalog,
   parseConfig,
+  parseLogPage,
   parseMetrics,
-  parseProcess,
-  parseSummary,
+  parseProcessEnvelope,
+  parseStopEnvelope,
+  type ProcessEnvelope,
+  type StopEnvelope,
   type TrainingConfig,
+  type TrainingLogPage,
   type TrainingMetrics,
-  type TrainingProcess,
-  type TrainingSummary,
 } from "./types.ts";
 
 export async function fetchConfig(): Promise<TrainingConfig> {
@@ -23,38 +27,27 @@ export async function initializeTraining(
 
 export async function resumeTraining(
   request: ResumeRequest,
-): Promise<TrainingProcess> {
-  const value = await requestJson(
-    "/api/training/resume",
-    "POST",
-    request,
+): Promise<ProcessEnvelope> {
+  return parseProcessEnvelope(
+    await requestJson("/api/training/resume", "POST", request),
   );
-  const record = recordValue(value);
-  if (record === null) throw new Error("Invalid resume response");
-  return parseProcess({ process: record }) ??
-    fail("Resume returned no process");
 }
 
-export async function stopTraining(runDir: string): Promise<boolean> {
-  const record = recordValue(
+export async function stopTraining(
+  runDir: string,
+): Promise<StopEnvelope> {
+  return parseStopEnvelope(
     await requestJson("/api/training/stop", "POST", {
       run_dir: runDir,
     }),
   );
-  if (record === null || typeof record.forced !== "boolean") {
-    throw new Error("Invalid stop response");
-  }
-  return record.forced;
 }
 
-export async function fetchSummary(
+export async function fetchProcess(
   runDir: string,
-): Promise<TrainingSummary> {
-  return parseSummary(
-    await requestJson(
-      `/api/training/summary?${query({ run_dir: runDir })}`,
-      "GET",
-    ),
+): Promise<ProcessEnvelope> {
+  return parseProcessEnvelope(
+    await requestJson(processRequestPath(runDir), "GET"),
   );
 }
 
@@ -62,21 +55,72 @@ export async function fetchMetrics(
   runDir: string,
   updateLimit: number,
   seriesPoints: number,
-  sessionId: string | null = null,
 ): Promise<TrainingMetrics> {
   return parseMetrics(
     await requestJson(
-      `/api/training/metrics?${
-        query({
-          run_dir: runDir,
-          update_limit: String(updateLimit),
-          series_points: String(seriesPoints),
-          ...(sessionId === null ? {} : { session_id: sessionId }),
-        })
-      }`,
+      metricsRequestPath(runDir, updateLimit, seriesPoints),
       "GET",
     ),
   );
+}
+
+export async function fetchCheckpoints(
+  runDir: string,
+): Promise<CheckpointCatalog> {
+  return parseCheckpointCatalog(
+    await requestJson(checkpointRequestPath(runDir), "GET"),
+  );
+}
+
+export async function fetchLogPage(
+  runDir: string,
+  beforeSequence: number | null,
+  limit: number,
+): Promise<TrainingLogPage> {
+  return parseLogPage(
+    await requestJson(
+      logPageRequestPath(runDir, beforeSequence, limit),
+      "GET",
+    ),
+  );
+}
+
+export function processRequestPath(runDir: string): string {
+  return `/api/training/process?${query({ run_dir: runDir })}`;
+}
+
+export function metricsRequestPath(
+  runDir: string,
+  updateLimit: number,
+  seriesPoints: number,
+): string {
+  return `/api/training/metrics?${
+    query({
+      run_dir: runDir,
+      update_limit: String(updateLimit),
+      series_points: String(seriesPoints),
+    })
+  }`;
+}
+
+export function checkpointRequestPath(runDir: string): string {
+  return `/api/training/checkpoints?${query({ run_dir: runDir })}`;
+}
+
+export function logPageRequestPath(
+  runDir: string,
+  beforeSequence: number | null,
+  limit: number,
+): string {
+  return `/api/training/logs?${
+    query({
+      run_dir: runDir,
+      ...(beforeSequence === null
+        ? {}
+        : { before_sequence: String(beforeSequence) }),
+      limit: String(limit),
+    })
+  }`;
 }
 
 async function requestJson(
@@ -93,16 +137,13 @@ async function requestJson(
   });
   const value: unknown = await response.json();
   if (!response.ok) {
-    const detail = recordValue(value)?.detail;
+    const record = recordValue(value);
+    const detail = record?.detail;
     throw new Error(
       typeof detail === "string" ? detail : `HTTP ${response.status}`,
     );
   }
   return value;
-}
-
-function fail(message: string): never {
-  throw new Error(message);
 }
 
 function query(values: Readonly<Record<string, string>>): string {

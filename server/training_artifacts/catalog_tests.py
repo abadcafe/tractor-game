@@ -6,9 +6,6 @@ import sys
 from pathlib import Path
 
 from server.foundation.result import Ok
-from server.training.checkpoint_catalog import (
-    read_checkpoint_catalog,
-)
 from server.training.config import ModelConfig, TrainConfig
 from server.training.torch_checkpoints.manifest import (
     write_checkpoint_manifest,
@@ -17,13 +14,18 @@ from server.training.torch_checkpoints.schema import (
     CheckpointManifest,
     TorchCheckpointMetadata,
 )
+from server.training_artifacts.catalog import (
+    read_checkpoint_catalog,
+)
 
 
 def test_read_checkpoint_catalog_lists_manifest_object_and_orphan(
     tmp_path: Path,
 ) -> None:
-    _write_checkpoint(tmp_path, "latest.json", "current", b"state")
-    orphan = tmp_path / "checkpoints" / "objects" / "orphan"
+    current_id = "a" * 32
+    orphan_id = "b" * 32
+    _write_checkpoint(tmp_path, "latest.json", current_id, b"state")
+    orphan = tmp_path / "checkpoints" / "objects" / orphan_id
     orphan.mkdir(parents=True)
     orphan.joinpath("state.pt").write_bytes(b"orphan")
 
@@ -35,11 +37,28 @@ def test_read_checkpoint_catalog_lists_manifest_object_and_orphan(
     ]
     assert result.value.manifests[0].valid is True
     assert [item.checkpoint_id for item in result.value.objects] == [
-        "current",
-        "orphan",
+        current_id,
+        orphan_id,
     ]
     assert result.value.objects[1].orphan is True
     assert result.value.total_unique_state_bytes == 11
+
+
+def test_invalid_object_id_is_visible_but_never_valid(
+    tmp_path: Path,
+) -> None:
+    invalid = tmp_path / "checkpoints" / "objects" / "foo"
+    invalid.mkdir(parents=True)
+    invalid.joinpath("state.pt").write_bytes(b"state")
+
+    result = read_checkpoint_catalog(tmp_path)
+
+    assert isinstance(result, Ok)
+    assert len(result.value.objects) == 1
+    assert result.value.objects[0].checkpoint_id == "foo"
+    assert result.value.objects[0].valid is False
+    assert result.value.objects[0].error is not None
+    assert result.value.total_unique_state_bytes == 0
 
 
 def test_read_checkpoint_catalog_keeps_invalid_manifest_visible(

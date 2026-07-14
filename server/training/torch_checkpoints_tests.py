@@ -17,15 +17,15 @@ from server.training import training_state
 from server.training.config import ModelConfig, TrainConfig
 from server.training.model import TractorPolicyModel
 from server.training.ppo import PPOTrainer
+from server.training.resume_config import (
+    ExecutionConfigOverrides,
+    resolve_execution_config,
+)
 from server.training.runtime import (
     ExecutionConfig,
     ExecutionTimeouts,
     ModelRankKind,
     ModelRankPlacement,
-)
-from server.training.session_config import (
-    ExecutionConfigOverrides,
-    resolve_execution_config,
 )
 from server.training.torch_checkpoints import (
     pruning as _checkpoint_pruning,

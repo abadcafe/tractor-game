@@ -11,7 +11,6 @@ import torch
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
 from server.training.config import ModelConfig, TrainConfig
-from server.training.event_log import EventContext, StructuredEventSink
 from server.training.policy import TrainingPolicy
 from server.training.ppo.distributed import (
     PPOUpdatePartition,
@@ -66,6 +65,7 @@ from server.training.runtime.shared_rollout_arena import (
     attach_rollout_arena_writer,
 )
 from server.training.runtime.threads import apply_torch_thread_config
+from server.training_events import EventContext, StructuredEventSink
 
 
 @dataclass(slots=True)
@@ -79,6 +79,7 @@ class _WorkerRuntime:
     completed_round_count: int = 0
     sampling_task: asyncio.Task[_SamplingTaskResult] | None = None
     sampling_policy_version: int | None = None
+    sampling_rollout_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,10 +165,6 @@ async def _run_training_worker_process_async(
     """Async worker process main loop."""
     assert worker_index >= 0
     assert run_id
-    event_sink.emit(
-        "process.started",
-        fields={"worker_index": worker_index},
-    )
     setup_result = _setup_worker_runtime(
         worker_index=worker_index,
         execution_config=execution_config,
@@ -175,9 +172,8 @@ async def _run_training_worker_process_async(
     )
     if isinstance(setup_result, Rejected):
         event_sink.emit(
-            "process.failed",
-            level="ERROR",
-            fields={"reason": setup_result.reason},
+            "process.start",
+            error=setup_result.reason,
         )
         event_sink.close()
         await control.send_response(
@@ -192,9 +188,8 @@ async def _run_training_worker_process_async(
     sync_result = initialize_distributed_rank(distributed_rank_config)
     if isinstance(sync_result, Rejected):
         event_sink.emit(
-            "process.failed",
-            level="ERROR",
-            fields={"reason": sync_result.reason},
+            "process.start",
+            error=sync_result.reason,
         )
         event_sink.close()
         await control.send_response(
@@ -219,9 +214,8 @@ async def _run_training_worker_process_async(
     )
     if isinstance(runtime_result, Rejected):
         event_sink.emit(
-            "process.failed",
-            level="ERROR",
-            fields={"reason": runtime_result.reason},
+            "process.start",
+            error=runtime_result.reason,
         )
         event_sink.close()
         await control.send_response(
@@ -235,6 +229,10 @@ async def _run_training_worker_process_async(
         destroy_distributed_rank()
         return
     runtime = runtime_result.value
+    event_sink.emit(
+        "process.start",
+        fields={"worker_index": worker_index},
+    )
     try:
         while True:
             command_result = await control.recv_command()
@@ -259,7 +257,7 @@ async def _run_training_worker_process_async(
         runtime.arena_writer.close()
         runtime.arena_reader.close()
         destroy_distributed_rank()
-        event_sink.emit("process.stopped")
+        event_sink.emit("process.stop")
         event_sink.close()
 
 
@@ -476,6 +474,15 @@ def _run_worker_update(
     event_sink: StructuredEventSink,
 ) -> WorkerResponse:
     if _sampling_is_active(runtime):
+        event_sink.emit(
+            "update.rank",
+            context=EventContext(
+                policy_version=command.policy_version,
+                rollout_id=command.rollout_id,
+                worker_index=worker_index,
+            ),
+            error="worker cannot update while sampling is active",
+        )
         return _worker_rejection(
             worker_index=worker_index,
             command="update",
@@ -483,6 +490,15 @@ def _run_worker_update(
             reason="worker cannot update while sampling is active",
         )
     if runtime.local_model_rank is None:
+        event_sink.emit(
+            "update.rank",
+            context=EventContext(
+                policy_version=command.policy_version,
+                rollout_id=command.rollout_id,
+                worker_index=worker_index,
+            ),
+            error="worker does not own a local model rank",
+        )
         return _worker_rejection(
             worker_index=worker_index,
             command="update",
@@ -491,9 +507,9 @@ def _run_worker_update(
         )
     context = EventContext(
         policy_version=command.policy_version,
+        rollout_id=command.rollout_id,
         worker_index=worker_index,
     )
-    event_sink.emit("update.rank_started", context=context)
     update_started = time.perf_counter()
     returns_result = runtime.arena_reader.read_rank_batch(
         policy_version=command.policy_version,
@@ -502,10 +518,14 @@ def _run_worker_update(
     )
     if isinstance(returns_result, Rejected):
         event_sink.emit(
-            "update.rank_failed",
+            "update.rank",
             context=context,
-            level="ERROR",
-            fields={"reason": returns_result.reason},
+            fields={
+                "duration_seconds": max(
+                    time.perf_counter() - update_started, 0.0
+                )
+            },
+            error=returns_result.reason,
         )
         return _worker_rejection(
             worker_index=worker_index,
@@ -519,10 +539,14 @@ def _run_worker_update(
     )
     if isinstance(update_result, Rejected):
         event_sink.emit(
-            "update.rank_failed",
+            "update.rank",
             context=context,
-            level="ERROR",
-            fields={"reason": update_result.reason},
+            fields={
+                "duration_seconds": max(
+                    time.perf_counter() - update_started, 0.0
+                )
+            },
+            error=update_result.reason,
         )
         return _worker_rejection(
             worker_index=worker_index,
@@ -531,7 +555,7 @@ def _run_worker_update(
             reason=update_result.reason,
         )
     event_sink.emit(
-        "update.rank_completed",
+        "update.rank",
         context=context,
         fields={
             "duration_seconds": max(
@@ -613,6 +637,15 @@ def _start_worker_sampling(
     event_sink: StructuredEventSink,
 ) -> WorkerResponse:
     if runtime.sampling_task is not None:
+        event_sink.emit(
+            "sampling",
+            context=EventContext(
+                policy_version=command.policy_version,
+                rollout_id=command.rollout_id,
+                worker_index=worker_index,
+            ),
+            error="worker sampling is already active",
+        )
         return _worker_rejection(
             worker_index=worker_index,
             command="start_sampling",
@@ -620,26 +653,23 @@ def _start_worker_sampling(
             reason="worker sampling is already active",
         )
     if command.game_env_count > len(runtime.sessions):
+        event_sink.emit(
+            "sampling",
+            context=EventContext(
+                policy_version=command.policy_version,
+                rollout_id=command.rollout_id,
+                worker_index=worker_index,
+            ),
+            error="worker game env count exceeds configured capacity",
+        )
         return _worker_rejection(
             worker_index=worker_index,
             command="start_sampling",
             policy_version=command.policy_version,
             reason="worker game env count exceeds configured capacity",
         )
-    context = EventContext(
-        policy_version=command.policy_version,
-        rollout_id=f"{event_sink.session_id}:{command.policy_version}",
-        worker_index=worker_index,
-    )
-    event_sink.emit(
-        "sampling.started",
-        context=context,
-        fields={
-            "game_env_count": command.game_env_count,
-            "completed_rounds": runtime.completed_round_count,
-        },
-    )
     runtime.sampling_policy_version = command.policy_version
+    runtime.sampling_rollout_id = command.rollout_id
     runtime.sampling_task = asyncio.create_task(
         _run_sampling_until_stopped(
             worker_index=worker_index,
@@ -689,18 +719,53 @@ async def _stop_worker_sampling(
             policy_version=command.policy_version,
         )
     if runtime.sampling_policy_version != command.policy_version:
+        event_sink.emit(
+            "sampling",
+            context=EventContext(
+                policy_version=command.policy_version,
+                rollout_id=command.rollout_id,
+                worker_index=worker_index,
+            ),
+            error="worker sampling policy version mismatch",
+        )
         return _worker_rejection(
             worker_index=worker_index,
             command="stop_sampling",
             policy_version=command.policy_version,
             reason="worker sampling policy version mismatch",
         )
+    if runtime.sampling_rollout_id != command.rollout_id:
+        event_sink.emit(
+            "sampling",
+            context=EventContext(
+                policy_version=command.policy_version,
+                rollout_id=command.rollout_id,
+                worker_index=worker_index,
+            ),
+            error="worker sampling rollout id mismatch",
+        )
+        return _worker_rejection(
+            worker_index=worker_index,
+            command="stop_sampling",
+            policy_version=command.policy_version,
+            reason="worker sampling rollout id mismatch",
+        )
     if not task.done():
         task.cancel()
     sampling_result = await task
     runtime.sampling_task = None
     runtime.sampling_policy_version = None
+    runtime.sampling_rollout_id = None
     if isinstance(sampling_result, Rejected):
+        event_sink.emit(
+            "sampling",
+            context=EventContext(
+                policy_version=command.policy_version,
+                rollout_id=command.rollout_id,
+                worker_index=worker_index,
+            ),
+            error=sampling_result.reason,
+        )
         return _worker_rejection(
             worker_index=worker_index,
             command="stop_sampling",
@@ -709,12 +774,10 @@ async def _stop_worker_sampling(
         )
     policy_stats = runtime.policy.drain_stats()
     event_sink.emit(
-        "sampling.completed",
+        "sampling",
         context=EventContext(
             policy_version=command.policy_version,
-            rollout_id=(
-                f"{event_sink.session_id}:{command.policy_version}"
-            ),
+            rollout_id=command.rollout_id,
             worker_index=worker_index,
         ),
         fields={
@@ -745,6 +808,7 @@ async def _cancel_active_sampling(*, runtime: _WorkerRuntime) -> None:
     await task
     runtime.sampling_task = None
     runtime.sampling_policy_version = None
+    runtime.sampling_rollout_id = None
 
 
 async def _run_sampling_until_stopped(
@@ -774,6 +838,7 @@ async def _run_sampling_until_stopped(
             train_config=train_config,
             execution_config=execution_config,
             policy_version=command.policy_version,
+            rollout_id=command.rollout_id,
             worker_index=worker_index,
             event_sink=event_sink,
         )
@@ -863,6 +928,7 @@ async def _run_sampling_until_stopped(
                     train_config=train_config,
                     execution_config=execution_config,
                     policy_version=command.policy_version,
+                    rollout_id=command.rollout_id,
                     worker_index=worker_index,
                     event_sink=event_sink,
                 )
@@ -907,17 +973,10 @@ def _schedule_round(
     train_config: TrainConfig,
     execution_config: ExecutionConfig,
     policy_version: int,
+    rollout_id: str,
     worker_index: int,
     event_sink: StructuredEventSink,
 ) -> asyncio.Task[_EnvRoundTaskResult]:
-    context = EventContext(
-        policy_version=policy_version,
-        rollout_id=f"{event_sink.session_id}:{policy_version}",
-        worker_index=worker_index,
-        game_env_index=game_env_index,
-        episode_id=episode_id,
-    )
-    event_sink.emit("round.started", context=context)
     return asyncio.create_task(
         _play_worker_round(
             session=session,
@@ -925,6 +984,7 @@ def _schedule_round(
             episode_id=episode_id,
             base_seed=train_config.seed,
             policy_version=policy_version,
+            rollout_id=rollout_id,
             max_seconds=execution_config.timeouts.round_seconds,
             worker_index=worker_index,
             event_sink=event_sink,
@@ -939,6 +999,7 @@ async def _play_worker_round(
     episode_id: int,
     base_seed: int,
     policy_version: int,
+    rollout_id: str,
     max_seconds: float,
     worker_index: int,
     event_sink: StructuredEventSink,
@@ -946,7 +1007,7 @@ async def _play_worker_round(
     started = time.perf_counter()
     context = EventContext(
         policy_version=policy_version,
-        rollout_id=f"{event_sink.session_id}:{policy_version}",
+        rollout_id=rollout_id,
         worker_index=worker_index,
         game_env_index=game_env_index,
         episode_id=episode_id,
@@ -954,25 +1015,25 @@ async def _play_worker_round(
     result = await session.play_round(
         base_seed=base_seed,
         policy_version=policy_version,
+        rollout_id=rollout_id,
         episode_id=episode_id,
         max_seconds=max_seconds,
     )
     if isinstance(result, Rejected):
         event_sink.emit(
-            "round.failed",
+            "round",
             context=context,
-            level="ERROR",
             fields={
-                "reason": result.reason,
                 "duration_seconds": max(
                     time.perf_counter() - started, 0.0
                 ),
             },
+            error=result.reason,
         )
         return result
     round_data = result.value
     event_sink.emit(
-        "round.completed",
+        "round",
         context=context,
         fields={
             "duration_seconds": round_data.elapsed_seconds,

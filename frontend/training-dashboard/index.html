@@ -10,10 +10,8 @@
   <body>
     <header class="topbar">
       <div class="brand">Training Console</div>
-      <div class="connection">
-        <span id="connection-state" class="connection-label"
-        >CONNECTING</span>
-      </div>
+      <span id="connection-state" class="connection-label"
+      >CONNECTING</span>
     </header>
     <form class="directory-bar" id="directory-form">
       <label for="run-directory">Run directory</label>
@@ -35,27 +33,32 @@
     </form>
     <div class="app-shell">
       <nav class="sidebar" aria-label="Training console navigation">
-        <a class="nav-link" data-route="overview" href="#overview"
-        >Overview</a>
+        <a class="nav-link" data-route="process" href="#process"
+        >Process</a>
         <a class="nav-link" data-route="metrics" href="#metrics"
         >Metrics</a>
         <a class="nav-link" data-route="logs" href="#logs">Logs</a>
-        <a class="nav-link" data-route="checkpoints" href="#checkpoints"
-        >Checkpoints</a>
+        <a
+          class="nav-link"
+          data-route="checkpoints"
+          href="#checkpoints"
+        >
+          Checkpoints
+        </a>
       </nav>
       <main class="content">
-        <section class="view" data-view="overview">
+        <section class="view" data-view="process">
           <header class="page-head">
-            <div>
-              <h1>Training Run</h1>
-              <p id="run-caption" class="subtitle"></p>
+            <div class="head-copy">
+              <h1>CLI Process Control</h1>
+              <p id="run-caption" class="subtitle code-value"></p>
             </div>
             <div class="head-actions">
               <button
                 class="icon-button"
-                data-refresh
-                title="Refresh"
-                aria-label="Refresh"
+                data-refresh-domain="process"
+                title="Refresh process"
+                aria-label="Refresh process"
               >
                 ↻
               </button>
@@ -78,48 +81,29 @@
               </button>
             </div>
           </header>
-          <section class="overview" id="overview"></section>
-          <div class="two-column">
-            <section class="panel">
-              <header class="section-head">
-                <h2>Managed process</h2><span
-                  id="process-presence"
-                  class="badge neutral"
-                >-</span>
-              </header>
-              <div id="process-details" class="detail-list"></div>
-            </section>
-            <section class="panel">
-              <header class="section-head">
-                <h2>Current runtime</h2><span
-                  id="session-presence"
-                  class="badge neutral"
-                >-</span>
-              </header>
-              <div id="runtime-details" class="detail-list"></div>
-            </section>
-          </div>
+          <section class="panel">
+            <header class="section-head">
+              <h2>Managed CLI process</h2>
+              <span id="process-presence" class="badge neutral"
+              >STOPPED</span>
+            </header>
+            <div id="process-details" class="detail-list"></div>
+          </section>
           <section class="panel command-panel">
-            <header class="section-head"><h2>Process argv</h2></header>
+            <header class="section-head"><h2>Command argv</h2></header>
             <pre id="process-command" class="code-block"></pre>
           </section>
         </section>
 
         <section class="view" data-view="metrics" hidden>
           <header class="page-head">
-            <div>
+            <div class="head-copy">
               <h1>Training Metrics</h1>
-              <p class="subtitle" id="metrics-session">No session</p>
+              <p class="subtitle">
+                Derived exclusively from structured logs
+              </p>
             </div>
             <div class="metrics-toolbar">
-              <label class="compact-field">Session
-                <select
-                  id="metrics-session-select"
-                  class="input compact-input"
-                >
-                  <option value="">Latest session</option>
-                </select>
-              </label>
               <div class="segmented" aria-label="Chart axis">
                 <button class="segment active" data-axis="update">
                   Update
@@ -133,7 +117,7 @@
                   <option value="50">50 updates</option>
                   <option value="200" selected>200 updates</option>
                   <option value="500">500 updates</option>
-                  <option value="5000">All available</option>
+                  <option value="5000">5000 updates</option>
                 </select>
               </label>
               <label class="compact-field">Resolution
@@ -148,9 +132,9 @@
               </label>
               <button
                 class="icon-button"
-                data-refresh
-                title="Refresh"
-                aria-label="Refresh"
+                data-refresh-domain="metrics"
+                title="Refresh metrics"
+                aria-label="Refresh metrics"
               >
                 ↻
               </button>
@@ -195,33 +179,25 @@
 
         <section class="view" data-view="logs" hidden>
           <header class="page-head">
-            <div>
+            <div class="head-copy">
               <h1>Training Logs</h1>
-              <p class="subtitle">Structured training events</p>
+              <p class="subtitle">Raw terminal action records</p>
             </div>
             <button
               class="icon-button"
-              data-refresh
-              title="Refresh"
-              aria-label="Refresh"
+              data-refresh-domain="logs"
+              title="Reload logs"
+              aria-label="Reload logs"
             >
               ↻
             </button>
           </header>
           <section class="panel log-panel">
             <div class="log-toolbar">
-              <label class="compact-field">Window
-                <input
-                  id="log-window"
-                  class="input compact-input"
-                  type="number"
-                  min="1"
-                  step="1"
-                  value="5000"
-                  required
-                >
-              </label>
-              <button class="button" id="toggle-follow">Pause</button>
+              <button class="button" id="load-older">Load older</button>
+              <button class="button" id="toggle-follow">
+                Auto-follow: on
+              </button>
               <span id="log-count" class="section-note">0 events</span>
             </div>
             <div id="log-content" class="structured-log"></div>
@@ -230,15 +206,16 @@
 
         <section class="view" data-view="checkpoints" hidden>
           <header class="page-head">
-            <div>
+            <div class="head-copy">
               <h1>Checkpoints</h1>
-              <p id="checkpoint-directory" class="subtitle"></p>
+              <p id="checkpoint-directory" class="subtitle code-value">
+              </p>
             </div>
             <button
               class="icon-button"
-              data-refresh
-              title="Refresh"
-              aria-label="Refresh"
+              data-refresh-domain="checkpoints"
+              title="Refresh checkpoints"
+              aria-label="Refresh checkpoints"
             >
               ↻
             </button>
@@ -256,7 +233,7 @@
                     <th>Samples</th>
                     <th>State</th>
                     <th>Size</th>
-                    <th>Integrity</th>
+                    <th>Condition</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -292,7 +269,7 @@
         <header class="modal-head">
           <div>
             <h2>Initialize run</h2>
-            <p>Create portable zero-update model and optimizer state</p>
+            <p>Create zero-update state</p>
           </div>
           <button
             class="modal-close"
@@ -310,11 +287,15 @@
           ></code>
         </section>
         <footer class="modal-actions">
-          <span id="init-status" class="status-value"></span><button
-            class="button"
+          <span id="init-status" class="status-value"></span>
+          <button
+            class="button button-danger"
+            id="open-replace"
             type="button"
-            data-close-dialog
           >
+            Replace existing…
+          </button>
+          <button class="button" type="button" data-close-dialog>
             Cancel
           </button>
           <button
@@ -333,7 +314,7 @@
         <header class="modal-head">
           <div>
             <h2>Replace existing training run?</h2>
-            <p id="replace-status"></p>
+            <p>Destructive initialization</p>
           </div>
           <button
             class="modal-close"
@@ -346,30 +327,24 @@
         </header>
         <section class="replace-body">
           <p class="replace-warning">
-            This will permanently delete the existing checkpoints,
-            structured logs, and all other files in this directory.
+            This permanently deletes checkpoints, structured logs, and
+            every other artifact in this run directory.
           </p>
           <code id="replace-run-directory" class="replace-path"></code>
-          <label for="replace-existing">
-            To confirm, type <code>yes</code> below.
-          </label>
+          <label for="replace-existing"
+          >Type <code>yes</code> to confirm.</label>
           <input
             id="replace-existing"
             class="input"
             name="replace_existing"
             autocomplete="off"
-            autocapitalize="off"
-            spellcheck="false"
             pattern="yes"
             required
           >
         </section>
         <footer class="modal-actions">
-          <span id="replace-result" class="status-value"></span><button
-            class="button"
-            type="button"
-            data-close-dialog
-          >
+          <span id="replace-result" class="status-value"></span>
+          <button class="button" type="button" data-close-dialog>
             Cancel
           </button>
           <button
@@ -389,9 +364,7 @@
         <header class="modal-head">
           <div>
             <h2>Resume training</h2>
-            <p>
-              Select a checkpoint and configure this training process
-            </p>
+            <p>Configure a managed CLI process</p>
           </div>
           <button
             class="modal-close"
@@ -409,11 +382,8 @@
           ></code>
         </section>
         <footer class="modal-actions">
-          <span id="resume-status" class="status-value"></span><button
-            class="button"
-            type="button"
-            data-close-dialog
-          >
+          <span id="resume-status" class="status-value"></span>
+          <button class="button" type="button" data-close-dialog>
             Cancel
           </button>
           <button
@@ -434,6 +404,7 @@
           <button
             class="modal-close"
             id="close-checkpoint"
+            type="button"
             aria-label="Close"
           >
             ×

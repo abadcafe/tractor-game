@@ -24,7 +24,7 @@ def test_worker_start_sampling_command_carries_no_state_snapshot() -> (
     None
 ):
     command = WorkerStartSamplingCommand(
-        policy_version=2, game_env_count=3
+        policy_version=2, rollout_id="rollout-2", game_env_count=3
     )
 
     assert command.policy_version == 2
@@ -33,7 +33,9 @@ def test_worker_start_sampling_command_carries_no_state_snapshot() -> (
 
 
 def test_decode_worker_stop_sampling_command_accepts_stop() -> None:
-    command = WorkerStopSamplingCommand(policy_version=2)
+    command = WorkerStopSamplingCommand(
+        policy_version=2, rollout_id="rollout-2"
+    )
 
     decoded = decode_worker_command(command)
 
@@ -58,7 +60,9 @@ def test_worker_load_state_command_carries_state_snapshot() -> None:
 
 
 def test_worker_update_command_carries_no_state_snapshot() -> None:
-    command = WorkerUpdateCommand(policy_version=4)
+    command = WorkerUpdateCommand(
+        policy_version=4, rollout_id="rollout-4"
+    )
 
     assert command.policy_version == 4
     assert not hasattr(command, "state")

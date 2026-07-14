@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Callable, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from server.foundation import result as _result
-from server.foundation.json_value import JsonObject
 from server.training.stop import TrainingStopRequest
 
 type ManagedCheckpointName = Annotated[
@@ -63,7 +62,7 @@ class TrainingInitOptions(BaseModel):
 
 
 class TrainingResumeOptions(BaseModel):
-    """Checkpoint and process policy for one training session."""
+    """Checkpoint and process policy for one resumed training run."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -134,26 +133,10 @@ class InitializedRun(BaseModel):
     checkpoint_path: Path
 
 
-class TrainingRunOutcome(BaseModel):
+class TrainingRunResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    outcome: str
     checkpoint_path: Path
-    total_rounds: int = Field(ge=0)
-    total_samples: int = Field(ge=0)
-    total_updates: int = Field(ge=0)
-
-
-class PersistedRunSummary(BaseModel):
-    """Fully validated persisted state for a stopped run."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    checkpoint_id: str
-    checkpoint_path: Path
-    state_size_bytes: int = Field(ge=0)
-    model_config_values: JsonObject
-    train_config_values: JsonObject
     total_rounds: int = Field(ge=0)
     total_samples: int = Field(ge=0)
     total_updates: int = Field(ge=0)
@@ -171,25 +154,9 @@ class TrainingService:
         self,
         options: TrainingResumeOptions,
         stop_request: TrainingStopRequest,
-    ) -> _result.Ok[TrainingRunOutcome] | _result.Rejected:
-        return resume_run(options, stop_request)
-
-    def inspect(
-        self, run_dir: Path
-    ) -> _result.Ok[PersistedRunSummary] | _result.Rejected:
-        return inspect_run(run_dir)
-
-    def checkpoint_catalog(
-        self, run_dir: Path
-    ) -> _result.Ok[JsonObject] | _result.Rejected:
-        from server.training.checkpoint_catalog import (
-            read_checkpoint_catalog,
-        )
-
-        result = read_checkpoint_catalog(run_dir)
-        if isinstance(result, _result.Rejected):
-            return result
-        return _result.Ok(value=result.value.model_dump(mode="json"))
+        on_ready: Callable[[], None] | None = None,
+    ) -> _result.Ok[TrainingRunResult] | _result.Rejected:
+        return resume_run(options, stop_request, on_ready=on_ready)
 
 
 def initialize_run(
@@ -236,8 +203,11 @@ def initialize_run(
 def resume_run(
     options: TrainingResumeOptions,
     stop_request: TrainingStopRequest,
-) -> _result.Ok[TrainingRunOutcome] | _result.Rejected:
-    """Validate, load, and run one resumed training session."""
+    *,
+    on_ready: Callable[[], None] | None = None,
+) -> _result.Ok[TrainingRunResult] | _result.Rejected:
+    """Validate, load, and execute resumed training."""
+    from server.training.resume_config import resolve_resume_options
     from server.training.resume_setup import (
         canonicalize_resume_timeline,
     )
@@ -248,7 +218,6 @@ def resume_run(
     from server.training.runtime.coordinator import (
         run_training_coordinator,
     )
-    from server.training.session_config import resolve_resume_options
     from server.training.training_state import (
         validate_model_rank_runtime,
     )
@@ -287,7 +256,7 @@ def resume_run(
         return timeline_result
     result = run_training_coordinator(
         run_dir=resolved.run_dir,
-        session_id=str(uuid4()),
+        runtime_id=str(uuid4()),
         model_config=resolved.model_config,
         train_config=resolved.train_config,
         checkpoint_policy=resolved.checkpoint_policy,
@@ -295,25 +264,16 @@ def resume_run(
         max_samples=resolved.max_samples,
         resume=resolved.run_dir / "checkpoints" / "latest.json",
         stop_request=stop_request,
+        on_ready=on_ready,
     )
     if isinstance(result, _result.Rejected):
         return result
     value = result.value
     return _result.Ok(
-        value=TrainingRunOutcome(
-            outcome=value.outcome,
+        value=TrainingRunResult(
             checkpoint_path=value.checkpoint_path,
             total_rounds=value.total_rounds,
             total_samples=value.total_samples,
             total_updates=value.total_updates,
         )
     )
-
-
-def inspect_run(
-    run_dir: Path,
-) -> _result.Ok[PersistedRunSummary] | _result.Rejected:
-    """Fully validate one stopped training run."""
-    from server.training.run_validation import validate_training_run
-
-    return validate_training_run(run_dir)
