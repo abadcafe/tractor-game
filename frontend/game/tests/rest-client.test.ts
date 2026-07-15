@@ -13,12 +13,15 @@ async function withMockServer(
   handler: (req: Request) => Response,
   fn: (baseUrl: string) => Promise<void>,
 ): Promise<void> {
-  const server = Deno.serve({ port: 0 }, handler);
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0 },
+    handler,
+  );
   const addr = server.addr;
   const port = typeof addr === "object" && "port" in addr
     ? addr.port
     : 0;
-  const baseUrl = `http://localhost:${port}`;
+  const baseUrl = `http://127.0.0.1:${port}`;
   try {
     await fn(baseUrl);
   } finally {

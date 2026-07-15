@@ -374,7 +374,12 @@ def _sample_semantic_actions(
         padded_generation_steps,
     )
     assert generation_step_counts.dtype == torch.long
-    assert sampling_thresholds.dtype == torch.float64
+    expected_threshold_dtype = (
+        torch.float32
+        if action_batch.device.type == "mps"
+        else torch.float64
+    )
+    assert sampling_thresholds.dtype == expected_threshold_dtype
     workspace.reset(
         action_batch=action_batch,
         padded_generation_steps=padded_generation_steps,

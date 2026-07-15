@@ -58,6 +58,45 @@ def test_semantic_action_sampler_zero_threshold_selects_first() -> None:
     assert int(result.value.selected_choice_offsets[0].item()) == 0
 
 
+def test_semantic_action_sampler_supports_mps_float32_thresholds() -> (
+    None
+):
+    if not torch.backends.mps.is_available():
+        return
+    device = torch.device("mps")
+    pass_id = semantic_argument_id(SemanticArgument("pass"))
+    action_plan = _trace_set_plan(((pass_id,),))
+    generation_steps = action_plan_generation_step_count(action_plan)
+    action_batch = plan_batch_to_device((action_plan,), device=device)
+    sampler = SemanticActionSampler.create(
+        batch_capacity=1,
+        device=device,
+    )
+
+    result = sampler.sample(
+        action_batch=action_batch,
+        generation_step_counts=torch.tensor(
+            (generation_steps,), dtype=torch.long, device=device
+        ),
+        sampling_thresholds=torch.zeros(
+            (1, generation_steps),
+            dtype=torch.float32,
+            device=device,
+        ),
+        padded_generation_steps=generation_steps,
+        logit_decoder=_ConstantLogitDecoder(
+            logits=torch.zeros(
+                (SEMANTIC_CODEC.argument_vocab_size,),
+                dtype=torch.float32,
+                device=device,
+            )
+        ),
+    )
+
+    assert isinstance(result, Ok)
+    assert _token_ids(result.value) == (pass_id,)
+
+
 def test_semantic_action_sampler_ignores_invalid_vocab_logit() -> None:
     pass_id = semantic_argument_id(SemanticArgument("pass"))
     stop_id = semantic_argument_id(SemanticArgument("stop"))

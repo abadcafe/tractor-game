@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 
 import torch
@@ -122,12 +123,6 @@ async def test_run_until_command_drains_requests_before_command() -> (
             )
         )
         assert isinstance(command_sent, Ok)
-        await _send_request(
-            link=link0, worker_index=0, policy_version=7
-        )
-        await _send_request(
-            link=link1, worker_index=1, policy_version=7
-        )
         data_plane = _data_plane(
             control_link=control_link,
             request_peers=(
@@ -138,11 +133,27 @@ async def test_run_until_command_drains_requests_before_command() -> (
             max_observation_tokens=_TEST_MAX_OBSERVATION_TOKENS,
         )
 
-        command_result = await data_plane.run_until_command(
-            policy_version=7,
-            process_batch=recorder.process,
-            reject_batch=recorder.reject,
-        )
+        async with asyncio.TaskGroup() as senders:
+            senders.create_task(
+                _send_request(
+                    link=link0,
+                    worker_index=0,
+                    policy_version=7,
+                )
+            )
+            senders.create_task(
+                _send_request(
+                    link=link1,
+                    worker_index=1,
+                    policy_version=7,
+                )
+            )
+            await _wait_for_ready_requests((link0, link1))
+            command_result = await data_plane.run_until_command(
+                policy_version=7,
+                process_batch=recorder.process,
+                reject_batch=recorder.reject,
+            )
 
         assert isinstance(command_result, Ok)
         assert isinstance(
@@ -199,12 +210,6 @@ async def test_run_until_command_rejects_stale_policy_version() -> None:
     recorder = _DataPlaneRecorder()
     max_observation_tokens = 45
     try:
-        await _send_request(
-            link=link,
-            worker_index=2,
-            policy_version=4,
-            max_observation_tokens=max_observation_tokens,
-        )
         command_sent = await control_link.coordinator.send_command(
             ModelRankLoadStateCommand(
                 state=_runtime_state(), policy_version=9
@@ -218,11 +223,21 @@ async def test_run_until_command_rejects_stale_policy_version() -> None:
             max_observation_tokens=max_observation_tokens,
         )
 
-        command_result = await data_plane.run_until_command(
-            policy_version=5,
-            process_batch=recorder.process,
-            reject_batch=recorder.reject,
-        )
+        async with asyncio.TaskGroup() as senders:
+            senders.create_task(
+                _send_request(
+                    link=link,
+                    worker_index=2,
+                    policy_version=4,
+                    max_observation_tokens=max_observation_tokens,
+                )
+            )
+            await _wait_for_ready_requests((link,))
+            command_result = await data_plane.run_until_command(
+                policy_version=5,
+                process_batch=recorder.process,
+                reject_batch=recorder.reject,
+            )
 
         assert isinstance(command_result, Ok)
         assert isinstance(
@@ -254,24 +269,6 @@ async def test_run_until_command_rejects_only_stale_routes() -> None:
             )
         )
         assert isinstance(command_sent, Ok)
-        await _send_request(
-            link=link0,
-            worker_index=0,
-            policy_version=4,
-            max_observation_tokens=max_observation_tokens,
-        )
-        await _send_request(
-            link=link1,
-            worker_index=1,
-            policy_version=5,
-            max_observation_tokens=max_observation_tokens,
-        )
-        await _send_request(
-            link=link2,
-            worker_index=2,
-            policy_version=4,
-            max_observation_tokens=max_observation_tokens,
-        )
         data_plane = _data_plane(
             control_link=control_link,
             request_peers=(
@@ -283,11 +280,37 @@ async def test_run_until_command_rejects_only_stale_routes() -> None:
             max_observation_tokens=max_observation_tokens,
         )
 
-        command_result = await data_plane.run_until_command(
-            policy_version=5,
-            process_batch=recorder.process,
-            reject_batch=recorder.reject,
-        )
+        async with asyncio.TaskGroup() as senders:
+            senders.create_task(
+                _send_request(
+                    link=link0,
+                    worker_index=0,
+                    policy_version=4,
+                    max_observation_tokens=max_observation_tokens,
+                )
+            )
+            senders.create_task(
+                _send_request(
+                    link=link1,
+                    worker_index=1,
+                    policy_version=5,
+                    max_observation_tokens=max_observation_tokens,
+                )
+            )
+            senders.create_task(
+                _send_request(
+                    link=link2,
+                    worker_index=2,
+                    policy_version=4,
+                    max_observation_tokens=max_observation_tokens,
+                )
+            )
+            await _wait_for_ready_requests((link0, link1, link2))
+            command_result = await data_plane.run_until_command(
+                policy_version=5,
+                process_batch=recorder.process,
+                reject_batch=recorder.reject,
+            )
 
         assert isinstance(command_result, Ok)
         assert isinstance(
@@ -321,24 +344,6 @@ async def test_run_until_command_batches_until_batch_size() -> None:
             )
         )
         assert isinstance(command_sent, Ok)
-        await _send_request(
-            link=link0,
-            worker_index=0,
-            policy_version=3,
-            max_observation_tokens=max_observation_tokens,
-        )
-        await _send_request(
-            link=link1,
-            worker_index=1,
-            policy_version=3,
-            max_observation_tokens=max_observation_tokens,
-        )
-        await _send_request(
-            link=link2,
-            worker_index=2,
-            policy_version=3,
-            max_observation_tokens=max_observation_tokens,
-        )
         data_plane = _data_plane(
             control_link=control_link,
             request_peers=(
@@ -350,11 +355,37 @@ async def test_run_until_command_batches_until_batch_size() -> None:
             max_observation_tokens=max_observation_tokens,
         )
 
-        command_result = await data_plane.run_until_command(
-            policy_version=3,
-            process_batch=recorder.process,
-            reject_batch=recorder.reject,
-        )
+        async with asyncio.TaskGroup() as senders:
+            senders.create_task(
+                _send_request(
+                    link=link0,
+                    worker_index=0,
+                    policy_version=3,
+                    max_observation_tokens=max_observation_tokens,
+                )
+            )
+            senders.create_task(
+                _send_request(
+                    link=link1,
+                    worker_index=1,
+                    policy_version=3,
+                    max_observation_tokens=max_observation_tokens,
+                )
+            )
+            senders.create_task(
+                _send_request(
+                    link=link2,
+                    worker_index=2,
+                    policy_version=3,
+                    max_observation_tokens=max_observation_tokens,
+                )
+            )
+            await _wait_for_ready_requests((link0, link1, link2))
+            command_result = await data_plane.run_until_command(
+                policy_version=3,
+                process_batch=recorder.process,
+                reject_batch=recorder.reject,
+            )
 
         assert isinstance(command_result, Ok)
         assert isinstance(
@@ -411,6 +442,84 @@ async def test_ingress_reuses_cuda_single_frame_slot() -> None:
         assert generation_count > 0
     finally:
         link.close()
+
+
+async def test_ingress_materializes_mps_thresholds_as_float32() -> None:
+    if not torch.backends.mps.is_available():
+        return
+    link = _request_link(worker_index=0)
+    ingress = PolicyRequestIngress(
+        batch_size=4,
+        max_observation_tokens=_TEST_MAX_OBSERVATION_TOKENS,
+        device=torch.device("mps"),
+    )
+    try:
+        batch = await _receive_single_frame_batch(
+            ingress=ingress,
+            link=link,
+            worker_index=0,
+            policy_version=11,
+        )
+
+        thresholds = batch.device_batch.sampling_thresholds
+        assert thresholds.device.type == "mps"
+        assert thresholds.dtype == torch.float32
+        assert bool(torch.isfinite(thresholds).all().cpu().item())
+        assert bool((thresholds >= 0.0).all().cpu().item())
+        assert bool((thresholds < 1.0).all().cpu().item())
+    finally:
+        link.close()
+
+
+async def test_ingress_aggregates_mps_thresholds_as_float32() -> None:
+    if not torch.backends.mps.is_available():
+        return
+    link0 = _request_link(worker_index=0)
+    link1 = _request_link(worker_index=1)
+    ingress = PolicyRequestIngress(
+        batch_size=4,
+        max_observation_tokens=_TEST_MAX_OBSERVATION_TOKENS,
+        device=torch.device("mps:0"),
+    )
+    try:
+        ingress.begin_batch()
+        async with asyncio.TaskGroup() as senders:
+            senders.create_task(
+                _send_request(
+                    link=link0,
+                    worker_index=0,
+                    policy_version=13,
+                )
+            )
+            senders.create_task(
+                _send_request(
+                    link=link1,
+                    worker_index=1,
+                    policy_version=13,
+                )
+            )
+            await _wait_for_ready_requests((link0, link1))
+            first_result = await ingress.receive_from(
+                link0.model_rank_peer
+            )
+            second_result = await ingress.receive_from(
+                link1.model_rank_peer
+            )
+        assert isinstance(first_result, Ok)
+        assert isinstance(second_result, Ok)
+        batch_result = ingress.finish_batch()
+        assert isinstance(batch_result, Ok)
+
+        batch = batch_result.value.device_batch
+        assert batch.policy_versions == (13, 13)
+        assert batch.sampling_thresholds.device == torch.device("mps:0")
+        assert batch.sampling_thresholds.dtype == torch.float32
+        assert bool(
+            (batch.sampling_thresholds < 1.0).all().cpu().item()
+        )
+    finally:
+        link0.close()
+        link1.close()
 
 
 def _control_link() -> _ModelRankControlLink:
@@ -475,6 +584,19 @@ async def _send_request(
     assert isinstance(send_result, Ok)
 
 
+async def _wait_for_ready_requests(
+    links: tuple[_RequestLink, ...],
+) -> None:
+    for link in links:
+        ready_result = (
+            await link.model_rank_peer.endpoint.wait_readable(
+                timeout_seconds=5.0
+            )
+        )
+        assert isinstance(ready_result, Ok)
+        assert ready_result.value
+
+
 async def _receive_single_frame_batch(
     *,
     ingress: PolicyRequestIngress,
@@ -482,13 +604,19 @@ async def _receive_single_frame_batch(
     worker_index: int,
     policy_version: int,
 ) -> ModelRankInferenceBatch:
-    await _send_request(
-        link=link,
-        worker_index=worker_index,
-        policy_version=policy_version,
-    )
     ingress.begin_batch()
-    receive_result = await ingress.receive_from(link.model_rank_peer)
+    async with asyncio.TaskGroup() as senders:
+        senders.create_task(
+            _send_request(
+                link=link,
+                worker_index=worker_index,
+                policy_version=policy_version,
+            )
+        )
+        await _wait_for_ready_requests((link,))
+        receive_result = await ingress.receive_from(
+            link.model_rank_peer
+        )
     assert isinstance(receive_result, Ok)
     batch_result = ingress.finish_batch()
     assert isinstance(batch_result, Ok)

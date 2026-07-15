@@ -74,17 +74,20 @@ function playerTarget(
 }
 
 Deno.test("test_connect_success", async () => {
-  const server = Deno.serve({ port: 0 }, (req) => {
-    const upgrade = req.headers.get("upgrade") || "";
-    if (upgrade.toLowerCase() === "websocket") {
-      const { socket, response } = Deno.upgradeWebSocket(req);
-      socket.addEventListener("open", () => {
-        sendStateOnRequest(socket);
-      });
-      return response;
-    }
-    return new Response("Not Found", { status: 404 });
-  });
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0 },
+    (req) => {
+      const upgrade = req.headers.get("upgrade") || "";
+      if (upgrade.toLowerCase() === "websocket") {
+        const { socket, response } = Deno.upgradeWebSocket(req);
+        socket.addEventListener("open", () => {
+          sendStateOnRequest(socket);
+        });
+        return response;
+      }
+      return new Response("Not Found", { status: 404 });
+    },
+  );
 
   const addr = server.addr;
   const port = typeof addr === "object" && "port" in addr
@@ -98,7 +101,7 @@ Deno.test("test_connect_success", async () => {
 
   await client.connect(
     playerTarget("test-id"),
-    `ws://localhost:${port}`,
+    `ws://127.0.0.1:${port}`,
   );
 
   // Wait for message
@@ -123,25 +126,28 @@ Deno.test("test_send_returns_false_when_socket_not_open", () => {
 Deno.test("test_send_action", async () => {
   const receivedActions: string[] = [];
   let serverReady = false;
-  const server = Deno.serve({ port: 0 }, (req) => {
-    const upgrade = req.headers.get("upgrade") || "";
-    if (upgrade.toLowerCase() === "websocket") {
-      const { socket, response } = Deno.upgradeWebSocket(req);
-      socket.addEventListener("open", () => {
-        serverReady = true;
-      });
-      socket.addEventListener("message", (e) => {
-        if (typeof e.data === "string") {
-          receivedActions.push(e.data);
-        }
-        if (e.data === JSON.stringify({ seq: 0 })) {
-          socket.send(JSON.stringify(makeStateMessage()));
-        }
-      });
-      return response;
-    }
-    return new Response("Not Found", { status: 404 });
-  });
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0 },
+    (req) => {
+      const upgrade = req.headers.get("upgrade") || "";
+      if (upgrade.toLowerCase() === "websocket") {
+        const { socket, response } = Deno.upgradeWebSocket(req);
+        socket.addEventListener("open", () => {
+          serverReady = true;
+        });
+        socket.addEventListener("message", (e) => {
+          if (typeof e.data === "string") {
+            receivedActions.push(e.data);
+          }
+          if (e.data === JSON.stringify({ seq: 0 })) {
+            socket.send(JSON.stringify(makeStateMessage()));
+          }
+        });
+        return response;
+      }
+      return new Response("Not Found", { status: 404 });
+    },
+  );
 
   const addr = server.addr;
   const port = typeof addr === "object" && "port" in addr
@@ -152,7 +158,7 @@ Deno.test("test_send_action", async () => {
 
   await client.connect(
     playerTarget("test-id"),
-    `ws://localhost:${port}`,
+    `ws://127.0.0.1:${port}`,
   );
   await waitFor(() => serverReady);
 
@@ -178,28 +184,31 @@ Deno.test("stale socket close does not clear the current connection", async () =
   const sockets: WebSocket[] = [];
   const receivedByPath = new Map<string, string[]>();
 
-  const server = Deno.serve({ port: 0 }, (req) => {
-    const upgrade = req.headers.get("upgrade") || "";
-    if (upgrade.toLowerCase() === "websocket") {
-      const path = new URL(req.url).pathname;
-      const { socket, response } = Deno.upgradeWebSocket(req);
-      socket.addEventListener("open", () => {
-        sockets.push(socket);
-        sendStateOnRequest(socket);
-      });
-      socket.addEventListener("message", (event) => {
-        if (typeof event.data !== "string") return;
-        const existing = receivedByPath.get(path) ?? [];
-        existing.push(event.data);
-        receivedByPath.set(path, existing);
-        if (event.data === JSON.stringify({ seq: 0 })) {
-          socket.send(JSON.stringify(makeStateMessage()));
-        }
-      });
-      return response;
-    }
-    return new Response("Not Found", { status: 404 });
-  });
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0 },
+    (req) => {
+      const upgrade = req.headers.get("upgrade") || "";
+      if (upgrade.toLowerCase() === "websocket") {
+        const path = new URL(req.url).pathname;
+        const { socket, response } = Deno.upgradeWebSocket(req);
+        socket.addEventListener("open", () => {
+          sockets.push(socket);
+          sendStateOnRequest(socket);
+        });
+        socket.addEventListener("message", (event) => {
+          if (typeof event.data !== "string") return;
+          const existing = receivedByPath.get(path) ?? [];
+          existing.push(event.data);
+          receivedByPath.set(path, existing);
+          if (event.data === JSON.stringify({ seq: 0 })) {
+            socket.send(JSON.stringify(makeStateMessage()));
+          }
+        });
+        return response;
+      }
+      return new Response("Not Found", { status: 404 });
+    },
+  );
 
   const addr = server.addr;
   const port = typeof addr === "object" && "port" in addr
@@ -211,12 +220,12 @@ Deno.test("stale socket close does not clear the current connection", async () =
 
   await client.connect(
     playerTarget("old-game"),
-    `ws://localhost:${port}`,
+    `ws://127.0.0.1:${port}`,
   );
   await waitFor(() => sockets.length === 1);
   await client.connect(
     playerTarget("new-game"),
-    `ws://localhost:${port}`,
+    `ws://127.0.0.1:${port}`,
   );
   await waitFor(() => sockets.length === 2);
 
@@ -242,10 +251,13 @@ Deno.test("stale socket close does not clear the current connection", async () =
 Deno.test("failed initial connect does not schedule reconnects", async () => {
   let requestCount = 0;
 
-  const server = Deno.serve({ port: 0 }, () => {
-    requestCount++;
-    return new Response("Not Found", { status: 404 });
-  });
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0 },
+    () => {
+      requestCount++;
+      return new Response("Not Found", { status: 404 });
+    },
+  );
 
   const addr = server.addr;
   const port = typeof addr === "object" && "port" in addr
@@ -259,7 +271,7 @@ Deno.test("failed initial connect does not schedule reconnects", async () => {
   try {
     await client.connect(
       playerTarget("missing-game"),
-      `ws://localhost:${port}`,
+      `ws://127.0.0.1:${port}`,
     );
   } catch {
     rejected = true;
@@ -275,17 +287,20 @@ Deno.test("failed initial connect does not schedule reconnects", async () => {
 
 Deno.test("test_onMessage_receives_state", async () => {
   const msg = makeStateMessage();
-  const server = Deno.serve({ port: 0 }, (req) => {
-    const upgrade = req.headers.get("upgrade") || "";
-    if (upgrade.toLowerCase() === "websocket") {
-      const { socket, response } = Deno.upgradeWebSocket(req);
-      socket.addEventListener("open", () => {
-        sendStateOnRequest(socket, msg);
-      });
-      return response;
-    }
-    return new Response("Not Found", { status: 404 });
-  });
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0 },
+    (req) => {
+      const upgrade = req.headers.get("upgrade") || "";
+      if (upgrade.toLowerCase() === "websocket") {
+        const { socket, response } = Deno.upgradeWebSocket(req);
+        socket.addEventListener("open", () => {
+          sendStateOnRequest(socket, msg);
+        });
+        return response;
+      }
+      return new Response("Not Found", { status: 404 });
+    },
+  );
 
   const addr = server.addr;
   const port = typeof addr === "object" && "port" in addr
@@ -300,7 +315,7 @@ Deno.test("test_onMessage_receives_state", async () => {
 
   await client.connect(
     playerTarget("test-id"),
-    `ws://localhost:${port}`,
+    `ws://127.0.0.1:${port}`,
   );
   await waitFor(() => received !== null);
 
@@ -315,20 +330,23 @@ Deno.test("test_onMessage_receives_state", async () => {
 });
 
 Deno.test("test_onDisconnect_called", async () => {
-  const server = Deno.serve({ port: 0 }, (req) => {
-    const upgrade = req.headers.get("upgrade") || "";
-    if (upgrade.toLowerCase() === "websocket") {
-      const { socket, response } = Deno.upgradeWebSocket(req);
-      socket.addEventListener("open", () => {
-        sendStateOnRequest(socket);
-        socket.addEventListener("message", () => {
-          setTimeout(() => socket.close(), 50);
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0 },
+    (req) => {
+      const upgrade = req.headers.get("upgrade") || "";
+      if (upgrade.toLowerCase() === "websocket") {
+        const { socket, response } = Deno.upgradeWebSocket(req);
+        socket.addEventListener("open", () => {
+          sendStateOnRequest(socket);
+          socket.addEventListener("message", () => {
+            setTimeout(() => socket.close(), 50);
+          });
         });
-      });
-      return response;
-    }
-    return new Response("Not Found", { status: 404 });
-  });
+        return response;
+      }
+      return new Response("Not Found", { status: 404 });
+    },
+  );
 
   const addr = server.addr;
   const port = typeof addr === "object" && "port" in addr
@@ -346,7 +364,7 @@ Deno.test("test_onDisconnect_called", async () => {
 
   await client.connect(
     playerTarget("test-id"),
-    `ws://localhost:${port}`,
+    `ws://127.0.0.1:${port}`,
   );
   await waitFor(() => disconnected);
 
@@ -359,18 +377,21 @@ Deno.test("test_onDisconnect_called", async () => {
 
 Deno.test("test_connect_constructs_ws_url_from_default_player_identity", async () => {
   let requestedPath = "";
-  const server = Deno.serve({ port: 0 }, (req) => {
-    const upgrade = req.headers.get("upgrade") || "";
-    if (upgrade.toLowerCase() === "websocket") {
-      requestedPath = new URL(req.url).pathname;
-      const { socket, response } = Deno.upgradeWebSocket(req);
-      socket.addEventListener("open", () => {
-        sendStateOnRequest(socket);
-      });
-      return response;
-    }
-    return new Response("Not Found", { status: 404 });
-  });
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0 },
+    (req) => {
+      const upgrade = req.headers.get("upgrade") || "";
+      if (upgrade.toLowerCase() === "websocket") {
+        requestedPath = new URL(req.url).pathname;
+        const { socket, response } = Deno.upgradeWebSocket(req);
+        socket.addEventListener("open", () => {
+          sendStateOnRequest(socket);
+        });
+        return response;
+      }
+      return new Response("Not Found", { status: 404 });
+    },
+  );
 
   const addr = server.addr;
   const port = typeof addr === "object" && "port" in addr
@@ -381,7 +402,7 @@ Deno.test("test_connect_constructs_ws_url_from_default_player_identity", async (
 
   await client.connect(
     playerTarget("my-game-42"),
-    `ws://localhost:${port}`,
+    `ws://127.0.0.1:${port}`,
   );
   await waitFor(() => requestedPath !== "");
 
@@ -393,18 +414,21 @@ Deno.test("test_connect_constructs_ws_url_from_default_player_identity", async (
 
 Deno.test("test_connect_constructs_ws_url_escapes_player_identity", async () => {
   const requestedUrls: URL[] = [];
-  const server = Deno.serve({ port: 0 }, (req) => {
-    const upgrade = req.headers.get("upgrade") || "";
-    if (upgrade.toLowerCase() === "websocket") {
-      requestedUrls.push(new URL(req.url));
-      const { socket, response } = Deno.upgradeWebSocket(req);
-      socket.addEventListener("open", () => {
-        sendStateOnRequest(socket);
-      });
-      return response;
-    }
-    return new Response("Not Found", { status: 404 });
-  });
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0 },
+    (req) => {
+      const upgrade = req.headers.get("upgrade") || "";
+      if (upgrade.toLowerCase() === "websocket") {
+        requestedUrls.push(new URL(req.url));
+        const { socket, response } = Deno.upgradeWebSocket(req);
+        socket.addEventListener("open", () => {
+          sendStateOnRequest(socket);
+        });
+        return response;
+      }
+      return new Response("Not Found", { status: 404 });
+    },
+  );
 
   const addr = server.addr;
   const port = typeof addr === "object" && "port" in addr
@@ -415,7 +439,7 @@ Deno.test("test_connect_constructs_ws_url_escapes_player_identity", async () => 
 
   await client.connect(
     { gameId: "my-game-42", playerIndex: 1, userId: "user 1" },
-    `ws://localhost:${port}`,
+    `ws://127.0.0.1:${port}`,
   );
   await waitFor(() => requestedUrls.length > 0);
 
@@ -434,24 +458,27 @@ Deno.test("test_reconnects_after_server_disconnect", async () => {
   let connectionCount = 0;
   let latestReceived: ServerMessage | null = null;
 
-  const server = Deno.serve({ port: 0 }, (req) => {
-    const upgrade = req.headers.get("upgrade") || "";
-    if (upgrade.toLowerCase() === "websocket") {
-      const { socket, response } = Deno.upgradeWebSocket(req);
-      socket.addEventListener("open", () => {
-        connectionCount++;
-        sendStateOnRequest(socket);
-        // Close after first connection to trigger reconnect
-        if (connectionCount === 1) {
-          socket.addEventListener("message", () => {
-            setTimeout(() => socket.close(), 50);
-          });
-        }
-      });
-      return response;
-    }
-    return new Response("Not Found", { status: 404 });
-  });
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0 },
+    (req) => {
+      const upgrade = req.headers.get("upgrade") || "";
+      if (upgrade.toLowerCase() === "websocket") {
+        const { socket, response } = Deno.upgradeWebSocket(req);
+        socket.addEventListener("open", () => {
+          connectionCount++;
+          sendStateOnRequest(socket);
+          // Close after first connection to trigger reconnect
+          if (connectionCount === 1) {
+            socket.addEventListener("message", () => {
+              setTimeout(() => socket.close(), 50);
+            });
+          }
+        });
+        return response;
+      }
+      return new Response("Not Found", { status: 404 });
+    },
+  );
 
   const addr = server.addr;
   const port = typeof addr === "object" && "port" in addr
@@ -466,7 +493,7 @@ Deno.test("test_reconnects_after_server_disconnect", async () => {
 
   await client.connect(
     playerTarget("test-id"),
-    `ws://localhost:${port}`,
+    `ws://127.0.0.1:${port}`,
   );
 
   // Wait for reconnection: connectionCount should become 2
@@ -486,30 +513,33 @@ Deno.test("player left close does not reconnect", async () => {
   let disconnected = false;
   let willReconnect: boolean | null = null;
 
-  const server = Deno.serve({ port: 0 }, (req) => {
-    const upgrade = req.headers.get("upgrade") || "";
-    if (upgrade.toLowerCase() === "websocket") {
-      const { socket, response } = Deno.upgradeWebSocket(req);
-      socket.addEventListener("open", () => {
-        connectionCount++;
-        socket.addEventListener("message", (event) => {
-          if (event.data === JSON.stringify({ seq: 0 })) {
-            socket.send(JSON.stringify(makeStateMessage()));
-            setTimeout(
-              () =>
-                socket.close(
-                  PLAYER_LEFT_WS_CLOSE_CODE,
-                  "player left",
-                ),
-              50,
-            );
-          }
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0 },
+    (req) => {
+      const upgrade = req.headers.get("upgrade") || "";
+      if (upgrade.toLowerCase() === "websocket") {
+        const { socket, response } = Deno.upgradeWebSocket(req);
+        socket.addEventListener("open", () => {
+          connectionCount++;
+          socket.addEventListener("message", (event) => {
+            if (event.data === JSON.stringify({ seq: 0 })) {
+              socket.send(JSON.stringify(makeStateMessage()));
+              setTimeout(
+                () =>
+                  socket.close(
+                    PLAYER_LEFT_WS_CLOSE_CODE,
+                    "player left",
+                  ),
+                50,
+              );
+            }
+          });
         });
-      });
-      return response;
-    }
-    return new Response("Not Found", { status: 404 });
-  });
+        return response;
+      }
+      return new Response("Not Found", { status: 404 });
+    },
+  );
 
   const addr = server.addr;
   const port = typeof addr === "object" && "port" in addr
@@ -525,7 +555,7 @@ Deno.test("player left close does not reconnect", async () => {
 
   await client.connect(
     playerTarget("test-id"),
-    `ws://localhost:${port}`,
+    `ws://127.0.0.1:${port}`,
   );
   await waitFor(() => disconnected);
   await new Promise((resolve) => setTimeout(resolve, 1200));
@@ -542,19 +572,22 @@ Deno.test("player left close does not reconnect", async () => {
 Deno.test("test_reconnect_respects_max_retries", async () => {
   let connectionCount = 0;
 
-  const server = Deno.serve({ port: 0 }, (req) => {
-    const upgrade = req.headers.get("upgrade") || "";
-    if (upgrade.toLowerCase() === "websocket") {
-      const { socket, response } = Deno.upgradeWebSocket(req);
-      socket.addEventListener("open", () => {
-        connectionCount++;
-        // Always close immediately to force reconnection attempts
-        setTimeout(() => socket.close(), 10);
-      });
-      return response;
-    }
-    return new Response("Not Found", { status: 404 });
-  });
+  const server = Deno.serve(
+    { hostname: "127.0.0.1", port: 0 },
+    (req) => {
+      const upgrade = req.headers.get("upgrade") || "";
+      if (upgrade.toLowerCase() === "websocket") {
+        const { socket, response } = Deno.upgradeWebSocket(req);
+        socket.addEventListener("open", () => {
+          connectionCount++;
+          // Always close immediately to force reconnection attempts
+          setTimeout(() => socket.close(), 10);
+        });
+        return response;
+      }
+      return new Response("Not Found", { status: 404 });
+    },
+  );
 
   const addr = server.addr;
   const port = typeof addr === "object" && "port" in addr
@@ -567,7 +600,7 @@ Deno.test("test_reconnect_respects_max_retries", async () => {
 
   await client.connect(
     playerTarget("test-id"),
-    `ws://localhost:${port}`,
+    `ws://127.0.0.1:${port}`,
   );
 
   // Wait for all 3 retries: 1s + 2s + 4s = 7s, use 10s timeout to be safe

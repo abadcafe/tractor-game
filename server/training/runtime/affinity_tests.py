@@ -22,7 +22,10 @@ def test_apply_cpu_affinity_empty_cpu_set_reads_current_affinity(
 
     monkeypatch.setattr(affinity.sys, "platform", "linux")
     monkeypatch.setattr(
-        affinity.os, "sched_getaffinity", fake_getaffinity
+        affinity.os,
+        "sched_getaffinity",
+        fake_getaffinity,
+        raising=False,
     )
 
     applied = apply_cpu_affinity(label="coordinator", cpus=())
@@ -59,10 +62,16 @@ def test_apply_cpu_affinity_sets_requested_linux_cpus(
 
     monkeypatch.setattr(affinity.sys, "platform", "linux")
     monkeypatch.setattr(
-        affinity.os, "sched_setaffinity", fake_setaffinity
+        affinity.os,
+        "sched_setaffinity",
+        fake_setaffinity,
+        raising=False,
     )
     monkeypatch.setattr(
-        affinity.os, "sched_getaffinity", fake_getaffinity
+        affinity.os,
+        "sched_getaffinity",
+        fake_getaffinity,
+        raising=False,
     )
 
     applied = apply_cpu_affinity(label="worker-1", cpus=(4, 5))
@@ -82,7 +91,10 @@ def test_apply_cpu_affinity_rejects_operating_system_failure(
 
     monkeypatch.setattr(affinity.sys, "platform", "linux")
     monkeypatch.setattr(
-        affinity.os, "sched_setaffinity", fake_setaffinity
+        affinity.os,
+        "sched_setaffinity",
+        fake_setaffinity,
+        raising=False,
     )
 
     applied = apply_cpu_affinity(label="worker-2", cpus=(7,))
@@ -108,10 +120,16 @@ def test_preflight_cpu_affinity_restores_original_cpu_set(
 
     monkeypatch.setattr(affinity.sys, "platform", "linux")
     monkeypatch.setattr(
-        affinity.os, "sched_setaffinity", fake_setaffinity
+        affinity.os,
+        "sched_setaffinity",
+        fake_setaffinity,
+        raising=False,
     )
     monkeypatch.setattr(
-        affinity.os, "sched_getaffinity", fake_getaffinity
+        affinity.os,
+        "sched_getaffinity",
+        fake_getaffinity,
+        raising=False,
     )
 
     checked = preflight_cpu_affinity(label="worker-0", cpus=(3, 4))
@@ -139,10 +157,16 @@ def test_preflight_cpu_affinity_rejects_invalid_cpu_set(
 
     monkeypatch.setattr(affinity.sys, "platform", "linux")
     monkeypatch.setattr(
-        affinity.os, "sched_setaffinity", fake_setaffinity
+        affinity.os,
+        "sched_setaffinity",
+        fake_setaffinity,
+        raising=False,
     )
     monkeypatch.setattr(
-        affinity.os, "sched_getaffinity", fake_getaffinity
+        affinity.os,
+        "sched_getaffinity",
+        fake_getaffinity,
+        raising=False,
     )
 
     checked = preflight_cpu_affinity(label="worker-0", cpus=(9,))
@@ -169,7 +193,10 @@ def test_current_cpu_affinity_returns_empty_on_os_failure(
 
     monkeypatch.setattr(affinity.sys, "platform", "linux")
     monkeypatch.setattr(
-        affinity.os, "sched_getaffinity", fake_getaffinity
+        affinity.os,
+        "sched_getaffinity",
+        fake_getaffinity,
+        raising=False,
     )
 
     assert current_cpu_affinity() == ()

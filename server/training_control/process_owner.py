@@ -17,7 +17,7 @@ type TrainingCommand = Literal["initialize", "resume"]
 
 
 class ProcessOwner(BaseModel):
-    """Persistent identity for exactly one Linux process lifetime."""
+    """Persistent identity for exactly one process lifetime."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -81,7 +81,7 @@ def read_owner(
 def write_owner(
     runtime_root: Path, owner: ProcessOwner
 ) -> _result.Ok[None] | _result.Rejected:
-    """Atomically publish an owner after /proc identity is known."""
+    """Atomically publish an owner after process identity is known."""
     path = owner_path(runtime_root, owner.run_dir)
     directory_result = _prepare_directory(path.parent)
     if isinstance(directory_result, _result.Rejected):
