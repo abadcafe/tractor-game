@@ -611,10 +611,12 @@ def test_torch_checkpoint_save_reports_post_commit_prune_rmtree_failure(
     )
     orphan_dir = tmp_path / "objects" / "orphan"
     orphan_dir.mkdir()
+    original_rmtree = _checkpoint_pruning.shutil.rmtree
 
     def fail_rmtree(path: Path) -> None:
-        assert path == orphan_dir
-        raise OSError("busy")
+        if path == orphan_dir:
+            raise OSError("busy")
+        original_rmtree(path)
 
     monkeypatch.setattr(
         _checkpoint_pruning.shutil, "rmtree", fail_rmtree

@@ -5,9 +5,19 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass
+from typing import Protocol, cast
 
 from server.foundation import result as _result
 from server.training.runtime.config import CpuSet
+
+
+class _LinuxAffinityApi(Protocol):
+    def sched_setaffinity(self, pid: int, cpus: set[int]) -> None: ...
+
+    def sched_getaffinity(self, pid: int) -> set[int]: ...
+
+
+_LINUX_AFFINITY = cast(_LinuxAffinityApi, os)
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,8 +52,8 @@ def apply_cpu_affinity(
             )
         )
     try:
-        os.sched_setaffinity(0, set(cpus))
-        active = tuple(sorted(os.sched_getaffinity(0)))
+        _LINUX_AFFINITY.sched_setaffinity(0, set(cpus))
+        active = tuple(sorted(_LINUX_AFFINITY.sched_getaffinity(0)))
     except OSError:
         return _result.Rejected(
             reason=f"CPU affinity apply failed for {label}: {cpus}"
@@ -80,22 +90,22 @@ def preflight_cpu_affinity(
             )
         )
     try:
-        original = set(os.sched_getaffinity(0))
+        original = set(_LINUX_AFFINITY.sched_getaffinity(0))
     except OSError:
         return _result.Rejected(
             reason=f"CPU affinity preflight failed for {label}: {cpus}"
         )
     restore_failed = False
     try:
-        os.sched_setaffinity(0, set(cpus))
-        active = tuple(sorted(os.sched_getaffinity(0)))
+        _LINUX_AFFINITY.sched_setaffinity(0, set(cpus))
+        active = tuple(sorted(_LINUX_AFFINITY.sched_getaffinity(0)))
     except OSError:
         return _result.Rejected(
             reason=f"CPU affinity preflight failed for {label}: {cpus}"
         )
     finally:
         try:
-            os.sched_setaffinity(0, original)
+            _LINUX_AFFINITY.sched_setaffinity(0, original)
         except OSError:
             restore_failed = True
     if restore_failed:
@@ -124,6 +134,6 @@ def current_cpu_affinity() -> CpuSet:
     if not sys.platform.startswith("linux"):
         return ()
     try:
-        return tuple(sorted(os.sched_getaffinity(0)))
+        return tuple(sorted(_LINUX_AFFINITY.sched_getaffinity(0)))
     except OSError:
         return ()

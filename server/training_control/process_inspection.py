@@ -1,10 +1,13 @@
-"""Linux /proc inspection for externally owned training processes."""
+"""Cross-platform inspection for externally owned training processes."""
 
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+from typing import Literal
 
+import psutil
 from pydantic import BaseModel, ConfigDict, Field
 
 from server.foundation import result as _result
@@ -13,6 +16,8 @@ from server.training_control.process_owner import (
     TrainingCommand,
     read_owner,
 )
+
+type ProcessInspectionBackend = Literal["proc", "portable"]
 
 
 class ProcessSnapshot(BaseModel):
@@ -51,17 +56,30 @@ class ProcSnapshot(BaseModel):
 
 
 class ProcessInspector:
-    """Resolve an external owner record against stable /proc facts."""
+    """Resolve an external owner against stable OS process facts."""
 
     def __init__(
         self,
         *,
         runtime_root: Path,
-        proc_root: Path = Path("/proc"),
+        proc_root: Path | None = None,
         clock_ticks_per_second: int | None = None,
+        backend: ProcessInspectionBackend | None = None,
     ) -> None:
         self._runtime_root = runtime_root.resolve()
-        self._proc_root = proc_root
+        self._backend = (
+            (
+                "proc"
+                if proc_root is not None
+                or sys.platform.startswith("linux")
+                else "portable"
+            )
+            if backend is None
+            else backend
+        )
+        self._proc_root = (
+            Path("/proc") if proc_root is None else proc_root
+        )
         self._clock_ticks_per_second = (
             os.sysconf("SC_CLK_TCK")
             if clock_ticks_per_second is None
@@ -108,8 +126,16 @@ class ProcessInspector:
     def inspect_pid(
         self, pid: int
     ) -> _result.Ok[ProcSnapshot | None] | _result.Rejected:
-        """Read a PID twice to reject reuse during inspection."""
+        """Read one PID with a stable lifetime identity token."""
         assert pid > 0
+        if self._backend == "portable":
+            return _inspect_portable_pid(pid)
+        return self._inspect_proc_pid(pid)
+
+    def _inspect_proc_pid(
+        self, pid: int
+    ) -> _result.Ok[ProcSnapshot | None] | _result.Rejected:
+        """Read a Linux PID twice to reject reuse during inspection."""
         process_dir = self._proc_root / str(pid)
         try:
             initial_stat_text = (process_dir / "stat").read_text(
@@ -185,6 +211,59 @@ class ProcessInspector:
                 cli_command=_cli_command(argv),
             )
         )
+
+
+def portable_start_token(process: psutil.Process) -> int:
+    """Return a stable integer token for a portable process lifetime."""
+    created_at = process.create_time()
+    if created_at <= 0.0:
+        raise ValueError("process creation time must be positive")
+    return round(created_at * 1_000_000)
+
+
+def _inspect_portable_pid(
+    pid: int,
+) -> _result.Ok[ProcSnapshot | None] | _result.Rejected:
+    try:
+        process = psutil.Process(pid)
+        with process.oneshot():
+            status = process.status()
+            if status == psutil.STATUS_ZOMBIE:
+                return _result.Ok(value=None)
+            start_token = portable_start_token(process)
+            started_at_ms = round(process.create_time() * 1000)
+            argv = tuple(process.cmdline())
+            working_directory = Path(process.cwd()).resolve()
+            executable = Path(process.exe()).resolve()
+            process_group_id = os.getpgid(pid)
+            unix_session_id = os.getsid(pid)
+    except (
+        psutil.NoSuchProcess,
+        psutil.ZombieProcess,
+        ProcessLookupError,
+    ):
+        return _result.Ok(value=None)
+    except psutil.Error, OSError, ValueError:
+        return _result.Rejected(
+            reason=f"process information is unreadable: PID {pid}"
+        )
+    if not argv:
+        return _result.Ok(value=None)
+    return _result.Ok(
+        value=ProcSnapshot(
+            pid=pid,
+            start_ticks=start_token,
+            started_at_ms=started_at_ms,
+            kernel_state=status,
+            executable=executable,
+            working_directory=working_directory,
+            run_dir=_run_dir(argv, working_directory),
+            argv=argv,
+            process_group_id=process_group_id,
+            unix_session_id=unix_session_id,
+            cli_command=_cli_command(argv),
+        )
+    )
 
 
 def same_process(left: ProcessSnapshot, right: ProcessSnapshot) -> bool:

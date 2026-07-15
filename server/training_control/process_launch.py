@@ -5,12 +5,49 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import sys
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol, cast
 
+import psutil
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from server.foundation import result as _result
+from server.training_control.process_inspection import (
+    portable_start_token,
+)
+
+
+class _LinuxOsApi(Protocol):
+    def pidfd_open(self, pid: int, flags: int = 0) -> int: ...
+
+
+class _LinuxSignalApi(Protocol):
+    def pidfd_send_signal(
+        self,
+        descriptor: int,
+        requested_signal: int,
+        siginfo: None = None,
+        flags: int = 0,
+    ) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _LinuxProcessHandle:
+    descriptor: int
+
+
+@dataclass(frozen=True, slots=True)
+class _PortableProcessHandle:
+    process: psutil.Process
+    start_token: int
+
+
+type ProcessHandle = _LinuxProcessHandle | _PortableProcessHandle
+
+_LINUX_OS = cast(_LinuxOsApi, os)
+_LINUX_SIGNAL = cast(_LinuxSignalApi, signal)
 
 
 class _ControlMessage(BaseModel):
@@ -118,11 +155,17 @@ def terminate_process_group(pid: int) -> None:
 
 
 def open_process_handle(
-    pid: int,
-) -> _result.Ok[int | None] | _result.Rejected:
-    """Open a Linux pidfd, returning none only after process exit."""
+    pid: int, start_token: int
+) -> _result.Ok[ProcessHandle | None] | _result.Rejected:
+    """Open an identity-bound handle, or none after process exit."""
+    if not sys.platform.startswith("linux"):
+        return _open_portable_process_handle(pid, start_token)
     try:
-        return _result.Ok(value=os.pidfd_open(pid))
+        return _result.Ok(
+            value=_LinuxProcessHandle(
+                descriptor=_LINUX_OS.pidfd_open(pid)
+            )
+        )
     except ProcessLookupError:
         return _result.Ok(value=None)
     except OSError as error:
@@ -134,14 +177,70 @@ def open_process_handle(
 
 
 def signal_process_handle(
-    descriptor: int, requested_signal: int
+    handle: ProcessHandle, requested_signal: int
 ) -> _result.Ok[None] | _result.Rejected:
-    """Signal the exact process lifetime referenced by a pidfd."""
+    """Signal the exact process lifetime referenced by a handle."""
+    if isinstance(handle, _PortableProcessHandle):
+        return _signal_portable_process_handle(handle, requested_signal)
     try:
-        signal.pidfd_send_signal(descriptor, requested_signal)
+        _LINUX_SIGNAL.pidfd_send_signal(
+            handle.descriptor, requested_signal
+        )
     except ProcessLookupError:
         return _result.Ok(value=None)
     except OSError as error:
+        return _result.Rejected(
+            reason=f"training process signal failed: {error}"
+        )
+    return _result.Ok(value=None)
+
+
+def close_process_handle(handle: ProcessHandle) -> None:
+    """Release operating-system resources owned by a process handle."""
+    if isinstance(handle, _LinuxProcessHandle):
+        os.close(handle.descriptor)
+
+
+def _open_portable_process_handle(
+    pid: int, start_token: int
+) -> _result.Ok[ProcessHandle | None] | _result.Rejected:
+    try:
+        process = psutil.Process(pid)
+        observed_token = portable_start_token(process)
+    except psutil.NoSuchProcess, psutil.ZombieProcess:
+        return _result.Ok(value=None)
+    except psutil.Error, OSError, ValueError:
+        return _result.Rejected(
+            reason=(
+                "training process handle could not be opened: "
+                f"PID {pid}"
+            )
+        )
+    if observed_token != start_token:
+        return _result.Rejected(
+            reason=(
+                "training process identity changed before handle open"
+            )
+        )
+    return _result.Ok(
+        value=_PortableProcessHandle(
+            process=process, start_token=start_token
+        )
+    )
+
+
+def _signal_portable_process_handle(
+    handle: _PortableProcessHandle, requested_signal: int
+) -> _result.Ok[None] | _result.Rejected:
+    try:
+        if portable_start_token(handle.process) != handle.start_token:
+            return _result.Rejected(
+                reason="training process identity changed before signal"
+            )
+        handle.process.send_signal(requested_signal)
+    except psutil.NoSuchProcess, psutil.ZombieProcess:
+        return _result.Ok(value=None)
+    except (psutil.Error, OSError, ValueError) as error:
         return _result.Rejected(
             reason=f"training process signal failed: {error}"
         )

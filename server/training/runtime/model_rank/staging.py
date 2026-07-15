@@ -17,6 +17,8 @@ from server.training.policy_inference_batch import (
 from server.training.policy_inference_batch.device import (
     copy_policy_request_host_frame_to_device,
     materialize_policy_request_frame,
+    materialize_sampling_thresholds_for_device,
+    sampling_threshold_dtype_for_device,
 )
 from server.training.policy_inference_batch.frame import (
     decode_policy_request_frame_metadata,
@@ -344,6 +346,7 @@ class PolicyRequestIngress:
             batch_result = materialize_policy_request_frame(
                 device_frame=device_frame,
                 metadata=frame.metadata,
+                host_frame=host_frame,
             )
             if isinstance(batch_result, Rejected):
                 return batch_result
@@ -524,7 +527,7 @@ class _FinalPolicyRequestBatchBuilder:
             ),
             sampling_thresholds=torch.zeros(
                 (batch_size, SEMANTIC_CODEC.max_argument_tokens),
-                dtype=template.sampling_thresholds.dtype,
+                dtype=sampling_threshold_dtype_for_device(device),
                 device=device,
             ),
             generation_step_counts=torch.empty(
@@ -551,7 +554,7 @@ class _FinalPolicyRequestBatchBuilder:
             and self.observation_batch.numeric_values.dtype
             == template.observation_batch.numeric_values.dtype
             and self.sampling_thresholds.dtype
-            == template.sampling_thresholds.dtype
+            == sampling_threshold_dtype_for_device(device)
             and self.generation_step_counts.dtype
             == template.generation_step_counts.dtype
         )
@@ -587,13 +590,21 @@ class _FinalPolicyRequestBatchBuilder:
             start=start,
         )
         self.sampling_thresholds[start:end, :].zero_()
+        source_thresholds = frame.device_batch.sampling_thresholds
+        if self.sampling_thresholds.device.type == "mps":
+            source_thresholds = (
+                materialize_sampling_thresholds_for_device(
+                    thresholds=source_thresholds,
+                    device=self.sampling_thresholds.device,
+                )
+            )
         self.sampling_thresholds[
             start:end, : frame.padded_generation_steps()
         ].copy_(
-            frame.device_batch.sampling_thresholds,
+            source_thresholds,
             non_blocking=_non_blocking_copy(
                 destination=self.sampling_thresholds,
-                source=frame.device_batch.sampling_thresholds,
+                source=source_thresholds,
             ),
         )
         self.generation_step_counts[start:end].copy_(

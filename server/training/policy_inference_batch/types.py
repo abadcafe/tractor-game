@@ -166,7 +166,14 @@ class DevicePolicyRequestBatch:
             batch_size,
             self.padded_generation_steps,
         )
-        assert self.sampling_thresholds.dtype == torch.float64
+        expected_threshold_dtype = (
+            torch.float32
+            if self.action_plan_batch.device.type == "mps"
+            else torch.float64
+        )
+        assert (
+            self.sampling_thresholds.dtype == expected_threshold_dtype
+        )
         assert self.generation_step_counts.shape == (batch_size,)
         assert self.generation_step_counts.dtype == torch.long
         assert len(self.policy_versions) == batch_size

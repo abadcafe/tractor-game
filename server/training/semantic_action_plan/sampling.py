@@ -44,19 +44,17 @@ def sample_legal_candidates(
     error_code = torch.zeros(
         (), dtype=torch.long, device=argument_logits.device
     )
-    high_precision_thresholds = thresholds.to(
-        dtype=torch.float64, device=argument_logits.device
-    )
+    assert thresholds.dtype in (torch.float32, torch.float64)
+    checked_thresholds = thresholds.to(device=argument_logits.device)
     error_code = _set_error_if(
         error_code,
-        (~torch.isfinite(high_precision_thresholds)).any(),
+        (~torch.isfinite(checked_thresholds)).any(),
         _ERROR_NONFINITE_THRESHOLD,
     )
     error_code = _set_error_if(
         error_code,
         (
-            (high_precision_thresholds < 0.0)
-            | (high_precision_thresholds >= 1.0)
+            (checked_thresholds < 0.0) | (checked_thresholds >= 1.0)
         ).any(),
         _ERROR_THRESHOLD_RANGE,
     )
@@ -70,7 +68,7 @@ def sample_legal_candidates(
         argument_logits=argument_logits,
         legal_candidates=legal_candidates,
         thresholds=_sampling_thresholds_for_logits(
-            thresholds=high_precision_thresholds,
+            thresholds=checked_thresholds,
             argument_logits=argument_logits,
         ),
         has_legal_token=has_legal_token,

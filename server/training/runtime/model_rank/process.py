@@ -214,13 +214,13 @@ def _setup_model_rank_runtime(
     model_rank_device: str,
     execution_config: ExecutionConfig,
 ) -> _result.Ok[torch.device] | _result.Rejected:
-    return _resolve_model_rank_device(
+    return resolve_model_rank_device(
         model_rank_kind=execution_config.model_ranks.kind,
         model_rank_device=model_rank_device,
     )
 
 
-def _resolve_model_rank_device(
+def resolve_model_rank_device(
     *,
     model_rank_kind: str,
     model_rank_device: str,
@@ -262,7 +262,7 @@ def _resolve_model_rank_device(
                     "PyTorch runtime"
                 )
             )
-        return Ok(value=device)
+        return Ok(value=torch.device("mps:0"))
     return Rejected(
         reason="CPU compute does not use model-rank process"
     )

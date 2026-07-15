@@ -24,6 +24,7 @@ from server.training_control.process_inspection import (
     same_process,
 )
 from server.training_control.process_launch import (
+    close_process_handle,
     open_process_handle,
     read_control_message,
     signal_process_handle,
@@ -81,7 +82,7 @@ class TrainingProcessControl:
         self,
         *,
         runtime_root: Path | None = None,
-        proc_root: Path = Path("/proc"),
+        proc_root: Path | None = None,
         startup_timeout_seconds: float | None = None,
     ) -> None:
         config = training_control_config()
@@ -324,7 +325,7 @@ class TrainingProcessControl:
                 )
             )
         handle_result = await asyncio.to_thread(
-            open_process_handle, original.pid
+            open_process_handle, original.pid, original.start_ticks
         )
         if isinstance(handle_result, _result.Rejected):
             return handle_result
@@ -343,10 +344,10 @@ class TrainingProcessControl:
             )
         verified = self._inspector.inspect(canonical)
         if isinstance(verified, _result.Rejected):
-            os.close(handle)
+            close_process_handle(handle)
             return verified
         if verified.value is None:
-            os.close(handle)
+            close_process_handle(handle)
             cleanup = await self._finalize_owner(canonical, original)
             if isinstance(cleanup, _result.Rejected):
                 return cleanup
@@ -359,7 +360,7 @@ class TrainingProcessControl:
                 )
             )
         if not same_process(original, verified.value):
-            os.close(handle)
+            close_process_handle(handle)
             return _result.Rejected(
                 reason=(
                     "training PID identity changed before stop signal"
@@ -368,7 +369,7 @@ class TrainingProcessControl:
         signaled = await asyncio.to_thread(
             signal_process_handle, handle, signal.SIGTERM
         )
-        os.close(handle)
+        close_process_handle(handle)
         if isinstance(signaled, _result.Rejected):
             return signaled
         exited = await self._wait_for_exit(

@@ -1,5 +1,7 @@
-"""Black-box tests for strict owner plus /proc inspection."""
+"""Black-box tests for strict cross-platform process inspection."""
 
+import os
+import sys
 from pathlib import Path
 
 from server.foundation.result import Ok, Rejected
@@ -92,6 +94,27 @@ def test_pid_reuse_is_rejected_by_start_ticks(tmp_path: Path) -> None:
     assert "not the owned training process" in result.reason
 
 
+def test_portable_inspector_reads_current_process(
+    tmp_path: Path,
+) -> None:
+    inspector = ProcessInspector(
+        runtime_root=tmp_path / "control",
+        backend="portable",
+    )
+
+    result = inspector.inspect_pid(os.getpid())
+
+    assert isinstance(result, Ok)
+    process = result.value
+    assert process is not None
+    assert process.pid == os.getpid()
+    assert process.start_ticks > 0
+    assert process.started_at_ms > 0
+    assert process.argv
+    assert process.executable.is_absolute()
+    assert process.working_directory.is_absolute()
+
+
 def _write_process(
     proc_root: Path, pid: int, run_dir: Path, *, start_ticks: int
 ) -> None:
@@ -102,7 +125,7 @@ def _write_process(
     process_dir = proc_root / str(pid)
     process_dir.mkdir()
     argv = (
-        "/usr/bin/python",
+        sys.executable,
         "-m",
         "server.training_cli",
         "--run-dir",
@@ -119,4 +142,4 @@ def _write_process(
         encoding="ascii",
     )
     process_dir.joinpath("cwd").symlink_to(proc_root.parent)
-    process_dir.joinpath("exe").symlink_to("/usr/bin/python")
+    process_dir.joinpath("exe").symlink_to(sys.executable)

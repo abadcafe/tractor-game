@@ -1,0 +1,9 @@
+{
+  "imports": {
+    "echarts/charts": "./stubs/echarts/charts.ts",
+    "echarts/components": "./stubs/echarts/components.ts",
+    "echarts/renderers": "./stubs/echarts/renderers.ts",
+    "echarts/core": "./stubs/echarts/core.ts",
+    "echarts": "./stubs/echarts/index.ts"
+  }
+}

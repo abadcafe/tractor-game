@@ -32,6 +32,8 @@ from server.training.semantic_action_plan import DeviceActionPlanBatch
 from server.training.semantic_action_plan.spec import ACTION_FACE_COUNT
 from server.training.tensorize import ObservationTensorBatch
 
+_FLOAT32_BELOW_ONE = float.fromhex("0x1.fffffep-1")
+
 
 def materialize_borrowed_policy_request_batch(
     *, batch: BorrowedPolicyRequestBatch, device: torch.device
@@ -46,6 +48,7 @@ def materialize_borrowed_policy_request_batch(
     return materialize_policy_request_frame(
         device_frame=device_frame,
         metadata=batch.metadata,
+        host_frame=host_frame,
     )
 
 
@@ -65,6 +68,7 @@ def materialize_policy_request_batch_frame(
     return materialize_policy_request_frame(
         device_frame=device_frame,
         metadata=metadata_result.value,
+        host_frame=host_frame,
     )
 
 
@@ -93,6 +97,7 @@ def materialize_policy_request_frame(
     *,
     device_frame: Tensor,
     metadata: PolicyRequestFrameMetadata,
+    host_frame: Tensor | None = None,
 ) -> _result.Ok[DevicePolicyRequestBatch] | _result.Rejected:
     """Return final request tensors as views over a staged frame."""
     validate_result = _validate_device_frame(
@@ -103,6 +108,13 @@ def materialize_policy_request_frame(
         return validate_result
     layout = metadata.layout
     row_count = metadata.row_count
+    thresholds_result = _materialize_sampling_thresholds(
+        device_frame=device_frame,
+        host_frame=host_frame,
+        metadata=metadata,
+    )
+    if isinstance(thresholds_result, Rejected):
+        return thresholds_result
     return Ok(
         value=DevicePolicyRequestBatch(
             observation_batch=ObservationTensorBatch(
@@ -238,14 +250,7 @@ def materialize_policy_request_frame(
                     (metadata.batch_capacity, MAX_PAIR_PLAN_COUNT),
                 )[:row_count],
             ),
-            sampling_thresholds=_view_f64_column(
-                device_frame,
-                layout.sampling_thresholds,
-                (
-                    metadata.batch_capacity,
-                    metadata.padded_generation_steps,
-                ),
-            )[:row_count],
+            sampling_thresholds=thresholds_result.value[:row_count],
             generation_step_counts=_view_i64_column(
                 device_frame,
                 layout.generation_step_counts,
@@ -253,6 +258,73 @@ def materialize_policy_request_frame(
             )[:row_count],
             policy_versions=metadata.policy_versions,
             padded_generation_steps=metadata.padded_generation_steps,
+        )
+    )
+
+
+def sampling_threshold_dtype_for_device(
+    device: torch.device,
+) -> torch.dtype:
+    """Return the supported sampling-threshold dtype for a device."""
+    if device.type == "mps":
+        return torch.float32
+    return torch.float64
+
+
+def materialize_sampling_thresholds_for_device(
+    *, thresholds: Tensor, device: torch.device
+) -> Tensor:
+    """Move float64 thresholds without making MPS float64 tensors."""
+    assert thresholds.device.type == "cpu"
+    assert thresholds.dtype == torch.float64
+    if device.type != "mps":
+        return thresholds.to(device=device)
+    valid = (
+        torch.isfinite(thresholds)
+        & (thresholds >= 0.0)
+        & (thresholds < 1.0)
+    )
+    normalized = torch.where(
+        valid,
+        thresholds.clamp(max=_FLOAT32_BELOW_ONE),
+        thresholds,
+    )
+    return normalized.to(dtype=torch.float32, device=device)
+
+
+def _materialize_sampling_thresholds(
+    *,
+    device_frame: Tensor,
+    host_frame: Tensor | None,
+    metadata: PolicyRequestFrameMetadata,
+) -> _result.Ok[Tensor] | _result.Rejected:
+    shape = (
+        metadata.batch_capacity,
+        metadata.padded_generation_steps,
+    )
+    if device_frame.device.type != "mps":
+        return Ok(
+            value=_view_f64_column(
+                device_frame,
+                metadata.layout.sampling_thresholds,
+                shape,
+            )
+        )
+    if host_frame is None or host_frame.device.type != "cpu":
+        return Rejected(
+            reason=(
+                "MPS policy request requires host sampling thresholds"
+            )
+        )
+    host_thresholds = _view_f64_column(
+        host_frame,
+        metadata.layout.sampling_thresholds,
+        shape,
+    )
+    return Ok(
+        value=materialize_sampling_thresholds_for_device(
+            thresholds=host_thresholds,
+            device=device_frame.device,
         )
     )
 
