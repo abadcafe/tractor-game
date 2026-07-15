@@ -1,7 +1,7 @@
 {
   "tasks": {
-    "build": "rm -rf static && mkdir -p static/game static/ai-debug static/training && tsc --project frontend/tsconfig.json && esbuild frontend/training-dashboard/main.ts --bundle --minify --format=esm --platform=browser --outfile=static/training/main.js && rm -rf static/training-dashboard && cp frontend/game/index.html frontend/game/style.css static/game/ && cp frontend/ai-debug/index.html frontend/ai-debug/style.css static/ai-debug/ && cp frontend/training-dashboard/index.html frontend/training-dashboard/style.css static/training/ && deno run --allow-read=static --allow-write=static scripts/cache_bust_static.ts",
-    "test": "deno test --allow-net --allow-read=frontend frontend/game/tests/ frontend/training-dashboard/tests/"
+    "build": "rm -rf static && mkdir -p static/game static/ai-debug static/training && tsc --project frontend/tsconfig.json && ./node_modules/.bin/esbuild frontend/training-dashboard/main.ts --bundle --minify --format=esm --platform=browser --outfile=static/training/main.js && rm -rf static/training-dashboard && cp frontend/game/index.html frontend/game/style.css static/game/ && cp frontend/ai-debug/index.html frontend/ai-debug/style.css static/ai-debug/ && cp frontend/training-dashboard/index.html frontend/training-dashboard/style.css static/training/ && deno run --allow-read=static --allow-write=static scripts/cache_bust_static.ts",
+    "test": "deno test --import-map=frontend/training-dashboard/tests/deno-import-map.json --allow-net --allow-read=frontend frontend/game/tests/ frontend/training-dashboard/tests/"
   },
   "compilerOptions": {
     "lib": ["dom", "dom.iterable", "deno.ns"]

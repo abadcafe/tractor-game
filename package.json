@@ -4,6 +4,7 @@
     "echarts": "6.1.0"
   },
   "devDependencies": {
-    "esbuild": "0.27.3"
+    "esbuild": "0.27.3",
+    "typescript": "^7.0.2"
   }
 }
