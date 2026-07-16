@@ -367,11 +367,10 @@ async function resume(event: Event): Promise<void> {
   status.className = "status-value";
   status.textContent = "Launching training process…";
   try {
-    const value = await resumeTraining(
+    await resumeTraining(
       resumeRequestFromForm(resumeForm, origin.runDir),
     );
     if (!selection.ownsRun(origin)) return;
-    processDomain.apply(value);
     resumeDialog.close();
   } catch (error: unknown) {
     if (selection.ownsRun(origin)) {
@@ -393,7 +392,6 @@ async function stop(): Promise<void> {
   try {
     const value = await stopTraining(origin.runDir);
     if (!selection.ownsRun(origin)) return;
-    processDomain.apply(value);
     clearProcessError("control");
     if (value.forced) {
       processStatus.reportWarning(

@@ -14,7 +14,7 @@ from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 
 from server.foundation import result as _result
 from server.training_artifacts import query_checkpoint_invalidation
-from server.training_control.process_control import ProcessEnvelope
+from server.training_control.process_inspection import ProcessState
 from server.training_events.queries import query_training_log_tail
 from server.training_metrics.queries import (
     query_metrics_cursor,
@@ -153,15 +153,12 @@ def register_training_stream_route(
     async def training_process(
         websocket: WebSocket,
         run_dir: Path | None = None,
-        after_revision: Annotated[int, Query(ge=-1)] = -1,
     ) -> None:
         await websocket.accept()
         canonical = state.training_control_config.resolve_run_dir(
             run_dir
         )
-        snapshots = state.training_process_control.watch(
-            canonical, after_revision=after_revision
-        )
+        snapshots = state.training_process_control.watch(canonical)
         disconnect = asyncio.create_task(
             _wait_for_disconnect(websocket)
         )
@@ -268,9 +265,9 @@ def register_training_stream_route(
 
 async def _next_snapshot(
     snapshots: AsyncGenerator[
-        _result.Ok[ProcessEnvelope] | _result.Rejected, None
+        _result.Ok[ProcessState] | _result.Rejected, None
     ],
-) -> _result.Ok[ProcessEnvelope] | _result.Rejected:
+) -> _result.Ok[ProcessState] | _result.Rejected:
     return await anext(snapshots)
 
 

@@ -5,10 +5,8 @@ import {
   parseCheckpointCatalog,
   parseConfig,
   parseLogPage,
-  parseProcessEnvelope,
-  parseStopEnvelope,
-  type ProcessEnvelope,
-  type StopEnvelope,
+  parseStopResult,
+  type StopResult,
   type TrainingConfig,
   type TrainingLogPage,
 } from "./types.ts";
@@ -40,16 +38,19 @@ export async function initializeTraining(
 
 export async function resumeTraining(
   request: ResumeRequest,
-): Promise<ProcessEnvelope> {
-  return parseProcessEnvelope(
-    await requestJson("/api/training/resume", "POST", request),
+): Promise<void> {
+  const response = await requestJsonResponse(
+    "/api/training/resume",
+    "POST",
+    request,
   );
+  responseValue(response);
 }
 
 export async function stopTraining(
   runDir: string,
-): Promise<StopEnvelope> {
-  return parseStopEnvelope(
+): Promise<StopResult> {
+  return parseStopResult(
     await requestJson("/api/training/stop", "POST", {
       run_dir: runDir,
     }),
@@ -123,7 +124,9 @@ async function requestJsonResponse(
       : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const value: unknown = await response.json();
+  const value: unknown = response.status === 204
+    ? null
+    : await response.json();
   return { ok: response.ok, status: response.status, value };
 }
 

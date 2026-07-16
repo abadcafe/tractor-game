@@ -1,68 +1,41 @@
-"""Unified lifecycle control for standalone training CLI processes."""
+"""PID-file lifecycle control for standalone training CLI processes."""
 
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import logging
 import os
 import signal
 import subprocess
 import time
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager, suppress
+from contextlib import suppress
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from server.foundation import result as _result
-from server.training_control.config import training_control_config
 from server.training_control.process_inspection import (
     ProcessInspector,
-    ProcessSnapshot,
-    ProcSnapshot,
-    same_process,
-)
-from server.training_control.process_launch import (
-    close_process_handle,
-    open_process_handle,
-    signal_process_handle,
-    spawn_process,
-    terminate_process_group,
-)
-from server.training_control.process_owner import (
-    ProcessOwner,
-    TrainingCommand,
-    increment_revision,
-    lock_path,
-    prepare_control_directory,
-    read_owner,
-    read_revision,
-    remove_owner_if_matches,
-    write_owner,
+    ProcessState,
+    remove_training_pid,
+    remove_training_pid_if_matches,
+    write_training_pid,
 )
 
 _LOGGER = logging.getLogger(__name__)
-_PROCESS_DISCOVERY_TIMEOUT_SECONDS = 5.0
-
-
-class ProcessEnvelope(BaseModel):
-    """Revisioned process state for control responses and streams."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    revision: int = Field(ge=0)
-    process: ProcessSnapshot | None
+_PROCESS_POLL_SECONDS = 1.0
+_PROCESS_EXIT_POLL_SECONDS = 0.1
+_FORCED_EXIT_TIMEOUT_SECONDS = 5.0
+_PROCESS_LOG_NAME = "training-cli.log"
 
 
 class StopResult(BaseModel):
-    """Terminal state returned by an idempotent stop request."""
+    """Outcome of a PID-file stop request."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     forced: bool
-    revision: int = Field(ge=0)
-    process: None = None
 
 
 class TrainingInitialization(BaseModel):
@@ -75,49 +48,17 @@ class TrainingInitialization(BaseModel):
 
 
 class TrainingProcessControl:
-    """Own initialize, resume, inspect, stop, and lifecycle watches."""
+    """Control initialization and resumed training with a PID file."""
 
-    def __init__(
-        self,
-        *,
-        runtime_root: Path | None = None,
-        proc_root: Path | None = None,
-    ) -> None:
-        config = training_control_config()
-        self._runtime_root = (
-            config.control_runtime_dir
-            if runtime_root is None
-            else runtime_root.resolve()
-        )
-        self._inspector = ProcessInspector(
-            runtime_root=self._runtime_root,
-            proc_root=proc_root,
-        )
+    def __init__(self) -> None:
+        self._inspector = ProcessInspector()
         self._locks: dict[Path, asyncio.Lock] = {}
-        self._conditions: dict[Path, asyncio.Condition] = {}
         self._reapers: set[asyncio.Task[None]] = set()
 
     async def inspect(
         self, run_dir: Path
-    ) -> _result.Ok[ProcessEnvelope] | _result.Rejected:
-        """Return direct /proc state and clean an exact stale owner."""
-        canonical = run_dir.resolve()
-        owner = read_owner(self._runtime_root, canonical)
-        if isinstance(owner, _result.Rejected):
-            return owner
-        if owner.value is None:
-            revision = read_revision(self._runtime_root, canonical)
-            if isinstance(revision, _result.Rejected):
-                return revision
-            return _result.Ok(
-                value=ProcessEnvelope(
-                    revision=revision.value, process=None
-                )
-            )
-        async with self._mutation_lock(canonical) as lock_result:
-            if isinstance(lock_result, _result.Rejected):
-                return lock_result
-            return await self._inspect_locked(canonical)
+    ) -> _result.Ok[ProcessState] | _result.Rejected:
+        return self._inspector.inspect(run_dir.resolve())
 
     async def initialize(
         self,
@@ -126,50 +67,39 @@ class TrainingProcessControl:
         command: tuple[str, ...],
         working_directory: Path,
     ) -> _result.Ok[TrainingInitialization] | _result.Rejected:
-        """Run initialization as a visible, managed process."""
-        spawn_result = await self._start_process(
-            run_dir=run_dir,
-            command=command,
-            working_directory=working_directory,
-            command_kind="initialize",
-            capture_output=True,
-        )
-        if isinstance(spawn_result, _result.Rejected):
-            return spawn_result
-        process, snapshot = spawn_result.value
-        try:
-            _stdout, stderr = await asyncio.to_thread(
-                process.communicate
-            )
-        except asyncio.CancelledError:
-            await asyncio.to_thread(
-                terminate_process_group, process.pid
-            )
-            await asyncio.to_thread(process.wait)
-            if snapshot is not None:
-                cleanup = await self._finalize_owner(
-                    run_dir.resolve(), snapshot
-                )
-                _log_cleanup_failure(cleanup)
-            raise
-        if snapshot is not None:
-            cleanup = await self._finalize_owner(
-                run_dir.resolve(), snapshot
-            )
-            if isinstance(cleanup, _result.Rejected):
-                return cleanup
-        if process.returncode != 0:
-            error = stderr.decode("utf-8", errors="replace").strip()
-            return _result.Rejected(
-                reason=error or "training initialization failed"
-            )
+        """Execute CLI init synchronously without publishing a PID."""
+        assert command
         canonical = run_dir.resolve()
+        async with self._lock(canonical):
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *command,
+                    cwd=working_directory.resolve(),
+                    stdin=subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+            except OSError as error:
+                return _result.Rejected(
+                    reason=(
+                        "training initialization could not be started: "
+                        f"{error}"
+                    )
+                )
+            _stdout, stderr = await process.communicate()
+            returncode = process.returncode
+            assert returncode is not None
+            if returncode != 0:
+                error = stderr.decode("utf-8", errors="replace").strip()
+                return _result.Rejected(
+                    reason=error or "training initialization failed"
+                )
         return _result.Ok(
             value=TrainingInitialization(
                 run_dir=canonical,
-                checkpoint_path=(
-                    canonical / "checkpoints" / "latest.json"
-                ),
+                checkpoint_path=canonical
+                / "checkpoints"
+                / "latest.json",
             )
         )
 
@@ -179,34 +109,57 @@ class TrainingProcessControl:
         run_dir: Path,
         command: tuple[str, ...],
         working_directory: Path,
-    ) -> _result.Ok[ProcessEnvelope] | _result.Rejected:
-        """Start training and publish the live CLI process."""
-        spawn_result = await self._start_process(
-            run_dir=run_dir,
-            command=command,
-            working_directory=working_directory,
-            command_kind="resume",
-            capture_output=False,
-        )
-        if isinstance(spawn_result, _result.Rejected):
-            return spawn_result
-        process, snapshot = spawn_result.value
-        if snapshot is None:
-            await asyncio.to_thread(process.wait)
-            return _result.Rejected(
-                reason="training process exited during launch"
-            )
-        self._start_reaper(process, run_dir.resolve(), snapshot)
-        current = await self.inspect(run_dir)
-        if isinstance(current, _result.Rejected):
-            return current
-        if current.value.process is None:
-            return _result.Rejected(
-                reason=(
-                    "training process exited immediately after launch"
+    ) -> _result.Ok[None] | _result.Rejected:
+        """Spawn one long-running CLI process and publish its PID."""
+        assert command
+        canonical = run_dir.resolve()
+        async with self._lock(canonical):
+            current = self._inspector.inspect(canonical)
+            if isinstance(current, _result.Rejected):
+                return current
+            process_snapshot = current.value.process
+            if process_snapshot is not None:
+                return _result.Rejected(
+                    reason=(
+                        "training process is already running: PID "
+                        f"{process_snapshot.pid}"
+                    )
                 )
-            )
-        return current
+            directory_result = _validate_resume_directory(canonical)
+            if isinstance(directory_result, _result.Rejected):
+                return directory_result
+            log_path = canonical / _PROCESS_LOG_NAME
+            try:
+                output = log_path.open("wb", buffering=0)
+            except OSError:
+                return _result.Rejected(
+                    reason=f"training log is unwritable: {log_path}"
+                )
+            try:
+                try:
+                    process = await asyncio.create_subprocess_exec(
+                        *command,
+                        cwd=working_directory.resolve(),
+                        stdin=subprocess.DEVNULL,
+                        stdout=output,
+                        stderr=subprocess.STDOUT,
+                        start_new_session=True,
+                    )
+                except OSError as error:
+                    return _result.Rejected(
+                        reason=(
+                            "training process could not be started: "
+                            f"{error}"
+                        )
+                    )
+            finally:
+                output.close()
+            written = write_training_pid(canonical, process.pid)
+            if isinstance(written, _result.Rejected):
+                await _kill_spawned_process_group(process)
+                return written
+            self._start_reaper(process, canonical)
+        return _result.Ok(value=None)
 
     async def stop(
         self,
@@ -214,109 +167,54 @@ class TrainingProcessControl:
         run_dir: Path,
         timeout_seconds: float,
     ) -> _result.Ok[StopResult] | _result.Rejected:
-        """Stop gracefully, then kill only a verified process group."""
+        """Request graceful shutdown, then force the process group."""
         assert timeout_seconds > 0.0
         canonical = run_dir.resolve()
-        initial = await self.inspect(canonical)
-        if isinstance(initial, _result.Rejected):
-            return initial
-        original = initial.value.process
-        if original is None:
-            return _result.Ok(
-                value=StopResult(
-                    forced=False,
-                    revision=initial.value.revision,
-                )
-            )
-        handle_result = await asyncio.to_thread(
-            open_process_handle, original.pid, original.start_ticks
-        )
-        if isinstance(handle_result, _result.Rejected):
-            return handle_result
-        handle = handle_result.value
-        if handle is None:
-            cleanup = await self._finalize_owner(canonical, original)
-            if isinstance(cleanup, _result.Rejected):
-                return cleanup
-            empty = await self.inspect(canonical)
-            if isinstance(empty, _result.Rejected):
-                return empty
-            return _result.Ok(
-                value=StopResult(
-                    forced=False, revision=empty.value.revision
-                )
-            )
-        verified = self._inspector.inspect(canonical)
-        if isinstance(verified, _result.Rejected):
-            close_process_handle(handle)
-            return verified
-        if verified.value is None:
-            close_process_handle(handle)
-            cleanup = await self._finalize_owner(canonical, original)
-            if isinstance(cleanup, _result.Rejected):
-                return cleanup
-            empty = await self.inspect(canonical)
-            if isinstance(empty, _result.Rejected):
-                return empty
-            return _result.Ok(
-                value=StopResult(
-                    forced=False, revision=empty.value.revision
-                )
-            )
-        if not same_process(original, verified.value):
-            close_process_handle(handle)
-            return _result.Rejected(
-                reason=(
-                    "training PID identity changed before stop signal"
-                )
-            )
-        signaled = await asyncio.to_thread(
-            signal_process_handle, handle, signal.SIGTERM
-        )
-        close_process_handle(handle)
-        if isinstance(signaled, _result.Rejected):
-            return signaled
-        exited = await self._wait_for_exit(
-            canonical, original, timeout_seconds=timeout_seconds
-        )
-        if isinstance(exited, _result.Rejected):
-            return exited
-        forced = False
-        if not exited.value:
-            current = await self.inspect(canonical)
+        async with self._lock(canonical):
+            current = self._inspector.inspect(canonical)
             if isinstance(current, _result.Rejected):
                 return current
             process = current.value.process
-            if process is not None:
-                if not same_process(original, process):
-                    return _result.Rejected(
-                        reason=(
-                            "training PID identity changed while "
-                            "stopping; "
-                            "no force signal was sent"
-                        )
-                    )
-                if process.process_group_id != process.pid:
-                    return _result.Rejected(
-                        reason=(
-                            "training process is not its process-group "
-                            "leader; refusing unsafe force stop"
-                        )
-                    )
+            if process is None:
+                removed = remove_training_pid(canonical)
+                if isinstance(removed, _result.Rejected):
+                    return removed
+                return _result.Ok(value=StopResult(forced=False))
+            pid = process.pid
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                removed = remove_training_pid_if_matches(canonical, pid)
+                if isinstance(removed, _result.Rejected):
+                    return removed
+                return _result.Ok(value=StopResult(forced=False))
+            except OSError:
+                return _result.Rejected(
+                    reason=f"SIGTERM failed for training PID {pid}"
+                )
+            exited = await _wait_for_process_group_exit(
+                pid, timeout_seconds=timeout_seconds
+            )
+            if isinstance(exited, _result.Rejected):
+                return exited
+            forced = False
+            if not exited.value:
                 try:
-                    os.killpg(process.process_group_id, signal.SIGKILL)
+                    os.killpg(pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
                 except OSError:
                     return _result.Rejected(
                         reason=(
                             "SIGKILL failed for training process group "
-                            f"{process.process_group_id}"
+                            f"{pid}"
                         )
                     )
-                forced = True
-                killed = await self._wait_for_exit(
-                    canonical, original, timeout_seconds=5.0
+                else:
+                    forced = True
+                killed = await _wait_for_process_group_exit(
+                    pid,
+                    timeout_seconds=_FORCED_EXIT_TIMEOUT_SECONDS,
                 )
                 if isinstance(killed, _result.Rejected):
                     return killed
@@ -324,46 +222,33 @@ class TrainingProcessControl:
                     return _result.Rejected(
                         reason="training process group did not exit"
                     )
-        cleanup = await self._finalize_owner(canonical, original)
-        if isinstance(cleanup, _result.Rejected):
-            return cleanup
-        empty = await self.inspect(canonical)
-        if isinstance(empty, _result.Rejected):
-            return empty
-        return _result.Ok(
-            value=StopResult(
-                forced=forced, revision=empty.value.revision
-            )
-        )
+            removed = remove_training_pid_if_matches(canonical, pid)
+            if isinstance(removed, _result.Rejected):
+                return removed
+            return _result.Ok(value=StopResult(forced=forced))
 
     async def watch(
-        self, run_dir: Path, *, after_revision: int = -1
+        self, run_dir: Path
     ) -> AsyncGenerator[
-        _result.Ok[ProcessEnvelope] | _result.Rejected, None
+        _result.Ok[ProcessState] | _result.Rejected, None
     ]:
-        """Yield full snapshots, using revision only as invalidation."""
+        """Yield initial state and subsequent PID-state changes."""
         canonical = run_dir.resolve()
-        observed = after_revision
+        previous: ProcessState | None = None
+        observed = False
         while True:
-            result = await self.inspect(canonical)
+            result = self._inspector.inspect(canonical)
             if isinstance(result, _result.Rejected):
                 yield result
                 return
-            if result.value.revision > observed:
-                observed = result.value.revision
+            if not observed or result.value != previous:
+                previous = result.value
+                observed = True
                 yield result
-                continue
-            condition = self._condition(canonical)
-            async with condition:
-                try:
-                    await asyncio.wait_for(
-                        condition.wait(), timeout=1.0
-                    )
-                except TimeoutError:
-                    pass
+            await asyncio.sleep(_PROCESS_POLL_SECONDS)
 
     async def close(self) -> None:
-        """Stop server-owned watchers without stopping training."""
+        """Stop local reapers without stopping resumed training."""
         tasks = tuple(self._reapers)
         for task in tasks:
             task.cancel()
@@ -371,311 +256,90 @@ class TrainingProcessControl:
             with suppress(asyncio.CancelledError):
                 await task
 
-    async def _start_process(
-        self,
-        *,
-        run_dir: Path,
-        command: tuple[str, ...],
-        working_directory: Path,
-        command_kind: TrainingCommand,
-        capture_output: bool,
-    ) -> (
-        _result.Ok[
-            tuple[subprocess.Popen[bytes], ProcessSnapshot | None]
-        ]
-        | _result.Rejected
-    ):
-        assert command
-        canonical = run_dir.resolve()
-        async with self._mutation_lock(canonical) as lock_result:
-            if isinstance(lock_result, _result.Rejected):
-                return lock_result
-            current = await self._inspect_locked(canonical)
-            if isinstance(current, _result.Rejected):
-                return current
-            if current.value.process is not None:
-                return _result.Rejected(
-                    reason=(
-                        "training process is already running: PID "
-                        f"{current.value.process.pid}"
-                    )
-                )
-            prepared = prepare_control_directory(
-                self._runtime_root, canonical
-            )
-            if isinstance(prepared, _result.Rejected):
-                return prepared
-            spawn_result = await asyncio.to_thread(
-                spawn_process,
-                command,
-                working_directory=working_directory.resolve(),
-                capture_output=capture_output,
-                output_directory=prepared.value,
-            )
-            if isinstance(spawn_result, _result.Rejected):
-                return spawn_result
-            process = spawn_result.value
-            proc_result = await self._wait_for_proc(process)
-            if isinstance(proc_result, _result.Rejected):
-                await asyncio.to_thread(
-                    terminate_process_group, process.pid
-                )
-                await asyncio.to_thread(process.wait)
-                return proc_result
-            proc = proc_result.value
-            if proc is None:
-                return _result.Ok(value=(process, None))
-            owner = ProcessOwner(
-                run_dir=canonical,
-                pid=process.pid,
-                start_ticks=proc.start_ticks,
-                command=command_kind,
-            )
-            owner_result = write_owner(self._runtime_root, owner)
-            if isinstance(owner_result, _result.Rejected):
-                await asyncio.to_thread(
-                    terminate_process_group, process.pid
-                )
-                await asyncio.to_thread(process.wait)
-                return owner_result
-            inspected = self._inspector.inspect(canonical)
-            if isinstance(inspected, _result.Rejected):
-                await asyncio.to_thread(
-                    terminate_process_group, process.pid
-                )
-                await asyncio.to_thread(process.wait)
-                remove_owner_if_matches(
-                    self._runtime_root,
-                    canonical,
-                    pid=owner.pid,
-                    start_ticks=owner.start_ticks,
-                )
-                return inspected
-            if inspected.value is None:
-                await asyncio.to_thread(
-                    terminate_process_group, process.pid
-                )
-                await asyncio.to_thread(process.wait)
-                removed = remove_owner_if_matches(
-                    self._runtime_root,
-                    canonical,
-                    pid=owner.pid,
-                    start_ticks=owner.start_ticks,
-                )
-                if isinstance(removed, _result.Rejected):
-                    return removed
-                return _result.Rejected(
-                    reason=(
-                        "training process exited before ownership was "
-                        "published"
-                    )
-                )
-            publish_result = await self._publish(canonical)
-            if isinstance(publish_result, _result.Rejected):
-                await asyncio.to_thread(
-                    terminate_process_group, process.pid
-                )
-                await asyncio.to_thread(process.wait)
-                removed = remove_owner_if_matches(
-                    self._runtime_root,
-                    canonical,
-                    pid=owner.pid,
-                    start_ticks=owner.start_ticks,
-                )
-                if isinstance(removed, _result.Rejected):
-                    return removed
-                return publish_result
-            return _result.Ok(value=(process, inspected.value))
-
-    async def _wait_for_proc(
-        self, process: subprocess.Popen[bytes]
-    ) -> _result.Ok[ProcSnapshot | None] | _result.Rejected:
-        deadline = time.monotonic() + _PROCESS_DISCOVERY_TIMEOUT_SECONDS
-        last_error: _result.Rejected | None = None
-        while time.monotonic() < deadline:
-            result = self._inspector.inspect_pid(process.pid)
-            if isinstance(result, _result.Rejected):
-                last_error = result
-            elif result.value is not None:
-                return _result.Ok(value=result.value)
-            if process.poll() is not None:
-                return _result.Ok(value=None)
-            await asyncio.sleep(0.01)
-        if process.poll() is not None:
-            return _result.Ok(value=None)
-        if last_error is not None:
-            return last_error
-        return _result.Rejected(
-            reason=(
-                f"training process failed to start: PID {process.pid}"
-            )
-        )
-
-    async def _inspect_locked(
-        self, canonical: Path
-    ) -> _result.Ok[ProcessEnvelope] | _result.Rejected:
-        process_result = self._inspector.inspect(canonical)
-        if isinstance(process_result, _result.Rejected):
-            return process_result
-        process = process_result.value
-        owner_result = read_owner(self._runtime_root, canonical)
-        if isinstance(owner_result, _result.Rejected):
-            return owner_result
-        owner = owner_result.value
-        if process is None and owner is not None:
-            removed = remove_owner_if_matches(
-                self._runtime_root,
-                canonical,
-                pid=owner.pid,
-                start_ticks=owner.start_ticks,
-            )
-            if isinstance(removed, _result.Rejected):
-                return removed
-            if removed.value:
-                published = await self._publish(canonical)
-                if isinstance(published, _result.Rejected):
-                    return published
-        revision_result = read_revision(self._runtime_root, canonical)
-        if isinstance(revision_result, _result.Rejected):
-            return revision_result
-        return _result.Ok(
-            value=ProcessEnvelope(
-                revision=revision_result.value, process=process
-            )
-        )
-
-    async def _wait_for_exit(
-        self,
-        run_dir: Path,
-        original: ProcessSnapshot,
-        *,
-        timeout_seconds: float,
-    ) -> _result.Ok[bool] | _result.Rejected:
-        deadline = time.monotonic() + timeout_seconds
-        last_rejection: _result.Rejected | None = None
-        while time.monotonic() < deadline:
-            inspected = self._inspector.inspect(run_dir)
-            if isinstance(inspected, _result.Rejected):
-                last_rejection = inspected
-                await asyncio.sleep(0.1)
-                continue
-            last_rejection = None
-            current = inspected.value
-            if current is None:
-                return _result.Ok(value=True)
-            if not same_process(original, current):
-                return _result.Rejected(
-                    reason="training PID identity changed while waiting"
-                )
-            await asyncio.sleep(0.1)
-        if last_rejection is not None:
-            return last_rejection
-        return _result.Ok(value=False)
-
-    async def _finalize_owner(
-        self, run_dir: Path, process: ProcessSnapshot
-    ) -> _result.Ok[None] | _result.Rejected:
-        async with self._mutation_lock(run_dir) as lock_result:
-            if isinstance(lock_result, _result.Rejected):
-                return lock_result
-            removed = remove_owner_if_matches(
-                self._runtime_root,
-                run_dir,
-                pid=process.pid,
-                start_ticks=process.start_ticks,
-            )
-            if isinstance(removed, _result.Ok) and removed.value:
-                published = await self._publish(run_dir)
-                if isinstance(published, _result.Rejected):
-                    return published
-            elif isinstance(removed, _result.Rejected):
-                return removed
-            return _result.Ok(value=None)
+    def _lock(self, run_dir: Path) -> asyncio.Lock:
+        return self._locks.setdefault(run_dir, asyncio.Lock())
 
     def _start_reaper(
-        self,
-        process: subprocess.Popen[bytes],
-        run_dir: Path,
-        snapshot: ProcessSnapshot,
+        self, process: asyncio.subprocess.Process, run_dir: Path
     ) -> None:
-        async def reap() -> None:
-            await asyncio.to_thread(process.wait)
-            cleanup = await self._finalize_owner(run_dir, snapshot)
-            _log_cleanup_failure(cleanup)
-
-        task = asyncio.create_task(
-            reap(), name=f"training-reaper-{process.pid}"
-        )
+        task = asyncio.create_task(self._reap(process, run_dir))
         self._reapers.add(task)
         task.add_done_callback(self._reapers.discard)
 
-    async def _publish(
-        self, run_dir: Path
-    ) -> _result.Ok[int] | _result.Rejected:
-        revision = increment_revision(self._runtime_root, run_dir)
-        if isinstance(revision, _result.Rejected):
-            return revision
-        condition = self._condition(run_dir)
-        async with condition:
-            condition.notify_all()
-        return revision
-
-    def _condition(self, run_dir: Path) -> asyncio.Condition:
-        return self._conditions.setdefault(run_dir, asyncio.Condition())
-
-    @asynccontextmanager
-    async def _mutation_lock(
-        self, run_dir: Path
-    ) -> AsyncGenerator[_result.Ok[None] | _result.Rejected, None]:
-        local_lock = self._locks.setdefault(run_dir, asyncio.Lock())
-        async with local_lock:
-            prepared = prepare_control_directory(
-                self._runtime_root, run_dir
+    async def _reap(
+        self, process: asyncio.subprocess.Process, run_dir: Path
+    ) -> None:
+        await process.wait()
+        async with self._lock(run_dir):
+            removed = remove_training_pid_if_matches(
+                run_dir, process.pid
             )
-            if isinstance(prepared, _result.Rejected):
-                yield prepared
-                return
-            descriptor_result = await asyncio.to_thread(
-                _acquire_file_lock,
-                lock_path(self._runtime_root, run_dir),
+        if isinstance(removed, _result.Rejected):
+            _LOGGER.error(
+                "Training PID cleanup failed: %s", removed.reason
             )
-            if isinstance(descriptor_result, _result.Rejected):
-                yield descriptor_result
-                return
-            descriptor = descriptor_result.value
-            try:
-                yield _result.Ok(value=None)
-            finally:
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
-                os.close(descriptor)
 
 
-def _acquire_file_lock(
-    path: Path,
-) -> _result.Ok[int] | _result.Rejected:
-    descriptor: int | None = None
+def _validate_resume_directory(
+    run_dir: Path,
+) -> _result.Ok[None] | _result.Rejected:
     try:
-        descriptor = os.open(
-            path,
-            os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
-            0o600,
-        )
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        if not run_dir.is_dir():
+            return _result.Rejected(
+                reason=(
+                    f"training run directory does not exist: {run_dir}"
+                )
+            )
     except OSError:
-        if descriptor is not None:
-            os.close(descriptor)
+        return _result.Rejected(
+            reason=f"training run directory is unreadable: {run_dir}"
+        )
+    return _result.Ok(value=None)
+
+
+async def _kill_spawned_process_group(
+    process: asyncio.subprocess.Process,
+) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    await process.wait()
+
+
+async def _wait_for_process_group_exit(
+    process_group_id: int, *, timeout_seconds: float
+) -> _result.Ok[bool] | _result.Rejected:
+    assert process_group_id > 0
+    assert timeout_seconds > 0.0
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        exists = _process_group_exists(process_group_id)
+        if isinstance(exists, _result.Rejected):
+            return exists
+        if not exists.value:
+            return _result.Ok(value=True)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            return _result.Ok(value=False)
+        await asyncio.sleep(min(_PROCESS_EXIT_POLL_SECONDS, remaining))
+
+
+def _process_group_exists(
+    process_group_id: int,
+) -> _result.Ok[bool] | _result.Rejected:
+    assert process_group_id > 0
+    try:
+        os.killpg(process_group_id, 0)
+    except ProcessLookupError:
+        return _result.Ok(value=False)
+    except PermissionError:
+        return _result.Ok(value=True)
+    except OSError:
         return _result.Rejected(
             reason=(
-                f"training control lock could not be acquired: {path}"
+                "training process-group existence check failed: "
+                f"{process_group_id}"
             )
         )
-    return _result.Ok(value=descriptor)
-
-
-def _log_cleanup_failure(
-    result: (_result.Ok[None] | _result.Ok[bool] | _result.Rejected),
-) -> None:
-    if isinstance(result, _result.Rejected):
-        _LOGGER.error(
-            "Training owner cleanup failed: %s", result.reason
-        )
+    return _result.Ok(value=True)

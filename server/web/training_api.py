@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Annotated, Never
 
 from anyio import to_thread
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from pydantic import BaseModel, BeforeValidator, ConfigDict
 
 from server.foundation.result import Ok, Rejected
@@ -23,9 +23,7 @@ from server.training_control.commands import (
     resume_command_argv,
 )
 from server.training_control.process_control import (
-    ProcessEnvelope,
     StopResult,
-    TrainingInitialization,
 )
 from server.training_events.queries import (
     TrainingLogHistoryPage,
@@ -78,7 +76,7 @@ def register_training_routes(app: FastAPI, state: ServerState) -> None:
 
     async def initialize_training(
         request: TrainingInitRequest,
-    ) -> TrainingInitialization:
+    ) -> Response:
         run_dir = state.training_control_config.resolve_run_dir(
             request.run_dir
         )
@@ -106,25 +104,27 @@ def register_training_routes(app: FastAPI, state: ServerState) -> None:
         )
         if isinstance(result, Rejected):
             _raise_rejected(result, status_code=409)
-        return result.value
+        return Response(status_code=204)
 
     async def resume_training(
         request: TrainingResumeRequest,
-    ) -> ProcessEnvelope:
+    ) -> Response:
         run_dir = state.training_control_config.resolve_run_dir(
             request.run_dir
         )
         resolved_request = request.model_copy(
             update={"run_dir": run_dir}
         )
-        result = await state.training_process_control.resume(
-            run_dir=run_dir,
-            command=resume_command_argv(resolved_request),
-            working_directory=Path.cwd(),
+        result = await asyncio.shield(
+            state.training_process_control.resume(
+                run_dir=run_dir,
+                command=resume_command_argv(resolved_request),
+                working_directory=Path.cwd(),
+            )
         )
         if isinstance(result, Rejected):
             _raise_rejected(result, status_code=409)
-        return result.value
+        return Response(status_code=204)
 
     async def stop_training(body: TrainingRunBody) -> StopResult:
         run_dir = state.training_control_config.resolve_run_dir(

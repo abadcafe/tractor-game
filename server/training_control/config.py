@@ -14,7 +14,6 @@ class TrainingControlConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     default_run_dir: Path
-    control_runtime_dir: Path
     stop_timeout_seconds: float = Field(gt=0.0)
 
     def resolve_run_dir(self, supplied: Path | None) -> Path:
@@ -33,19 +32,7 @@ def training_control_config() -> TrainingControlConfig:
     timeout = float(
         os.environ.get("TRAINING_STOP_TIMEOUT_SECONDS", "1800")
     )
-    configured_runtime = os.environ.get("TRAINING_CONTROL_RUNTIME_DIR")
-    if configured_runtime is not None:
-        runtime_dir = Path(configured_runtime).resolve()
-    else:
-        xdg_runtime = os.environ.get("XDG_RUNTIME_DIR")
-        runtime_base = (
-            Path(xdg_runtime)
-            if xdg_runtime is not None
-            else Path("/tmp") / f"tractor-game-{os.getuid()}"
-        )
-        runtime_dir = (runtime_base / "training").resolve()
     return TrainingControlConfig(
         default_run_dir=directory,
-        control_runtime_dir=runtime_dir,
         stop_timeout_seconds=timeout,
     )

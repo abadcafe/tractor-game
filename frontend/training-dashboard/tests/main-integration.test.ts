@@ -444,6 +444,16 @@ function jsonResponse(payload: unknown): FakeResponse {
   };
 }
 
+function noContentResponse(): FakeResponse {
+  return {
+    status: 204,
+    ok: true,
+    json(): Promise<unknown> {
+      return Promise.resolve(null);
+    },
+  };
+}
+
 function waitFrame(): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(() => resolve(), 0);
@@ -903,29 +913,12 @@ function withFakeDashboardDom(): DashboardHarness {
         );
       }
       if (target.includes("/api/training/init") && method === "POST") {
-        return Promise.resolve(jsonResponse({}));
+        return Promise.resolve(noContentResponse());
       }
       if (
         target.includes("/api/training/resume") && method === "POST"
       ) {
-        return Promise.resolve(
-          jsonResponse({
-            revision: 1,
-            process: {
-              pid: 100,
-              start_ticks: 1,
-              started_at_ms: Date.now(),
-              kernel_state: "R",
-              executable: "/usr/bin/python",
-              working_directory: "/tmp/run",
-              run_dir: "/tmp/run",
-              argv: ["python"],
-              process_group_id: 100,
-              unix_session_id: 100,
-              command: "resume",
-            },
-          }),
-        );
+        return Promise.resolve(noContentResponse());
       }
       if (target.includes("/api/training/stop")) {
         return Promise.resolve(jsonResponse({ forced: false }));

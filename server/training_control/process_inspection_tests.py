@@ -1,142 +1,89 @@
-"""Black-box tests for strict cross-platform process inspection."""
+"""Tests for PID-file-backed process status."""
+
+from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
 from server.foundation.result import Ok, Rejected
-from server.training_control.process_inspection import ProcessInspector
-from server.training_control.process_owner import (
-    ProcessOwner,
-    write_owner,
+from server.training_control.process_inspection import (
+    ProcessInspector,
+    pid_file_path,
+    read_training_pid,
+    remove_training_pid_if_matches,
+    write_training_pid,
 )
 
 
-def test_missing_external_owner_returns_no_process(
-    tmp_path: Path,
-) -> None:
-    inspector = ProcessInspector(
-        runtime_root=tmp_path / "control",
-        proc_root=tmp_path / "proc",
-        clock_ticks_per_second=100,
-    )
-
-    result = inspector.inspect(tmp_path / "run")
+def test_missing_pid_file_is_stopped(tmp_path: Path) -> None:
+    result = ProcessInspector().inspect(tmp_path)
 
     assert isinstance(result, Ok)
-    assert result.value is None
+    assert result.value.process is None
 
 
-def test_owner_and_proc_produce_complete_snapshot(
+def test_live_pid_exposes_actual_process_details(
     tmp_path: Path,
 ) -> None:
-    run_dir = tmp_path / "run"
-    runtime_root = tmp_path / "control"
-    proc_root = tmp_path / "proc"
-    _write_process(proc_root, 123, run_dir, start_ticks=98_765)
-    owner = ProcessOwner(
-        run_dir=run_dir.resolve(),
-        pid=123,
-        start_ticks=98_765,
-        command="resume",
-    )
-    assert isinstance(write_owner(runtime_root, owner), Ok)
-    inspector = ProcessInspector(
-        runtime_root=runtime_root,
-        proc_root=proc_root,
-        clock_ticks_per_second=100,
+    pid_file_path(tmp_path).write_text(
+        f"{os.getpid()}\n", encoding="ascii"
     )
 
-    result = inspector.inspect(run_dir)
+    result = ProcessInspector().inspect(tmp_path)
 
     assert isinstance(result, Ok)
-    process = result.value
-    assert process is not None
-    assert process.pid == 123
-    assert process.start_ticks == 98_765
-    assert process.started_at_ms == 1_987_650
-    assert process.kernel_state == "S"
-    assert process.process_group_id == 123
-    assert process.unix_session_id == 123
-    assert process.run_dir == run_dir.resolve()
-    assert process.command == "resume"
-
-
-def test_pid_reuse_is_rejected_by_start_ticks(tmp_path: Path) -> None:
-    run_dir = tmp_path / "run"
-    runtime_root = tmp_path / "control"
-    proc_root = tmp_path / "proc"
-    _write_process(proc_root, 123, run_dir, start_ticks=222)
-    assert isinstance(
-        write_owner(
-            runtime_root,
-            ProcessOwner(
-                run_dir=run_dir.resolve(),
-                pid=123,
-                start_ticks=111,
-                command="resume",
-            ),
-        ),
-        Ok,
-    )
-    inspector = ProcessInspector(
-        runtime_root=runtime_root,
-        proc_root=proc_root,
-        clock_ticks_per_second=100,
-    )
-
-    result = inspector.inspect(run_dir)
-
-    assert isinstance(result, Rejected)
-    assert "not the owned training process" in result.reason
-
-
-def test_portable_inspector_reads_current_process(
-    tmp_path: Path,
-) -> None:
-    inspector = ProcessInspector(
-        runtime_root=tmp_path / "control",
-        backend="portable",
-    )
-
-    result = inspector.inspect_pid(os.getpid())
-
-    assert isinstance(result, Ok)
-    process = result.value
+    process = result.value.process
     assert process is not None
     assert process.pid == os.getpid()
-    assert process.start_ticks > 0
-    assert process.started_at_ms > 0
-    assert process.argv
-    assert process.executable.is_absolute()
-    assert process.working_directory.is_absolute()
+    inspection = process.inspection
+    assert inspection.kind == "details"
+    assert inspection.started_at_ms > 0
+    assert inspection.argv
+    assert inspection.process_group_id > 0
+    assert inspection.unix_session_id > 0
 
 
-def _write_process(
-    proc_root: Path, pid: int, run_dir: Path, *, start_ticks: int
-) -> None:
-    proc_root.mkdir(parents=True, exist_ok=True)
-    proc_root.joinpath("stat").write_text(
-        "cpu 1 2 3 4\nbtime 1000\n", encoding="ascii"
+def test_malformed_pid_file_is_stopped(tmp_path: Path) -> None:
+    path = pid_file_path(tmp_path)
+    for content in ("", "not-a-pid\n", "0\n", "-12\n", "1\n2\n"):
+        path.write_text(content, encoding="ascii")
+        result = ProcessInspector().inspect(tmp_path)
+        assert isinstance(result, Ok)
+        assert result.value.process is None
+
+
+def test_dead_pid_file_is_stopped(tmp_path: Path) -> None:
+    pid_file_path(tmp_path).write_text("2147483647\n", encoding="ascii")
+
+    result = ProcessInspector().inspect(tmp_path)
+
+    assert isinstance(result, Ok)
+    assert result.value.process is None
+
+
+def test_pid_file_write_and_matching_removal(tmp_path: Path) -> None:
+    written = write_training_pid(tmp_path, os.getpid())
+    assert isinstance(written, Ok)
+    read = read_training_pid(tmp_path)
+    assert isinstance(read, Ok)
+    assert read.value == os.getpid()
+
+    unchanged = remove_training_pid_if_matches(
+        tmp_path, os.getpid() + 1
     )
-    process_dir = proc_root / str(pid)
-    process_dir.mkdir()
-    argv = (
-        sys.executable,
-        "-m",
-        "server.training_cli",
-        "--run-dir",
-        str(run_dir.resolve()),
-        "resume",
-        "latest.json",
-    )
-    process_dir.joinpath("cmdline").write_bytes(
-        b"\0".join(part.encode("utf-8") for part in argv) + b"\0"
-    )
-    fields = ["S", "1", "123", "123"] + ["0"] * 15 + [str(start_ticks)]
-    process_dir.joinpath("stat").write_text(
-        f"{pid} (python worker) {' '.join(fields)}\n",
-        encoding="ascii",
-    )
-    process_dir.joinpath("cwd").symlink_to(proc_root.parent)
-    process_dir.joinpath("exe").symlink_to(sys.executable)
+    assert isinstance(unchanged, Ok)
+    assert unchanged.value is False
+    removed = remove_training_pid_if_matches(tmp_path, os.getpid())
+    assert isinstance(removed, Ok)
+    assert removed.value is True
+    assert not pid_file_path(tmp_path).exists()
+
+
+def test_pid_file_symlink_is_rejected(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.write_text(f"{os.getpid()}\n", encoding="ascii")
+    pid_file_path(tmp_path).symlink_to(target)
+
+    result = read_training_pid(tmp_path)
+
+    assert isinstance(result, Rejected)

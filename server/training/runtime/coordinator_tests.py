@@ -21,7 +21,6 @@ from server.training.ppo import PPOUpdateStats
 from server.training.ppo.profile import blank_update_profile
 from server.training.run_setup import initialize_training_run
 from server.training.runtime import coordinator as coordinator_module
-from server.training.runtime.affinity import current_cpu_affinity
 from server.training.runtime.checkpoint_state import (
     create_initial_runtime_checkpoint_state,
     save_runtime_checkpoint_state,
@@ -165,11 +164,8 @@ def test_run_training_coordinator_synchronizes_cpu_arena_update(
     checkpoint_policy = CheckpointPolicy(
         every_updates=1, retention_updates=1
     )
-    worker_cpu_layout = current_cpu_affinity()[:2]
-    if len(worker_cpu_layout) < 2:
-        pytest.skip("multi-rank CPU update requires two available CPUs")
     execution_config = ExecutionConfig(
-        worker_cpu_layout=worker_cpu_layout,
+        worker_cpu_layout=(None, None),
         samples_per_update=32,
     )
     initial = create_initial_runtime_checkpoint_state(
