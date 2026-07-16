@@ -19,6 +19,16 @@ class TorchThreadStatus:
     active_num_interop_threads: int
 
 
+def apply_worker_torch_thread_config() -> (
+    _result.Ok[TorchThreadStatus] | _result.Rejected
+):
+    """Apply the fixed one-thread policy for every worker process."""
+    return apply_torch_thread_config(
+        num_threads=1,
+        num_interop_threads=1,
+    )
+
+
 def apply_torch_thread_config(
     *,
     num_threads: int | None,

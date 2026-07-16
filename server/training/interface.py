@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, Callable, Literal
+from typing import Annotated, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -75,7 +75,7 @@ class TrainingResumeOptions(BaseModel):
     learning_rate: float | None = Field(
         default=None, gt=0.0, allow_inf_nan=False
     )
-    checkpoint_every_updates: int = Field(default=50, gt=0)
+    checkpoint_every_updates: int = Field(gt=0)
     checkpoint_retention_updates: int = Field(default=5, ge=0)
     round_timeout_seconds: float | None = Field(
         default=None, gt=0.0, allow_inf_nan=False
@@ -154,9 +154,8 @@ class TrainingService:
         self,
         options: TrainingResumeOptions,
         stop_request: TrainingStopRequest,
-        on_ready: Callable[[], None] | None = None,
     ) -> _result.Ok[TrainingRunResult] | _result.Rejected:
-        return resume_run(options, stop_request, on_ready=on_ready)
+        return resume_run(options, stop_request)
 
 
 def initialize_run(
@@ -203,8 +202,6 @@ def initialize_run(
 def resume_run(
     options: TrainingResumeOptions,
     stop_request: TrainingStopRequest,
-    *,
-    on_ready: Callable[[], None] | None = None,
 ) -> _result.Ok[TrainingRunResult] | _result.Rejected:
     """Validate, load, and execute resumed training."""
     from server.training.resume_config import resolve_resume_options
@@ -264,7 +261,6 @@ def resume_run(
         max_samples=resolved.max_samples,
         resume=resolved.run_dir / "checkpoints" / "latest.json",
         stop_request=stop_request,
-        on_ready=on_ready,
     )
     if isinstance(result, _result.Rejected):
         return result

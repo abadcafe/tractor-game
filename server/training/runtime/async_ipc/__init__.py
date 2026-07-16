@@ -11,6 +11,7 @@ from server.training.runtime.async_ipc.control import (
     AsyncProcessControlLink,
     ProcessControlProtocol,
     create_async_process_control_link,
+    poll_async_control_responses,
     wait_async_control_responses,
 )
 from server.training.runtime.async_ipc.frame import (
@@ -32,6 +33,7 @@ __all__ = (
     "broadcast_control_commands",
     "create_async_process_control_link",
     "create_async_socket_pair",
+    "poll_async_control_responses",
     "wait_async_control_responses",
     "wait_readable_frames",
 )

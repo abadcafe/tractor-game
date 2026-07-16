@@ -1,11 +1,11 @@
 """Tests for external exact-lifetime process owners."""
 
+import json
 from pathlib import Path
 
-from server.foundation.result import Ok
+from server.foundation.result import Ok, Rejected
 from server.training_control.process_owner import (
     ProcessOwner,
-    mark_owner_ready,
     owner_path,
     read_owner,
     remove_owner_if_matches,
@@ -23,7 +23,6 @@ def test_owner_lives_outside_run_and_records_exact_identity(
         pid=123,
         start_ticks=456,
         command="resume",
-        ready=False,
     )
 
     written = write_owner(runtime_root, owner)
@@ -36,7 +35,7 @@ def test_owner_lives_outside_run_and_records_exact_identity(
     assert not run_dir.joinpath("training.pid").exists()
 
 
-def test_ready_and_remove_require_same_process_lifetime(
+def test_remove_requires_same_process_lifetime(
     tmp_path: Path,
 ) -> None:
     run_dir = tmp_path / "run"
@@ -46,21 +45,41 @@ def test_ready_and_remove_require_same_process_lifetime(
         pid=123,
         start_ticks=456,
         command="resume",
-        ready=False,
     )
     assert isinstance(write_owner(runtime_root, owner), Ok)
 
     unchanged = remove_owner_if_matches(
         runtime_root, run_dir, pid=123, start_ticks=999
     )
-    ready = mark_owner_ready(
-        runtime_root, run_dir, pid=123, start_ticks=456
-    )
     removed = remove_owner_if_matches(
         runtime_root, run_dir, pid=123, start_ticks=456
     )
 
     assert isinstance(unchanged, Ok) and unchanged.value is False
-    assert isinstance(ready, Ok)
     assert isinstance(removed, Ok) and removed.value is True
     assert not owner_path(runtime_root, run_dir).exists()
+
+
+def test_legacy_ready_owner_is_rejected(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    runtime_root = tmp_path / "runtime"
+    path = owner_path(runtime_root, run_dir)
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "run_dir": str(run_dir.resolve()),
+                "pid": 123,
+                "start_ticks": 456,
+                "command": "resume",
+                "ready": True,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = read_owner(runtime_root, run_dir)
+
+    assert isinstance(result, Rejected)

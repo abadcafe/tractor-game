@@ -1,5 +1,8 @@
 import { ProcessController, processStreamUrl } from "../process.ts";
-import type { ProcessEnvelope } from "../types.ts";
+import {
+  parseProcessEnvelope,
+  type ProcessEnvelope,
+} from "../types.ts";
 
 Deno.test("process snapshots reject older server revisions", () => {
   const applied: ProcessEnvelope[] = [];
@@ -27,6 +30,23 @@ Deno.test("process stream is scoped only by canonical run directory", () => {
   ) throw new Error(value);
 });
 
+Deno.test("legacy process readiness snapshots are rejected", () => {
+  let rejected = false;
+  try {
+    parseProcessEnvelope({
+      revision: 1,
+      process: { ...processSnapshot(7), ready: true },
+    });
+  } catch (error: unknown) {
+    if (!(error instanceof Error)) throw error;
+    if (error.message !== "Legacy process readiness is not supported") {
+      throw error;
+    }
+    rejected = true;
+  }
+  if (!rejected) throw new Error("Legacy readiness was accepted");
+});
+
 function processSnapshot(pid: number) {
   return {
     pid,
@@ -40,6 +60,5 @@ function processSnapshot(pid: number) {
     process_group_id: pid,
     unix_session_id: pid,
     command: "resume" as const,
-    ready: true,
   };
 }

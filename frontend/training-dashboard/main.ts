@@ -363,9 +363,9 @@ async function resume(event: Event): Promise<void> {
   resuming = true;
   syncProcessOperations();
   button.disabled = true;
-  button.textContent = "Starting…";
+  button.textContent = "Resuming…";
   status.className = "status-value";
-  status.textContent = "Waiting for CLI readiness…";
+  status.textContent = "Launching training process…";
   try {
     const value = await resumeTraining(
       resumeRequestFromForm(resumeForm, origin.runDir),

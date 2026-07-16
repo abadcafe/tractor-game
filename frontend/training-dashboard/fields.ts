@@ -36,7 +36,7 @@ export interface ResumeRequest {
   ppo_profile: "off" | "basic" | "detailed" | null;
   max_samples: number;
   learning_rate: number | null;
-  checkpoint_every_updates: number;
+  checkpoint_every_updates: number | null;
   checkpoint_retention_updates: number;
   round_timeout_seconds: number | null;
   sampling_start_timeout_seconds: number | null;
@@ -273,10 +273,9 @@ export const RESUME_FIELDS: readonly TrainingField[] = [
     "checkpoint_every_updates",
     "Checkpoint interval",
     "Checkpoint",
-    "50",
+    "",
     "1",
     "1",
-    false,
   ),
   number(
     "checkpoint_retention_updates",
@@ -419,7 +418,7 @@ export function resumeRequestFromForm(
     ppo_profile: profile,
     max_samples: requiredNumber(form, "max_samples"),
     learning_rate: optionalNumber(form, "learning_rate"),
-    checkpoint_every_updates: requiredNumber(
+    checkpoint_every_updates: optionalNumber(
       form,
       "checkpoint_every_updates",
     ),

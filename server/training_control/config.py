@@ -16,7 +16,6 @@ class TrainingControlConfig(BaseModel):
     default_run_dir: Path
     control_runtime_dir: Path
     stop_timeout_seconds: float = Field(gt=0.0)
-    startup_timeout_seconds: float = Field(default=1800.0, gt=0.0)
 
     def resolve_run_dir(self, supplied: Path | None) -> Path:
         """Resolve an optional request directory against the default."""
@@ -34,9 +33,6 @@ def training_control_config() -> TrainingControlConfig:
     timeout = float(
         os.environ.get("TRAINING_STOP_TIMEOUT_SECONDS", "1800")
     )
-    startup_timeout = float(
-        os.environ.get("TRAINING_STARTUP_TIMEOUT_SECONDS", "1800")
-    )
     configured_runtime = os.environ.get("TRAINING_CONTROL_RUNTIME_DIR")
     if configured_runtime is not None:
         runtime_dir = Path(configured_runtime).resolve()
@@ -52,5 +48,4 @@ def training_control_config() -> TrainingControlConfig:
         default_run_dir=directory,
         control_runtime_dir=runtime_dir,
         stop_timeout_seconds=timeout,
-        startup_timeout_seconds=startup_timeout,
     )

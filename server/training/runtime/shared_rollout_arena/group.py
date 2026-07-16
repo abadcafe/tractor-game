@@ -20,6 +20,7 @@ from server.training.runtime.shared_rollout_arena.types import (
     RolloutArenaHandle,
     RolloutArenaSnapshot,
 )
+from server.training.stop import TrainingStopRequest
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +33,25 @@ class SharedRolloutArenaGroup:
     def __post_init__(self) -> None:
         assert self.handles
         assert len(self.handles) == len(self.segments)
+
+
+@dataclass(frozen=True, slots=True)
+class RolloutSampleTargetReached:
+    """Sampling reached its configured aggregate sample target."""
+
+    snapshot: RolloutArenaSnapshot
+
+
+@dataclass(frozen=True, slots=True)
+class RolloutStopRequested:
+    """Sampling was interrupted by a cooperative stop request."""
+
+
+type RolloutWaitOutcome = (
+    RolloutSampleTargetReached | RolloutStopRequested
+)
+
+_STOP_CHECK_INTERVAL_SECONDS = 0.05
 
 
 def create_shared_rollout_arena_group(
@@ -85,14 +105,15 @@ def create_shared_rollout_arena_group(
     )
 
 
-def wait_rollout_sample_target(
+def wait_rollout_sample_target_or_stop(
     *,
     group: SharedRolloutArenaGroup,
     policy_version: int,
     target_sample_count: int,
     timeout_seconds: float,
-) -> _result.Ok[RolloutArenaSnapshot] | _result.Rejected:
-    """Block until aggregate committed samples reach a target."""
+    stop_request: TrainingStopRequest,
+) -> _result.Ok[RolloutWaitOutcome] | _result.Rejected:
+    """Block until aggregate samples reach a target or a stop."""
     assert policy_version >= 0
     assert target_sample_count > 0
     assert timeout_seconds > 0.0
@@ -110,13 +131,21 @@ def wait_rollout_sample_target(
                 snapshot_result.value.sample_count
                 >= target_sample_count
             ):
-                return snapshot_result
+                return Ok(
+                    value=RolloutSampleTargetReached(
+                        snapshot=snapshot_result.value
+                    )
+                )
+            if stop_request.is_requested():
+                return Ok(value=RolloutStopRequested())
             remaining = deadline - time.monotonic()
             if remaining <= 0.0:
                 return Rejected(
                     reason="rollout sample target timed out"
                 )
-            progress_condition.wait(remaining)
+            progress_condition.wait(
+                min(remaining, _STOP_CHECK_INTERVAL_SECONDS)
+            )
     finally:
         progress_condition.release()
 

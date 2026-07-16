@@ -1,12 +1,15 @@
 """Shared-memory rollout sample arenas for training runtime."""
 
 from server.training.runtime.shared_rollout_arena.group import (
+    RolloutSampleTargetReached,
+    RolloutStopRequested,
+    RolloutWaitOutcome,
     SharedRolloutArenaGroup,
     close_shared_rollout_arenas,
     create_shared_rollout_arena_group,
     reset_rollout_arenas,
     snapshot_rollout_arenas,
-    wait_rollout_sample_target,
+    wait_rollout_sample_target_or_stop,
 )
 from server.training.runtime.shared_rollout_arena.reader import (
     SharedRolloutArenaReader,
@@ -28,6 +31,9 @@ __all__ = (
     "RolloutArenaHandle",
     "RolloutArenaSnapshot",
     "RolloutRoundMetrics",
+    "RolloutSampleTargetReached",
+    "RolloutStopRequested",
+    "RolloutWaitOutcome",
     "SharedRolloutArenaGroup",
     "SharedRolloutArenaReader",
     "SharedRolloutArenaWriter",
@@ -37,5 +43,5 @@ __all__ = (
     "create_shared_rollout_arena_group",
     "reset_rollout_arenas",
     "snapshot_rollout_arenas",
-    "wait_rollout_sample_target",
+    "wait_rollout_sample_target_or_stop",
 )

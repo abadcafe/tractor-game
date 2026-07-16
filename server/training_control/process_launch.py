@@ -1,4 +1,4 @@
-"""Low-level spawn and readiness pipe operations."""
+"""Low-level process spawn and identity-bound signal operations."""
 
 from __future__ import annotations
 
@@ -8,10 +8,9 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import Protocol, cast
 
 import psutil
-from pydantic import BaseModel, ConfigDict, ValidationError
 
 from server.foundation import result as _result
 from server.training_control.process_inspection import (
@@ -50,18 +49,10 @@ _LINUX_OS = cast(_LinuxOsApi, os)
 _LINUX_SIGNAL = cast(_LinuxSignalApi, signal)
 
 
-class _ControlMessage(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    type: Literal["ready", "error"]
-    error: str | None = None
-
-
 def spawn_process(
     command: tuple[str, ...],
     *,
     working_directory: Path,
-    ready_write_fd: int | None,
     capture_output: bool,
     output_directory: Path,
 ) -> _result.Ok[subprocess.Popen[bytes]] | _result.Rejected:
@@ -83,9 +74,6 @@ def spawn_process(
             stdin=subprocess.DEVNULL,
             stdout=stdout,
             stderr=stderr,
-            pass_fds=()
-            if ready_write_fd is None
-            else (ready_write_fd,),
             start_new_session=True,
         )
     except OSError as error:
@@ -96,54 +84,6 @@ def spawn_process(
         if output_handle is not None:
             output_handle.close()
     return _result.Ok(value=process)
-
-
-def read_control_message(
-    descriptor: int,
-) -> _result.Ok[None] | _result.Rejected:
-    """Read one bounded, strict readiness result from the CLI."""
-    chunks: list[bytes] = []
-    size = 0
-    while True:
-        try:
-            chunk = os.read(descriptor, 4096)
-        except OSError as error:
-            return _result.Rejected(
-                reason=(
-                    "training readiness pipe could not be read: "
-                    f"{error}"
-                )
-            )
-        if not chunk:
-            break
-        chunks.append(chunk)
-        size += len(chunk)
-        if size > 65_536:
-            return _result.Rejected(
-                reason="training readiness message is too large"
-            )
-        if b"\n" in chunk:
-            break
-    data = b"".join(chunks).partition(b"\n")[0]
-    if not data:
-        return _result.Rejected(
-            reason="training process exited before reporting readiness"
-        )
-    try:
-        message = _ControlMessage.model_validate_json(data)
-    except ValidationError:
-        return _result.Rejected(
-            reason="training readiness message is invalid"
-        )
-    if message.type == "error":
-        return _result.Rejected(
-            reason=message.error or "training startup failed"
-        )
-    if message.error is not None:
-        return _result.Rejected(
-            reason="training readiness message is invalid"
-        )
-    return _result.Ok(value=None)
 
 
 def terminate_process_group(pid: int) -> None:

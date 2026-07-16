@@ -94,7 +94,6 @@ def test_text_summary_uses_injected_time_for_process_uptime(
             process_group_id=123,
             unix_session_id=123,
             command="resume",
-            ready=True,
         ),
         metrics=TrainingMetrics(
             store_id="a" * 32,
@@ -114,7 +113,6 @@ def test_text_summary_uses_injected_time_for_process_uptime(
 
     rendered = format_training_summary(summary, now_ms=6_000)
 
-    assert "ready: true" in rendered
     assert "start ticks: 456" in rendered
     assert "started at: 1970-01-01T00:00:01.000+00:00" in rendered
     assert "uptime: 5s" in rendered

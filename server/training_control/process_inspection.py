@@ -36,7 +36,6 @@ class ProcessSnapshot(BaseModel):
     process_group_id: int = Field(gt=0)
     unix_session_id: int = Field(gt=0)
     command: TrainingCommand
-    ready: bool
 
 
 class ProcSnapshot(BaseModel):
@@ -119,7 +118,6 @@ class ProcessInspector:
                 process_group_id=process.process_group_id,
                 unix_session_id=process.unix_session_id,
                 command=owner.command,
-                ready=owner.ready,
             )
         )
 

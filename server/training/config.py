@@ -120,7 +120,7 @@ class TrainConfig:
 class CheckpointPolicy:
     """Checkpoint cadence and retention for one resume process."""
 
-    every_updates: int = 50
+    every_updates: int
     retention_updates: int = 5
 
     def __post_init__(self) -> None:

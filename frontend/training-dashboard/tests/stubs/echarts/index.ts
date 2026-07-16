@@ -1,5 +1,15 @@
 export interface LineSeriesOption {
-  // Placeholder for ECharts line series options used in dashboard typings.
+  readonly name?: string;
+  readonly type?: "line";
+  readonly showSymbol?: boolean;
+  readonly symbolSize?: number;
+  readonly sampling?: "lttb";
+  readonly lineStyle?: { readonly width: number };
+  readonly emphasis?: { readonly focus: "series" };
+  readonly data?: readonly (readonly [
+    number | null,
+    number | null,
+  ])[];
 }
 
 export interface EChartsOption {

@@ -21,6 +21,15 @@ Deno.test("init and resume forms expose disjoint command boundaries", () => {
   if (initFlags.has("--replace-existing")) {
     throw new Error("Replace confirmation is rendered separately");
   }
+  const interval = RESUME_FIELDS.find((field) =>
+    field.key === "checkpoint_every_updates"
+  );
+  if (
+    interval === undefined || interval.defaultValue !== "" ||
+    interval.optional !== true
+  ) {
+    throw new Error("Checkpoint interval must defer to the CLI");
+  }
 });
 
 Deno.test("command previews include explicit subcommands", () => {
@@ -52,7 +61,7 @@ Deno.test("command previews include explicit subcommands", () => {
     ppo_profile: null,
     max_samples: 0,
     learning_rate: null,
-    checkpoint_every_updates: 50,
+    checkpoint_every_updates: null,
     checkpoint_retention_updates: 5,
     round_timeout_seconds: null,
     sampling_start_timeout_seconds: null,
@@ -93,7 +102,8 @@ Deno.test("command previews include explicit subcommands", () => {
   }
   if (
     !resumeCommand.includes(" resume latest.json ") ||
-    resumeCommand.includes(" --checkpoint ")
+    resumeCommand.includes(" --checkpoint ") ||
+    resumeCommand.includes("--checkpoint-every-updates")
   ) {
     throw new Error(resumeCommand);
   }

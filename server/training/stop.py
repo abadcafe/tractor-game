@@ -10,7 +10,7 @@ from types import FrameType
 
 
 class TrainingStopRequest:
-    """Thread-safe stop flag checked only at update boundaries."""
+    """Thread-safe cooperative stop flag for training stages."""
 
     def __init__(self) -> None:
         self._event = threading.Event()

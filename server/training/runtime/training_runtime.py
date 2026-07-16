@@ -70,12 +70,15 @@ from server.training.runtime.rendezvous import create_file_rendezvous
 from server.training.runtime.shared_rollout_arena import (
     RolloutArenaHandle,
     RolloutArenaSnapshot,
+    RolloutSampleTargetReached,
+    RolloutStopRequested,
+    RolloutWaitOutcome,
     SharedRolloutArenaGroup,
     close_shared_rollout_arenas,
     create_shared_rollout_arena_group,
     reset_rollout_arenas,
     snapshot_rollout_arenas,
-    wait_rollout_sample_target,
+    wait_rollout_sample_target_or_stop,
 )
 from server.training.runtime.state import RuntimeTrainingState
 from server.training.runtime.worker_process import (
@@ -83,9 +86,11 @@ from server.training.runtime.worker_process import (
 )
 from server.training.runtime.worker_sampling_lifecycle import (
     WorkerSamplingCleanupFailed,
+    WorkerSamplingStartStopped,
     start_worker_sampling_session,
     stop_worker_sampling_session,
 )
+from server.training.stop import TrainingStopRequest
 from server.training_events import (
     EventSink,
     ProcessIdentity,
@@ -105,6 +110,23 @@ class TrainingUpdateResult:
     update_stats: PPOUpdateStats
 
 
+@dataclass(frozen=True, slots=True)
+class TrainingStopDiscardedPartialRollout:
+    """Stop discarded a stable rollout smaller than one minibatch."""
+
+    snapshot: RolloutArenaSnapshot
+    minimum_sample_count: int
+
+    def __post_init__(self) -> None:
+        assert self.minimum_sample_count > 0
+        assert self.snapshot.sample_count < self.minimum_sample_count
+
+
+type TrainingCycleOutcome = (
+    TrainingUpdateResult | TrainingStopDiscardedPartialRollout
+)
+
+
 class TrainingRuntime(Protocol):
     """Coordinator-facing training runtime interface."""
 
@@ -113,8 +135,12 @@ class TrainingRuntime(Protocol):
     ) -> _result.Ok[None] | _result.Rejected: ...
 
     async def run_update(
-        self, *, policy_version: int, rollout_id: str
-    ) -> _result.Ok[TrainingUpdateResult] | _result.Rejected: ...
+        self,
+        *,
+        policy_version: int,
+        rollout_id: str,
+        stop_request: TrainingStopRequest,
+    ) -> _result.Ok[TrainingCycleOutcome] | _result.Rejected: ...
 
     async def snapshot(
         self, *, policy_version: int
@@ -184,7 +210,7 @@ class _UnrecoverableRuntimeFailure:
 
 
 type _TrainingUpdateCycleResult = (
-    _result.Ok[TrainingUpdateResult]
+    _result.Ok[TrainingCycleOutcome]
     | _result.Rejected
     | _UnrecoverableRuntimeFailure
 )
@@ -212,6 +238,7 @@ _MODEL_RANK_CONTROL_PROTOCOL: ProcessControlProtocol[
 @dataclass(slots=True)
 class _ProcessTrainingRuntime:
     execution_config: ExecutionConfig
+    minimum_update_sample_count: int
     pools: _RuntimePools
     event_sink: EventSink
     _poisoned: Rejected | None = None
@@ -237,8 +264,12 @@ class _ProcessTrainingRuntime:
         return result
 
     async def run_update(
-        self, *, policy_version: int, rollout_id: str
-    ) -> _result.Ok[TrainingUpdateResult] | _result.Rejected:
+        self,
+        *,
+        policy_version: int,
+        rollout_id: str,
+        stop_request: TrainingStopRequest,
+    ) -> _result.Ok[TrainingCycleOutcome] | _result.Rejected:
         if self._poisoned is not None:
             return self._poisoned
         result = await _run_training_update(
@@ -246,7 +277,10 @@ class _ProcessTrainingRuntime:
             execution_config=self.execution_config,
             policy_version=policy_version,
             rollout_id=rollout_id,
-            event_sink=self.event_sink,
+            stop_request=stop_request,
+            minimum_update_sample_count=(
+                self.minimum_update_sample_count
+            ),
         )
         if isinstance(result, _UnrecoverableRuntimeFailure):
             await self._poison_and_close(result.rejection)
@@ -308,6 +342,7 @@ def open_training_runtime(
     return Ok(
         value=_ProcessTrainingRuntime(
             execution_config=execution_config,
+            minimum_update_sample_count=train_config.minibatch_size,
             pools=pools_result.value,
             event_sink=event_sink,
         )
@@ -680,8 +715,10 @@ async def _run_training_update(
     execution_config: ExecutionConfig,
     policy_version: int,
     rollout_id: str,
-    event_sink: EventSink,
+    stop_request: TrainingStopRequest,
+    minimum_update_sample_count: int,
 ) -> _TrainingUpdateCycleResult:
+    assert minimum_update_sample_count > 0
     reset_result = reset_rollout_arenas(
         group=pools.rollout_arena_group,
         policy_version=policy_version,
@@ -693,6 +730,7 @@ async def _run_training_update(
         execution_config=execution_config,
         policy_version=policy_version,
         rollout_id=rollout_id,
+        stop_request=stop_request,
     )
     if isinstance(session_result, WorkerSamplingCleanupFailed):
         return _UnrecoverableRuntimeFailure(
@@ -700,34 +738,70 @@ async def _run_training_update(
         )
     if isinstance(session_result, Rejected):
         return session_result
-    session = session_result.value
-    target_snapshot_result = await wait_rollout_sample_target_async(
-        group=pools.rollout_arena_group,
-        policy_version=policy_version,
-        target_sample_count=execution_config.samples_per_update,
-        timeout_seconds=execution_config.timeouts.rollout_sample_seconds,
-    )
-    if isinstance(target_snapshot_result, Rejected):
+    session_outcome = session_result.value
+    if isinstance(session_outcome, WorkerSamplingStartStopped):
+        stopped_early = True
+    else:
+        stopped_early = False
+        target_result = await wait_rollout_sample_target_or_stop_async(
+            group=pools.rollout_arena_group,
+            policy_version=policy_version,
+            target_sample_count=execution_config.samples_per_update,
+            timeout_seconds=(
+                execution_config.timeouts.rollout_sample_seconds
+            ),
+            stop_request=stop_request,
+        )
+        if isinstance(target_result, Rejected):
+            stopped_result = await stop_worker_sampling_session(
+                session=session_outcome,
+                timeout_seconds=(
+                    execution_config.timeouts.sampling_stop_seconds
+                ),
+            )
+            if isinstance(stopped_result, Rejected):
+                return _UnrecoverableRuntimeFailure(
+                    rejection=_runtime_cleanup_rejection(
+                        failure=target_result,
+                        cleanup=stopped_result,
+                    )
+                )
+            return target_result
+        wait_outcome = target_result.value
+        match wait_outcome:
+            case RolloutSampleTargetReached():
+                stopped_early = False
+            case RolloutStopRequested():
+                stopped_early = True
+            case _:
+                assert_never(wait_outcome)
         stopped_result = await stop_worker_sampling_session(
-            session=session,
+            session=session_outcome,
             timeout_seconds=(
                 execution_config.timeouts.sampling_stop_seconds
             ),
         )
         if isinstance(stopped_result, Rejected):
             return _UnrecoverableRuntimeFailure(
-                rejection=_runtime_cleanup_rejection(
-                    failure=target_snapshot_result,
-                    cleanup=stopped_result,
-                )
+                rejection=stopped_result
             )
-        return target_snapshot_result
-    stopped_result = await stop_worker_sampling_session(
-        session=session,
-        timeout_seconds=execution_config.timeouts.sampling_stop_seconds,
+    snapshot_result = snapshot_rollout_arenas(
+        group=pools.rollout_arena_group,
+        policy_version=policy_version,
     )
-    if isinstance(stopped_result, Rejected):
-        return _UnrecoverableRuntimeFailure(rejection=stopped_result)
+    if isinstance(snapshot_result, Rejected):
+        return snapshot_result
+    snapshot = snapshot_result.value
+    if (
+        stopped_early
+        and snapshot.sample_count < minimum_update_sample_count
+    ):
+        return Ok(
+            value=TrainingStopDiscardedPartialRollout(
+                snapshot=snapshot,
+                minimum_sample_count=minimum_update_sample_count,
+            )
+        )
     update_result = await _run_compute_updates(
         worker_pool=pools.worker_pool,
         model_rank_pool=pools.model_rank_pool,
@@ -737,34 +811,30 @@ async def _run_training_update(
     )
     if isinstance(update_result, _UnrecoverableRuntimeFailure):
         return update_result
-    snapshot_result = snapshot_rollout_arenas(
-        group=pools.rollout_arena_group,
-        policy_version=policy_version,
-    )
-    if isinstance(snapshot_result, Rejected):
-        return snapshot_result
     return Ok(
         value=TrainingUpdateResult(
-            snapshot=snapshot_result.value,
+            snapshot=snapshot,
             update_stats=update_result.value.update_stats,
         )
     )
 
 
-async def wait_rollout_sample_target_async(
+async def wait_rollout_sample_target_or_stop_async(
     *,
     group: SharedRolloutArenaGroup,
     policy_version: int,
     target_sample_count: int,
     timeout_seconds: float,
-) -> _result.Ok[RolloutArenaSnapshot] | _result.Rejected:
+    stop_request: TrainingStopRequest,
+) -> _result.Ok[RolloutWaitOutcome] | _result.Rejected:
     """Wait for rollout progress without blocking the event loop."""
     return await asyncio.to_thread(
-        wait_rollout_sample_target,
+        wait_rollout_sample_target_or_stop,
         group=group,
         policy_version=policy_version,
         target_sample_count=target_sample_count,
         timeout_seconds=timeout_seconds,
+        stop_request=stop_request,
     )
 
 

@@ -39,7 +39,6 @@ def test_owner_and_proc_produce_complete_snapshot(
         pid=123,
         start_ticks=98_765,
         command="resume",
-        ready=False,
     )
     assert isinstance(write_owner(runtime_root, owner), Ok)
     inspector = ProcessInspector(
@@ -61,7 +60,6 @@ def test_owner_and_proc_produce_complete_snapshot(
     assert process.unix_session_id == 123
     assert process.run_dir == run_dir.resolve()
     assert process.command == "resume"
-    assert process.ready is False
 
 
 def test_pid_reuse_is_rejected_by_start_ticks(tmp_path: Path) -> None:
@@ -77,7 +75,6 @@ def test_pid_reuse_is_rejected_by_start_ticks(tmp_path: Path) -> None:
                 pid=123,
                 start_ticks=111,
                 command="resume",
-                ready=True,
             ),
         ),
         Ok,

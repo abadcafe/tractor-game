@@ -32,9 +32,6 @@ class ServerState:
     def __post_init__(self) -> None:
         self.training_process_control = TrainingProcessControl(
             runtime_root=self.training_control_config.control_runtime_dir,
-            startup_timeout_seconds=(
-                self.training_control_config.startup_timeout_seconds
-            ),
         )
 
     async def cleanup_expired_games(
