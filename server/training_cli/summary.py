@@ -15,7 +15,6 @@ from server.training_artifacts import (
     CheckpointCatalog,
     read_checkpoint_catalog,
 )
-from server.training_control.config import training_control_config
 from server.training_control.process_inspection import (
     ProcessInspector,
     ProcessSnapshot,
@@ -25,7 +24,7 @@ from server.training_metrics.queries import (
     query_training_metrics,
 )
 
-SUMMARY_SCHEMA_VERSION = 3
+SUMMARY_SCHEMA_VERSION = 4
 
 
 class TrainingSummary(BaseModel):
@@ -33,7 +32,7 @@ class TrainingSummary(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    schema_version: Literal[3] = SUMMARY_SCHEMA_VERSION
+    schema_version: Literal[4] = SUMMARY_SCHEMA_VERSION
     run_dir: Path
     process: ProcessSnapshot | None
     metrics: TrainingMetrics
@@ -45,10 +44,7 @@ def build_training_summary(
 ) -> _result.Ok[TrainingSummary] | _result.Rejected:
     """Read process, metrics, and artifacts without loading Torch."""
     canonical = run_dir.resolve()
-    config = training_control_config()
-    process_result = ProcessInspector(
-        runtime_root=config.control_runtime_dir
-    ).inspect(canonical)
+    process_result = ProcessInspector().inspect(canonical)
     if isinstance(process_result, _result.Rejected):
         return process_result
     metrics_result = query_training_metrics(
@@ -62,7 +58,7 @@ def build_training_summary(
     return _result.Ok(
         value=TrainingSummary(
             run_dir=canonical,
-            process=process_result.value,
+            process=process_result.value.process,
             metrics=metrics_result.value,
             checkpoints=checkpoint_result.value,
         )
@@ -81,24 +77,32 @@ def format_training_summary(
         lines.append("  not running")
     else:
         process = summary.process
+        inspection = process.inspection
+        lines.append(f"  pid: {process.pid}")
+        if inspection.kind == "error":
+            lines.append(f"  inspection error: {inspection.error}")
+            inspection = None
+        if inspection is None:
+            return _finish_summary(lines, summary)
         uptime_seconds = (
-            max(observed_now - process.started_at_ms, 0) // 1000
+            max(observed_now - inspection.started_at_ms, 0) // 1000
         )
         lines.extend(
             (
-                f"  command: {process.command}",
-                f"  pid: {process.pid}",
-                f"  start ticks: {process.start_ticks}",
-                f"  started at: {_timestamp(process.started_at_ms)}",
+                f"  started at: {_timestamp(inspection.started_at_ms)}",
                 f"  uptime: {uptime_seconds}s",
-                f"  kernel state: {process.kernel_state}",
-                f"  executable: {process.executable}",
-                f"  working directory: {process.working_directory}",
-                f"  process group id: {process.process_group_id}",
-                f"  unix session id: {process.unix_session_id}",
-                f"  argv: {_shell_join(process.argv)}",
+                f"  kernel state: {inspection.kernel_state}",
+                f"  executable: {inspection.executable}",
+                f"  working directory: {inspection.working_directory}",
+                f"  process group id: {inspection.process_group_id}",
+                f"  unix session id: {inspection.unix_session_id}",
+                f"  argv: {_shell_join(inspection.argv)}",
             )
         )
+    return _finish_summary(lines, summary)
+
+
+def _finish_summary(lines: list[str], summary: TrainingSummary) -> str:
     lines.extend(
         (
             "",

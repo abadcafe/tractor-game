@@ -26,7 +26,9 @@ Deno.test("returning to a directory does not revive old snapshots", () => {
   selection.setRunDirectory("/runs/first");
 
   if (selection.ownsRun(snapshot)) {
-    throw new Error("Run ownership must include a monotonic revision");
+    throw new Error(
+      "Run ownership must include a monotonic generation",
+    );
   }
 });
 

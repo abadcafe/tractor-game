@@ -30,9 +30,7 @@ class ServerState:
     training_process_control: TrainingProcessControl = field(init=False)
 
     def __post_init__(self) -> None:
-        self.training_process_control = TrainingProcessControl(
-            runtime_root=self.training_control_config.control_runtime_dir,
-        )
+        self.training_process_control = TrainingProcessControl()
 
     async def cleanup_expired_games(
         self, *, max_age_seconds: int

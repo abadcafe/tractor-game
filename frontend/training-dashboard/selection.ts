@@ -1,11 +1,11 @@
 export interface RunSelectionSnapshot {
   readonly runDir: string;
-  readonly revision: number;
+  readonly generation: number;
 }
 
 export class DashboardSelection {
   #runDir = "";
-  #revision = 0;
+  #generation = 0;
 
   get runDir(): string {
     return this.#runDir;
@@ -14,19 +14,19 @@ export class DashboardSelection {
   setRunDirectory(runDir: string): void {
     if (runDir === this.#runDir) return;
     this.#runDir = runDir;
-    this.#revision += 1;
+    this.#generation += 1;
   }
 
   markRunReplaced(): void {
-    this.#revision += 1;
+    this.#generation += 1;
   }
 
   captureRun(): RunSelectionSnapshot {
-    return { runDir: this.#runDir, revision: this.#revision };
+    return { runDir: this.#runDir, generation: this.#generation };
   }
 
   ownsRun(snapshot: RunSelectionSnapshot): boolean {
     return snapshot.runDir === this.#runDir &&
-      snapshot.revision === this.#revision;
+      snapshot.generation === this.#generation;
   }
 }

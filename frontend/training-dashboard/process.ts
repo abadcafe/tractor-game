@@ -1,4 +1,4 @@
-import { parseProcessEnvelope, type ProcessEnvelope } from "./types.ts";
+import { parseProcessState, type ProcessState } from "./types.ts";
 import { parseTrainingStreamFrame } from "./stream-frame.ts";
 
 export interface WebSocketLocation {
@@ -6,27 +6,8 @@ export interface WebSocketLocation {
   readonly host: string;
 }
 
-export class ProcessController {
-  #revision = -1;
-
-  constructor(
-    private readonly applySnapshot: (value: ProcessEnvelope) => void,
-  ) {}
-
-  reset(): void {
-    this.#revision = -1;
-  }
-
-  apply(value: ProcessEnvelope): boolean {
-    if (value.revision <= this.#revision) return false;
-    this.#revision = value.revision;
-    this.applySnapshot(value);
-    return true;
-  }
-}
-
 export interface ProcessStreamHandlers {
-  readonly onSnapshot: (snapshot: ProcessEnvelope) => void;
+  readonly onSnapshot: (snapshot: ProcessState) => void;
   readonly onConnectionChange: (connected: boolean) => void;
   readonly onError: (message: string) => void;
 }
@@ -65,7 +46,7 @@ export class ProcessStreamClient {
           return;
         }
         this.handlers.onSnapshot(
-          parseProcessEnvelope(frame.value),
+          parseProcessState(frame.value),
         );
       } catch (error: unknown) {
         this.handlers.onError(errorText(error));

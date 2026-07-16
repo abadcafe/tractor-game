@@ -7,6 +7,7 @@ ASGI WebSocket testing natively.
 
 import json
 import logging
+import os
 import sqlite3
 import time
 from collections.abc import AsyncGenerator, Generator
@@ -27,6 +28,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from server.game.players import AIPlayer, HumanPlayer
 from server.game.room.game_room import GameRoom
+from server.training_control.process_inspection import pid_file_path
 from server.training_events import (
     EventContext,
     ProcessIdentity,
@@ -112,7 +114,7 @@ def test_training_logs_have_rest_history_and_cursor_tail(
             "max_tokens": 512,
         },
     )
-    assert initialized.status_code == 200
+    assert initialized.status_code == 204
     query = urlencode(
         {
             "run_dir": str(tmp_path),
@@ -151,7 +153,7 @@ def test_training_process_snapshot_is_websocket_only(
     ) as websocket:
         snapshot = _receive_ws_json(websocket)
 
-    assert snapshot == {"revision": 0, "process": None}
+    assert snapshot == {"process": None}
     assert (
         sync_client.get(f"/api/training/process?{query}").status_code
         == 404
@@ -229,7 +231,7 @@ def test_training_metrics_stream_pushes_replacement_snapshot(
         sink.close()
         updated = _receive_ws_json(websocket)
 
-    assert initialized.status_code == 200
+    assert initialized.status_code == 204
     assert _is_dict(initial)
     assert initial["store_id"] is None
     assert _is_dict(replacement)
@@ -260,7 +262,7 @@ def test_training_metrics_stream_applies_projection_parameters(
             "max_tokens": 512,
         },
     )
-    assert initialized.status_code == 200
+    assert initialized.status_code == 204
     sink = StructuredEventSink(
         run_dir=tmp_path,
         process=ProcessIdentity(kind="coordinator"),
@@ -313,7 +315,7 @@ def test_training_streams_report_store_replacement(
             "max_tokens": 512,
         },
     )
-    assert initialized.status_code == 200
+    assert initialized.status_code == 204
     query = urlencode(
         {
             "run_dir": str(tmp_path),
@@ -376,18 +378,22 @@ def test_training_init_requires_yes_before_replacement(
     )
     (tmp_path / "runtime").mkdir()
     (tmp_path / "runtime" / "stale").write_text("old", encoding="utf-8")
+    pid_file_path(tmp_path).write_text(
+        f"{os.getpid()}\n", encoding="ascii"
+    )
     rejected = sync_client.post("/api/training/init", json=request)
     request["replace_existing"] = "yes"
     replaced = sync_client.post("/api/training/init", json=request)
 
-    assert initialized.status_code == 200
+    assert initialized.status_code == 204
     assert rejected.status_code == 412
     assert rejected.json() == {
         "detail": "type yes to replace existing training artifacts"
     }
-    assert replaced.status_code == 200
+    assert replaced.status_code == 204
     assert not (tmp_path / "stdout.log").exists()
     assert not (tmp_path / "runtime").exists()
+    assert not pid_file_path(tmp_path).exists()
 
 
 def test_training_resume_returns_before_cli_preflight_failure(
@@ -401,17 +407,21 @@ def test_training_resume_returns_before_cli_preflight_failure(
         json={"run_dir": str(tmp_path), "checkpoint": "latest.json"},
     )
 
-    assert response.status_code == 200
-    document = response.json()
-    assert _is_dict(document)
-    process = document["process"]
-    assert _is_dict(process)
-    assert process["command"] == "resume"
-    assert "ready" not in process
-    argv = process["argv"]
-    assert isinstance(argv, list)
-    assert "latest.json" in argv
-    assert "--checkpoint-every-updates" not in argv
+    assert response.status_code == 204
+    deadline = time.monotonic() + 15.0
+    log_path = tmp_path / "training-cli.log"
+    while not log_path.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert log_path.exists()
+    while log_path.stat().st_size == 0 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    output = log_path.read_text(encoding="utf-8")
+    assert "latest.json" in output
+    stopped = sync_client.post(
+        "/api/training/stop", json={"run_dir": str(tmp_path)}
+    )
+    assert stopped.status_code == 200
+    assert not pid_file_path(tmp_path).exists()
 
 
 def test_ai_debug_page_returns_html(

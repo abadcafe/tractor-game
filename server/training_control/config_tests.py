@@ -43,7 +43,6 @@ def test_training_control_config_resolves_run_directory(
     supplied = tmp_path / "supplied"
     config = TrainingControlConfig(
         default_run_dir=default,
-        control_runtime_dir=tmp_path / "control",
         stop_timeout_seconds=30.0,
     )
 

@@ -13,7 +13,10 @@ from server.training_cli.summary import (
     TrainingSummary,
     format_training_summary,
 )
-from server.training_control.process_inspection import ProcessSnapshot
+from server.training_control.process_inspection import (
+    ProcessDetails,
+    ProcessSnapshot,
+)
 from server.training_metrics.queries import (
     MetricDatasets,
     TrainingMetrics,
@@ -25,7 +28,7 @@ def test_summary_composes_empty_domain_models(tmp_path: Path) -> None:
 
     assert completed.returncode == 0
     parsed = _parse_summary(completed.stdout)
-    assert parsed.schema_version == 3
+    assert parsed.schema_version == 4
     assert parsed.process is None
     assert parsed.metrics.through_sequence == 0
     assert parsed.checkpoints.manifests == ()
@@ -84,16 +87,15 @@ def test_text_summary_uses_injected_time_for_process_uptime(
         run_dir=tmp_path,
         process=ProcessSnapshot(
             pid=123,
-            start_ticks=456,
-            started_at_ms=1_000,
-            kernel_state="S",
-            executable=Path("/usr/bin/python"),
-            working_directory=tmp_path,
-            run_dir=tmp_path,
-            argv=("/usr/bin/python", "-m", "server.training_cli"),
-            process_group_id=123,
-            unix_session_id=123,
-            command="resume",
+            inspection=ProcessDetails(
+                started_at_ms=1_000,
+                kernel_state="S",
+                executable=Path("/usr/bin/python"),
+                working_directory=tmp_path,
+                argv=("/usr/bin/python", "-m", "server.training_cli"),
+                process_group_id=123,
+                unix_session_id=123,
+            ),
         ),
         metrics=TrainingMetrics(
             store_id="a" * 32,
@@ -113,7 +115,6 @@ def test_text_summary_uses_injected_time_for_process_uptime(
 
     rendered = format_training_summary(summary, now_ms=6_000)
 
-    assert "start ticks: 456" in rendered
     assert "started at: 1970-01-01T00:00:01.000+00:00" in rendered
     assert "uptime: 5s" in rendered
     assert "integrity: incomplete" in rendered

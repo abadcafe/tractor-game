@@ -1,20 +1,5 @@
-import { ProcessController, processStreamUrl } from "../process.ts";
-import {
-  parseProcessEnvelope,
-  type ProcessEnvelope,
-} from "../types.ts";
-
-Deno.test("process snapshots reject older server revisions", () => {
-  const applied: ProcessEnvelope[] = [];
-  const controller = new ProcessController((value) =>
-    applied.push(value)
-  );
-  controller.apply({ revision: 12, process: null });
-  controller.apply({ revision: 11, process: processSnapshot(7) });
-  if (applied.length !== 1 || applied[0]?.revision !== 12) {
-    throw new Error("An older process snapshot was applied");
-  }
-});
+import { processStreamUrl } from "../process.ts";
+import { parseProcessState } from "../types.ts";
 
 Deno.test("process stream is scoped only by canonical run directory", () => {
   const value = processStreamUrl(
@@ -30,35 +15,54 @@ Deno.test("process stream is scoped only by canonical run directory", () => {
   ) throw new Error(value);
 });
 
-Deno.test("legacy process readiness snapshots are rejected", () => {
+Deno.test("process state parses PID diagnostics without ownership", () => {
+  const parsed = parseProcessState({ process: processSnapshot(7) });
+  if (parsed.process?.pid !== 7) {
+    throw new Error("Process PID was not parsed");
+  }
+  if (parsed.process.inspection.kind !== "details") {
+    throw new Error("Process details were not parsed");
+  }
+  if (parsed.process.inspection.argv.at(-1) !== "resume") {
+    throw new Error("Process argv was not preserved");
+  }
+});
+
+Deno.test("process state parses a live PID with unreadable details", () => {
+  const parsed = parseProcessState({
+    process: {
+      pid: 9,
+      inspection: { kind: "error", error: "permission denied" },
+    },
+  });
+  if (parsed.process?.inspection.kind !== "error") {
+    throw new Error("Inspection error was not parsed");
+  }
+});
+
+Deno.test("revisioned process envelopes are rejected", () => {
   let rejected = false;
   try {
-    parseProcessEnvelope({
-      revision: 1,
-      process: { ...processSnapshot(7), ready: true },
-    });
+    parseProcessState({ revision: 1, process: processSnapshot(7) });
   } catch (error: unknown) {
     if (!(error instanceof Error)) throw error;
-    if (error.message !== "Legacy process readiness is not supported") {
-      throw error;
-    }
     rejected = true;
   }
-  if (!rejected) throw new Error("Legacy readiness was accepted");
+  if (!rejected) throw new Error("Legacy revision was accepted");
 });
 
 function processSnapshot(pid: number) {
   return {
     pid,
-    start_ticks: 44,
-    started_at_ms: 1_700_000_000_000,
-    kernel_state: "S",
-    executable: "/usr/bin/python3",
-    working_directory: "/workspace",
-    run_dir: "/tmp/run",
-    argv: ["python", "-m", "server.training_cli", "resume"],
-    process_group_id: pid,
-    unix_session_id: pid,
-    command: "resume" as const,
+    inspection: {
+      kind: "details" as const,
+      started_at_ms: 1_700_000_000_000,
+      kernel_state: "S",
+      executable: "/usr/bin/python3",
+      working_directory: "/workspace",
+      argv: ["python", "-m", "server.training_cli", "resume"],
+      process_group_id: pid,
+      unix_session_id: pid,
+    },
   };
 }

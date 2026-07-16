@@ -1,5 +1,9 @@
-import { ProcessController, ProcessStreamClient } from "./process.ts";
-import type { ProcessEnvelope, ProcessSnapshot } from "./types.ts";
+import { ProcessStreamClient } from "./process.ts";
+import type {
+  ProcessDetails,
+  ProcessSnapshot,
+  ProcessState,
+} from "./types.ts";
 
 export interface ProcessDomainCallbacks {
   readonly reportError: (message: string) => void;
@@ -14,21 +18,20 @@ export interface ProcessOperations {
 }
 
 export class ProcessDomain {
-  #envelope: ProcessEnvelope | null = null;
+  #state: ProcessState | null = null;
   #operations: ProcessOperations = {
     initializing: false,
     resuming: false,
     stopping: false,
   };
-  readonly #controller = new ProcessController((value) => {
-    this.#envelope = value;
-    this.callbacks.clearError();
-    this.render();
-  });
   readonly #stream = new ProcessStreamClient(
     () => this.runDir() || null,
     {
-      onSnapshot: (value) => this.#controller.apply(value),
+      onSnapshot: (value) => {
+        this.#state = value;
+        this.callbacks.clearError();
+        this.render();
+      },
       onConnectionChange: (connected) =>
         this.callbacks.connectionChanged(connected),
       onError: (message) => this.callbacks.reportError(message),
@@ -43,7 +46,7 @@ export class ProcessDomain {
   }
 
   get process(): ProcessSnapshot | null {
-    return this.#envelope?.process ?? null;
+    return this.#state?.process ?? null;
   }
 
   connect(): void {
@@ -51,14 +54,9 @@ export class ProcessDomain {
   }
 
   reset(): void {
-    this.#controller.reset();
-    this.#envelope = null;
+    this.#state = null;
     this.callbacks.clearError();
     this.render();
-  }
-
-  apply(value: ProcessEnvelope): void {
-    this.#controller.apply(value);
   }
 
   setOperations(value: ProcessOperations): void {
@@ -68,66 +66,68 @@ export class ProcessDomain {
 
   render(): void {
     const process = this.process;
+    const details = process?.inspection.kind === "details"
+      ? process.inspection
+      : null;
+    const inspectionError = process?.inspection.kind === "error"
+      ? process.inspection.error
+      : null;
     const caption = element("run-caption", HTMLElement);
     caption.textContent = this.runDir();
     caption.title = this.runDir();
     const presence = element("process-presence", HTMLElement);
-    presence.textContent = process === null
-      ? "STOPPED"
-      : process.command === "initialize"
-      ? "INITIALIZING"
-      : "RUNNING";
+    presence.textContent = process === null ? "STOPPED" : "RUNNING";
     presence.className = process === null
       ? "badge neutral"
       : "badge running";
     replaceWithRows(element("process-details", HTMLElement), [
-      ["Command", process?.command ?? "-", "plain"],
       ["PID", process === null ? "-" : String(process.pid), "plain"],
-      ["Started", formatTime(process?.started_at_ms ?? null), "plain"],
+      ["Started", formatTime(details?.started_at_ms ?? null), "plain"],
       [
         "Uptime",
-        process === null ? "-" : formatUptime(process),
+        details === null ? "-" : formatUptime(details),
         "plain",
       ],
-      ["Kernel state", process?.kernel_state ?? "-", "plain"],
-      [
-        "Start ticks",
-        process === null ? "-" : String(process.start_ticks),
-        "plain",
-      ],
-      ["Executable", process?.executable ?? "-", "code"],
-      ["Working directory", process?.working_directory ?? "-", "code"],
-      ["Canonical run directory", process?.run_dir ?? "-", "code"],
+      ["Kernel state", details?.kernel_state ?? "-", "plain"],
+      ["Executable", details?.executable ?? "-", "code"],
+      ["Working directory", details?.working_directory ?? "-", "code"],
       [
         "Process group ID",
-        process === null ? "-" : String(process.process_group_id),
+        details === null ? "-" : String(details.process_group_id),
         "plain",
       ],
       [
         "Unix session ID",
-        process === null ? "-" : String(process.unix_session_id),
+        details === null ? "-" : String(details.unix_session_id),
         "plain",
       ],
+      ["Inspection error", inspectionError ?? "-", "plain"],
     ]);
     element("process-command", HTMLElement).textContent =
       process === null
-        ? "No managed CLI process"
-        : process.argv.map(shellQuote).join(" ");
+        ? "No live PID"
+        : details === null
+        ? inspectionError ?? "Process information is unavailable"
+        : details.argv.map(shellQuote).join(" ");
     const busy = this.#operations.initializing ||
       this.#operations.resuming || this.#operations.stopping;
     element("open-init", HTMLButtonElement).disabled =
-      this.runDir() === "" || process !== null || busy;
+      this.runDir() === "" || busy;
     element("open-resume", HTMLButtonElement).disabled =
       this.runDir() === "" || process !== null || busy;
     const stop = element("stop-training", HTMLButtonElement);
-    stop.disabled = process === null || this.#operations.stopping;
+    stop.disabled = process === null || busy;
     stop.textContent = this.#operations.stopping ? "Stopping…" : "Stop";
   }
 
   #renderUptime(): void {
     const target = document.getElementById("process-uptime-value");
-    if (target !== null && this.process !== null) {
-      target.textContent = formatUptime(this.process);
+    const inspection = this.process?.inspection;
+    if (
+      target !== null && inspection !== undefined &&
+      inspection.kind === "details"
+    ) {
+      target.textContent = formatUptime(inspection);
     }
   }
 }
@@ -154,7 +154,7 @@ function formatTime(value: number | null): string {
   return value === null ? "-" : new Date(value).toLocaleString("en-GB");
 }
 
-function formatUptime(process: ProcessSnapshot): string {
+function formatUptime(process: ProcessDetails): string {
   const seconds = Math.max(
     0,
     Math.floor((Date.now() - process.started_at_ms) / 1000),
