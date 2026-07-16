@@ -102,7 +102,7 @@ class TrainingResumeRequest(BaseModel):
     learning_rate: (
         Annotated[float, Field(gt=0.0, allow_inf_nan=False)] | None
     ) = None
-    checkpoint_every_updates: Annotated[int, Field(gt=0)] = 50
+    checkpoint_every_updates: Annotated[int, Field(gt=0)] | None = None
     checkpoint_retention_updates: Annotated[int, Field(ge=0)] = 5
     round_timeout_seconds: (
         Annotated[float, Field(gt=0.0, allow_inf_nan=False)] | None
@@ -165,8 +165,6 @@ class TrainingResumeRequest(BaseModel):
             self.checkpoint,
             "--max-samples",
             str(self.max_samples),
-            "--checkpoint-every-updates",
-            str(self.checkpoint_every_updates),
             "--checkpoint-retention-updates",
             str(self.checkpoint_retention_updates),
         ]
@@ -175,6 +173,10 @@ class TrainingResumeRequest(BaseModel):
             ("--model-ranks", self.model_ranks),
             ("--ppo-profile", self.ppo_profile),
             ("--learning-rate", self.learning_rate),
+            (
+                "--checkpoint-every-updates",
+                self.checkpoint_every_updates,
+            ),
             ("--round-timeout-seconds", self.round_timeout_seconds),
             (
                 "--sampling-start-timeout-seconds",

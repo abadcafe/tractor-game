@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Protocol, assert_never
 
@@ -11,6 +12,7 @@ from server.training.runtime.async_ipc import (
     AsyncCoordinatorControlEndpoint,
     ControlCommandBroadcastFailure,
     broadcast_control_commands,
+    poll_async_control_responses,
     wait_async_control_responses,
 )
 from server.training.runtime.config import ExecutionConfig
@@ -27,6 +29,9 @@ from server.training.runtime.messages import (
     WorkerStopSamplingCommand,
     WorkerUpdateCompleted,
 )
+from server.training.stop import TrainingStopRequest
+
+_STOP_CHECK_INTERVAL_SECONDS = 0.05
 
 
 class WorkerControlHandle(Protocol):
@@ -72,19 +77,37 @@ class WorkerSamplingCleanupFailed:
         assert self.rejection.reason
 
 
+@dataclass(frozen=True, slots=True)
+class WorkerSamplingStartStopped:
+    """A stop prevented a sampling session from becoming active."""
+
+
+@dataclass(frozen=True, slots=True)
+class _WorkerSamplingStartStopRequested:
+    """Internal marker returned while waiting for start responses."""
+
+
+type WorkerSamplingStartOutcome = (
+    WorkerSamplingSession | WorkerSamplingStartStopped
+)
+
+
 async def start_worker_sampling_session(
     *,
     handles: tuple[WorkerControlHandle, ...],
     execution_config: ExecutionConfig,
     policy_version: int,
     rollout_id: str,
+    stop_request: TrainingStopRequest,
 ) -> (
-    _result.Ok[WorkerSamplingSession]
+    _result.Ok[WorkerSamplingStartOutcome]
     | _result.Rejected
     | WorkerSamplingCleanupFailed
 ):
     """Start sampling on every worker or clean up commanded workers."""
     assert handles
+    if stop_request.is_requested():
+        return Ok(value=WorkerSamplingStartStopped())
     send_result = await broadcast_control_commands(
         targets=handles,
         sender=_worker_control_sender,
@@ -114,6 +137,7 @@ async def start_worker_sampling_session(
         stop_timeout_seconds=(
             execution_config.timeouts.sampling_stop_seconds
         ),
+        stop_request=stop_request,
     )
 
 
@@ -179,18 +203,28 @@ async def _receive_worker_sampling_session_started(
     rollout_id: str,
     start_timeout_seconds: float,
     stop_timeout_seconds: float,
+    stop_request: TrainingStopRequest,
 ) -> (
-    _result.Ok[WorkerSamplingSession]
+    _result.Ok[WorkerSamplingStartOutcome]
     | _result.Rejected
     | WorkerSamplingCleanupFailed
 ):
     started_handles: list[WorkerControlHandle] = []
     pending = list(commanded_handles)
+    deadline = time.monotonic() + start_timeout_seconds
     while pending:
-        ready_result = await _wait_worker_responses(
+        ready_result = await _wait_worker_start_responses(
             handles=tuple(pending),
-            timeout_seconds=start_timeout_seconds,
+            deadline=deadline,
+            stop_request=stop_request,
         )
+        if isinstance(ready_result, _WorkerSamplingStartStopRequested):
+            return await _stop_worker_sampling_after_start_request(
+                handles=commanded_handles,
+                policy_version=policy_version,
+                rollout_id=rollout_id,
+                timeout_seconds=stop_timeout_seconds,
+            )
         if isinstance(ready_result, Rejected):
             return await _abort_worker_sampling_start(
                 handles=commanded_handles,
@@ -257,6 +291,46 @@ async def _receive_worker_sampling_session_started(
             ),
         )
     )
+
+
+async def _stop_worker_sampling_after_start_request(
+    *,
+    handles: tuple[WorkerControlHandle, ...],
+    policy_version: int,
+    rollout_id: str,
+    timeout_seconds: float,
+) -> (
+    _result.Ok[WorkerSamplingStartOutcome] | WorkerSamplingCleanupFailed
+):
+    send_result = await _send_worker_stop_sampling_commands(
+        handles=handles,
+        policy_version=policy_version,
+        rollout_id=rollout_id,
+    )
+    if isinstance(send_result, Rejected):
+        return WorkerSamplingCleanupFailed(
+            rejection=Rejected(
+                reason=(
+                    "stop-requested sampling cleanup failed: "
+                    f"{send_result.reason}"
+                )
+            )
+        )
+    stopped_result = await _receive_worker_sampling_abort_stopped(
+        handles=handles,
+        policy_version=policy_version,
+        timeout_seconds=timeout_seconds,
+    )
+    if isinstance(stopped_result, Rejected):
+        return WorkerSamplingCleanupFailed(
+            rejection=Rejected(
+                reason=(
+                    "stop-requested sampling cleanup failed: "
+                    f"{stopped_result.reason}"
+                )
+            )
+        )
+    return Ok(value=WorkerSamplingStartStopped())
 
 
 async def _abort_worker_sampling_start(
@@ -458,6 +532,42 @@ async def _wait_worker_responses(
             for control in ready_result.value
         )
     )
+
+
+async def _wait_worker_start_responses(
+    *,
+    handles: tuple[WorkerControlHandle, ...],
+    deadline: float,
+    stop_request: TrainingStopRequest,
+) -> (
+    _result.Ok[tuple[WorkerControlHandle, ...]]
+    | _result.Rejected
+    | _WorkerSamplingStartStopRequested
+):
+    while True:
+        if stop_request.is_requested():
+            return _WorkerSamplingStartStopRequested()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            return Rejected(reason="process control response timed out")
+        ready_result = await poll_async_control_responses(
+            endpoints=tuple(handle.control for handle in handles),
+            timeout_seconds=min(
+                remaining, _STOP_CHECK_INTERVAL_SECONDS
+            ),
+        )
+        if isinstance(ready_result, Rejected):
+            return ready_result
+        if ready_result.value:
+            return Ok(
+                value=tuple(
+                    _worker_handle_for_control(
+                        handles=handles,
+                        control=control,
+                    )
+                    for control in ready_result.value
+                )
+            )
 
 
 def _worker_handle_for_control(

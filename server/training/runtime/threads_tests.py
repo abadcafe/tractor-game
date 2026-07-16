@@ -6,7 +6,41 @@ import pytest
 
 from server.foundation.result import Ok, Rejected
 from server.training.runtime import threads
-from server.training.runtime.threads import apply_torch_thread_config
+from server.training.runtime.threads import (
+    TorchThreadStatus,
+    apply_torch_thread_config,
+    apply_worker_torch_thread_config,
+)
+
+
+def test_worker_thread_policy_is_always_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[tuple[int | None, int | None]] = []
+
+    def fake_apply_torch_thread_config(
+        *, num_threads: int | None, num_interop_threads: int | None
+    ) -> Ok[TorchThreadStatus]:
+        requests.append((num_threads, num_interop_threads))
+        return Ok(
+            value=TorchThreadStatus(
+                requested_num_threads=num_threads,
+                requested_num_interop_threads=num_interop_threads,
+                active_num_threads=1,
+                active_num_interop_threads=1,
+            )
+        )
+
+    monkeypatch.setattr(
+        threads,
+        "apply_torch_thread_config",
+        fake_apply_torch_thread_config,
+    )
+
+    result = apply_worker_torch_thread_config()
+
+    assert isinstance(result, Ok)
+    assert requests == [(1, 1)]
 
 
 def test_apply_torch_thread_config_inherits_current_thread_counts(

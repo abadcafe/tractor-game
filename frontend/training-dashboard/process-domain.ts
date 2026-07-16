@@ -76,25 +76,12 @@ export class ProcessDomain {
       ? "STOPPED"
       : process.command === "initialize"
       ? "INITIALIZING"
-      : process.ready
-      ? "RUNNING"
-      : "STARTING";
+      : "RUNNING";
     presence.className = process === null
       ? "badge neutral"
       : "badge running";
     replaceWithRows(element("process-details", HTMLElement), [
       ["Command", process?.command ?? "-", "plain"],
-      [
-        "Readiness",
-        process === null
-          ? "-"
-          : process.ready
-          ? "Ready"
-          : process.command === "initialize"
-          ? "Initializing"
-          : "Starting",
-        "plain",
-      ],
       ["PID", process === null ? "-" : String(process.pid), "plain"],
       ["Started", formatTime(process?.started_at_ms ?? null), "plain"],
       [

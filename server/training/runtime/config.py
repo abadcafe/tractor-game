@@ -18,6 +18,8 @@ type ModelRankKind = Literal["none", "cuda", "mps"]
 type ModelRankDevice = str
 type PPOProfileMode = Literal["off", "basic", "detailed"]
 type CpuSet = tuple[int, ...]
+type WorkerCpuSlot = int | None
+type WorkerCpuLayout = tuple[WorkerCpuSlot, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,7 +69,7 @@ class ExecutionTimeouts:
 class ExecutionConfig:
     """Runtime settings that may change freely across resume."""
 
-    worker_cpus: CpuSet = ()
+    worker_cpu_layout: WorkerCpuLayout = ()
     model_ranks: ModelRankPlacement = field(
         default_factory=lambda: ModelRankPlacement(
             kind="none", devices=()
@@ -82,7 +84,7 @@ class ExecutionConfig:
     samples_per_update: int = 1024
 
     def __post_init__(self) -> None:
-        assert _cpu_set_is_valid(self.worker_cpus)
+        assert _worker_cpu_layout_is_valid(self.worker_cpu_layout)
         assert self.ppo_profile in ("off", "basic", "detailed")
         assert self.model_inference_batch_size > 0
         assert self.game_envs_per_worker > 0
@@ -90,17 +92,18 @@ class ExecutionConfig:
 
     def worker_process_count(self) -> int:
         """Return OS worker process count."""
-        if not self.worker_cpus:
+        if not self.worker_cpu_layout:
             return 1
-        return len(self.worker_cpus)
+        return len(self.worker_cpu_layout)
 
     def worker_cpu_set(self, worker_index: int) -> CpuSet:
         """Return the CPU affinity for one worker process."""
         assert worker_index >= 0
         assert worker_index < self.worker_process_count()
-        if not self.worker_cpus:
+        if not self.worker_cpu_layout:
             return ()
-        return (self.worker_cpus[worker_index],)
+        cpu = self.worker_cpu_layout[worker_index]
+        return () if cpu is None else (cpu,)
 
     def model_rank_process_count(self) -> int:
         """Return standalone model-rank process count."""
@@ -117,15 +120,24 @@ class ExecutionConfig:
         return worker_index % len(self.model_ranks.devices)
 
 
-def parse_cpu_set(text: str) -> _result.Ok[CpuSet] | _result.Rejected:
-    """Parse a Linux-style CPU list such as ``0-3,6``."""
+def parse_worker_cpu_layout(
+    text: str,
+) -> _result.Ok[WorkerCpuLayout] | _result.Rejected:
+    """Parse one affinity slot per worker; ``-1`` is unbound."""
     if not text:
-        return _result.Rejected(reason="CPU set must not be empty")
-    cpus: list[int] = []
+        return _result.Rejected(
+            reason="worker CPU layout must not be empty"
+        )
+    slots: list[WorkerCpuSlot] = []
     seen: set[int] = set()
     for part in text.split(","):
         if not part:
-            return _result.Rejected(reason=f"invalid CPU set: {text}")
+            return _result.Rejected(
+                reason=f"invalid worker CPU layout: {text}"
+            )
+        if part == "-1":
+            slots.append(None)
+            continue
         parsed_part = _parse_cpu_set_part(part)
         if isinstance(parsed_part, _result.Rejected):
             return parsed_part
@@ -135,8 +147,8 @@ def parse_cpu_set(text: str) -> _result.Ok[CpuSet] | _result.Rejected:
                     reason=f"duplicate CPU in set: {cpu}"
                 )
             seen.add(cpu)
-            cpus.append(cpu)
-    return _result.Ok(value=tuple(cpus))
+            slots.append(cpu)
+    return _result.Ok(value=tuple(slots))
 
 
 def parse_model_rank_placement(
@@ -218,8 +230,11 @@ def _parse_cpu_number(
     return _result.Ok(value=value)
 
 
-def _cpu_set_is_valid(cpus: CpuSet) -> bool:
-    return len(cpus) == len(set(cpus)) and all(cpu >= 0 for cpu in cpus)
+def _worker_cpu_layout_is_valid(layout: WorkerCpuLayout) -> bool:
+    bound = tuple(cpu for cpu in layout if cpu is not None)
+    return len(bound) == len(set(bound)) and all(
+        cpu >= 0 for cpu in bound
+    )
 
 
 def _is_cuda_device(device: str) -> bool:

@@ -21,12 +21,11 @@ class ProcessOwner(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     run_dir: Path
     pid: int = Field(gt=0)
     start_ticks: int = Field(ge=0)
     command: TrainingCommand
-    ready: bool
 
 
 def control_directory(runtime_root: Path, run_dir: Path) -> Path:
@@ -135,31 +134,6 @@ def remove_owner_if_matches(
             reason=f"training owner could not be removed: {path}"
         )
     return _result.Ok(value=True)
-
-
-def mark_owner_ready(
-    runtime_root: Path,
-    run_dir: Path,
-    *,
-    pid: int,
-    start_ticks: int,
-) -> _result.Ok[None] | _result.Rejected:
-    """Atomically mark the exact resume process as ready."""
-    result = read_owner(runtime_root, run_dir)
-    if isinstance(result, _result.Rejected):
-        return result
-    owner = result.value
-    if owner is None or (
-        owner.pid != pid or owner.start_ticks != start_ticks
-    ):
-        return _result.Rejected(
-            reason="training owner changed before readiness"
-        )
-    if owner.ready:
-        return _result.Ok(value=None)
-    return write_owner(
-        runtime_root, owner.model_copy(update={"ready": True})
-    )
 
 
 def read_revision(

@@ -224,12 +224,8 @@ class FakeElement extends EventTarget {
 
   closest(selector: string): FakeElement | null {
     if (selector !== "dialog") return null;
-    let current: FakeElement | null = this;
-    while (current !== null) {
-      if (current.tagName === "DIALOG") return current;
-      current = current.#parent;
-    }
-    return null;
+    if (this.tagName === "DIALOG") return this;
+    return this.#parent?.closest(selector) ?? null;
   }
 
   reportValidity(): boolean {
@@ -442,8 +438,8 @@ function jsonResponse(payload: unknown): FakeResponse {
   return {
     status: 200,
     ok: true,
-    async json(): Promise<unknown> {
-      return payload;
+    json(): Promise<unknown> {
+      return Promise.resolve(payload);
     },
   };
 }
@@ -627,8 +623,6 @@ function withFakeDashboardDom(): DashboardHarness {
   ) as FakeButtonElement;
   const closeInit = create("close-init", "button");
   closeInit.setAttribute("data-close-dialog", "");
-  const initFieldsContainer = create("init-fields");
-
   const replaceDialog = create("replace-dialog", "dialog");
   const replaceForm = create("replace-form", "form") as FakeFormElement;
   const replaceStatus = create("replace-status");
@@ -893,7 +887,7 @@ function withFakeDashboardDom(): DashboardHarness {
 
   defineGlobal(
     "fetch",
-    (async (
+    ((
       input: string | URL,
       init?: RequestInit,
     ): Promise<FakeResponse> => {
@@ -901,39 +895,42 @@ function withFakeDashboardDom(): DashboardHarness {
       const method = init?.method ?? "GET";
       fetchCalls.push({ method, path: target });
       if (target.includes("/api/training/config")) {
-        return jsonResponse({
-          default_run_dir: "/tmp/run",
-          stop_timeout_seconds: 1.0,
-        });
+        return Promise.resolve(
+          jsonResponse({
+            default_run_dir: "/tmp/run",
+            stop_timeout_seconds: 1.0,
+          }),
+        );
       }
       if (target.includes("/api/training/init") && method === "POST") {
-        return jsonResponse({});
+        return Promise.resolve(jsonResponse({}));
       }
       if (
         target.includes("/api/training/resume") && method === "POST"
       ) {
-        return jsonResponse({
-          revision: 1,
-          process: {
-            pid: 100,
-            start_ticks: 1,
-            started_at_ms: Date.now(),
-            kernel_state: "R",
-            executable: "/usr/bin/python",
-            working_directory: "/tmp/run",
-            run_dir: "/tmp/run",
-            argv: ["python"],
-            process_group_id: 100,
-            unix_session_id: 100,
-            command: "resume",
-            ready: true,
-          },
-        });
+        return Promise.resolve(
+          jsonResponse({
+            revision: 1,
+            process: {
+              pid: 100,
+              start_ticks: 1,
+              started_at_ms: Date.now(),
+              kernel_state: "R",
+              executable: "/usr/bin/python",
+              working_directory: "/tmp/run",
+              run_dir: "/tmp/run",
+              argv: ["python"],
+              process_group_id: 100,
+              unix_session_id: 100,
+              command: "resume",
+            },
+          }),
+        );
       }
       if (target.includes("/api/training/stop")) {
-        return jsonResponse({ forced: false });
+        return Promise.resolve(jsonResponse({ forced: false }));
       }
-      return jsonResponse({});
+      return Promise.resolve(jsonResponse({}));
     }) as typeof fetch,
   );
 
@@ -1028,7 +1025,7 @@ Deno.test(
       );
       await waitUntil(
         () => !harness.confirmResumeButton.disabled,
-        "resume button remained disabled after CLI readiness",
+        "resume button remained disabled after process launch",
       );
 
       assertEquals(

@@ -14,7 +14,9 @@ from server.training.runtime.config import (
     ModelRankKind,
     ModelRankPlacement,
     PPOProfileMode,
+    WorkerCpuLayout,
     parse_model_rank_placement,
+    parse_worker_cpu_layout,
 )
 from server.training.runtime.rendezvous import (
     FileRendezvous,
@@ -23,6 +25,7 @@ from server.training.runtime.rendezvous import (
 from server.training.runtime.threads import (
     TorchThreadStatus,
     apply_torch_thread_config,
+    apply_worker_torch_thread_config,
 )
 
 __all__ = [
@@ -36,10 +39,13 @@ __all__ = [
     "ModelRankPlacement",
     "PPOProfileMode",
     "TorchThreadStatus",
+    "WorkerCpuLayout",
     "apply_cpu_affinity",
     "apply_torch_thread_config",
+    "apply_worker_torch_thread_config",
     "create_file_rendezvous",
     "current_cpu_affinity",
     "parse_model_rank_placement",
+    "parse_worker_cpu_layout",
     "preflight_cpu_affinity",
 ]

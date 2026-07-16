@@ -390,7 +390,7 @@ def test_training_init_requires_yes_before_replacement(
     assert not (tmp_path / "runtime").exists()
 
 
-def test_training_resume_returns_cli_preflight_error(
+def test_training_resume_returns_before_cli_preflight_failure(
     sync_client: SyncServerClient,
     tmp_path: Path,
 ) -> None:
@@ -401,10 +401,17 @@ def test_training_resume_returns_cli_preflight_error(
         json={"run_dir": str(tmp_path), "checkpoint": "latest.json"},
     )
 
-    assert response.status_code == 409
-    detail = response.json()["detail"]
-    assert isinstance(detail, str)
-    assert "latest.json" in detail
+    assert response.status_code == 200
+    document = response.json()
+    assert _is_dict(document)
+    process = document["process"]
+    assert _is_dict(process)
+    assert process["command"] == "resume"
+    assert "ready" not in process
+    argv = process["argv"]
+    assert isinstance(argv, list)
+    assert "latest.json" in argv
+    assert "--checkpoint-every-updates" not in argv
 
 
 def test_ai_debug_page_returns_html(

@@ -13,14 +13,14 @@ from server.training.config import (
 )
 from server.training.interface import TrainingResumeOptions
 from server.training.runtime import (
-    CpuSet,
     ExecutionConfig,
     ExecutionTimeouts,
     ModelRankPlacement,
     PPOProfileMode,
+    WorkerCpuLayout,
     parse_model_rank_placement,
+    parse_worker_cpu_layout,
 )
-from server.training.runtime.config import parse_cpu_set
 from server.training.torch_checkpoints.load import (
     read_torch_checkpoint_metadata,
 )
@@ -45,7 +45,7 @@ class TrainConfigOverrides:
 
 @dataclass(frozen=True, slots=True)
 class ExecutionConfigOverrides:
-    worker_cpus: CpuSet | None = None
+    worker_cpu_layout: WorkerCpuLayout | None = None
     model_ranks: ModelRankPlacement | None = None
     ppo_profile: PPOProfileMode | None = None
     round_timeout_seconds: float | None = None
@@ -109,8 +109,9 @@ def resolve_execution_config(
     base = ExecutionConfig()
     return _result.Ok(
         value=ExecutionConfig(
-            worker_cpus=_or_base(
-                overrides.worker_cpus, base.worker_cpus
+            worker_cpu_layout=_or_base(
+                overrides.worker_cpu_layout,
+                base.worker_cpu_layout,
             ),
             model_ranks=_or_base(
                 overrides.model_ranks, base.model_ranks
@@ -162,7 +163,7 @@ def resolve_execution_config(
 def _resolve_execution_config(
     request: TrainingResumeOptions,
 ) -> _result.Ok[ExecutionConfig] | _result.Rejected:
-    cpu_result = _parse_optional_cpu_set(request.worker_cpus)
+    cpu_result = _parse_optional_worker_cpu_layout(request.worker_cpus)
     if isinstance(cpu_result, _result.Rejected):
         return cpu_result
     ranks_result = _parse_optional_model_ranks(request.model_ranks)
@@ -170,7 +171,7 @@ def _resolve_execution_config(
         return ranks_result
     return resolve_execution_config(
         ExecutionConfigOverrides(
-            worker_cpus=cpu_result.value,
+            worker_cpu_layout=cpu_result.value,
             model_ranks=ranks_result.value,
             ppo_profile=request.ppo_profile,
             round_timeout_seconds=request.round_timeout_seconds,
@@ -239,12 +240,12 @@ def _override_train_config(
     )
 
 
-def _parse_optional_cpu_set(
+def _parse_optional_worker_cpu_layout(
     value: str | None,
-) -> _result.Ok[CpuSet | None] | _result.Rejected:
+) -> _result.Ok[WorkerCpuLayout | None] | _result.Rejected:
     if value is None:
         return _result.Ok(value=None)
-    parsed = parse_cpu_set(value)
+    parsed = parse_worker_cpu_layout(value)
     if isinstance(parsed, _result.Rejected):
         return parsed
     return _result.Ok(value=parsed.value)

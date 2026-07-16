@@ -87,7 +87,6 @@ def format_training_summary(
         lines.extend(
             (
                 f"  command: {process.command}",
-                f"  ready: {str(process.ready).lower()}",
                 f"  pid: {process.pid}",
                 f"  start ticks: {process.start_ticks}",
                 f"  started at: {_timestamp(process.started_at_ms)}",

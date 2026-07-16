@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
-from typing import Callable
 from uuid import uuid4
 
 from server.foundation import result as _result
@@ -29,6 +28,7 @@ from server.training.runtime.shared_rollout_arena import (
 from server.training.runtime.state import RuntimeTrainingState
 from server.training.runtime.training_runtime import (
     TrainingRuntime,
+    TrainingStopDiscardedPartialRollout,
     TrainingUpdateResult,
     open_training_runtime,
 )
@@ -53,7 +53,6 @@ def run_training_coordinator(
     max_samples: int,
     resume: Path,
     stop_request: TrainingStopRequest,
-    on_ready: Callable[[], None] | None = None,
 ) -> _result.Ok[TrainingLoopResult] | _result.Rejected:
     """Run synchronized worker training and commit canonical state."""
     return asyncio.run(
@@ -67,7 +66,6 @@ def run_training_coordinator(
             max_samples=max_samples,
             resume=resume,
             stop_request=stop_request,
-            on_ready=on_ready,
         )
     )
 
@@ -83,7 +81,6 @@ async def _run_training_coordinator_async(
     max_samples: int,
     resume: Path,
     stop_request: TrainingStopRequest,
-    on_ready: Callable[[], None] | None,
 ) -> _result.Ok[TrainingLoopResult] | _result.Rejected:
     """Run synchronized worker training inside the async runtime."""
     assert max_samples >= 0
@@ -138,7 +135,6 @@ async def _run_training_coordinator_async(
             event_sink=event_sink,
             runtime=runtime,
             stop_request=stop_request,
-            on_ready=on_ready,
         )
     finally:
         await runtime.close()
@@ -203,7 +199,6 @@ async def _run_synchronized_training(
     event_sink: StructuredEventSink,
     runtime: TrainingRuntime,
     stop_request: TrainingStopRequest,
-    on_ready: Callable[[], None] | None,
 ) -> _result.Ok[TrainingLoopResult] | _result.Rejected:
     start = time.monotonic()
     total_rounds = state.total_rounds
@@ -217,8 +212,7 @@ async def _run_synchronized_training(
     )
     if isinstance(load_result, Rejected):
         return load_result
-    if on_ready is not None:
-        on_ready()
+    last_checkpoint_path: Path | None = None
     while (
         _should_continue_training(
             max_samples=max_samples,
@@ -227,6 +221,7 @@ async def _run_synchronized_training(
         )
         and not stop_request.is_requested()
     ):
+        last_checkpoint_path = None
         rollout_id = str(uuid4())
         context = EventContext(
             policy_version=total_updates,
@@ -236,6 +231,7 @@ async def _run_synchronized_training(
         update_result = await runtime.run_update(
             policy_version=total_updates,
             rollout_id=rollout_id,
+            stop_request=stop_request,
         )
         if isinstance(update_result, Rejected):
             duration_seconds = max(
@@ -258,6 +254,24 @@ async def _run_synchronized_training(
         update_cycle_seconds = max(
             time.monotonic() - update_cycle_start, 0.0
         )
+        if isinstance(update, TrainingStopDiscardedPartialRollout):
+            assert stop_request.is_requested()
+            event_sink.emit(
+                "rollout",
+                context=context,
+                fields={
+                    **_rollout_fields(update.snapshot),
+                    "duration_seconds": update_cycle_seconds,
+                    "termination": "stop_requested",
+                    "discarded_sample_count": (
+                        update.snapshot.sample_count
+                    ),
+                    "minimum_update_sample_count": (
+                        update.minimum_sample_count
+                    ),
+                },
+            )
+            break
         event_sink.emit(
             "rollout",
             context=context,
@@ -282,6 +296,12 @@ async def _run_synchronized_training(
             update_cycle_seconds=update_cycle_seconds,
             update=update,
         )
+        if stop_request.is_requested() or not _should_continue_training(
+            max_samples=max_samples,
+            start_total_samples=start_total_samples,
+            total_samples=total_samples,
+        ):
+            break
         checkpoint_result = await _maybe_save_checkpoint(
             run_dir=run_dir,
             rollout_id=rollout_id,
@@ -291,34 +311,36 @@ async def _run_synchronized_training(
             execution_config=execution_config,
             event_sink=event_sink,
             runtime=runtime,
-            max_samples=max_samples,
-            start_total_samples=start_total_samples,
             total_rounds=total_rounds,
             total_samples=total_samples,
             total_updates=total_updates,
         )
         if isinstance(checkpoint_result, Rejected):
             return checkpoint_result
-    final_checkpoint_result = await _save_final_checkpoint(
-        run_dir=run_dir,
-        model_config=model_config,
-        train_config=train_config,
-        checkpoint_policy=checkpoint_policy,
-        execution_config=execution_config,
-        runtime=runtime,
-        event_sink=event_sink,
-        total_rounds=total_rounds,
-        total_samples=total_samples,
-        total_updates=total_updates,
-    )
-    if isinstance(final_checkpoint_result, Rejected):
-        return final_checkpoint_result
+        last_checkpoint_path = checkpoint_result.value
+    final_checkpoint_path = last_checkpoint_path
+    if final_checkpoint_path is None:
+        final_checkpoint_result = await _save_final_checkpoint(
+            run_dir=run_dir,
+            model_config=model_config,
+            train_config=train_config,
+            checkpoint_policy=checkpoint_policy,
+            execution_config=execution_config,
+            runtime=runtime,
+            event_sink=event_sink,
+            total_rounds=total_rounds,
+            total_samples=total_samples,
+            total_updates=total_updates,
+        )
+        if isinstance(final_checkpoint_result, Rejected):
+            return final_checkpoint_result
+        final_checkpoint_path = final_checkpoint_result.value
     return Ok(
         value=TrainingLoopResult(
             total_rounds=total_rounds,
             total_samples=total_samples,
             total_updates=total_updates,
-            checkpoint_path=final_checkpoint_result.value,
+            checkpoint_path=final_checkpoint_path,
         )
     )
 
@@ -403,8 +425,6 @@ async def _maybe_save_checkpoint(
     execution_config: ExecutionConfig,
     event_sink: StructuredEventSink,
     runtime: TrainingRuntime,
-    max_samples: int,
-    start_total_samples: int,
     total_rounds: int,
     total_samples: int,
     total_updates: int,

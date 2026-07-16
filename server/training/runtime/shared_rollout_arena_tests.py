@@ -12,6 +12,8 @@ from server.foundation.result import Ok, Rejected
 from server.training.returns import ReturnCommit
 from server.training.runtime.shared_rollout_arena import (
     RolloutArenaHandle,
+    RolloutSampleTargetReached,
+    RolloutStopRequested,
     SharedRolloutArenaGroup,
     attach_rollout_arena_reader,
     attach_rollout_arena_writer,
@@ -19,7 +21,7 @@ from server.training.runtime.shared_rollout_arena import (
     create_shared_rollout_arena_group,
     reset_rollout_arenas,
     snapshot_rollout_arenas,
-    wait_rollout_sample_target,
+    wait_rollout_sample_target_or_stop,
 )
 from server.training.runtime.shared_rollout_arena import (
     group as arena_group_module,
@@ -27,6 +29,7 @@ from server.training.runtime.shared_rollout_arena import (
 from server.training.runtime.shared_rollout_arena.types import (
     RolloutRoundMetrics,
 )
+from server.training.stop import TrainingStopRequest
 
 
 def test_read_rank_batch_reads_assigned_worker_arenas() -> None:
@@ -117,11 +120,12 @@ def test_wait_rollout_sample_target_uses_aggregate_samples() -> None:
                 commit=_commit(policy_version=3, model_ranks=(0,)),
             )
             assert isinstance(first_append, Ok)
-            early_wait = wait_rollout_sample_target(
+            early_wait = wait_rollout_sample_target_or_stop(
                 group=group,
                 policy_version=3,
                 target_sample_count=2,
                 timeout_seconds=0.001,
+                stop_request=TrainingStopRequest(),
             )
             assert isinstance(early_wait, Rejected)
 
@@ -131,22 +135,47 @@ def test_wait_rollout_sample_target_uses_aggregate_samples() -> None:
                 commit=_commit(policy_version=3, model_ranks=(0,)),
             )
             assert isinstance(second_append, Ok)
-            full_wait = wait_rollout_sample_target(
+            full_wait = wait_rollout_sample_target_or_stop(
                 group=group,
                 policy_version=3,
                 target_sample_count=2,
                 timeout_seconds=1.0,
+                stop_request=TrainingStopRequest(),
             )
             assert isinstance(full_wait, Ok)
-            assert full_wait.value.sample_count == 2
-            assert full_wait.value.round_count == 2
-            assert full_wait.value.total_step_count == 2
-            assert full_wait.value.max_step_count == 1
+            assert isinstance(
+                full_wait.value, RolloutSampleTargetReached
+            )
+            assert full_wait.value.snapshot.sample_count == 2
+            assert full_wait.value.snapshot.round_count == 2
+            assert full_wait.value.snapshot.total_step_count == 2
+            assert full_wait.value.snapshot.max_step_count == 1
         finally:
             first_writer.close()
             second_writer.close()
     finally:
         close_shared_rollout_arenas(group)
+
+
+def test_wait_rollout_sample_target_returns_requested_stop() -> None:
+    group_result = _arena_group(worker_count=1, capacity=2)
+    assert isinstance(group_result, Ok)
+    group = group_result.value
+    stop_request = TrainingStopRequest()
+    stop_request.request_stop()
+    try:
+        result = wait_rollout_sample_target_or_stop(
+            group=group,
+            policy_version=3,
+            target_sample_count=2,
+            timeout_seconds=1.0,
+            stop_request=stop_request,
+        )
+    finally:
+        close_shared_rollout_arenas(group)
+
+    assert isinstance(result, Ok)
+    assert isinstance(result.value, RolloutStopRequested)
 
 
 def test_snapshot_and_reset_reuse_group_owned_segments(

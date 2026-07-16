@@ -48,6 +48,22 @@ def test_apply_cpu_affinity_rejects_non_linux_binding(
     assert "worker-0" in applied.reason
 
 
+def test_unbound_worker_skips_affinity_on_darwin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(affinity.sys, "platform", "darwin")
+
+    applied = apply_cpu_affinity(label="worker-0", cpus=())
+    checked = preflight_cpu_affinity(label="worker-0", cpus=())
+
+    assert isinstance(applied, Ok)
+    assert applied.value.requested_cpus == ()
+    assert applied.value.active_cpus == ()
+    assert isinstance(checked, Ok)
+    assert checked.value.requested_cpus == ()
+    assert checked.value.active_cpus == ()
+
+
 def test_apply_cpu_affinity_sets_requested_linux_cpus(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

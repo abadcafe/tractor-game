@@ -82,6 +82,8 @@ def test_initialize_then_resume_through_public_interface(
         TrainingResumeOptions(
             run_dir=run_dir,
             checkpoint="latest.json",
+            worker_cpus="-1,-1",
+            checkpoint_every_updates=3,
         ),
         stop_request,
     )

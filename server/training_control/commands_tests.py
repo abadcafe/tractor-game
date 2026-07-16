@@ -45,6 +45,31 @@ def test_resume_command_places_shared_run_dir_before_subcommand() -> (
     )
     assert command[6] == "update-12.json"
     assert "--checkpoint" not in command
+    assert "--checkpoint-every-updates" not in command
+
+
+def test_resume_command_emits_checkpoint_interval_override() -> None:
+    command = resume_command_argv(
+        TrainingResumeRequest(
+            checkpoint="latest.json",
+            checkpoint_every_updates=7,
+        )
+    )
+
+    index = command.index("--checkpoint-every-updates")
+    assert command[index + 1] == "7"
+
+
+def test_resume_command_preserves_unbound_worker_slots() -> None:
+    command = resume_command_argv(
+        TrainingResumeRequest(
+            checkpoint="latest.json",
+            worker_cpus="-1,-1",
+        )
+    )
+
+    index = command.index("--worker-cpus")
+    assert command[index + 1] == "-1,-1"
 
 
 def test_resume_request_rejects_unmanaged_checkpoint_path() -> None:
@@ -69,3 +94,9 @@ def test_init_and_resume_expose_lifecycle_specific_parameters() -> None:
     assert "replace_existing" not in resume_fields
     assert "worker_cpus" in resume_fields
     assert "worker_cpus" not in init_fields
+    assert (
+        TrainingResumeRequest(
+            checkpoint="latest.json"
+        ).checkpoint_every_updates
+        is None
+    )

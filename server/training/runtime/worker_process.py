@@ -64,7 +64,9 @@ from server.training.runtime.shared_rollout_arena import (
     attach_rollout_arena_reader,
     attach_rollout_arena_writer,
 )
-from server.training.runtime.threads import apply_torch_thread_config
+from server.training.runtime.threads import (
+    apply_worker_torch_thread_config,
+)
 from server.training_events import EventContext, StructuredEventSink
 
 
@@ -167,7 +169,6 @@ async def _run_training_worker_process_async(
     assert run_id
     setup_result = _setup_worker_runtime(
         worker_index=worker_index,
-        execution_config=execution_config,
         worker_cpus=worker_cpus,
     )
     if isinstance(setup_result, Rejected):
@@ -264,7 +265,6 @@ async def _run_training_worker_process_async(
 def _setup_worker_runtime(
     *,
     worker_index: int,
-    execution_config: ExecutionConfig,
     worker_cpus: CpuSet,
 ) -> _result.Ok[torch.device] | _result.Rejected:
     affinity_result = apply_cpu_affinity(
@@ -273,10 +273,7 @@ def _setup_worker_runtime(
     )
     if isinstance(affinity_result, Rejected):
         return affinity_result
-    thread_result = apply_torch_thread_config(
-        num_threads=1 if worker_cpus else None,
-        num_interop_threads=1 if worker_cpus else None,
-    )
+    thread_result = apply_worker_torch_thread_config()
     if isinstance(thread_result, Rejected):
         return thread_result
     return Ok(value=torch.device("cpu"))

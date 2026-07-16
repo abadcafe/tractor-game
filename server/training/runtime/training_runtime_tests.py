@@ -14,6 +14,8 @@ import pytest
 
 from server.foundation.result import Ok, Rejected
 from server.training.config import ModelConfig, TrainConfig
+from server.training.ppo import PPOUpdateStats
+from server.training.ppo.profile import blank_update_profile
 from server.training.runtime import training_runtime
 from server.training.runtime.async_ipc import (
     AsyncChildControlEndpoint,
@@ -38,6 +40,7 @@ from server.training.runtime.messages import (
     WorkerStartSamplingCommand,
     WorkerStopSamplingCommand,
     WorkerUpdateCommand,
+    WorkerUpdateCompleted,
     decode_worker_command,
     decode_worker_response,
 )
@@ -50,6 +53,8 @@ from server.training.runtime.model_rank.messages import (
 )
 from server.training.runtime.shared_rollout_arena import (
     RolloutArenaSnapshot,
+    RolloutSampleTargetReached,
+    RolloutWaitOutcome,
     SharedRolloutArenaGroup,
     close_shared_rollout_arenas,
     create_shared_rollout_arena_group,
@@ -63,8 +68,10 @@ from server.training.runtime.worker_sampling_lifecycle import (
     WorkerControlHandle,
     WorkerSamplingCleanupFailed,
     WorkerSamplingSession,
+    WorkerSamplingStartStopped,
     start_worker_sampling_session,
 )
+from server.training.stop import TrainingStopRequest
 from server.training_events import NullEventSink
 
 _WORKER_TEST_PROTOCOL: ProcessControlProtocol[
@@ -262,7 +269,7 @@ def _open_fake_runtime(
         assert run_id == "poisoned-runtime"
         assert model_config.d_model == 4
         assert train_config.ppo_epochs == 1
-        assert execution_config.samples_per_update == 1
+        assert execution_config.samples_per_update > 0
         return Ok(value=pools)
 
     monkeypatch.setattr(
@@ -300,6 +307,7 @@ async def test_start_sampling_session_stops_commanded_workers() -> None:
                 ),
                 policy_version=7,
                 rollout_id="rollout-7",
+                stop_request=TrainingStopRequest(),
             )
         )
 
@@ -355,6 +363,52 @@ async def test_start_sampling_session_stops_commanded_workers() -> None:
 
 
 @pytest.mark.asyncio
+async def test_start_sampling_session_stops_when_requested() -> None:
+    first = _fake_worker(0)
+    second = _fake_worker(1)
+    stop_request = TrainingStopRequest()
+    try:
+        task = asyncio.create_task(
+            start_worker_sampling_session(
+                handles=(first.handle, second.handle),
+                execution_config=ExecutionConfig(),
+                policy_version=7,
+                rollout_id="rollout-7",
+                stop_request=stop_request,
+            )
+        )
+        await _receive_start_command(first)
+        await _receive_start_command(second)
+        stop_request.request_stop()
+        await _receive_stop_command(first)
+        await _receive_stop_command(second)
+        for worker in (first, second):
+            started = await worker.child.send_response(
+                WorkerSamplingStarted(
+                    worker_index=worker.handle.index,
+                    policy_version=7,
+                )
+            )
+            stopped = await worker.child.send_response(
+                WorkerSamplingStopped(
+                    worker_index=worker.handle.index,
+                    policy_version=7,
+                    cancelled_env_count=1,
+                )
+            )
+            assert isinstance(started, Ok)
+            assert isinstance(stopped, Ok)
+
+        result = await task
+
+        assert isinstance(result, Ok)
+        assert isinstance(result.value, WorkerSamplingStartStopped)
+    finally:
+        first.close()
+        second.close()
+
+
+@pytest.mark.asyncio
 async def test_start_sampling_cleans_sent_worker_on_failure() -> None:
     first = _fake_worker(0)
     second = _fake_worker(1)
@@ -368,6 +422,7 @@ async def test_start_sampling_cleans_sent_worker_on_failure() -> None:
                 ),
                 policy_version=7,
                 rollout_id="rollout-7",
+                stop_request=TrainingStopRequest(),
             )
         )
 
@@ -410,6 +465,7 @@ async def test_start_sampling_reports_uncleaned_sent_workers() -> None:
                 ),
                 policy_version=7,
                 rollout_id="rollout-7",
+                stop_request=TrainingStopRequest(),
             )
         )
 
@@ -434,7 +490,7 @@ def test_rollout_arena_capacity_per_worker_keeps_aggregate_target() -> (
     None
 ):
     execution_config = ExecutionConfig(
-        worker_cpus=(0, 1, 2),
+        worker_cpu_layout=(0, 1, 2),
         game_envs_per_worker=2,
         samples_per_update=32,
     )
@@ -460,34 +516,41 @@ async def test_rollout_sample_wait_does_not_block_event_loop(
     assert isinstance(group_result, Ok)
     group = group_result.value
 
-    def blocking_wait_rollout_sample_target(
+    def blocking_wait_rollout_sample_target_or_stop(
         *,
         group: SharedRolloutArenaGroup,
         policy_version: int,
         target_sample_count: int,
         timeout_seconds: float,
-    ) -> Ok[RolloutArenaSnapshot] | Rejected:
+        stop_request: TrainingStopRequest,
+    ) -> Ok[RolloutWaitOutcome] | Rejected:
         assert group.handles
         assert policy_version == 3
         assert target_sample_count == 1
         assert timeout_seconds == 1.0
+        assert not stop_request.is_requested()
         time.sleep(0.2)
-        return Ok(value=_empty_snapshot(policy_version=policy_version))
+        return Ok(
+            value=RolloutSampleTargetReached(
+                snapshot=_empty_snapshot(policy_version=policy_version)
+            )
+        )
 
     monkeypatch.setattr(
         training_runtime,
-        "wait_rollout_sample_target",
-        blocking_wait_rollout_sample_target,
+        "wait_rollout_sample_target_or_stop",
+        blocking_wait_rollout_sample_target_or_stop,
     )
 
     try:
         start = time.perf_counter()
         wait_task = asyncio.create_task(
-            training_runtime.wait_rollout_sample_target_async(
+            training_runtime.wait_rollout_sample_target_or_stop_async(
                 group=group,
                 policy_version=3,
                 target_sample_count=1,
                 timeout_seconds=1.0,
+                stop_request=TrainingStopRequest(),
             )
         )
         await asyncio.sleep(0.02)
@@ -498,6 +561,146 @@ async def test_rollout_sample_wait_does_not_block_event_loop(
 
     assert elapsed < 0.1
     assert isinstance(result, Ok)
+
+
+@pytest.mark.asyncio
+async def test_runtime_discards_stop_rollout_below_minibatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = mp.get_context("spawn")
+    group_result = create_shared_rollout_arena_group(
+        context=context,
+        worker_count=1,
+        arena_capacity_per_worker=64,
+        policy_version=0,
+    )
+    assert isinstance(group_result, Ok)
+    group = group_result.value
+    worker = _fake_worker(0)
+    pools = _FakeRuntimePools(
+        worker_pool=_FakeWorkerPool(handles=(worker.handle,)),
+        model_rank_pool=None,
+        worker_inference_links=(),
+        rollout_arena_group=group,
+    )
+
+    async def stop_runtime_pools(
+        stopped_pools: _FakeRuntimePools,
+    ) -> None:
+        assert stopped_pools is pools
+
+    runtime = _open_fake_runtime(
+        monkeypatch=monkeypatch,
+        pools=pools,
+        execution_config=ExecutionConfig(samples_per_update=64),
+        force_stop_runtime_pools=lambda _pools: None,
+    )
+    monkeypatch.setattr(
+        training_runtime, "_stop_runtime_pools", stop_runtime_pools
+    )
+    stop_request = TrainingStopRequest()
+    stop_request.request_stop()
+    try:
+        result = await runtime.run_update(
+            policy_version=3,
+            rollout_id="rollout-3",
+            stop_request=stop_request,
+        )
+        await runtime.close()
+    finally:
+        worker.close()
+        close_shared_rollout_arenas(group)
+
+    assert isinstance(result, Ok)
+    assert isinstance(
+        result.value,
+        training_runtime.TrainingStopDiscardedPartialRollout,
+    )
+    assert result.value.snapshot.sample_count == 0
+    assert result.value.minimum_sample_count == 64
+
+
+@pytest.mark.asyncio
+async def test_runtime_updates_stop_rollout_at_minibatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = mp.get_context("spawn")
+    group_result = create_shared_rollout_arena_group(
+        context=context,
+        worker_count=1,
+        arena_capacity_per_worker=64,
+        policy_version=0,
+    )
+    assert isinstance(group_result, Ok)
+    group = group_result.value
+    worker = _fake_worker(0)
+    pools = _FakeRuntimePools(
+        worker_pool=_FakeWorkerPool(handles=(worker.handle,)),
+        model_rank_pool=None,
+        worker_inference_links=(),
+        rollout_arena_group=group,
+    )
+
+    def partial_snapshot(
+        *, group: SharedRolloutArenaGroup, policy_version: int
+    ) -> Ok[RolloutArenaSnapshot] | Rejected:
+        assert group is pools.rollout_arena_group
+        return Ok(
+            value=_rollout_snapshot(
+                policy_version=policy_version,
+                round_count=1,
+                sample_count=64,
+            )
+        )
+
+    async def stop_runtime_pools(
+        stopped_pools: _FakeRuntimePools,
+    ) -> None:
+        assert stopped_pools is pools
+
+    runtime = _open_fake_runtime(
+        monkeypatch=monkeypatch,
+        pools=pools,
+        execution_config=ExecutionConfig(samples_per_update=1024),
+        force_stop_runtime_pools=lambda _pools: None,
+    )
+    monkeypatch.setattr(
+        training_runtime, "snapshot_rollout_arenas", partial_snapshot
+    )
+    monkeypatch.setattr(
+        training_runtime, "_stop_runtime_pools", stop_runtime_pools
+    )
+    stop_request = TrainingStopRequest()
+    stop_request.request_stop()
+    try:
+        task = asyncio.create_task(
+            runtime.run_update(
+                policy_version=3,
+                rollout_id="rollout-3",
+                stop_request=stop_request,
+            )
+        )
+        command = await _receive_worker_update_command(worker)
+        response = await worker.child.send_response(
+            WorkerUpdateCompleted(
+                worker_index=0,
+                policy_version=3,
+                update_stats=_update_stats(),
+            )
+        )
+        assert isinstance(response, Ok)
+        result = await task
+        await runtime.close()
+    finally:
+        worker.close()
+        close_shared_rollout_arenas(group)
+
+    assert command.policy_version == 3
+    assert isinstance(result, Ok)
+    assert isinstance(
+        result.value, training_runtime.TrainingUpdateResult
+    )
+    assert result.value.snapshot.sample_count == 64
 
 
 @pytest.mark.asyncio
@@ -530,7 +733,9 @@ async def test_runtime_poisoned_after_sampling_stop_failure(
         execution_config: ExecutionConfig,
         policy_version: int,
         rollout_id: str,
+        stop_request: TrainingStopRequest,
     ) -> Ok[WorkerSamplingSession] | Rejected:
+        assert not stop_request.is_requested()
         nonlocal start_calls
         assert execution_config.samples_per_update == 1
         start_calls += 1
@@ -549,11 +754,17 @@ async def test_runtime_poisoned_after_sampling_stop_failure(
         policy_version: int,
         target_sample_count: int,
         timeout_seconds: float,
-    ) -> Ok[RolloutArenaSnapshot] | Rejected:
+        stop_request: TrainingStopRequest,
+    ) -> Ok[RolloutWaitOutcome] | Rejected:
         assert group.handles
+        assert not stop_request.is_requested()
         assert target_sample_count == 1
         assert timeout_seconds == 2.0
-        return Ok(value=_empty_snapshot(policy_version=policy_version))
+        return Ok(
+            value=RolloutSampleTargetReached(
+                snapshot=_empty_snapshot(policy_version=policy_version)
+            )
+        )
 
     async def rejected_sampling_stop(
         *, session: WorkerSamplingSession, timeout_seconds: float
@@ -596,7 +807,7 @@ async def test_runtime_poisoned_after_sampling_stop_failure(
     )
     monkeypatch.setattr(
         training_runtime,
-        "wait_rollout_sample_target_async",
+        "wait_rollout_sample_target_or_stop_async",
         completed_rollout_wait,
     )
     monkeypatch.setattr(
@@ -627,10 +838,14 @@ async def test_runtime_poisoned_after_sampling_stop_failure(
     runtime = runtime_result.value
     try:
         first = await runtime.run_update(
-            policy_version=3, rollout_id="rollout-3"
+            policy_version=3,
+            rollout_id="rollout-3",
+            stop_request=TrainingStopRequest(),
         )
         second = await runtime.run_update(
-            policy_version=4, rollout_id="rollout-4"
+            policy_version=4,
+            rollout_id="rollout-4",
+            stop_request=TrainingStopRequest(),
         )
         await runtime.close()
     finally:
@@ -674,6 +889,7 @@ async def test_runtime_poisoned_after_sampling_start_cleanup_failure(
         execution_config: ExecutionConfig,
         policy_version: int,
         rollout_id: str,
+        stop_request: TrainingStopRequest,
     ) -> (
         Ok[WorkerSamplingSession]
         | Rejected
@@ -683,6 +899,7 @@ async def test_runtime_poisoned_after_sampling_start_cleanup_failure(
         assert handles == (fake_worker.handle,)
         assert execution_config.samples_per_update == 1
         assert policy_version == 3
+        assert not stop_request.is_requested()
         start_calls += 1
         return WorkerSamplingCleanupFailed(
             rejection=Rejected(
@@ -707,10 +924,14 @@ async def test_runtime_poisoned_after_sampling_start_cleanup_failure(
     )
     try:
         first = await runtime.run_update(
-            policy_version=3, rollout_id="rollout-3"
+            policy_version=3,
+            rollout_id="rollout-3",
+            stop_request=TrainingStopRequest(),
         )
         second = await runtime.run_update(
-            policy_version=4, rollout_id="rollout-4"
+            policy_version=4,
+            rollout_id="rollout-4",
+            stop_request=TrainingStopRequest(),
         )
         await runtime.close()
     finally:
@@ -755,11 +976,13 @@ async def test_runtime_poisoned_after_worker_update_partial_broadcast(
         execution_config: ExecutionConfig,
         policy_version: int,
         rollout_id: str,
+        stop_request: TrainingStopRequest,
     ) -> (
         Ok[WorkerSamplingSession]
         | Rejected
         | WorkerSamplingCleanupFailed
     ):
+        assert not stop_request.is_requested()
         assert execution_config.samples_per_update == 1
         return Ok(
             value=WorkerSamplingSession(
@@ -776,10 +999,16 @@ async def test_runtime_poisoned_after_worker_update_partial_broadcast(
         policy_version: int,
         target_sample_count: int,
         timeout_seconds: float,
-    ) -> Ok[RolloutArenaSnapshot] | Rejected:
+        stop_request: TrainingStopRequest,
+    ) -> Ok[RolloutWaitOutcome] | Rejected:
         assert group.handles
+        assert not stop_request.is_requested()
         assert target_sample_count == 1
-        return Ok(value=_empty_snapshot(policy_version=policy_version))
+        return Ok(
+            value=RolloutSampleTargetReached(
+                snapshot=_empty_snapshot(policy_version=policy_version)
+            )
+        )
 
     async def stopped_sampling_session(
         *, session: WorkerSamplingSession, timeout_seconds: float
@@ -812,7 +1041,7 @@ async def test_runtime_poisoned_after_worker_update_partial_broadcast(
     )
     monkeypatch.setattr(
         training_runtime,
-        "wait_rollout_sample_target_async",
+        "wait_rollout_sample_target_or_stop_async",
         completed_rollout_wait,
     )
     monkeypatch.setattr(
@@ -823,12 +1052,18 @@ async def test_runtime_poisoned_after_worker_update_partial_broadcast(
     try:
         first_worker.handle.control.close()
         task = asyncio.create_task(
-            runtime.run_update(policy_version=5, rollout_id="rollout-5")
+            runtime.run_update(
+                policy_version=5,
+                rollout_id="rollout-5",
+                stop_request=TrainingStopRequest(),
+            )
         )
         command = await _receive_worker_update_command(second_worker)
         first = await task
         second = await runtime.run_update(
-            policy_version=6, rollout_id="rollout-6"
+            policy_version=6,
+            rollout_id="rollout-6",
+            stop_request=TrainingStopRequest(),
         )
         await runtime.close()
     finally:
@@ -876,11 +1111,13 @@ async def test_runtime_poisoned_after_model_rank_update_partial_send(
         execution_config: ExecutionConfig,
         policy_version: int,
         rollout_id: str,
+        stop_request: TrainingStopRequest,
     ) -> (
         Ok[WorkerSamplingSession]
         | Rejected
         | WorkerSamplingCleanupFailed
     ):
+        assert not stop_request.is_requested()
         return Ok(
             value=WorkerSamplingSession(
                 policy_version=policy_version,
@@ -896,9 +1133,15 @@ async def test_runtime_poisoned_after_model_rank_update_partial_send(
         policy_version: int,
         target_sample_count: int,
         timeout_seconds: float,
-    ) -> Ok[RolloutArenaSnapshot] | Rejected:
+        stop_request: TrainingStopRequest,
+    ) -> Ok[RolloutWaitOutcome] | Rejected:
         assert group.handles
-        return Ok(value=_empty_snapshot(policy_version=policy_version))
+        assert not stop_request.is_requested()
+        return Ok(
+            value=RolloutSampleTargetReached(
+                snapshot=_empty_snapshot(policy_version=policy_version)
+            )
+        )
 
     async def stopped_sampling_session(
         *, session: WorkerSamplingSession, timeout_seconds: float
@@ -936,7 +1179,7 @@ async def test_runtime_poisoned_after_model_rank_update_partial_send(
     )
     monkeypatch.setattr(
         training_runtime,
-        "wait_rollout_sample_target_async",
+        "wait_rollout_sample_target_or_stop_async",
         completed_rollout_wait,
     )
     monkeypatch.setattr(
@@ -947,12 +1190,18 @@ async def test_runtime_poisoned_after_model_rank_update_partial_send(
     try:
         first_rank.handle.control.close()
         task = asyncio.create_task(
-            runtime.run_update(policy_version=5, rollout_id="rollout-5")
+            runtime.run_update(
+                policy_version=5,
+                rollout_id="rollout-5",
+                stop_request=TrainingStopRequest(),
+            )
         )
         command = await _receive_model_rank_update_command(second_rank)
         first = await task
         second = await runtime.run_update(
-            policy_version=6, rollout_id="rollout-6"
+            policy_version=6,
+            rollout_id="rollout-6",
+            stop_request=TrainingStopRequest(),
         )
         await runtime.close()
     finally:
@@ -1000,11 +1249,13 @@ async def test_runtime_poisoned_after_worker_update_response_timeout(
         execution_config: ExecutionConfig,
         policy_version: int,
         rollout_id: str,
+        stop_request: TrainingStopRequest,
     ) -> (
         Ok[WorkerSamplingSession]
         | Rejected
         | WorkerSamplingCleanupFailed
     ):
+        assert not stop_request.is_requested()
         return Ok(
             value=WorkerSamplingSession(
                 policy_version=policy_version,
@@ -1020,9 +1271,15 @@ async def test_runtime_poisoned_after_worker_update_response_timeout(
         policy_version: int,
         target_sample_count: int,
         timeout_seconds: float,
-    ) -> Ok[RolloutArenaSnapshot] | Rejected:
+        stop_request: TrainingStopRequest,
+    ) -> Ok[RolloutWaitOutcome] | Rejected:
         assert group.handles
-        return Ok(value=_empty_snapshot(policy_version=policy_version))
+        assert not stop_request.is_requested()
+        return Ok(
+            value=RolloutSampleTargetReached(
+                snapshot=_empty_snapshot(policy_version=policy_version)
+            )
+        )
 
     async def stopped_sampling_session(
         *, session: WorkerSamplingSession, timeout_seconds: float
@@ -1058,7 +1315,7 @@ async def test_runtime_poisoned_after_worker_update_response_timeout(
     )
     monkeypatch.setattr(
         training_runtime,
-        "wait_rollout_sample_target_async",
+        "wait_rollout_sample_target_or_stop_async",
         completed_rollout_wait,
     )
     monkeypatch.setattr(
@@ -1068,7 +1325,11 @@ async def test_runtime_poisoned_after_worker_update_response_timeout(
     )
     try:
         task = asyncio.create_task(
-            runtime.run_update(policy_version=5, rollout_id="rollout-5")
+            runtime.run_update(
+                policy_version=5,
+                rollout_id="rollout-5",
+                stop_request=TrainingStopRequest(),
+            )
         )
         first_command = await _receive_worker_update_command(
             first_worker
@@ -1078,7 +1339,9 @@ async def test_runtime_poisoned_after_worker_update_response_timeout(
         )
         first = await task
         second = await runtime.run_update(
-            policy_version=6, rollout_id="rollout-6"
+            policy_version=6,
+            rollout_id="rollout-6",
+            stop_request=TrainingStopRequest(),
         )
         await runtime.close()
     finally:
@@ -1240,7 +1503,7 @@ def test_start_runtime_pools_cleans_worker_started_before_interrupt(
             model_config=ModelConfig(d_model=4, layers=1, heads=1),
             train_config=TrainConfig(),
             execution_config=ExecutionConfig(
-                worker_cpus=(0, 1),
+                worker_cpu_layout=(0, 1),
                 samples_per_update=1,
             ),
         )
@@ -1308,22 +1571,44 @@ def _sleep_forever_training_process(**_kwargs: object) -> None:
 
 
 def _empty_snapshot(*, policy_version: int) -> RolloutArenaSnapshot:
-    return RolloutArenaSnapshot(
+    return _rollout_snapshot(
         policy_version=policy_version,
-        capacity=1,
         round_count=0,
         sample_count=1,
+    )
+
+
+def _rollout_snapshot(
+    *, policy_version: int, round_count: int, sample_count: int
+) -> RolloutArenaSnapshot:
+    return RolloutArenaSnapshot(
+        policy_version=policy_version,
+        capacity=max(sample_count, 1),
+        round_count=round_count,
+        sample_count=sample_count,
         generated_action_count=0,
         accepted_action_count=0,
         action_choice_count=0,
         game_over_count=0,
         dropped_sample_count=0,
         cancelled_env_count=0,
-        total_step_count=0,
-        max_step_count=0,
+        total_step_count=sample_count,
+        max_step_count=0 if sample_count == 0 else 1,
         team0_reward_sum=0.0,
         team1_reward_sum=0.0,
         elapsed_seconds_max=0.0,
+    )
+
+
+def _update_stats() -> PPOUpdateStats:
+    return PPOUpdateStats(
+        policy_loss=1.0,
+        value_loss=2.0,
+        entropy=3.0,
+        total_loss=4.0,
+        approx_kl=5.0,
+        clip_fraction=0.5,
+        profile=blank_update_profile(update_seconds=0.1),
     )
 
 

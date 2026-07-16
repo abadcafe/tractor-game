@@ -10,41 +10,66 @@ from server.training.runtime.config import (
     ExecutionConfig,
     ExecutionTimeouts,
     ModelRankPlacement,
-    parse_cpu_set,
     parse_model_rank_placement,
+    parse_worker_cpu_layout,
 )
 
 
-def test_parse_cpu_set_ranges() -> None:
-    parsed = parse_cpu_set("4-7")
+def test_parse_worker_cpu_layout_ranges() -> None:
+    parsed = parse_worker_cpu_layout("4-7")
 
     assert isinstance(parsed, Ok)
     assert parsed.value == (4, 5, 6, 7)
 
 
-def test_parse_cpu_set_rejects_duplicate_cpu() -> None:
-    parsed = parse_cpu_set("0-3,2,6")
+def test_parse_worker_cpu_layout_accepts_repeated_unbound_slots() -> (
+    None
+):
+    parsed = parse_worker_cpu_layout("-1,-1")
+
+    assert isinstance(parsed, Ok)
+    assert parsed.value == (None, None)
+
+
+def test_parse_worker_cpu_layout_accepts_mixed_slots() -> None:
+    parsed = parse_worker_cpu_layout("0,-1,2")
+
+    assert isinstance(parsed, Ok)
+    assert parsed.value == (0, None, 2)
+
+
+def test_parse_worker_cpu_layout_rejects_duplicate_cpu() -> None:
+    parsed = parse_worker_cpu_layout("0-3,2,6")
 
     assert isinstance(parsed, Rejected)
     assert "duplicate CPU" in parsed.reason
 
 
-def test_parse_cpu_set_rejects_empty_text() -> None:
-    parsed = parse_cpu_set("")
+def test_parse_worker_cpu_layout_rejects_empty_text() -> None:
+    parsed = parse_worker_cpu_layout("")
 
     assert isinstance(parsed, Rejected)
-    assert parsed.reason == "CPU set must not be empty"
+    assert parsed.reason == "worker CPU layout must not be empty"
 
 
-def test_parse_cpu_set_rejects_descending_range() -> None:
-    parsed = parse_cpu_set("3-1")
+def test_parse_worker_cpu_layout_rejects_descending_range() -> None:
+    parsed = parse_worker_cpu_layout("3-1")
 
     assert isinstance(parsed, Rejected)
     assert "descending" in parsed.reason
 
 
-def test_parse_cpu_set_rejects_non_numeric_part() -> None:
-    parsed = parse_cpu_set("0,a")
+def test_parse_worker_cpu_layout_rejects_other_negative_values() -> (
+    None
+):
+    parsed = parse_worker_cpu_layout("-2")
+
+    assert isinstance(parsed, Rejected)
+    assert "invalid CPU number" in parsed.reason
+
+
+def test_parse_worker_cpu_layout_rejects_non_numeric_part() -> None:
+    parsed = parse_worker_cpu_layout("0,a")
 
     assert isinstance(parsed, Rejected)
     assert "invalid CPU number" in parsed.reason
@@ -147,16 +172,24 @@ def test_execution_timeouts_keep_sampling_stages_separate() -> None:
 
 
 def test_execution_config_derives_workers_from_cpu_list() -> None:
-    config = ExecutionConfig(worker_cpus=(4, 5, 6, 7))
+    config = ExecutionConfig(worker_cpu_layout=(4, 5, 6, 7))
 
     assert config.worker_process_count() == 4
     assert config.worker_cpu_set(0) == (4,)
     assert config.worker_cpu_set(3) == (7,)
 
 
+def test_execution_config_derives_unbound_workers_from_layout() -> None:
+    config = ExecutionConfig(worker_cpu_layout=(None, None))
+
+    assert config.worker_process_count() == 2
+    assert config.worker_cpu_set(0) == ()
+    assert config.worker_cpu_set(1) == ()
+
+
 def test_execution_config_maps_workers_by_modulo() -> None:
     config = ExecutionConfig(
-        worker_cpus=(4, 5, 6, 7, 8),
+        worker_cpu_layout=(4, 5, 6, 7, 8),
         model_ranks=ModelRankPlacement(
             kind="cuda", devices=("cuda:0", "cuda:1")
         ),

@@ -24,7 +24,6 @@ export interface ProcessSnapshot {
   readonly process_group_id: number;
   readonly unix_session_id: number;
   readonly command: "initialize" | "resume";
-  readonly ready: boolean;
 }
 
 export interface ProcessEnvelope {
@@ -323,6 +322,9 @@ export function parseCheckpointStreamMessage(
 
 function parseProcessSnapshot(value: unknown): ProcessSnapshot {
   const record = requiredRecord(value, "process snapshot");
+  if ("ready" in record) {
+    throw new Error("Legacy process readiness is not supported");
+  }
   const command = requiredString(record.command, "command");
   if (command !== "initialize" && command !== "resume") {
     throw new Error("Invalid command");
@@ -351,7 +353,6 @@ function parseProcessSnapshot(value: unknown): ProcessSnapshot {
       "unix_session_id",
     ),
     command,
-    ready: requiredBoolean(record.ready, "ready"),
   };
 }
 

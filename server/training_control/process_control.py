@@ -26,7 +26,6 @@ from server.training_control.process_inspection import (
 from server.training_control.process_launch import (
     close_process_handle,
     open_process_handle,
-    read_control_message,
     signal_process_handle,
     spawn_process,
     terminate_process_group,
@@ -36,7 +35,6 @@ from server.training_control.process_owner import (
     TrainingCommand,
     increment_revision,
     lock_path,
-    mark_owner_ready,
     prepare_control_directory,
     read_owner,
     read_revision,
@@ -45,6 +43,7 @@ from server.training_control.process_owner import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+_PROCESS_DISCOVERY_TIMEOUT_SECONDS = 5.0
 
 
 class ProcessEnvelope(BaseModel):
@@ -83,7 +82,6 @@ class TrainingProcessControl:
         *,
         runtime_root: Path | None = None,
         proc_root: Path | None = None,
-        startup_timeout_seconds: float | None = None,
     ) -> None:
         config = training_control_config()
         self._runtime_root = (
@@ -95,12 +93,6 @@ class TrainingProcessControl:
             runtime_root=self._runtime_root,
             proc_root=proc_root,
         )
-        self._startup_timeout_seconds = (
-            config.startup_timeout_seconds
-            if startup_timeout_seconds is None
-            else startup_timeout_seconds
-        )
-        assert self._startup_timeout_seconds > 0.0
         self._locks: dict[Path, asyncio.Lock] = {}
         self._conditions: dict[Path, asyncio.Condition] = {}
         self._reapers: set[asyncio.Task[None]] = set()
@@ -140,7 +132,6 @@ class TrainingProcessControl:
             command=command,
             working_directory=working_directory,
             command_kind="initialize",
-            ready_write_fd=None,
             capture_output=True,
         )
         if isinstance(spawn_result, _result.Rejected):
@@ -189,109 +180,22 @@ class TrainingProcessControl:
         command: tuple[str, ...],
         working_directory: Path,
     ) -> _result.Ok[ProcessEnvelope] | _result.Rejected:
-        """Start training and wait until the CLI reports ready."""
-        ready_read_fd, ready_write_fd = os.pipe()
-        os.set_inheritable(ready_write_fd, True)
-        controlled_command = (
-            *command,
-            "--ready-fd",
-            str(ready_write_fd),
+        """Start training and publish the live CLI process."""
+        spawn_result = await self._start_process(
+            run_dir=run_dir,
+            command=command,
+            working_directory=working_directory,
+            command_kind="resume",
+            capture_output=False,
         )
-        try:
-            spawn_result = await self._start_process(
-                run_dir=run_dir,
-                command=controlled_command,
-                working_directory=working_directory,
-                command_kind="resume",
-                ready_write_fd=ready_write_fd,
-                capture_output=False,
-            )
-        finally:
-            os.close(ready_write_fd)
         if isinstance(spawn_result, _result.Rejected):
-            os.close(ready_read_fd)
             return spawn_result
         process, snapshot = spawn_result.value
-        try:
-            message_result = await asyncio.wait_for(
-                asyncio.to_thread(read_control_message, ready_read_fd),
-                timeout=self._startup_timeout_seconds,
-            )
-        except asyncio.CancelledError:
-            await asyncio.to_thread(
-                terminate_process_group, process.pid
-            )
-            await asyncio.to_thread(process.wait)
-            if snapshot is not None:
-                cleanup = await self._finalize_owner(
-                    run_dir.resolve(), snapshot
-                )
-                _log_cleanup_failure(cleanup)
-            raise
-        except TimeoutError:
-            message_result = _result.Rejected(
-                reason="training readiness handshake timed out"
-            )
-        finally:
-            os.close(ready_read_fd)
-        if isinstance(message_result, _result.Rejected):
-            await asyncio.to_thread(
-                terminate_process_group, process.pid
-            )
-            await asyncio.to_thread(process.wait)
-            if snapshot is not None:
-                cleanup = await self._finalize_owner(
-                    run_dir.resolve(), snapshot
-                )
-                _log_cleanup_failure(cleanup)
-            return message_result
         if snapshot is None:
             await asyncio.to_thread(process.wait)
             return _result.Rejected(
-                reason=(
-                    "training process reported readiness after exiting"
-                )
+                reason="training process exited during launch"
             )
-        async with self._mutation_lock(
-            run_dir.resolve()
-        ) as lock_result:
-            if isinstance(lock_result, _result.Rejected):
-                return lock_result
-            ready_result = mark_owner_ready(
-                self._runtime_root,
-                run_dir.resolve(),
-                pid=snapshot.pid,
-                start_ticks=snapshot.start_ticks,
-            )
-            if isinstance(ready_result, _result.Rejected):
-                await asyncio.to_thread(
-                    terminate_process_group, process.pid
-                )
-                await asyncio.to_thread(process.wait)
-                removed = remove_owner_if_matches(
-                    self._runtime_root,
-                    run_dir.resolve(),
-                    pid=snapshot.pid,
-                    start_ticks=snapshot.start_ticks,
-                )
-                if isinstance(removed, _result.Rejected):
-                    _log_cleanup_failure(removed)
-                return ready_result
-            publish_result = await self._publish(run_dir.resolve())
-            if isinstance(publish_result, _result.Rejected):
-                await asyncio.to_thread(
-                    terminate_process_group, process.pid
-                )
-                await asyncio.to_thread(process.wait)
-                removed = remove_owner_if_matches(
-                    self._runtime_root,
-                    run_dir.resolve(),
-                    pid=snapshot.pid,
-                    start_ticks=snapshot.start_ticks,
-                )
-                if isinstance(removed, _result.Rejected):
-                    _log_cleanup_failure(removed)
-                return publish_result
         self._start_reaper(process, run_dir.resolve(), snapshot)
         current = await self.inspect(run_dir)
         if isinstance(current, _result.Rejected):
@@ -299,7 +203,7 @@ class TrainingProcessControl:
         if current.value.process is None:
             return _result.Rejected(
                 reason=(
-                    "training process exited after readiness handshake"
+                    "training process exited immediately after launch"
                 )
             )
         return current
@@ -474,7 +378,6 @@ class TrainingProcessControl:
         command: tuple[str, ...],
         working_directory: Path,
         command_kind: TrainingCommand,
-        ready_write_fd: int | None,
         capture_output: bool,
     ) -> (
         _result.Ok[
@@ -506,7 +409,6 @@ class TrainingProcessControl:
                 spawn_process,
                 command,
                 working_directory=working_directory.resolve(),
-                ready_write_fd=ready_write_fd,
                 capture_output=capture_output,
                 output_directory=prepared.value,
             )
@@ -528,7 +430,6 @@ class TrainingProcessControl:
                 pid=process.pid,
                 start_ticks=proc.start_ticks,
                 command=command_kind,
-                ready=False,
             )
             owner_result = write_owner(self._runtime_root, owner)
             if isinstance(owner_result, _result.Rejected):
@@ -589,9 +490,7 @@ class TrainingProcessControl:
     async def _wait_for_proc(
         self, process: subprocess.Popen[bytes]
     ) -> _result.Ok[ProcSnapshot | None] | _result.Rejected:
-        deadline = time.monotonic() + min(
-            self._startup_timeout_seconds, 5.0
-        )
+        deadline = time.monotonic() + _PROCESS_DISCOVERY_TIMEOUT_SECONDS
         last_error: _result.Rejected | None = None
         while time.monotonic() < deadline:
             result = self._inspector.inspect_pid(process.pid)
@@ -653,10 +552,14 @@ class TrainingProcessControl:
         timeout_seconds: float,
     ) -> _result.Ok[bool] | _result.Rejected:
         deadline = time.monotonic() + timeout_seconds
+        last_rejection: _result.Rejected | None = None
         while time.monotonic() < deadline:
             inspected = self._inspector.inspect(run_dir)
             if isinstance(inspected, _result.Rejected):
-                return inspected
+                last_rejection = inspected
+                await asyncio.sleep(0.1)
+                continue
+            last_rejection = None
             current = inspected.value
             if current is None:
                 return _result.Ok(value=True)
@@ -665,6 +568,8 @@ class TrainingProcessControl:
                     reason="training PID identity changed while waiting"
                 )
             await asyncio.sleep(0.1)
+        if last_rejection is not None:
+            return last_rejection
         return _result.Ok(value=False)
 
     async def _finalize_owner(

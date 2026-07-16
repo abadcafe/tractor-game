@@ -187,6 +187,32 @@ async def wait_async_control_responses[CommandT, ResponseT](
     """Wait until at least one coordinator endpoint has a response."""
     assert endpoints
     assert timeout_seconds >= 0.0
+    ready_result = await poll_async_control_responses(
+        endpoints=endpoints,
+        timeout_seconds=timeout_seconds,
+    )
+    if isinstance(ready_result, Rejected):
+        return ready_result
+    if not ready_result.value:
+        return Rejected(reason="process control response timed out")
+    return ready_result
+
+
+async def poll_async_control_responses[CommandT, ResponseT](
+    *,
+    endpoints: tuple[
+        AsyncCoordinatorControlEndpoint[CommandT, ResponseT], ...
+    ],
+    timeout_seconds: float,
+) -> (
+    _result.Ok[
+        tuple[AsyncCoordinatorControlEndpoint[CommandT, ResponseT], ...]
+    ]
+    | _result.Rejected
+):
+    """Return ready endpoints, including an empty timeout result."""
+    assert endpoints
+    assert timeout_seconds >= 0.0
     ready_result = await wait_readable_frames(
         endpoints=tuple(
             endpoint.frame_endpoint for endpoint in endpoints
@@ -195,8 +221,6 @@ async def wait_async_control_responses[CommandT, ResponseT](
     )
     if isinstance(ready_result, Rejected):
         return ready_result
-    if not ready_result.value:
-        return Rejected(reason="process control response timed out")
     return Ok(
         value=tuple(
             endpoint
