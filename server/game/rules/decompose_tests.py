@@ -1,5 +1,6 @@
 """Tests for rules.decompose public interface."""
 
+from itertools import permutations
 from typing import Literal
 
 from server.game.rules.cards import POINTS_MAP, Card, Rank, Suit
@@ -250,6 +251,46 @@ class TestDecompose:
         subs = decompose(cards, Suit.HEARTS, Rank.FIVE)
         assert len(subs) == 1
         assert subs[0].pair_count == 2
+
+    def test_decompose_trump_rank_pairs_is_permutation_invariant(
+        self,
+    ) -> None:
+        clubs = (
+            _card(Suit.CLUBS, Rank.THREE, 1),
+            _card(Suit.CLUBS, Rank.THREE, 2),
+        )
+        diamonds = (
+            _card(Suit.DIAMONDS, Rank.THREE, 1),
+            _card(Suit.DIAMONDS, Rank.THREE, 2),
+        )
+        spades = (
+            _card(Suit.SPADES, Rank.THREE, 1),
+            _card(Suit.SPADES, Rank.THREE, 2),
+        )
+
+        for ordered_groups in permutations((clubs, diamonds, spades)):
+            cards = [
+                card_value
+                for group in ordered_groups
+                for card_value in group
+            ]
+            subs = decompose(cards, Suit.HEARTS, Rank.THREE)
+            tractors = [sub for sub in subs if sub.pair_count == 2]
+            pairs = [sub for sub in subs if sub.pair_count == 1]
+
+            assert len(tractors) == 1
+            assert {
+                (card_value.suit, card_value.rank)
+                for card_value in tractors[0].cards
+            } == {
+                (Suit.CLUBS, Rank.THREE),
+                (Suit.SPADES, Rank.THREE),
+            }
+            assert len(pairs) == 1
+            assert {
+                (card_value.suit, card_value.rank)
+                for card_value in pairs[0].cards
+            } == {(Suit.DIAMONDS, Rank.THREE)}
 
     # --- Bug regression ---
     def test_decompose_trump_single_no_duplicate(self) -> None:

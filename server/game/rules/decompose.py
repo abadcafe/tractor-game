@@ -124,8 +124,11 @@ def decompose(
             if key not in rep_cards:
                 rep_cards[key] = pair_cards[0]
         pair_entries.sort(
-            key=lambda e: trump_rank_order(
-                rep_cards[e[0]], trump_suit, trump_rank
+            key=lambda entry: (
+                trump_rank_order(
+                    rep_cards[entry[0]], trump_suit, trump_rank
+                ),
+                SUIT_OFFSET[entry[0][1]],
             )
         )
 
