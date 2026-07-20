@@ -133,6 +133,47 @@ def test_allowed_traces_follow_tractor_priority_from_decompose() -> (
     }
 
 
+def test_decode_trump_rank_pair_is_independent_of_hand_order() -> None:
+    clubs = [
+        card("clubs", "3", 1),
+        card("clubs", "3", 2),
+    ]
+    diamonds = [
+        card("diamonds", "3", 1),
+        card("diamonds", "3", 2),
+    ]
+    spades = [
+        card("spades", "3", 1),
+        card("spades", "3", 2),
+    ]
+    lead = [
+        card("hearts", "3", 1),
+        card("hearts", "3", 2),
+    ]
+    selected = canonical_face_counts(tuple(clubs))
+
+    for hand in (
+        [*clubs, *diamonds, *spades],
+        [*spades, *clubs, *diamonds],
+    ):
+        space_result = build_follow_action_space(
+            hand=hand,
+            lead_cards=lead,
+            trump_suit=Suit.HEARTS,
+            trump_rank=Rank.THREE,
+        )
+
+        assert isinstance(space_result, Ok)
+        assert isinstance(space_result.value.decode(selected), Ok)
+        assert is_legal_follow(
+            hand,
+            clubs,
+            lead,
+            Suit.HEARTS,
+            Rank.THREE,
+        )
+
+
 def test_decode_accepts_full_legal_trace() -> None:
     lead = [card("hearts", "A")]
     heart = card("hearts", "3")
