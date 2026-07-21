@@ -1,4 +1,4 @@
-"""Tests for torch policy model forward pass."""
+"""Black-box tests for the typed policy model."""
 
 from __future__ import annotations
 
@@ -6,102 +6,79 @@ import torch
 
 from server.game.players.test_helpers import card, make_snapshot
 from server.training.model import TractorPolicyModel
-from server.training.observation import build_observation
-from server.training.semantic_actions import SemanticArgument
-from server.training.semantic_actions.codec import semantic_argument_id
+from server.training.observation import Observation, build_observation
+from server.training.observation_memory import ObservationMemoryView
+from server.training.semantic_actions.choices import (
+    ACTION_CHOICE_COUNT,
+    CARD_CHOICE_BASE_ID,
+    PASS_CHOICE_ID,
+)
 from server.training.tensorize import tensorize_observation
 
 
-def test_tractor_policy_model_scores_trace_shapes() -> None:
+def test_model_scores_exactly_110_choices_and_one_value() -> None:
     device = torch.device("cpu")
-    model = TractorPolicyModel(
-        d_model=8,
-        layers=1,
-        heads=2,
-    )
-    observation = build_observation(
-        player_index=0,
-        snapshot=make_snapshot(
-            phase="PLAYING",
-            awaiting_action="play",
-            player_hand=[card("spades", "A", 1)],
-        ),
-        history=(),
-    )
-    observation_batch = tensorize_observation(
-        observation=observation,
-        max_observation_tokens=64,
-        device=device,
+    model = TractorPolicyModel(d_model=16, layers=1, heads=2)
+    batch = tensorize_observation(
+        observation=_bid_observation(), device=device
     )
 
-    encoding = model.encode_observations(observation_batch)
-    scores = model.score_argument_traces(
+    encoding = model.encode_observations(batch)
+    scores = model.score_action_traces(
         encoding,
-        selected_token_ids_padded=torch.zeros(
-            (1, 2), dtype=torch.long, device=device
+        choice_ids_padded=torch.tensor(
+            ((PASS_CHOICE_ID,),), dtype=torch.long, device=device
         ),
-        step_counts=torch.tensor((2,), dtype=torch.long, device=device),
+        step_counts=torch.tensor((1,), dtype=torch.long, device=device),
     )
-    values = model.value_estimates(encoding)
 
-    assert scores.argument_logits.shape[:2] == (1, 2)
-    assert values.shape == (1,)
+    assert scores.choice_logits.shape == (1, 1, ACTION_CHOICE_COUNT)
+    assert model.value_estimates(encoding).shape == (1,)
 
 
-def test_live_argument_cache_matches_teacher_forced_trace_scores() -> (
-    None
-):
+def test_live_query_seed_matches_teacher_forced_scoring() -> None:
     device = torch.device("cpu")
-    model = TractorPolicyModel(
-        d_model=8,
-        layers=1,
-        heads=2,
-    )
+    model = TractorPolicyModel(d_model=16, layers=1, heads=2)
     model.eval()
-    observation = build_observation(
-        player_index=0,
-        snapshot=make_snapshot(
-            phase="DEAL_BID",
-            awaiting_action="bid",
-            player_hand=[card("hearts", "2", 1)],
-            trump_rank="2",
-        ),
-        history=(),
+    batch = tensorize_observation(
+        observation=_bid_observation(), device=device
     )
-    observation_batch = tensorize_observation(
-        observation=observation,
-        max_observation_tokens=64,
-        device=device,
-    )
-    selected_ids = torch.tensor(
-        (
-            (
-                semantic_argument_id(SemanticArgument("pass")),
-                semantic_argument_id(SemanticArgument("stop")),
-            ),
-        ),
+    choices = torch.tensor(
+        ((CARD_CHOICE_BASE_ID, PASS_CHOICE_ID),),
         dtype=torch.long,
         device=device,
     )
-    step_counts = torch.tensor((2,), dtype=torch.long, device=device)
+    steps = torch.tensor((2,), dtype=torch.long, device=device)
 
     with torch.no_grad():
-        encoding = model.encode_observations(observation_batch)
-        trace_scores = model.score_argument_traces(
+        encoding = model.encode_observations(batch)
+        scored = model.score_action_traces(
             encoding,
-            selected_token_ids_padded=selected_ids,
-            step_counts=step_counts,
+            choice_ids_padded=choices,
+            step_counts=steps,
         )
-        session = model.begin_argument_decode_session(
+        session = model.begin_action_decode_session(
             encoding, max_steps=2
         )
-        first_logits = session.next_logits()
-        session.advance(selected_ids[:, 0])
-        second_logits = session.next_logits()
+        first = session.next_choice_logits()
+        session.advance(choices[:, 0])
+        second = session.next_choice_logits()
 
-    torch.testing.assert_close(
-        first_logits, trace_scores.argument_logits[:, 0, :]
-    )
-    torch.testing.assert_close(
-        second_logits, trace_scores.argument_logits[:, 1, :]
+    torch.testing.assert_close(first, scored.choice_logits[:, 0])
+    torch.testing.assert_close(second, scored.choice_logits[:, 1])
+
+
+def _bid_observation() -> Observation:
+    return build_observation(
+        viewer=0,
+        snapshot=make_snapshot(
+            phase="DEAL_BID",
+            awaiting_action="bid",
+            player_hand=[card("hearts", "2")],
+            player_hand_counts=[1, 0, 0, 0],
+            trump_rank="2",
+        ),
+        memory=ObservationMemoryView(
+            bid_actions=(), completed_tricks=()
+        ),
     )

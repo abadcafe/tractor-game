@@ -72,7 +72,7 @@ class PolicyRequestFrameMetadata:
 
     row_count: int
     batch_capacity: int
-    max_observation_tokens: int
+    observation_token_capacity: int
     padded_generation_steps: int
     generation_step_counts: tuple[int, ...]
     routes: tuple[PolicyRequestRoute, ...]
@@ -83,7 +83,7 @@ class PolicyRequestFrameMetadata:
     def __post_init__(self) -> None:
         assert self.row_count > 0
         assert self.batch_capacity >= self.row_count
-        assert self.max_observation_tokens > 0
+        assert self.observation_token_capacity > 0
         assert self.padded_generation_steps > 0
         assert len(self.generation_step_counts) == self.row_count
         assert all(count > 0 for count in self.generation_step_counts)
@@ -96,8 +96,8 @@ class PolicyRequestFrameMetadata:
         assert all(version >= 0 for version in self.policy_versions)
         assert self.byte_count > 0
         assert self.layout.batch_capacity == self.batch_capacity
-        assert self.layout.max_observation_tokens == (
-            self.max_observation_tokens
+        assert self.layout.observation_token_capacity == (
+            self.observation_token_capacity
         )
         assert self.layout.padded_generation_steps == (
             self.padded_generation_steps
@@ -131,9 +131,9 @@ class BorrowedPolicyRequestBatch:
         return self.metadata.generation_step_counts
 
     @property
-    def max_observation_tokens(self) -> int:
-        """Return the observation token capacity."""
-        return self.metadata.max_observation_tokens
+    def observation_token_capacity(self) -> int:
+        """Return this lossless batch's padded token count."""
+        return self.metadata.observation_token_capacity
 
     @property
     def padded_generation_steps(self) -> int:
@@ -159,7 +159,7 @@ class DevicePolicyRequestBatch:
     def __post_init__(self) -> None:
         batch_size = self.action_plan_batch.batch_size()
         assert self.padded_generation_steps > 0
-        assert int(self.observation_batch.component_ids.shape[0]) == (
+        assert int(self.observation_batch.category_ids.shape[0]) == (
             batch_size
         )
         assert self.sampling_thresholds.shape == (

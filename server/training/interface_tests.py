@@ -22,10 +22,9 @@ def test_initialize_run_through_public_interface(
     initialized = service.initialize(
         TrainingInitOptions(
             run_dir=run_dir,
-            d_model=4,
+            d_model=8,
             layers=1,
             heads=1,
-            max_tokens=512,
             seed=23,
         )
     )
@@ -43,10 +42,9 @@ def test_initialize_requires_explicit_replacement_confirmation(
     service = TrainingService()
     options = TrainingInitOptions(
         run_dir=run_dir,
-        d_model=4,
+        d_model=8,
         layers=1,
         heads=1,
-        max_tokens=512,
     )
     first = service.initialize(options)
     assert isinstance(first, Ok)
@@ -68,10 +66,9 @@ def test_initialize_then_resume_through_public_interface(
     initialized = service.initialize(
         TrainingInitOptions(
             run_dir=run_dir,
-            d_model=4,
+            d_model=8,
             layers=1,
             heads=1,
-            max_tokens=512,
         )
     )
     assert isinstance(initialized, Ok)

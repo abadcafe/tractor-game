@@ -13,7 +13,6 @@ export interface InitRequest {
   d_model: number;
   layers: number;
   heads: number;
-  max_tokens: number;
   seed: number;
   learning_rate: number;
   ppo_clip: number;
@@ -229,18 +228,9 @@ export const INIT_GROUPS: readonly FormGroup[] = [
 ];
 
 export const INIT_FIELDS: readonly TrainingField[] = [
-  number("d_model", "Model width", "Model", "128", "1", "1", false),
+  number("d_model", "Model width", "Model", "128", "8", "1", false),
   number("layers", "Transformer layers", "Model", "3", "1", "1", false),
   number("heads", "Attention heads", "Model", "4", "1", "1", false),
-  number(
-    "max_tokens",
-    "Maximum tokens",
-    "Model",
-    "768",
-    "512",
-    "1",
-    false,
-  ),
   number("seed", "Seed", "Model", "0", "0", "1", false),
   ...optimizationFields(false),
 ];
@@ -383,7 +373,6 @@ export function initRequestFromForm(
     d_model: requiredNumber(form, "d_model"),
     layers: requiredNumber(form, "layers"),
     heads: requiredNumber(form, "heads"),
-    max_tokens: requiredNumber(form, "max_tokens"),
     seed: requiredNumber(form, "seed"),
     learning_rate: requiredNumber(form, "learning_rate"),
     ppo_clip: requiredNumber(form, "ppo_clip"),

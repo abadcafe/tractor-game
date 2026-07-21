@@ -5,16 +5,16 @@ Training internals should import the narrower semantic-action modules.
 
 from __future__ import annotations
 
-from server.training.semantic_actions.arguments import (
-    InvalidSemanticActionRejected,
-    SemanticArgument,
-    SemanticArgumentKind,
-    SemanticArgumentPrefix,
-    SemanticArgumentTrace,
-    semantic_prefix_state,
-)
 from server.training.semantic_actions.binding import (
     bind_generated_action,
+)
+from server.training.semantic_actions.choices import (
+    ActionChoice,
+    ActionChoiceKind,
+    ActionPrefix,
+    ActionTrace,
+    InvalidActionRejected,
+    action_prefix_cards,
 )
 from server.training.semantic_actions.query import (
     ActionQuery,
@@ -32,13 +32,13 @@ __all__ = (
     "BoundAction",
     "DecisionKind",
     "GeneratedAction",
-    "InvalidSemanticActionRejected",
+    "InvalidActionRejected",
     "PlayerActionKind",
-    "SemanticArgument",
-    "SemanticArgumentKind",
-    "SemanticArgumentPrefix",
-    "SemanticArgumentTrace",
+    "ActionChoice",
+    "ActionChoiceKind",
+    "ActionPrefix",
+    "ActionTrace",
     "bind_generated_action",
     "build_action_query",
-    "semantic_prefix_state",
+    "action_prefix_cards",
 )

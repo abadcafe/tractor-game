@@ -21,7 +21,7 @@ from server.training.observation import Observation
 from server.training.policy import PolicyDecision, RandomTrainingPolicy
 from server.training.runner import SelfPlaySession, round_rewards
 from server.training.sampling import PolicyDecisionKey
-from server.training.tokens import FaceCountToken, TrickResultFieldToken
+from server.training.tokenization import ActionToken, TrickToken
 
 
 class _ScriptedBoundaryGame:
@@ -438,17 +438,19 @@ def _first_bid_observation(
 def _play_record_token_count(observation: Observation) -> int:
     return sum(
         1
-        for token in observation.tokens
-        if isinstance(token, FaceCountToken)
-        and token.segment == "play_record"
+        for node in observation.tokens
+        if isinstance(node.payload, ActionToken)
+        and node.payload.kind == "play"
+        and node.payload.occurrence == "fact"
     )
 
 
 def _trick_result_token_count(observation: Observation) -> int:
     return sum(
         1
-        for token in observation.tokens
-        if isinstance(token, TrickResultFieldToken)
+        for node in observation.tokens
+        if isinstance(node.payload, TrickToken)
+        and node.payload.status == "completed"
     )
 
 

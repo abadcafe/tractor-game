@@ -1,4 +1,4 @@
-"""Torch Transformer policy/value model for Tractor self-play."""
+"""Position-independent Transformer policy/value model for Tractor."""
 
 from __future__ import annotations
 
@@ -9,76 +9,73 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from server.training.feature_schema import NUMERIC_FEATURE_COUNT
-from server.training.semantic_actions.codec import SEMANTIC_CODEC
-from server.training.tensorize import (
-    OBSERVATION_COMPONENT_COUNT,
-    ObservationTensorBatch,
-    observation_component_tensors,
+from server.training.network import (
+    StructuredObservationEncoder,
+    TypedTokenEncoder,
 )
-from server.training.vocab_schema import VOCAB_SCHEMA
+from server.training.semantic_actions.choices import (
+    ACTION_CHOICE_COUNT,
+    CARD_CHOICE_COUNT,
+    MAX_ACTION_STEPS,
+)
+from server.training.tensorize import ObservationTensorBatch
 
 
 @dataclass(frozen=True, slots=True)
-class ArgumentTraceScores:
-    """Per-step argument logits for one teacher-forced trace batch."""
+class ActionTraceScores:
+    """Fixed-vocabulary logits for every teacher-forced action step."""
 
-    argument_logits: Tensor
+    choice_logits: Tensor
 
 
 @dataclass(frozen=True, slots=True)
 class ObservationEncoding:
-    """Reusable encoded observation memory for policy/value heads."""
+    """Reusable observation memory and observation-specific choices."""
 
     memory: Tensor
     memory_padding_mask: Tensor
     observation_context: Tensor
+    choice_embeddings: Tensor
 
 
 @dataclass(slots=True)
-class ArgumentDecodeSession:
-    """Incremental semantic argument decoder for live inference."""
+class ActionDecodeSession:
+    """Incremental decoder seeded by the decision query itself."""
 
     _model: TractorPolicyModel
     _encoding: ObservationEncoding
-    _cache: ArgumentDecodeCache
+    _cache: ActionDecodeCache
     _step_index: int = 0
 
-    def next_logits(self) -> Tensor:
-        """Return logits for the current live decoding prefix."""
-        prefix_context = self._model.decode_live_argument_step(
-            cache=self._cache,
+    def next_choice_logits(self) -> Tensor:
+        """Return logits for all 110 choices at the current prefix."""
+        prefix_context = self._model.decode_live_action_step(
+            cache=self._cache
         )
-        return self._model.argument_logits_from_prefix_context(
+        return self._model.choice_logits_from_prefix_context(
             encoding=self._encoding,
             prefix_context=prefix_context,
         )
 
-    def advance(self, selected_token_ids: Tensor) -> None:
-        """Append sampled argument tokens to the live prefix cache."""
+    def advance(self, selected_choice_ids: Tensor) -> None:
+        """Append selected choices to the live prefix cache."""
         next_index = self._step_index + 1
         assert next_index < self._cache.max_steps
-        assert selected_token_ids.shape == (self._cache.batch_size,)
-        positions = torch.full(
-            selected_token_ids.shape,
-            next_index,
-            dtype=torch.long,
-            device=selected_token_ids.device,
+        assert selected_choice_ids.shape == (self._cache.batch_size,)
+        embeddings = self._model.embed_selected_choices(
+            encoding=self._encoding,
+            choice_ids=selected_choice_ids,
+            position=next_index,
         )
-        token_embeddings = self._model.embed_argument_tokens(
-            token_ids=selected_token_ids,
-            positions=positions,
-        )
-        self._model.append_live_argument_token(
-            cache=self._cache,
-            token_embeddings=token_embeddings,
+        self._model.append_live_action_choice(
+            cache=self._cache, choice_embeddings=embeddings
         )
         self._step_index = next_index
 
 
 @dataclass(slots=True)
-class ArgumentDecodeCache:
-    """Projected K/V cache for one live semantic argument batch."""
+class ActionDecodeCache:
+    """Projected K/V cache for one live action batch."""
 
     self_keys: Tensor
     self_values: Tensor
@@ -99,26 +96,27 @@ class ArgumentDecodeCache:
             self.batch_size,
             int(self.memory_keys.shape[2]),
         )
+        model_width = int(
+            self.self_keys.shape[1] * self.self_keys.shape[3]
+        )
         assert self.current_embedding.shape == (
             self.batch_size,
-            int(self.self_keys.shape[1] * self.self_keys.shape[3]),
+            model_width,
         )
         assert self.current_query.shape == (
             self.batch_size,
             int(self.self_keys.shape[1]),
             int(self.self_keys.shape[3]),
         )
-        assert self.current_length > 0
-        assert self.max_steps >= self.current_length
+        assert 0 < self.current_length <= self.max_steps
 
     @property
     def batch_size(self) -> int:
-        """Return cached batch row count."""
         return int(self.self_keys.shape[0])
 
 
 class TractorPolicyModel(nn.Module):
-    """Shared observation encoder with semantic argument decoder."""
+    """Typed observation encoder and shared-card action decoder."""
 
     def __init__(
         self,
@@ -128,114 +126,86 @@ class TractorPolicyModel(nn.Module):
         heads: int,
     ) -> None:
         super().__init__()
-        self._token_type_embedding = _embedding(
-            VOCAB_SCHEMA.token_type_vocab_size, d_model
+        assert d_model > 0
+        assert d_model % heads == 0
+        self._token_encoder = TypedTokenEncoder(d_model=d_model)
+        self._observation_encoder = StructuredObservationEncoder(
+            d_model=d_model, layers=layers, heads=heads
         )
-        self._segment_embedding = _embedding(
-            VOCAB_SCHEMA.segment_vocab_size, d_model
+        self._control_choice_embeddings = nn.Parameter(
+            torch.empty(2, d_model)
         )
-        self._field_embedding = _embedding(
-            VOCAB_SCHEMA.field_vocab_size, d_model
+        nn.init.normal_(
+            self._control_choice_embeddings,
+            mean=0.0,
+            std=1.0 / math.sqrt(float(d_model)),
         )
-        self._value_embedding = _embedding(
-            VOCAB_SCHEMA.value_vocab_size, d_model
+        self._action_position_embedding = nn.Embedding(
+            MAX_ACTION_STEPS, d_model
         )
-        self._suit_embedding = _embedding(
-            VOCAB_SCHEMA.suit_vocab_size, d_model
+        self._selected_choice_adapter = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.GELU(),
+            nn.LayerNorm(d_model),
         )
-        self._rank_embedding = _embedding(
-            VOCAB_SCHEMA.rank_vocab_size, d_model
+        self._query_seed = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.GELU(),
+            nn.LayerNorm(d_model),
         )
-        self._points_embedding = _embedding(
-            VOCAB_SCHEMA.points_vocab_size, d_model
-        )
-        self._color_embedding = _embedding(
-            VOCAB_SCHEMA.color_vocab_size, d_model
-        )
-        self._role_embedding = _embedding(
-            VOCAB_SCHEMA.role_vocab_size, d_model
-        )
-        self._trick_age_embedding = _embedding(
-            VOCAB_SCHEMA.trick_age_vocab_size, d_model
-        )
-        self._trick_state_embedding = _embedding(
-            VOCAB_SCHEMA.trick_state_vocab_size, d_model
-        )
-        self._play_order_embedding = _embedding(
-            VOCAB_SCHEMA.play_order_vocab_size, d_model
-        )
-        self._count_embedding = _embedding(
-            VOCAB_SCHEMA.count_vocab_size, d_model
-        )
-        self._play_width_embedding = _embedding(
-            VOCAB_SCHEMA.play_width_vocab_size, d_model
-        )
-        self._event_age_embedding = _embedding(
-            VOCAB_SCHEMA.event_age_vocab_size, d_model
-        )
-        self._categorical_projection = nn.Linear(
-            OBSERVATION_COMPONENT_COUNT * d_model,
-            d_model,
-            bias=False,
-        )
-        self._numeric_projection = nn.Linear(
-            NUMERIC_FEATURE_COUNT * 2,
-            d_model,
-            bias=False,
-        )
-        observation_layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=heads,
-            dim_feedforward=d_model * 4,
-            dropout=0.0,
-            batch_first=True,
-            activation="gelu",
-        )
-        self._observation_encoder = nn.TransformerEncoder(
-            observation_layer,
-            num_layers=layers,
-            enable_nested_tensor=False,
-        )
-        self._argument_embedding = _embedding(
-            SEMANTIC_CODEC.argument_vocab_size, d_model
-        )
-        self._argument_position_embedding = nn.Embedding(
-            SEMANTIC_CODEC.max_argument_tokens, d_model
-        )
-        self._argument_decoder = _ArgumentDecoderLayer(
+        self._action_decoder = _ActionDecoderLayer(
             d_model=d_model, heads=heads
         )
         self._decision_projection = nn.Linear(d_model * 2, d_model)
-        self._argument_head = nn.Linear(
-            d_model, SEMANTIC_CODEC.argument_vocab_size
+        self._choice_query = nn.Linear(d_model, d_model, bias=False)
+        self._choice_key = nn.Linear(d_model, d_model, bias=False)
+        self._choice_logit_bias = nn.Parameter(
+            torch.zeros(ACTION_CHOICE_COUNT)
         )
         self._value_head = nn.Linear(d_model, 1)
 
     def encode_observations(
-        self,
-        observation: ObservationTensorBatch,
+        self, observation: ObservationTensorBatch
     ) -> ObservationEncoding:
-        """Encode observations once for value and argument decoding."""
-        components = observation_component_tensors(observation)
-        memory_padding_mask = components.token_type_ids.eq(
-            VOCAB_SCHEMA.obs_pad_id
-        )
-        memory = self._encode_observation(
-            observation,
-            memory_padding_mask=memory_padding_mask,
-        )
-        query_mask = components.segment_ids.eq(
-            VOCAB_SCHEMA.segment_action_query_id
-        ) & (~memory_padding_mask)
-        observation_context = _query_or_all_mean(
-            memory,
+        """Encode observations and rule-conditioned card choices."""
+        memory_padding_mask = observation.category_ids[:, :, 0].eq(0)
+        memory = self._observation_encoder(
+            self._token_encoder(
+                category_ids=observation.category_ids,
+                scalar_values=observation.scalar_values,
+                card_rule_values=observation.card_rule_values,
+            ),
             padding_mask=memory_padding_mask,
-            query_mask=query_mask,
+            coordinates=observation.coordinate_values,
+            coordinate_masks=observation.coordinate_masks,
+        )
+        batch_indices = torch.arange(
+            int(memory.shape[0]),
+            dtype=torch.long,
+            device=memory.device,
+        )
+        observation_context = memory[
+            batch_indices, observation.query_indices
+        ]
+        card_categories = observation.candidate_category_ids
+        card_choices = self._token_encoder.encode_card_candidates(
+            suit_ids=card_categories[:, :, 0],
+            rank_ids=card_categories[:, :, 1],
+            effective_suit_ids=card_categories[:, :, 2],
+            counts=observation.candidate_counts,
+            rule_values=observation.candidate_card_rule_values,
+        )
+        assert int(card_choices.shape[1]) == CARD_CHOICE_COUNT
+        controls = self._control_choice_embeddings.unsqueeze(0).expand(
+            int(memory.shape[0]), -1, -1
         )
         return ObservationEncoding(
             memory=memory,
             memory_padding_mask=memory_padding_mask,
             observation_context=observation_context,
+            choice_embeddings=torch.cat(
+                (controls, card_choices), dim=1
+            ),
         )
 
     def select_observation_encoding(
@@ -258,100 +228,83 @@ class TractorPolicyModel(nn.Module):
             observation_context=encoding.observation_context.index_select(
                 0, index
             ),
+            choice_embeddings=encoding.choice_embeddings.index_select(
+                0, index
+            ),
         )
 
     def value_estimates(self, encoding: ObservationEncoding) -> Tensor:
-        """Return value estimates from an encoded observation batch."""
         return self._value_head(encoding.observation_context).squeeze(
             -1
         )
 
-    def begin_argument_decode_session(
+    def begin_action_decode_session(
         self,
         encoding: ObservationEncoding,
         *,
         max_steps: int,
-    ) -> ArgumentDecodeSession:
-        """Create an incremental decoder session for live sampling."""
-        assert max_steps > 0
-        assert max_steps <= SEMANTIC_CODEC.max_argument_tokens
-        batch_size = int(encoding.memory.shape[0])
-        bos_ids = torch.full(
-            (batch_size,),
-            SEMANTIC_CODEC.argument_bos_id,
-            dtype=torch.long,
-            device=encoding.memory.device,
+    ) -> ActionDecodeSession:
+        """Decode from the contextual query without a start token."""
+        assert 0 < max_steps <= MAX_ACTION_STEPS
+        seed = self._query_seed(encoding.observation_context)
+        seed = seed + self._action_position_embedding(
+            torch.zeros(
+                (int(seed.shape[0]),),
+                dtype=torch.long,
+                device=seed.device,
+            )
         )
-        positions = torch.zeros(
-            (batch_size,),
-            dtype=torch.long,
-            device=encoding.memory.device,
-        )
-        bos_embeddings = self.embed_argument_tokens(
-            token_ids=bos_ids, positions=positions
-        )
-        cache = self._argument_decoder.begin_decode_cache(
-            first_token_embeddings=bos_embeddings,
+        cache = self._action_decoder.begin_decode_cache(
+            first_embeddings=seed,
             memory=encoding.memory,
             memory_padding_mask=encoding.memory_padding_mask,
             max_steps=max_steps,
         )
-        return ArgumentDecodeSession(
-            _model=self,
-            _encoding=encoding,
-            _cache=cache,
+        return ActionDecodeSession(
+            _model=self, _encoding=encoding, _cache=cache
         )
 
-    def decode_live_argument_step(
-        self,
-        *,
-        cache: ArgumentDecodeCache,
+    def decode_live_action_step(
+        self, *, cache: ActionDecodeCache
     ) -> Tensor:
-        """Decode the current live token using cached projected K/V."""
-        return self._argument_decoder.decode_cached_step(cache=cache)
+        return self._action_decoder.decode_cached_step(cache=cache)
 
-    def append_live_argument_token(
-        self, *, cache: ArgumentDecodeCache, token_embeddings: Tensor
+    def append_live_action_choice(
+        self, *, cache: ActionDecodeCache, choice_embeddings: Tensor
     ) -> None:
-        """Append one selected token embedding to a live cache."""
-        self._argument_decoder.append_cached_token(
-            cache=cache,
-            token_embeddings=token_embeddings,
+        self._action_decoder.append_cached_choice(
+            cache=cache, choice_embeddings=choice_embeddings
         )
 
-    def score_argument_traces(
+    def score_action_traces(
         self,
         encoding: ObservationEncoding,
         *,
-        selected_token_ids_padded: Tensor,
+        choice_ids_padded: Tensor,
         step_counts: Tensor,
-    ) -> ArgumentTraceScores:
-        """Return per-step logits for recorded traces in one pass."""
-        assert selected_token_ids_padded.ndim == 2
-        assert step_counts.shape == (
-            int(selected_token_ids_padded.shape[0]),
+    ) -> ActionTraceScores:
+        """Score traces without Python autoregressive replay."""
+        assert choice_ids_padded.ndim == 2
+        assert step_counts.shape == (int(choice_ids_padded.shape[0]),)
+        prefix_embeddings = self._teacher_forced_prefix_embeddings(
+            encoding=encoding, choice_ids_padded=choice_ids_padded
         )
-        prefix_embeddings = self._embed_teacher_forced_trace_prefixes(
-            selected_token_ids_padded=selected_token_ids_padded,
-        )
-        max_step_count = int(selected_token_ids_padded.shape[1])
+        max_steps = int(choice_ids_padded.shape[1])
         positions = torch.arange(
-            max_step_count,
-            dtype=torch.long,
-            device=selected_token_ids_padded.device,
+            max_steps, dtype=torch.long, device=choice_ids_padded.device
         )
-        prefix_padding_mask = positions.unsqueeze(0) >= (
-            step_counts.unsqueeze(1)
-        )
+        prefix_padding_mask = positions.unsqueeze(
+            0
+        ) >= step_counts.unsqueeze(1)
         causal_mask = torch.triu(
             torch.ones(
-                (max_step_count, max_step_count),
+                (max_steps, max_steps),
                 dtype=torch.bool,
-                device=selected_token_ids_padded.device,
+                device=choice_ids_padded.device,
             ),
             diagonal=1,
         )
-        decoded = self._argument_decoder.forward_prefix(
+        decoded = self._action_decoder.forward_prefix(
             prefix_embeddings=prefix_embeddings,
             memory=encoding.memory,
             prefix_padding_mask=prefix_padding_mask,
@@ -360,65 +313,20 @@ class TractorPolicyModel(nn.Module):
         )
         observation_context = encoding.observation_context.unsqueeze(
             1
-        ).expand(-1, max_step_count, -1)
+        ).expand(-1, max_steps, -1)
         decision_context = torch.tanh(
             self._decision_projection(
                 torch.cat((observation_context, decoded), dim=-1)
             )
         )
-        return ArgumentTraceScores(
-            argument_logits=self._argument_head(decision_context)
+        return ActionTraceScores(
+            choice_logits=self._score_choices(
+                decision_context=decision_context,
+                choice_embeddings=encoding.choice_embeddings,
+            )
         )
 
-    def _encode_observation(
-        self,
-        observation: ObservationTensorBatch,
-        *,
-        memory_padding_mask: Tensor,
-    ) -> Tensor:
-        obs_embedded = self._embed_observation(observation)
-        return self._observation_encoder(
-            obs_embedded,
-            src_key_padding_mask=memory_padding_mask,
-        )
-
-    def _embed_observation(
-        self,
-        observation: ObservationTensorBatch,
-    ) -> Tensor:
-        components = observation_component_tensors(observation)
-        categorical_input = torch.cat(
-            (
-                self._token_type_embedding(components.token_type_ids),
-                self._segment_embedding(components.segment_ids),
-                self._field_embedding(components.field_ids),
-                self._value_embedding(components.value_ids),
-                self._suit_embedding(components.suit_ids),
-                self._rank_embedding(components.rank_ids),
-                self._points_embedding(components.points_ids),
-                self._color_embedding(components.color_ids),
-                self._role_embedding(components.role_ids),
-                self._trick_age_embedding(components.trick_age_ids),
-                self._trick_state_embedding(components.trick_state_ids),
-                self._play_order_embedding(components.play_order_ids),
-                self._count_embedding(components.count_ids),
-                self._play_width_embedding(components.play_width_ids),
-                self._event_age_embedding(components.event_age_ids),
-            ),
-            dim=-1,
-        )
-        numeric_values = observation.numeric_values * (
-            observation.numeric_masks
-        )
-        numeric_input = torch.cat(
-            (numeric_values, observation.numeric_masks),
-            dim=-1,
-        )
-        return self._categorical_projection(
-            categorical_input
-        ) + self._numeric_projection(numeric_input)
-
-    def argument_logits_from_prefix_context(
+    def choice_logits_from_prefix_context(
         self,
         *,
         encoding: ObservationEncoding,
@@ -432,44 +340,87 @@ class TractorPolicyModel(nn.Module):
                 )
             )
         )
-        return self._argument_head(decision_context)
+        return self._score_choices(
+            decision_context=decision_context,
+            choice_embeddings=encoding.choice_embeddings,
+        )
 
-    def _embed_teacher_forced_trace_prefixes(
-        self, *, selected_token_ids_padded: Tensor
+    def embed_selected_choices(
+        self,
+        *,
+        encoding: ObservationEncoding,
+        choice_ids: Tensor,
+        position: int,
     ) -> Tensor:
-        assert selected_token_ids_padded.ndim == 2
-        max_step_count = int(selected_token_ids_padded.shape[1])
-        assert max_step_count > 0
-        prefix_ids = torch.empty_like(selected_token_ids_padded)
-        prefix_ids[:, 0].fill_(SEMANTIC_CODEC.argument_bos_id)
-        if max_step_count > 1:
-            prefix_ids[:, 1:].copy_(
-                selected_token_ids_padded[:, : max_step_count - 1]
+        """Embed outputs with their shared candidate encodings."""
+        assert choice_ids.ndim == 1
+        assert 0 < position < MAX_ACTION_STEPS
+        batch_indices = torch.arange(
+            int(choice_ids.shape[0]),
+            dtype=torch.long,
+            device=choice_ids.device,
+        )
+        selected = encoding.choice_embeddings[batch_indices, choice_ids]
+        positions = torch.full_like(choice_ids, position)
+        return self._selected_choice_adapter(
+            selected
+        ) + self._action_position_embedding(positions)
+
+    def _teacher_forced_prefix_embeddings(
+        self,
+        *,
+        encoding: ObservationEncoding,
+        choice_ids_padded: Tensor,
+    ) -> Tensor:
+        max_steps = int(choice_ids_padded.shape[1])
+        assert 0 < max_steps <= MAX_ACTION_STEPS
+        seed = self._query_seed(encoding.observation_context).unsqueeze(
+            1
+        )
+        if max_steps == 1:
+            prefix = seed
+        else:
+            batch_size = int(choice_ids_padded.shape[0])
+            batch_indices = torch.arange(
+                batch_size,
+                dtype=torch.long,
+                device=choice_ids_padded.device,
+            ).unsqueeze(1)
+            selected = encoding.choice_embeddings[
+                batch_indices,
+                choice_ids_padded[:, : max_steps - 1],
+            ]
+            prefix = torch.cat(
+                (seed, self._selected_choice_adapter(selected)), dim=1
             )
         positions = torch.arange(
-            max_step_count,
+            max_steps,
             dtype=torch.long,
-            device=selected_token_ids_padded.device,
+            device=choice_ids_padded.device,
         ).unsqueeze(0)
-        return self._argument_embedding(
-            prefix_ids
-        ) + self._argument_position_embedding(positions)
+        return prefix + self._action_position_embedding(positions)
 
-    def embed_argument_tokens(
-        self, *, token_ids: Tensor, positions: Tensor
+    def _score_choices(
+        self, *, decision_context: Tensor, choice_embeddings: Tensor
     ) -> Tensor:
-        assert token_ids.shape == positions.shape
-        assert token_ids.ndim == 1
-        return self._argument_embedding(
-            token_ids
-        ) + self._argument_position_embedding(positions)
+        queries = self._choice_query(decision_context)
+        keys = self._choice_key(choice_embeddings)
+        if queries.ndim == 2:
+            logits = torch.einsum("bd,bcd->bc", queries, keys)
+        else:
+            assert queries.ndim == 3
+            logits = torch.einsum("bsd,bcd->bsc", queries, keys)
+        return logits / math.sqrt(float(keys.shape[-1])) + (
+            self._choice_logit_bias
+        )
 
 
-class _ArgumentDecoderLayer(nn.Module):
-    """Single-layer decoder with full-prefix and live-last paths."""
+class _ActionDecoderLayer(nn.Module):
+    """Single-layer decoder with teacher-forced and cached paths."""
 
     def __init__(self, *, d_model: int, heads: int) -> None:
         super().__init__()
+        self._heads = heads
         self._self_attn = nn.MultiheadAttention(
             d_model, heads, dropout=0.0, batch_first=True
         )
@@ -481,7 +432,6 @@ class _ArgumentDecoderLayer(nn.Module):
         self._norm1 = nn.LayerNorm(d_model)
         self._norm2 = nn.LayerNorm(d_model)
         self._norm3 = nn.LayerNorm(d_model)
-        self._dropout = nn.Dropout(0.0)
 
     def forward_prefix(
         self,
@@ -490,20 +440,23 @@ class _ArgumentDecoderLayer(nn.Module):
         memory: Tensor,
         prefix_padding_mask: Tensor,
         memory_padding_mask: Tensor,
-        self_attention_mask: Tensor | None = None,
+        self_attention_mask: Tensor,
     ) -> Tensor:
-        """Decode every prefix position for PPO replay evaluation."""
-        self_attended = self._self_attention(
-            query=prefix_embeddings,
-            key_value=prefix_embeddings,
+        self_attended, _weights = self._self_attn(
+            prefix_embeddings,
+            prefix_embeddings,
+            prefix_embeddings,
             key_padding_mask=prefix_padding_mask,
-            attention_mask=self_attention_mask,
+            attn_mask=self_attention_mask,
+            need_weights=False,
         )
         target = self._norm1(prefix_embeddings + self_attended)
-        cross_attended = self._cross_attention(
-            query=target,
-            memory=memory,
-            memory_padding_mask=memory_padding_mask,
+        cross_attended, _weights = self._cross_attn(
+            target,
+            memory,
+            memory,
+            key_padding_mask=memory_padding_mask,
+            need_weights=False,
         )
         target = self._norm2(target + cross_attended)
         return self._norm3(target + self._feed_forward(target))
@@ -511,74 +464,67 @@ class _ArgumentDecoderLayer(nn.Module):
     def begin_decode_cache(
         self,
         *,
-        first_token_embeddings: Tensor,
+        first_embeddings: Tensor,
         memory: Tensor,
         memory_padding_mask: Tensor,
         max_steps: int,
-    ) -> ArgumentDecodeCache:
-        """Create a projected K/V cache seeded with BOS embeddings."""
-        assert first_token_embeddings.ndim == 2
+    ) -> ActionDecodeCache:
+        """Create a cache seeded by the contextual decision query."""
+        assert first_embeddings.ndim == 2
         assert memory.ndim == 3
         assert max_steps > 0
-        batch_size = int(first_token_embeddings.shape[0])
-        assert batch_size > 0
+        batch_size = int(first_embeddings.shape[0])
         self_key, self_value = self._project_self_key_value(
-            first_token_embeddings.unsqueeze(1)
+            first_embeddings.unsqueeze(1)
         )
         memory_key, memory_value = self._project_cross_key_value(memory)
-        heads = int(self_key.shape[1])
-        head_dim = int(self_key.shape[3])
-        key_cache = torch.empty(
-            (batch_size, heads, max_steps, head_dim),
+        keys = torch.empty(
+            (
+                batch_size,
+                int(self_key.shape[1]),
+                max_steps,
+                int(self_key.shape[3]),
+            ),
             dtype=self_key.dtype,
             device=self_key.device,
         )
-        value_cache = torch.empty_like(key_cache)
-        key_cache[:, :, 0:1, :].copy_(self_key)
-        value_cache[:, :, 0:1, :].copy_(self_value)
-        return ArgumentDecodeCache(
-            self_keys=key_cache,
-            self_values=value_cache,
+        values = torch.empty_like(keys)
+        keys[:, :, 0:1].copy_(self_key)
+        values[:, :, 0:1].copy_(self_value)
+        return ActionDecodeCache(
+            self_keys=keys,
+            self_values=values,
             memory_keys=memory_key,
             memory_values=memory_value,
             memory_padding_mask=memory_padding_mask,
-            current_embedding=first_token_embeddings,
-            current_query=self._project_self_query(
-                first_token_embeddings
-            ),
+            current_embedding=first_embeddings,
+            current_query=self._project_self_query(first_embeddings),
             current_length=1,
             max_steps=max_steps,
         )
 
-    def append_cached_token(
-        self, *, cache: ArgumentDecodeCache, token_embeddings: Tensor
+    def append_cached_choice(
+        self, *, cache: ActionDecodeCache, choice_embeddings: Tensor
     ) -> None:
-        """Append one projected token to a live K/V cache."""
-        assert token_embeddings.ndim == 2
-        assert token_embeddings.shape[0] == cache.batch_size
+        assert choice_embeddings.shape == cache.current_embedding.shape
         assert cache.current_length < cache.max_steps
         key, value = self._project_self_key_value(
-            token_embeddings.unsqueeze(1)
+            choice_embeddings.unsqueeze(1)
         )
-        cache.self_keys[
-            :, :, cache.current_length : cache.current_length + 1, :
-        ].copy_(key)
-        cache.self_values[
-            :, :, cache.current_length : cache.current_length + 1, :
-        ].copy_(value)
-        cache.current_embedding = token_embeddings
-        cache.current_query = self._project_self_query(token_embeddings)
+        position = cache.current_length
+        cache.self_keys[:, :, position : position + 1].copy_(key)
+        cache.self_values[:, :, position : position + 1].copy_(value)
+        cache.current_embedding = choice_embeddings
+        cache.current_query = self._project_self_query(
+            choice_embeddings
+        )
         cache.current_length += 1
 
-    def decode_cached_step(
-        self, *, cache: ArgumentDecodeCache
-    ) -> Tensor:
-        """Decode the current live prefix token from cached K/V."""
-        query = cache.current_query
+    def decode_cached_step(self, *, cache: ActionDecodeCache) -> Tensor:
         self_attended = self._scaled_attention(
-            query=query,
-            key=cache.self_keys[:, :, : cache.current_length, :],
-            value=cache.self_values[:, :, : cache.current_length, :],
+            query=cache.current_query,
+            key=cache.self_keys[:, :, : cache.current_length],
+            value=cache.self_values[:, :, : cache.current_length],
             key_padding_mask=None,
             out_projection=self._self_attn.out_proj,
         )
@@ -593,114 +539,65 @@ class _ArgumentDecoderLayer(nn.Module):
         target = self._norm2(target + cross_attended)
         return self._norm3(target + self._feed_forward(target))
 
-    def _self_attention(
-        self,
-        *,
-        query: Tensor,
-        key_value: Tensor,
-        key_padding_mask: Tensor | None,
-        attention_mask: Tensor | None = None,
-    ) -> Tensor:
-        output, _weights = self._self_attn(
-            query,
-            key_value,
-            key_value,
-            key_padding_mask=key_padding_mask,
-            attn_mask=attention_mask,
-            need_weights=False,
-        )
-        return output
-
-    def _cross_attention(
-        self,
-        *,
-        query: Tensor,
-        memory: Tensor,
-        memory_padding_mask: Tensor,
-    ) -> Tensor:
-        output, _weights = self._cross_attn(
-            query,
-            memory,
-            memory,
-            key_padding_mask=memory_padding_mask,
-            need_weights=False,
-        )
-        return output
-
     def _feed_forward(self, target: Tensor) -> Tensor:
-        hidden = torch.nn.functional.gelu(self._linear1(target))
-        return self._linear2(self._dropout(hidden))
+        return self._linear2(F.gelu(self._linear1(target)))
 
     def _project_self_query(self, embeddings: Tensor) -> Tensor:
-        assert embeddings.ndim == 2
-        weight = self._self_attn.in_proj_weight
-        bias = self._self_attn.in_proj_bias
-        embed_dim = self._self_attn.embed_dim
-        projected = F.linear(
-            embeddings,
-            weight[:embed_dim],
-            bias[:embed_dim],
+        return self._project_query(
+            embeddings, attention=self._self_attn
         )
-        return _split_heads(
-            projected.unsqueeze(1), heads=self._self_attn.num_heads
-        ).squeeze(2)
 
     def _project_cross_query(self, embeddings: Tensor) -> Tensor:
-        assert embeddings.ndim == 2
-        weight = self._cross_attn.in_proj_weight
-        bias = self._cross_attn.in_proj_bias
-        embed_dim = self._cross_attn.embed_dim
+        return self._project_query(
+            embeddings, attention=self._cross_attn
+        )
+
+    def _project_query(
+        self, embeddings: Tensor, *, attention: nn.MultiheadAttention
+    ) -> Tensor:
+        weight = attention.in_proj_weight
+        bias = attention.in_proj_bias
+        embed_dim = attention.embed_dim
         projected = F.linear(
-            embeddings,
-            weight[:embed_dim],
-            bias[:embed_dim],
+            embeddings, weight[:embed_dim], bias[:embed_dim]
         )
         return _split_heads(
-            projected.unsqueeze(1), heads=self._cross_attn.num_heads
+            projected.unsqueeze(1), heads=self._heads
         ).squeeze(2)
 
     def _project_self_key_value(
         self, embeddings: Tensor
     ) -> tuple[Tensor, Tensor]:
-        assert embeddings.ndim == 3
-        weight = self._self_attn.in_proj_weight
-        bias = self._self_attn.in_proj_bias
-        embed_dim = self._self_attn.embed_dim
-        key = F.linear(
-            embeddings,
-            weight[embed_dim : embed_dim * 2],
-            bias[embed_dim : embed_dim * 2],
-        )
-        value = F.linear(
-            embeddings,
-            weight[embed_dim * 2 :],
-            bias[embed_dim * 2 :],
-        )
-        return (
-            _split_heads(key, heads=self._self_attn.num_heads),
-            _split_heads(value, heads=self._self_attn.num_heads),
+        return self._project_key_value(
+            embeddings, attention=self._self_attn
         )
 
     def _project_cross_key_value(
-        self, memory: Tensor
+        self, embeddings: Tensor
     ) -> tuple[Tensor, Tensor]:
-        assert memory.ndim == 3
-        weight = self._cross_attn.in_proj_weight
-        bias = self._cross_attn.in_proj_bias
-        embed_dim = self._cross_attn.embed_dim
+        return self._project_key_value(
+            embeddings, attention=self._cross_attn
+        )
+
+    def _project_key_value(
+        self, embeddings: Tensor, *, attention: nn.MultiheadAttention
+    ) -> tuple[Tensor, Tensor]:
+        weight = attention.in_proj_weight
+        bias = attention.in_proj_bias
+        embed_dim = attention.embed_dim
         key = F.linear(
-            memory,
+            embeddings,
             weight[embed_dim : embed_dim * 2],
             bias[embed_dim : embed_dim * 2],
         )
         value = F.linear(
-            memory,
+            embeddings,
             weight[embed_dim * 2 :],
             bias[embed_dim * 2 :],
         )
         return (
-            _split_heads(key, heads=self._cross_attn.num_heads),
-            _split_heads(value, heads=self._cross_attn.num_heads),
+            _split_heads(key, heads=self._heads),
+            _split_heads(value, heads=self._heads),
         )
 
     def _scaled_attention(
@@ -712,64 +609,41 @@ class _ArgumentDecoderLayer(nn.Module):
         key_padding_mask: Tensor | None,
         out_projection: nn.Linear,
     ) -> Tensor:
-        assert query.ndim == 3
         scores = torch.matmul(
             query.unsqueeze(2), key.transpose(-2, -1)
-        ).squeeze(2)
-        scores = scores / math.sqrt(float(query.shape[-1]))
+        ).squeeze(2) / math.sqrt(float(query.shape[-1]))
         if key_padding_mask is not None:
             scores = scores.masked_fill(
                 key_padding_mask.unsqueeze(1), -torch.inf
             )
-        probabilities = torch.softmax(scores, dim=-1)
         context = torch.matmul(
-            probabilities.unsqueeze(2), value
+            torch.softmax(scores, dim=-1).unsqueeze(2), value
         ).squeeze(2)
         return out_projection(_merge_heads(context))
 
 
-def _embedding(vocab_size: int, d_model: int) -> nn.Embedding:
-    return nn.Embedding(
-        vocab_size, d_model, padding_idx=VOCAB_SCHEMA.obs_pad_id
-    )
-
-
 def _split_heads(values: Tensor, *, heads: int) -> Tensor:
     assert values.ndim == 3
-    batch_size = int(values.shape[0])
-    sequence_length = int(values.shape[1])
-    embed_dim = int(values.shape[2])
-    assert embed_dim % heads == 0
-    head_dim = embed_dim // heads
+    batch_size, sequence_length, embed_dim = values.shape
+    assert int(embed_dim) % heads == 0
     return values.view(
-        batch_size, sequence_length, heads, head_dim
+        int(batch_size),
+        int(sequence_length),
+        heads,
+        int(embed_dim) // heads,
     ).transpose(1, 2)
 
 
 def _merge_heads(values: Tensor) -> Tensor:
     assert values.ndim == 3
-    batch_size = int(values.shape[0])
-    heads = int(values.shape[1])
-    head_dim = int(values.shape[2])
-    return values.reshape(batch_size, heads * head_dim)
+    return values.reshape(
+        int(values.shape[0]), int(values.shape[1] * values.shape[2])
+    )
 
 
-def _masked_mean(values: Tensor, padding_mask: Tensor) -> Tensor:
-    keep_mask = (~padding_mask).unsqueeze(-1).to(dtype=values.dtype)
-    summed = (values * keep_mask).sum(dim=-2)
-    counts = keep_mask.sum(dim=-2).clamp_min(1.0)
-    return summed / counts
-
-
-def _query_or_all_mean(
-    values: Tensor,
-    *,
-    padding_mask: Tensor,
-    query_mask: Tensor,
-) -> Tensor:
-    query_keep = query_mask.unsqueeze(-1).to(dtype=values.dtype)
-    query_summed = (values * query_keep).sum(dim=-2)
-    query_counts = query_keep.sum(dim=-2)
-    query_mean = query_summed / query_counts.clamp_min(1.0)
-    all_mean = _masked_mean(values, padding_mask)
-    return torch.where(query_counts.gt(0), query_mean, all_mean)
+__all__ = (
+    "ActionDecodeSession",
+    "ActionTraceScores",
+    "ObservationEncoding",
+    "TractorPolicyModel",
+)

@@ -116,10 +116,9 @@ async def test_training_logs_have_rest_history_and_cursor_tail(
         "/api/training/init",
         json={
             "run_dir": str(tmp_path),
-            "d_model": 2,
+            "d_model": 8,
             "layers": 1,
             "heads": 1,
-            "max_tokens": 512,
         },
     )
     assert initialized.status_code == 204
@@ -212,10 +211,9 @@ async def test_training_metrics_events_push_replacement_snapshot(
             "/api/training/init",
             json={
                 "run_dir": str(tmp_path),
-                "d_model": 2,
+                "d_model": 8,
                 "layers": 1,
                 "heads": 1,
-                "max_tokens": 512,
             },
         )
         sink = StructuredEventSink(
@@ -263,10 +261,9 @@ async def test_training_metrics_events_apply_projection_parameters(
         "/api/training/init",
         json={
             "run_dir": str(tmp_path),
-            "d_model": 2,
+            "d_model": 8,
             "layers": 1,
             "heads": 1,
-            "max_tokens": 512,
         },
     )
     assert initialized.status_code == 204
@@ -313,10 +310,9 @@ async def test_training_events_report_store_replacement(
         "/api/training/init",
         json={
             "run_dir": str(tmp_path),
-            "d_model": 2,
+            "d_model": 8,
             "layers": 1,
             "heads": 1,
-            "max_tokens": 512,
         },
     )
     assert initialized.status_code == 204
@@ -419,10 +415,9 @@ def test_training_init_requires_yes_before_replacement(
 ) -> None:
     request: dict[str, object] = {
         "run_dir": str(tmp_path),
-        "d_model": 2,
+        "d_model": 8,
         "layers": 1,
         "heads": 1,
-        "max_tokens": 512,
     }
 
     initialized = sync_client.post("/api/training/init", json=request)

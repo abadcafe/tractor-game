@@ -128,7 +128,6 @@ def _add_init_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--d-model", type=int, default=128)
     parser.add_argument("--layers", type=int, default=3)
     parser.add_argument("--heads", type=int, default=4)
-    parser.add_argument("--max-tokens", type=int, default=768)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--learning-rate", type=float, default=0.0003)
     parser.add_argument("--ppo-clip", type=float, default=0.2)

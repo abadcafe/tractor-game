@@ -10,11 +10,11 @@ from server.training.legal_actions.contract import LegalActionIndex
 from server.training.legal_actions.selection import (
     trace_is_selection_only,
 )
-from server.training.semantic_actions.arguments import (
-    InvalidSemanticActionRejected,
-    SemanticArgumentPrefix,
-    SemanticArgumentTrace,
-    semantic_prefix_state,
+from server.training.semantic_actions.choices import (
+    ActionPrefix,
+    ActionTrace,
+    InvalidActionRejected,
+    action_prefix_cards,
 )
 from server.training.semantic_actions.query import ActionQuery
 from server.training.semantic_actions.values import GeneratedAction
@@ -31,26 +31,26 @@ class DiscardLegalActionIndex(LegalActionIndex):
         return self._query
 
     def decode(
-        self, trace: SemanticArgumentTrace
+        self, trace: ActionTrace
     ) -> Ok[GeneratedAction] | Rejected:
         if not trace_is_selection_only(trace):
-            return InvalidSemanticActionRejected(
+            return InvalidActionRejected(
                 "exact-count 动作不能包含终止参数"
             )
-        selected_result = semantic_prefix_state(
-            SemanticArgumentPrefix(arguments=trace.arguments)
+        selected_result = action_prefix_cards(
+            ActionPrefix(choices=trace.choices)
         )
         if isinstance(selected_result, Rejected):
             return selected_result
         selected = selected_result.value
         if face_count_width(selected) != self._required_count():
-            return InvalidSemanticActionRejected("埋牌数量不满足规则")
+            return InvalidActionRejected("埋牌数量不满足规则")
         return Ok(
             value=GeneratedAction(
                 action_kind="discard",
                 message_type="discard",
                 face_counts=selected,
-                semantic_trace=trace,
+                trace=trace,
                 is_pass=False,
             )
         )

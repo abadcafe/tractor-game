@@ -19,40 +19,42 @@ from server.game.protocol import ScoringSnapshot
 from server.game.rules.card_faces import CardFace, FaceCount
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
+from server.training.observation_memory import ObservationMemory
 from server.training.player import TrainingPlayer
 from server.training.policy import PolicyDecision
 from server.training.policy_sampling import DecisionHandle
 from server.training.sampling import PolicyDecisionKey
 from server.training.semantic_action_plan import (
-    SemanticActionSampler,
-    SemanticArgumentLogitDecoder,
+    ActionChoiceLogitDecoder,
+    ActionSampler,
     action_plan_generation_step_count,
+    action_trace_from_choice_ids,
     compile_legal_action_frame,
     plan_batch_to_device,
-    semantic_trace_from_token_ids,
 )
-from server.training.semantic_actions import (
-    SemanticArgumentTrace,
+from server.training.semantic_actions import ActionTrace
+from server.training.semantic_actions.choices import (
+    ACTION_CHOICE_COUNT,
 )
-from server.training.semantic_actions.codec import SEMANTIC_CODEC
-from server.training.tokens import GlobalFieldToken, RoundFieldToken
+from server.training.tokenization import GlobalToken, RoundToken
+from server.training.tokenization.payloads import RoundField
 from server.training.trajectory import TrajectoryRecorder
 
 
 @dataclass(slots=True)
-class _ZeroLogitDecoder:
+class _ZeroChoiceDecoder:
     batch_size: int
     device: torch.device
 
-    def next_logits(self) -> torch.Tensor:
+    def next_choice_logits(self) -> torch.Tensor:
         return torch.zeros(
-            (self.batch_size, SEMANTIC_CODEC.argument_vocab_size),
+            (self.batch_size, ACTION_CHOICE_COUNT),
             dtype=torch.float32,
             device=self.device,
         )
 
-    def advance(self, selected_token_ids: torch.Tensor) -> None:
-        assert selected_token_ids.shape == (self.batch_size,)
+    def advance(self, selected_choice_ids: torch.Tensor) -> None:
+        assert selected_choice_ids.shape == (self.batch_size,)
 
 
 class FirstCardPlayPolicy:
@@ -79,27 +81,23 @@ class FirstCardPlayPolicy:
                     policy_version=decision_key.policy_version,
                     row_index=decision_key.decision_index,
                 ),
-                choice_count=len(
-                    decoded.value.semantic_trace.arguments
-                ),
+                choice_count=len(decoded.value.trace.choices),
             )
         )
 
 
 def _first_legal_trace(
     legal_actions: LegalActionIndex,
-) -> Ok[SemanticArgumentTrace] | Rejected:
+) -> Ok[ActionTrace] | Rejected:
     device = torch.device("cpu")
     action_plan = compile_legal_action_frame(legal_actions)
     generation_steps = action_plan_generation_step_count(action_plan)
     batch = plan_batch_to_device((action_plan,), device=device)
 
-    logit_decoder: SemanticArgumentLogitDecoder = _ZeroLogitDecoder(
+    logit_decoder: ActionChoiceLogitDecoder = _ZeroChoiceDecoder(
         batch_size=1, device=device
     )
-    sampler = SemanticActionSampler.create(
-        batch_capacity=1, device=device
-    )
+    sampler = ActionSampler.create(batch_capacity=1, device=device)
     sample_result = sampler.sample(
         action_batch=batch,
         generation_step_counts=torch.tensor(
@@ -116,10 +114,10 @@ def _first_legal_trace(
     sample = sample_result.value
     step_count = int(sample.step_counts[0].item())
     trace_ids = tuple(
-        int(sample.selected_token_ids_padded[0, index].item())
+        int(sample.choice_ids_padded[0, index].item())
         for index in range(step_count)
     )
-    return semantic_trace_from_token_ids(trace_ids)
+    return action_trace_from_choice_ids(trace_ids)
 
 
 class CapturingFirstCardPlayPolicy(FirstCardPlayPolicy):
@@ -167,6 +165,7 @@ async def test_training_player_submits_action_without_hints() -> None:
         index=0,
         policy=FirstCardPlayPolicy(),
         recorder=recorder,
+        observation_memory=_observation_memory(last_seq=0),
     )
 
     await player.on_state(game, make_state_message(snapshot, seq=1))
@@ -199,6 +198,7 @@ async def test_training_player_records_action_after_acceptance() -> (
         index=0,
         policy=FirstCardPlayPolicy(),
         recorder=recorder,
+        observation_memory=_observation_memory(last_seq=0),
     )
 
     await player.on_state(game, make_state_message(snapshot, seq=1))
@@ -228,6 +228,7 @@ async def test_training_player_returns_policy_rejection() -> None:
     player = TrainingPlayer(
         index=0,
         policy=RejectingPolicy(),
+        observation_memory=_observation_memory(last_seq=0),
     )
 
     await player.on_state(game, make_state_message(snapshot, seq=1))
@@ -257,13 +258,12 @@ async def test_acceptance_contract_requires_seq_advance() -> None:
         index=0,
         policy=FirstCardPlayPolicy(),
         recorder=recorder,
+        observation_memory=_observation_memory(last_seq=6),
     )
 
     await player.on_state(game, make_state_message(snapshot, seq=7))
     await asyncio.sleep(0.05)
-    await player.on_state(
-        game, make_state_message(accepted_snapshot, seq=7)
-    )
+    await player.on_state(game, make_state_message(snapshot, seq=7))
     assert recorder.steps() == ()
 
     await player.on_state(
@@ -338,6 +338,7 @@ async def test_training_player_observation_uses_rules_plan() -> None:
     player = TrainingPlayer(
         index=0,
         policy=policy,
+        observation_memory=_observation_memory(last_seq=0),
     )
 
     await player.on_state(game, make_state_message(snapshot, seq=1))
@@ -345,8 +346,22 @@ async def test_training_player_observation_uses_rules_plan() -> None:
 
     observation = policy.observation
     assert observation is not None
-    assert GlobalFieldToken("required_level", "A") in observation.tokens
-    assert (
-        RoundFieldToken("self_team_required_level", "A")
-        in observation.tokens
+    payloads = tuple(node.payload for node in observation.tokens)
+    assert any(isinstance(payload, GlobalToken) for payload in payloads)
+    assert any(
+        isinstance(payload, RoundToken)
+        and payload.field == RoundField.OWN_TARGET
+        for payload in payloads
     )
+
+
+def _observation_memory(*, last_seq: int) -> ObservationMemory:
+    memory = ObservationMemory()
+    result = memory.observe(
+        make_state_message(
+            make_snapshot(phase="WAITING", awaiting_action=None),
+            seq=last_seq,
+        )
+    )
+    assert isinstance(result, Ok)
+    return memory

@@ -22,41 +22,41 @@ from server.training.legal_actions import (
     build_legal_action_index,
 )
 from server.training.semantic_action_plan import (
-    SemanticActionSampler,
-    SemanticArgumentLogitDecoder,
+    ActionChoiceLogitDecoder,
+    ActionSampler,
     action_plan_generation_step_count,
     compile_legal_action_frame,
     plan_batch_to_device,
 )
 from server.training.semantic_actions import (
-    SemanticArgument,
-    SemanticArgumentTrace,
+    ActionChoice,
+    ActionTrace,
 )
-from server.training.semantic_actions.codec import (
-    SEMANTIC_CODEC,
-    semantic_argument_id,
+from server.training.semantic_actions.choices import (
+    ACTION_CHOICE_COUNT,
+    action_choice_id,
 )
 
 
 @dataclass(slots=True)
-class _PreferredTokenDecoder:
-    target_token_id: int
+class _PreferredChoiceDecoder:
+    target_choice_id: int
     batch_size: int
     device: torch.device
     step_index: int = 0
 
-    def next_logits(self) -> torch.Tensor:
+    def next_choice_logits(self) -> torch.Tensor:
         logits = torch.zeros(
-            (self.batch_size, SEMANTIC_CODEC.argument_vocab_size),
+            (self.batch_size, ACTION_CHOICE_COUNT),
             dtype=torch.float32,
             device=self.device,
         )
         if self.step_index == 0:
-            logits[:, self.target_token_id] = 100.0
+            logits[:, self.target_choice_id] = 100.0
         return logits
 
-    def advance(self, selected_token_ids: torch.Tensor) -> None:
-        assert selected_token_ids.shape == (self.batch_size,)
+    def advance(self, selected_choice_ids: torch.Tensor) -> None:
+        assert selected_choice_ids.shape == (self.batch_size,)
         self.step_index += 1
 
 
@@ -84,10 +84,10 @@ def test_build_legal_action_index_ignores_action_hints_for_follow() -> (
     )
 
     decoded_heart = legal_actions.decode(
-        SemanticArgumentTrace(arguments=(_select(heart, 1),))
+        ActionTrace(choices=(_card_choice(heart, 1),))
     )
     rejected_spade = legal_actions.decode(
-        SemanticArgumentTrace(arguments=(_select(spade, 1),))
+        ActionTrace(choices=(_card_choice(spade, 1),))
     )
 
     assert isinstance(decoded_heart, Ok)
@@ -114,10 +114,10 @@ def test_follow_decode_accepts_only_full_rule_legal_play() -> None:
     )
 
     decoded = legal_actions.decode(
-        SemanticArgumentTrace(arguments=(_select(heart, 1),))
+        ActionTrace(choices=(_card_choice(heart, 1),))
     )
     rejected = legal_actions.decode(
-        SemanticArgumentTrace(arguments=(_select(spade, 1),))
+        ActionTrace(choices=(_card_choice(spade, 1),))
     )
 
     assert isinstance(decoded, Ok)
@@ -138,16 +138,16 @@ def test_lead_mask_keeps_selected_cards_in_one_effective_suit() -> None:
     )
 
     decoded_stop = legal_actions.decode(
-        SemanticArgumentTrace(
-            arguments=(_select(heart, 1), SemanticArgument("stop"))
+        ActionTrace(
+            choices=(_card_choice(heart, 1), ActionChoice("finish"))
         )
     )
     rejected_mixed = legal_actions.decode(
-        SemanticArgumentTrace(
-            arguments=(
-                _select(heart, 1),
-                _select(spade, 1),
-                SemanticArgument("stop"),
+        ActionTrace(
+            choices=(
+                _card_choice(heart, 1),
+                _card_choice(spade, 1),
+                ActionChoice("finish"),
             )
         )
     )
@@ -177,14 +177,12 @@ def test_discard_auto_completes_at_exact_count_without_stop() -> None:
         snapshot=snapshot,
     )
 
-    trace = SemanticArgumentTrace(
-        arguments=(_select(first, 1), _select(second, 1))
+    trace = ActionTrace(
+        choices=(_card_choice(first, 1), _card_choice(second, 1))
     )
 
     rejected_extra_stop = legal_actions.decode(
-        SemanticArgumentTrace(
-            arguments=(*trace.arguments, SemanticArgument("stop"))
-        )
+        ActionTrace(choices=(*trace.choices, ActionChoice("finish")))
     )
     assert isinstance(legal_actions.decode(trace), Ok)
     assert isinstance(rejected_extra_stop, Rejected)
@@ -214,10 +212,10 @@ def test_bid_current_winner_can_only_pass() -> None:
     )
 
     pass_result = legal_actions.decode(
-        SemanticArgumentTrace(arguments=(SemanticArgument("pass"),))
+        ActionTrace(choices=(ActionChoice("pass"),))
     )
     select_result = legal_actions.decode(
-        SemanticArgumentTrace(arguments=(_select(first, 1),))
+        ActionTrace(choices=(_card_choice(first, 1),))
     )
 
     assert isinstance(pass_result, Ok)
@@ -265,25 +263,25 @@ def test_stir_mask_uses_current_priority() -> None:
         snapshot=snapshot,
     )
     pass_result = legal_actions.decode(
-        SemanticArgumentTrace(arguments=(SemanticArgument("pass"),))
+        ActionTrace(choices=(ActionChoice("pass"),))
     )
-    spade_token = semantic_argument_id(_select(spade_first, 2))
-    diamond_token = semantic_argument_id(_select(diamond_first, 2))
+    spade_choice = action_choice_id(_card_choice(spade_first, 2))
+    diamond_choice = action_choice_id(_card_choice(diamond_first, 2))
 
     assert isinstance(pass_result, Ok)
     assert (
-        _sampled_first_token_id(
+        _sampled_first_choice_id(
             legal_actions=legal_actions,
-            target_token_id=spade_token,
+            target_choice_id=spade_choice,
         )
-        == spade_token
+        == spade_choice
     )
     assert (
-        _sampled_first_token_id(
+        _sampled_first_choice_id(
             legal_actions=legal_actions,
-            target_token_id=diamond_token,
+            target_choice_id=diamond_choice,
         )
-        != diamond_token
+        != diamond_choice
     )
 
 
@@ -340,25 +338,25 @@ def test_stir_mask_uses_stir_event_priority_over_bid_winner() -> None:
         snapshot=snapshot,
     )
     pass_result = legal_actions.decode(
-        SemanticArgumentTrace(arguments=(SemanticArgument("pass"),))
+        ActionTrace(choices=(ActionChoice("pass"),))
     )
-    heart_token = semantic_argument_id(_select(heart_first, 2))
-    joker_token = semantic_argument_id(_select(small_joker_first, 2))
+    heart_choice = action_choice_id(_card_choice(heart_first, 2))
+    joker_choice = action_choice_id(_card_choice(small_joker_first, 2))
 
     assert isinstance(pass_result, Ok)
     assert (
-        _sampled_first_token_id(
+        _sampled_first_choice_id(
             legal_actions=legal_actions,
-            target_token_id=heart_token,
+            target_choice_id=heart_choice,
         )
-        != heart_token
+        != heart_choice
     )
     assert (
-        _sampled_first_token_id(
+        _sampled_first_choice_id(
             legal_actions=legal_actions,
-            target_token_id=joker_token,
+            target_choice_id=joker_choice,
         )
-        == joker_token
+        == joker_choice
     )
 
 
@@ -383,9 +381,9 @@ def _trick(
     )
 
 
-def _select(card_value: Card, count: int) -> SemanticArgument:
-    return SemanticArgument(
-        "select_face_count",
+def _card_choice(card_value: Card, count: int) -> ActionChoice:
+    return ActionChoice(
+        "card",
         FaceCount(
             CardFace(card_value.suit, card_value.rank),
             count,
@@ -393,24 +391,20 @@ def _select(card_value: Card, count: int) -> SemanticArgument:
     )
 
 
-def _sampled_first_token_id(
-    *, legal_actions: LegalActionIndex, target_token_id: int
+def _sampled_first_choice_id(
+    *, legal_actions: LegalActionIndex, target_choice_id: int
 ) -> int:
     device = torch.device("cpu")
     action_plan = compile_legal_action_frame(legal_actions)
     generation_steps = action_plan_generation_step_count(action_plan)
     action_batch = plan_batch_to_device((action_plan,), device=device)
 
-    logit_decoder: SemanticArgumentLogitDecoder = (
-        _PreferredTokenDecoder(
-            target_token_id=target_token_id,
-            batch_size=1,
-            device=device,
-        )
+    logit_decoder: ActionChoiceLogitDecoder = _PreferredChoiceDecoder(
+        target_choice_id=target_choice_id,
+        batch_size=1,
+        device=device,
     )
-    sampler = SemanticActionSampler.create(
-        batch_capacity=1, device=device
-    )
+    sampler = ActionSampler.create(batch_capacity=1, device=device)
     sample_result = sampler.sample(
         action_batch=action_batch,
         generation_step_counts=torch.tensor(
@@ -426,5 +420,5 @@ def _sampled_first_token_id(
         logit_decoder=logit_decoder,
     )
     assert isinstance(sample_result, Ok)
-    first_token = sample_result.value.selected_token_ids_padded[0, 0]
-    return int(first_token.item())
+    first_choice = sample_result.value.choice_ids_padded[0, 0]
+    return int(first_choice.item())

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from server.training.policy_inference_batch.types import (
     PolicyRequestRoute,
 )
-from server.training.policy_sampling import CompactTraceTokenIds
+from server.training.policy_sampling import CompactActionChoiceIds
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,14 +29,14 @@ class CompletedPolicyResponse:
     """Successful policy inference response."""
 
     route: PolicyRequestRoute
-    trace_token_ids: CompactTraceTokenIds
+    action_choice_ids: CompactActionChoiceIds
     decision_handle_model_rank: int
     decision_handle_policy_version: int
     decision_handle_row_index: int
     choice_count: int
 
     def __post_init__(self) -> None:
-        assert len(self.trace_token_ids) > 0
+        assert len(self.action_choice_ids) > 0
         assert self.decision_handle_model_rank >= 0
         assert self.decision_handle_policy_version >= 0
         assert self.decision_handle_row_index >= 0

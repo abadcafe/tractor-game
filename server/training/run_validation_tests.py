@@ -19,9 +19,7 @@ def test_validate_training_run_accepts_initialized_run(
 ) -> None:
     initialized = initialize_training_run(
         run_dir=tmp_path,
-        model_config=ModelConfig(
-            d_model=2, layers=1, heads=1, max_tokens=512
-        ),
+        model_config=ModelConfig(d_model=8, layers=1, heads=1),
         train_config=TrainConfig(),
     )
     assert isinstance(initialized, Ok)
@@ -30,7 +28,7 @@ def test_validate_training_run_accepts_initialized_run(
 
     assert isinstance(result, Ok)
     assert result.value.total_updates == 0
-    assert result.value.model_config_values["d_model"] == 2
+    assert result.value.model_config_values["d_model"] == 8
 
 
 def test_validate_training_run_accepts_observation_tail(
@@ -38,9 +36,7 @@ def test_validate_training_run_accepts_observation_tail(
 ) -> None:
     initialized = initialize_training_run(
         run_dir=tmp_path,
-        model_config=ModelConfig(
-            d_model=2, layers=1, heads=1, max_tokens=512
-        ),
+        model_config=ModelConfig(d_model=8, layers=1, heads=1),
         train_config=TrainConfig(),
     )
     assert isinstance(initialized, Ok)
@@ -62,9 +58,7 @@ def test_validate_training_run_rejects_state_hash_mismatch(
 ) -> None:
     initialized = initialize_training_run(
         run_dir=tmp_path,
-        model_config=ModelConfig(
-            d_model=2, layers=1, heads=1, max_tokens=512
-        ),
+        model_config=ModelConfig(d_model=8, layers=1, heads=1),
         train_config=TrainConfig(),
     )
     assert isinstance(initialized, Ok)
@@ -84,9 +78,7 @@ def test_validate_training_run_rejects_missing_database(
 ) -> None:
     initialized = initialize_training_run(
         run_dir=tmp_path,
-        model_config=ModelConfig(
-            d_model=2, layers=1, heads=1, max_tokens=512
-        ),
+        model_config=ModelConfig(d_model=8, layers=1, heads=1),
         train_config=TrainConfig(),
     )
     assert isinstance(initialized, Ok)

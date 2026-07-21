@@ -1,4 +1,4 @@
-"""Tensorization helpers for torch training."""
+"""Tensorization of compact typed observations."""
 
 from __future__ import annotations
 
@@ -9,143 +9,140 @@ from torch import Tensor
 
 from server.training.observation import Observation
 from server.training.packed_observation import (
-    OBSERVATION_COMPONENT_COUNT,
+    MAX_LOSSLESS_OBSERVATION_TOKENS,
     PackedObservation,
     pack_observation,
     padded_packed_observation,
 )
+from server.training.semantic_actions.choices import CARD_CHOICE_COUNT
 from server.training.tensor_staging import staged_tensor
+from server.training.tokenization.encoding_schema import CATEGORY_COUNT
 
 
 @dataclass(frozen=True, slots=True)
 class ObservationTensorBatch:
-    """Packed model input tensors for a batch of observations."""
+    """Device tensors for one batch of typed token sequences."""
 
-    component_ids: Tensor
-    numeric_values: Tensor
-    numeric_masks: Tensor
+    category_ids: Tensor
+    scalar_values: Tensor
+    card_rule_values: Tensor
+    coordinate_values: Tensor
+    coordinate_masks: Tensor
+    candidate_category_ids: Tensor
+    candidate_counts: Tensor
+    candidate_card_rule_values: Tensor
+    query_indices: Tensor
 
-
-@dataclass(frozen=True, slots=True)
-class ObservationComponentTensorBatch:
-    """Named tensor views over packed observation component ids."""
-
-    token_type_ids: Tensor
-    segment_ids: Tensor
-    field_ids: Tensor
-    value_ids: Tensor
-    suit_ids: Tensor
-    rank_ids: Tensor
-    points_ids: Tensor
-    color_ids: Tensor
-    role_ids: Tensor
-    trick_age_ids: Tensor
-    trick_state_ids: Tensor
-    play_order_ids: Tensor
-    count_ids: Tensor
-    play_width_ids: Tensor
-    event_age_ids: Tensor
+    def __post_init__(self) -> None:
+        assert self.category_ids.ndim == 3
+        assert int(self.category_ids.shape[2]) == CATEGORY_COUNT
+        batch, tokens = self.category_ids.shape[:2]
+        assert self.scalar_values.shape == (batch, tokens)
+        assert self.card_rule_values.shape == (batch, tokens, 2)
+        assert self.coordinate_values.shape == (batch, tokens, 3)
+        assert self.coordinate_masks.shape == (batch, tokens, 3)
+        assert self.candidate_category_ids.shape == (
+            batch,
+            CARD_CHOICE_COUNT,
+            3,
+        )
+        assert self.candidate_counts.shape == (
+            batch,
+            CARD_CHOICE_COUNT,
+        )
+        assert self.candidate_card_rule_values.shape == (
+            batch,
+            CARD_CHOICE_COUNT,
+            2,
+        )
+        assert self.query_indices.shape == (batch,)
 
 
 def tensorize_observation(
-    *,
-    observation: Observation,
-    max_observation_tokens: int,
-    device: torch.device,
+    *, observation: Observation, device: torch.device
 ) -> ObservationTensorBatch:
-    """Tensorize one observation as batch size 1."""
+    """Tensorize one observation as batch size one."""
     return tensorize_observations(
-        observations=(observation,),
-        max_observation_tokens=max_observation_tokens,
-        device=device,
+        observations=(observation,), device=device
     )
 
 
 def tensorize_observations(
-    *,
-    observations: tuple[Observation, ...],
-    max_observation_tokens: int,
-    device: torch.device,
+    *, observations: tuple[Observation, ...], device: torch.device
 ) -> ObservationTensorBatch:
-    """Tensorize observations as one batch."""
+    """Pack and tensorize one non-empty observation batch."""
     assert observations
     return tensorize_packed_observations(
         observations=tuple(
-            pack_observation(observation)
-            for observation in observations
+            pack_observation(item) for item in observations
         ),
-        max_observation_tokens=max_observation_tokens,
         device=device,
     )
 
 
 def tensorize_packed_observations(
-    *,
-    observations: tuple[PackedObservation, ...],
-    max_observation_tokens: int,
-    device: torch.device,
+    *, observations: tuple[PackedObservation, ...], device: torch.device
 ) -> ObservationTensorBatch:
-    """Tensorize packed observations as one batch."""
-    assert max_observation_tokens > 0
+    """Tensorize prepacked observations with batch-local padding."""
     assert observations
-    batch_token_count = max(
-        observation.token_count() for observation in observations
-    )
-    assert batch_token_count <= max_observation_tokens
+    token_count = max(item.token_count() for item in observations)
+    assert token_count <= MAX_LOSSLESS_OBSERVATION_TOKENS
     rows = tuple(
-        padded_packed_observation(
-            observation,
-            max_observation_tokens=batch_token_count,
-        )
-        for observation in observations
+        padded_packed_observation(item, token_count=token_count)
+        for item in observations
     )
     return ObservationTensorBatch(
-        component_ids=_component_tensor_rows(
-            tuple(row.component_rows for row in rows), device
+        category_ids=staged_tensor(
+            tuple(item.category_rows for item in rows),
+            dtype=torch.long,
+            device=device,
         ),
-        numeric_values=_numeric_tensor_rows(
-            tuple(row.numeric_value_rows for row in rows), device
+        scalar_values=staged_tensor(
+            tuple(item.scalar_values for item in rows),
+            dtype=torch.float32,
+            device=device,
         ),
-        numeric_masks=_numeric_tensor_rows(
-            tuple(row.numeric_mask_rows for row in rows), device
+        card_rule_values=staged_tensor(
+            tuple(item.card_rule_rows for item in rows),
+            dtype=torch.float32,
+            device=device,
+        ),
+        coordinate_values=staged_tensor(
+            tuple(item.coordinate_rows for item in rows),
+            dtype=torch.long,
+            device=device,
+        ),
+        coordinate_masks=staged_tensor(
+            tuple(item.coordinate_mask_rows for item in rows),
+            dtype=torch.bool,
+            device=device,
+        ),
+        candidate_category_ids=staged_tensor(
+            tuple(item.candidate_category_rows for item in rows),
+            dtype=torch.long,
+            device=device,
+        ),
+        candidate_counts=staged_tensor(
+            tuple(item.candidate_counts for item in rows),
+            dtype=torch.float32,
+            device=device,
+        ),
+        candidate_card_rule_values=staged_tensor(
+            tuple(item.candidate_card_rule_rows for item in rows),
+            dtype=torch.float32,
+            device=device,
+        ),
+        query_indices=staged_tensor(
+            tuple(item.query_index for item in rows),
+            dtype=torch.long,
+            device=device,
         ),
     )
 
 
-def observation_component_tensors(
-    batch: ObservationTensorBatch,
-) -> ObservationComponentTensorBatch:
-    """Return named component-id tensor views for a packed batch."""
-    component_ids = batch.component_ids
-    assert int(component_ids.shape[2]) == OBSERVATION_COMPONENT_COUNT
-    return ObservationComponentTensorBatch(
-        token_type_ids=component_ids[:, :, 0],
-        segment_ids=component_ids[:, :, 1],
-        field_ids=component_ids[:, :, 2],
-        value_ids=component_ids[:, :, 3],
-        suit_ids=component_ids[:, :, 4],
-        rank_ids=component_ids[:, :, 5],
-        points_ids=component_ids[:, :, 6],
-        color_ids=component_ids[:, :, 7],
-        role_ids=component_ids[:, :, 8],
-        trick_age_ids=component_ids[:, :, 9],
-        trick_state_ids=component_ids[:, :, 10],
-        play_order_ids=component_ids[:, :, 11],
-        count_ids=component_ids[:, :, 12],
-        play_width_ids=component_ids[:, :, 13],
-        event_age_ids=component_ids[:, :, 14],
-    )
-
-
-def _component_tensor_rows(
-    values: tuple[tuple[tuple[int, ...], ...], ...],
-    device: torch.device,
-) -> Tensor:
-    return staged_tensor(values, dtype=torch.long, device=device)
-
-
-def _numeric_tensor_rows(
-    values: tuple[tuple[tuple[float, ...], ...], ...],
-    device: torch.device,
-) -> Tensor:
-    return staged_tensor(values, dtype=torch.float32, device=device)
+__all__ = (
+    "ObservationTensorBatch",
+    "tensorize_observation",
+    "tensorize_observations",
+    "tensorize_packed_observations",
+)

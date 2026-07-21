@@ -23,7 +23,7 @@ from server.training.policy_sampling.model_rank_sample_arena import (
 )
 from server.training.sampling import PolicyDecisionKey
 from server.training.semantic_action_plan import (
-    SemanticActionSampler,
+    ActionSampler,
 )
 from server.training.torch_sampler import sample_policy_batch_into_arena
 
@@ -45,11 +45,8 @@ class TorchTrainingPolicy:
             model_rank_index=0,
             device=device,
         )
-        self.compiler = PolicyRequestCompiler(
-            batch_capacity=1,
-            max_observation_tokens=self.config.max_tokens,
-        )
-        self.sampler = SemanticActionSampler.create(
+        self.compiler = PolicyRequestCompiler(batch_capacity=1)
+        self.sampler = ActionSampler.create(
             batch_capacity=1,
             device=device,
         )

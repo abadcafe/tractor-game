@@ -16,15 +16,15 @@ from server.training.policy_inference_batch.response_types import (
     RejectedPolicyResponse,
 )
 from server.training.policy_sampling import (
+    CompactActionChoiceIds,
     CompactPolicyDecisionBatch,
-    CompactTraceTokenIds,
     DecisionHandle,
 )
 from server.training.semantic_action_plan import (
-    semantic_trace_from_token_ids,
+    action_trace_from_choice_ids,
 )
 
-WIRE_RESPONSE_BATCH_MAGIC = 0x5452504F4C4F4332
+WIRE_RESPONSE_BATCH_MAGIC = 0x5452504F4C4F4333
 
 _I64 = struct.Struct("<q")
 _STATUS_COMPLETED = 1
@@ -35,7 +35,7 @@ _HEADER_BYTES = _HEADER_WORD_COUNT * _I64.size
 _MAGIC_INDEX = 0
 _TOTAL_BYTES_INDEX = 1
 _ROW_COUNT_INDEX = 2
-_MAX_TRACE_COUNT_INDEX = 3
+_MAX_CHOICE_COUNT_INDEX = 3
 _REASON_BYTES_INDEX = 4
 
 
@@ -47,17 +47,17 @@ def encode_policy_response_batch_wire(
         return Rejected(reason="policy response batch is empty")
     layout = _response_layout(
         row_count=len(responses),
-        max_trace_count=_max_trace_count(responses),
+        max_choice_count=_max_choice_count(responses),
         reason_byte_count=_reason_byte_count(responses),
     )
     data = bytearray(layout.total_bytes)
     _write_header(
         data=data,
         row_count=len(responses),
-        max_trace_count=layout.max_trace_count,
+        max_choice_count=layout.max_choice_count,
         reason_byte_count=layout.reason_byte_count,
     )
-    trace_base = layout.trace_tokens_offset
+    choice_base = layout.action_choice_ids_offset
     reason_offset = 0
     for row_index, response in enumerate(responses):
         _write_i64_column(
@@ -91,11 +91,14 @@ def encode_policy_response_batch_wire(
             row_index=row_index,
             response=response,
         )
-        trace_start = (
-            trace_base + row_index * layout.max_trace_count * _I64.size
+        choice_start = (
+            choice_base
+            + row_index * layout.max_choice_count * _I64.size
         )
-        trace_bytes = response.trace_token_ids.encoded_i64
-        data[trace_start : trace_start + len(trace_bytes)] = trace_bytes
+        choice_bytes = response.action_choice_ids.encoded_i64
+        data[choice_start : choice_start + len(choice_bytes)] = (
+            choice_bytes
+        )
     return Ok(value=PolicyResponseBatchWire(data=bytes(data)))
 
 
@@ -114,8 +117,8 @@ def build_completed_policy_responses(
         responses.append(
             CompletedPolicyResponse(
                 route=route,
-                trace_token_ids=(
-                    decisions.trace_token_batch.compact_row(row_index)
+                action_choice_ids=(
+                    decisions.action_choice_batch.compact_row(row_index)
                 ),
                 decision_handle_model_rank=decisions.model_rank_index,
                 decision_handle_policy_version=(
@@ -196,8 +199,8 @@ def decode_policy_response(
     """Decode a response through the worker-side rule index."""
     if isinstance(response, RejectedPolicyResponse):
         return Rejected(reason=response.reason)
-    trace_result = semantic_trace_from_token_ids(
-        response.trace_token_ids.to_tuple()
+    trace_result = action_trace_from_choice_ids(
+        response.action_choice_ids.to_tuple()
     )
     if isinstance(trace_result, Rejected):
         return trace_result
@@ -224,14 +227,14 @@ class _ResponseLayout:
         self,
         *,
         row_count: int,
-        max_trace_count: int,
+        max_choice_count: int,
         reason_byte_count: int,
     ) -> None:
         assert row_count > 0
-        assert max_trace_count >= 0
+        assert max_choice_count >= 0
         assert reason_byte_count >= 0
         self.row_count = row_count
-        self.max_trace_count = max_trace_count
+        self.max_choice_count = max_choice_count
         self.reason_byte_count = reason_byte_count
         offset = _HEADER_BYTES
         self.worker_indices_offset = offset
@@ -248,22 +251,22 @@ class _ResponseLayout:
         offset += row_count * _I64.size
         self.choice_counts_offset = offset
         offset += row_count * _I64.size
-        self.trace_counts_offset = offset
+        self.action_choice_counts_offset = offset
         offset += row_count * _I64.size
         self.reason_offsets_offset = offset
         offset += row_count * _I64.size
         self.reason_lengths_offset = offset
         offset += row_count * _I64.size
-        self.trace_tokens_offset = offset
-        offset += row_count * max_trace_count * _I64.size
+        self.action_choice_ids_offset = offset
+        offset += row_count * max_choice_count * _I64.size
         self.reason_bytes_offset = offset
         self.total_bytes = offset + reason_byte_count
 
 
-def _max_trace_count(responses: tuple[PolicyResponse, ...]) -> int:
+def _max_choice_count(responses: tuple[PolicyResponse, ...]) -> int:
     return max(
         (
-            len(response.trace_token_ids)
+            len(response.action_choice_ids)
             for response in responses
             if isinstance(response, CompletedPolicyResponse)
         ),
@@ -280,11 +283,11 @@ def _reason_byte_count(responses: tuple[PolicyResponse, ...]) -> int:
 
 
 def _response_layout(
-    *, row_count: int, max_trace_count: int, reason_byte_count: int
+    *, row_count: int, max_choice_count: int, reason_byte_count: int
 ) -> _ResponseLayout:
     return _ResponseLayout(
         row_count=row_count,
-        max_trace_count=max_trace_count,
+        max_choice_count=max_choice_count,
         reason_byte_count=reason_byte_count,
     )
 
@@ -293,14 +296,14 @@ def _write_header(
     *,
     data: bytearray,
     row_count: int,
-    max_trace_count: int,
+    max_choice_count: int,
     reason_byte_count: int,
 ) -> None:
     words = (
         WIRE_RESPONSE_BATCH_MAGIC,
         len(data),
         row_count,
-        max_trace_count,
+        max_choice_count,
         reason_byte_count,
     )
     for index, word in enumerate(words):
@@ -343,9 +346,9 @@ def _write_completed_row(
     )
     _write_i64_column(
         data,
-        layout.trace_counts_offset,
+        layout.action_choice_counts_offset,
         row_index,
-        len(response.trace_token_ids),
+        len(response.action_choice_ids),
     )
 
 
@@ -383,15 +386,15 @@ def _decode_shape(data: bytes) -> Ok[_ResponseLayout] | Rejected:
             reason="policy response batch wire length mismatch"
         )
     row_count = _read_i64(data, _ROW_COUNT_INDEX)
-    max_trace_count = _read_i64(data, _MAX_TRACE_COUNT_INDEX)
+    max_choice_count = _read_i64(data, _MAX_CHOICE_COUNT_INDEX)
     reason_byte_count = _read_i64(data, _REASON_BYTES_INDEX)
     if row_count <= 0:
         return Rejected(reason="policy response batch is empty")
-    if max_trace_count < 0 or reason_byte_count < 0:
+    if max_choice_count < 0 or reason_byte_count < 0:
         return Rejected(reason="policy response batch shape is invalid")
     layout = _response_layout(
         row_count=row_count,
-        max_trace_count=max_trace_count,
+        max_choice_count=max_choice_count,
         reason_byte_count=reason_byte_count,
     )
     if layout.total_bytes != len(data):
@@ -459,10 +462,13 @@ def _decode_completed_response(
     row_index: int,
     route: PolicyRequestRoute,
 ) -> Ok[PolicyResponse] | Rejected:
-    trace_count = _read_i64_column(
-        data, layout.trace_counts_offset, row_index
+    action_choice_count = _read_i64_column(
+        data, layout.action_choice_counts_offset, row_index
     )
-    if trace_count <= 0 or trace_count > layout.max_trace_count:
+    if (
+        action_choice_count <= 0
+        or action_choice_count > layout.max_choice_count
+    ):
         return Rejected(reason="policy response trace length mismatch")
     model_rank_index = _read_i64_column(
         data, layout.model_rank_indices_offset, row_index
@@ -483,18 +489,21 @@ def _decode_completed_response(
         or choice_count <= 0
     ):
         return Rejected(reason="policy response handle is invalid")
-    trace_start = (
-        layout.trace_tokens_offset
-        + row_index * layout.max_trace_count * _I64.size
+    choice_start = (
+        layout.action_choice_ids_offset
+        + row_index * layout.max_choice_count * _I64.size
     )
-    trace_token_ids = CompactTraceTokenIds.from_i64_bytes(
-        data=data[trace_start : trace_start + trace_count * _I64.size],
-        count=trace_count,
+    action_choice_ids = CompactActionChoiceIds.from_i64_bytes(
+        data=data[
+            choice_start : choice_start
+            + action_choice_count * _I64.size
+        ],
+        count=action_choice_count,
     )
     return Ok(
         value=CompletedPolicyResponse(
             route=route,
-            trace_token_ids=trace_token_ids,
+            action_choice_ids=action_choice_ids,
             decision_handle_model_rank=model_rank_index,
             decision_handle_policy_version=policy_version,
             decision_handle_row_index=row_index_value,

@@ -36,7 +36,7 @@ from server.training.runtime.state import (
     load_runtime_training_state,
 )
 from server.training.semantic_action_plan import (
-    SemanticActionSampler,
+    ActionSampler,
 )
 from server.training.torch_sampler import sample_policy_batch_into_arena
 from server.training.training_state import (
@@ -55,7 +55,7 @@ class ModelReplica:
     execution_config: ExecutionConfig
     device: torch.device
     sample_arena: ModelRankSampleArena
-    sampler: SemanticActionSampler
+    sampler: ActionSampler
 
     def load_state(
         self,
@@ -155,7 +155,7 @@ def create_model_replica(
             model_rank_index=model_rank_index,
             device=device,
         ),
-        sampler=SemanticActionSampler.create(
+        sampler=ActionSampler.create(
             batch_capacity=execution_config.model_inference_batch_size,
             device=device,
         ),

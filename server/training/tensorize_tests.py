@@ -1,161 +1,119 @@
-"""Tests for torch tensorization of training observations."""
+"""Black-box tests for lossless typed observation tensorization."""
 
 from __future__ import annotations
-
-import subprocess
-import sys
 
 import torch
 
 from server.game.players.test_helpers import card, make_snapshot
-from server.training.feature_schema import NUMERIC_FEATURE_COUNT
-from server.training.observation import build_observation
+from server.game.rules.cards import Card
+from server.training.observation import Observation, build_observation
+from server.training.observation_memory import ObservationMemoryView
+from server.training.packed_observation import (
+    MAX_LOSSLESS_OBSERVATION_TOKENS,
+)
+from server.training.semantic_actions.choices import CARD_CHOICE_COUNT
 from server.training.tensorize import (
-    OBSERVATION_COMPONENT_COUNT,
-    observation_component_tensors,
     tensorize_observation,
     tensorize_observations,
 )
+from server.training.tokenization.encoding_schema import CATEGORY_COUNT
 
 
-def test_tensorize_observation_outputs_numeric_tensors() -> None:
-    observation = build_observation(
-        player_index=0,
-        snapshot=make_snapshot(defender_points=0),
-        history=(),
+def test_tensorize_observation_exposes_every_typed_column() -> None:
+    observation = _observation(
+        player_hand=[
+            card("spades", "A", 1),
+            card("spades", "A", 2),
+        ]
     )
 
     batch = tensorize_observation(
         observation=observation,
-        max_observation_tokens=128,
         device=torch.device("cpu"),
     )
 
-    assert batch.numeric_values.shape == (
+    token_count = len(observation.tokens)
+    assert batch.category_ids.shape == (1, token_count, CATEGORY_COUNT)
+    assert batch.scalar_values.shape == (1, token_count)
+    assert batch.card_rule_values.shape == (1, token_count, 2)
+    assert batch.coordinate_values.shape == (1, token_count, 3)
+    assert batch.coordinate_masks.shape == (1, token_count, 3)
+    assert batch.candidate_category_ids.shape == (
         1,
-        len(observation.tokens),
-        NUMERIC_FEATURE_COUNT,
+        CARD_CHOICE_COUNT,
+        3,
     )
-    assert batch.numeric_masks.shape == (
+    assert batch.candidate_counts.shape == (1, CARD_CHOICE_COUNT)
+    assert batch.candidate_card_rule_values.shape == (
         1,
-        len(observation.tokens),
-        NUMERIC_FEATURE_COUNT,
+        CARD_CHOICE_COUNT,
+        2,
     )
-    assert batch.component_ids.shape == (
-        1,
-        len(observation.tokens),
-        OBSERVATION_COMPONENT_COUNT,
-    )
-    assert batch.component_ids.dtype == torch.long
-    assert batch.numeric_values.dtype == torch.float32
-    assert batch.numeric_masks.dtype == torch.float32
-    assert batch.numeric_masks.sum().item() > 0.0
+    assert batch.query_indices.shape == (1,)
+    assert batch.category_ids.dtype == torch.long
+    assert batch.scalar_values.dtype == torch.float32
+    assert batch.coordinate_masks.dtype == torch.bool
 
 
-def test_tensorize_observations_use_batch_max_length() -> None:
-    short_observation = build_observation(
-        player_index=0,
-        snapshot=make_snapshot(player_hand=[card("spades", "A", 1)]),
-        history=(),
-    )
-    long_observation = build_observation(
-        player_index=0,
-        snapshot=make_snapshot(
-            player_hand=[
-                card("spades", "A", 1),
-                card("hearts", "K", 2),
-                card("clubs", "3", 1),
-            ]
-        ),
-        history=(),
+def test_tensorize_observations_pads_only_to_batch_maximum() -> None:
+    short = _observation(player_hand=[card("spades", "A", 1)])
+    long = _observation(
+        player_hand=[
+            card("spades", "A", 1),
+            card("hearts", "K", 2),
+            card("clubs", "3", 1),
+        ]
     )
 
     batch = tensorize_observations(
-        observations=(short_observation, long_observation),
-        max_observation_tokens=128,
+        observations=(short, long),
         device=torch.device("cpu"),
     )
 
-    assert len(short_observation.tokens) < len(long_observation.tokens)
-    expected_width = max(
-        len(short_observation.tokens), len(long_observation.tokens)
-    )
-    assert batch.component_ids.shape == (
-        2,
-        expected_width,
-        OBSERVATION_COMPONENT_COUNT,
-    )
-    assert batch.numeric_values.shape == (
-        2,
-        expected_width,
-        NUMERIC_FEATURE_COUNT,
-    )
+    assert len(short.tokens) < len(long.tokens)
+    assert batch.category_ids.shape[:2] == (2, len(long.tokens))
     assert (
-        batch.component_ids[0, len(short_observation.tokens) :, :]
-        .sum()
-        .item()
+        batch.category_ids[0, len(short.tokens) :, :].count_nonzero()
         == 0
     )
     assert (
-        batch.numeric_masks[0, len(short_observation.tokens) :, :]
-        .sum()
-        .item()
-        == 0.0
+        batch.coordinate_masks[
+            0, len(short.tokens) :, :
+        ].count_nonzero()
+        == 0
     )
+    assert len(long.tokens) <= MAX_LOSSLESS_OBSERVATION_TOKENS
 
 
-def test_tensorize_observation_crashes_on_oversized_observation() -> (
-    None
-):
-    completed: subprocess.CompletedProcess[str] = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import torch\n"
-                "from server.game.players.test_helpers import "
-                "make_snapshot\n"
-                "from server.training.observation import "
-                "build_observation\n"
-                "from server.training.tensorize import "
-                "tensorize_observation\n"
-                "observation = build_observation(\n"
-                "    player_index=0,\n"
-                "    snapshot=make_snapshot(),\n"
-                "    history=(),\n"
-                ")\n"
-                "tensorize_observation(\n"
-                "    observation=observation,\n"
-                "    max_observation_tokens=1,\n"
-                "    device=torch.device('cpu'),\n"
-                ")\n"
-            ),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
+def test_card_multiplicity_is_a_universal_scalar() -> None:
+    observation = _observation(
+        player_hand=[
+            card("spades", "A", 1),
+            card("spades", "A", 2),
+        ]
     )
-
-    assert completed.returncode != 0
-    assert "AssertionError" in completed.stderr
-
-
-def test_tensorize_observation_exposes_face_count_component() -> None:
-    first = card("spades", "A", 1)
-    second = card("spades", "A", 2)
-    observation = build_observation(
-        player_index=0,
-        snapshot=make_snapshot(player_hand=[first, second]),
-        history=(),
-    )
-
     batch = tensorize_observation(
         observation=observation,
-        max_observation_tokens=128,
         device=torch.device("cpu"),
     )
 
-    components = observation_component_tensors(batch)
+    scalar_values = batch.scalar_values[0]
+    assert 2.0 in tuple(
+        float(scalar_values[index].item())
+        for index in range(int(scalar_values.shape[0]))
+    )
+    candidate_counts = batch.candidate_counts[0]
+    assert {
+        float(candidate_counts[index].item())
+        for index in range(int(candidate_counts.shape[0]))
+    } == {1.0, 2.0}
 
-    assert components.count_ids.shape == (1, len(observation.tokens))
-    assert components.count_ids.max().item() > 0
+
+def _observation(*, player_hand: list[Card]) -> Observation:
+    return build_observation(
+        viewer=0,
+        snapshot=make_snapshot(player_hand=player_hand),
+        memory=ObservationMemoryView(
+            bid_actions=(), completed_tricks=()
+        ),
+    )

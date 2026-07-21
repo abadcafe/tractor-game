@@ -267,7 +267,7 @@ def _open_fake_runtime(
     ) -> Ok[_FakeRuntimePools] | Rejected:
         assert run_dir == Path("unused")
         assert run_id == "poisoned-runtime"
-        assert model_config.d_model == 4
+        assert model_config.d_model == 8
         assert train_config.ppo_epochs == 1
         assert execution_config.samples_per_update > 0
         return Ok(value=pools)
@@ -286,7 +286,7 @@ def _open_fake_runtime(
         run_dir=Path("unused"),
         run_id="poisoned-runtime",
         event_sink=NullEventSink(),
-        model_config=ModelConfig(d_model=4, layers=1, heads=1),
+        model_config=ModelConfig(d_model=8, layers=1, heads=1),
         train_config=TrainConfig(ppo_epochs=1),
         execution_config=execution_config,
     )
@@ -790,7 +790,7 @@ async def test_runtime_poisoned_after_sampling_stop_failure(
     ) -> Ok[_FakeRuntimePools] | Rejected:
         assert run_dir == Path("unused")
         assert run_id == "poisoned-runtime"
-        assert model_config.d_model == 4
+        assert model_config.d_model == 8
         assert train_config.ppo_epochs == 1
         assert execution_config.samples_per_update == 1
         return Ok(value=pools)
@@ -824,7 +824,7 @@ async def test_runtime_poisoned_after_sampling_stop_failure(
         run_dir=Path("unused"),
         run_id="poisoned-runtime",
         event_sink=NullEventSink(),
-        model_config=ModelConfig(d_model=4, layers=1, heads=1),
+        model_config=ModelConfig(d_model=8, layers=1, heads=1),
         train_config=TrainConfig(ppo_epochs=1),
         execution_config=ExecutionConfig(
             samples_per_update=1,
@@ -1500,7 +1500,7 @@ def test_start_runtime_pools_cleans_worker_started_before_interrupt(
             run_dir=tmp_path,
             run_id="interrupt-worker",
             event_sink=NullEventSink(),
-            model_config=ModelConfig(d_model=4, layers=1, heads=1),
+            model_config=ModelConfig(d_model=8, layers=1, heads=1),
             train_config=TrainConfig(),
             execution_config=ExecutionConfig(
                 worker_cpu_layout=(0, 1),
@@ -1545,7 +1545,7 @@ def test_start_runtime_pools_cleans_model_rank_started_before_interrupt(
             run_dir=tmp_path,
             run_id="interrupt-model-rank",
             event_sink=NullEventSink(),
-            model_config=ModelConfig(d_model=4, layers=1, heads=1),
+            model_config=ModelConfig(d_model=8, layers=1, heads=1),
             train_config=TrainConfig(),
             execution_config=ExecutionConfig(
                 model_ranks=ModelRankPlacement(

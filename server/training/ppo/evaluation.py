@@ -33,8 +33,8 @@ class TraceBatchEval:
 
 
 @dataclass(frozen=True, slots=True)
-class ArgumentBatchEval:
-    """Current-model scores for one batch of trace prefixes."""
+class ActionStepBatchEval:
+    """Current-model scores for active action trace prefixes."""
 
     active_positions: Tensor
     log_probabilities: Tensor
@@ -66,7 +66,7 @@ def evaluate_trace_batch(
     )
     replay = minibatch.replay
     assert replay is not None
-    prefix_eval_result = _argument_batch_eval(
+    prefix_eval_result = _action_step_batch_eval(
         model=model,
         encoding=encoding,
         replay=replay,
@@ -94,51 +94,52 @@ def evaluate_trace_batch(
     )
 
 
-def _argument_batch_eval(
+def _action_step_batch_eval(
     *,
     model: TractorPolicyModel,
     encoding: ObservationEncoding,
     replay: PPOReplayTensorBatch,
     profile: PPOProfileAccumulator,
-) -> _result.Ok[ArgumentBatchEval] | _result.Rejected:
+) -> _result.Ok[ActionStepBatchEval] | _result.Rejected:
     assert int(replay.step_counts.shape[0]) > 0
-    profile.record_argument_trace_lengths(replay.step_counts)
+    profile.record_action_trace_lengths(replay.step_counts)
     decode_start = profile.mark()
-    scores = model.score_argument_traces(
+    scores = model.score_action_traces(
         encoding,
-        selected_token_ids_padded=replay.selected_token_ids_padded,
+        choice_ids_padded=replay.choice_ids_padded,
         step_counts=replay.step_counts,
     )
-    profile.record_elapsed("argument_decode_seconds", decode_start)
+    profile.record_elapsed("action_decode_seconds", decode_start)
     active_positions = replay.active_sample_indices
     if replay.active_step_count == 0:
         empty = torch.empty(
             (0,), dtype=torch.float32, device=active_positions.device
         )
         return _result.Ok(
-            value=ArgumentBatchEval(
+            value=ActionStepBatchEval(
                 active_positions=active_positions,
                 log_probabilities=empty,
                 entropies=empty,
             )
         )
     distribution_start = profile.mark()
-    distribution_result = _evaluate_recorded_token_batch(
-        argument_logits=scores.argument_logits[
+    distribution_result = _evaluate_recorded_choice_batch(
+        choice_logits=scores.choice_logits[
             replay.active_sample_indices, replay.active_step_indices
         ],
-        choice_token_ids=replay.choice_token_ids,
-        choice_masks=replay.choice_masks,
-        selected_choice_offsets=replay.selected_choice_offsets,
+        legal_choice_masks=replay.legal_choice_masks,
+        selected_choice_ids=replay.choice_ids_padded[
+            replay.active_sample_indices, replay.active_step_indices
+        ],
     )
     if isinstance(distribution_result, _result.Rejected):
         return distribution_result
     distribution = distribution_result.value
     profile.record_elapsed(
-        "argument_distribution_seconds", distribution_start
+        "action_distribution_seconds", distribution_start
     )
     return _result.Ok(
-        value=ArgumentBatchEval(
+        value=ActionStepBatchEval(
             active_positions=active_positions,
             log_probabilities=distribution.log_probabilities,
             entropies=distribution.entropies,
@@ -147,75 +148,67 @@ def _argument_batch_eval(
 
 
 @dataclass(frozen=True, slots=True)
-class _RecordedTokenEval:
+class _RecordedChoiceEval:
     log_probabilities: Tensor
     entropies: Tensor
 
 
-def _evaluate_recorded_token_batch(
+def _evaluate_recorded_choice_batch(
     *,
-    argument_logits: Tensor,
-    choice_token_ids: Tensor,
-    choice_masks: Tensor,
-    selected_choice_offsets: Tensor,
-) -> _result.Ok[_RecordedTokenEval] | _result.Rejected:
-    assert choice_token_ids.ndim == 2
-    assert choice_masks.shape == choice_token_ids.shape
-    assert int(choice_token_ids.shape[0]) == int(
-        argument_logits.shape[0]
-    )
-    assert selected_choice_offsets.shape == (
-        int(argument_logits.shape[0]),
-    )
-    legal_logits = argument_logits.gather(
-        dim=1, index=choice_token_ids.to(dtype=torch.long)
-    )
-    valid_logits = legal_logits[choice_masks]
+    choice_logits: Tensor,
+    legal_choice_masks: Tensor,
+    selected_choice_ids: Tensor,
+) -> _result.Ok[_RecordedChoiceEval] | _result.Rejected:
+    assert legal_choice_masks.shape == choice_logits.shape
+    assert selected_choice_ids.shape == (int(choice_logits.shape[0]),)
+    valid_logits = choice_logits[legal_choice_masks]
     logits_check = reject_if_non_finite(
         (
             NamedTensorCheck(
                 tensor=valid_logits,
-                reason="policy argument logits must be finite",
+                reason="policy choice logits must be finite",
             ),
         )
     )
     if isinstance(logits_check, _result.Rejected):
         return logits_check
-    masked_logits = legal_logits.masked_fill(~choice_masks, -torch.inf)
+    masked_logits = choice_logits.masked_fill(
+        ~legal_choice_masks, -torch.inf
+    )
     probabilities = torch.softmax(masked_logits, dim=1).masked_fill(
-        ~choice_masks, 0.0
+        ~legal_choice_masks, 0.0
     )
     log_probabilities = torch.log_softmax(
         masked_logits, dim=1
-    ).masked_fill(~choice_masks, 0.0)
+    ).masked_fill(~legal_choice_masks, 0.0)
     selected = log_probabilities.gather(
-        dim=1, index=selected_choice_offsets.unsqueeze(1)
+        dim=1, index=selected_choice_ids.unsqueeze(1)
     ).squeeze(1)
     entropies = -(probabilities * log_probabilities).sum(dim=1)
     distribution_check = reject_if_non_finite(
         (
             NamedTensorCheck(
                 tensor=probabilities,
-                reason="policy argument distribution must be finite",
+                reason="policy choice distribution must be finite",
             ),
             NamedTensorCheck(
                 tensor=log_probabilities,
-                reason="policy argument distribution must be finite",
+                reason="policy choice distribution must be finite",
             ),
             NamedTensorCheck(
                 tensor=selected,
-                reason="policy argument distribution must be finite",
+                reason="policy choice distribution must be finite",
             ),
             NamedTensorCheck(
                 tensor=entropies,
-                reason="policy argument distribution must be finite",
+                reason="policy choice distribution must be finite",
             ),
         )
     )
     if isinstance(distribution_check, _result.Rejected):
         return distribution_check
     return _result.Ok(
-        value=_RecordedTokenEval(
+        value=_RecordedChoiceEval(
             log_probabilities=selected,
             entropies=entropies,
         )

@@ -304,7 +304,6 @@ def _create_worker_runtime(
         assert inference_peer is not None
         policy = BatchedPolicyClient(
             worker_index=worker_index,
-            max_observation_tokens=model_config.max_tokens,
             transport=AsyncRemotePolicyBatchTransport(
                 peer=inference_peer,
             ),
@@ -337,7 +336,6 @@ def _create_worker_runtime(
     local_model_rank = LocalModelRank(replica=core)
     policy = BatchedPolicyClient(
         worker_index=worker_index,
-        max_observation_tokens=model_config.max_tokens,
         transport=LocalPolicyBatchTransport(replica=core),
         timeout_seconds=(execution_config.timeouts.round_seconds),
         batch_size=execution_config.model_inference_batch_size,

@@ -18,7 +18,11 @@ from server.training.semantic_action_plan.frame import (
 from server.training.semantic_action_plan.spec import (
     ACTION_FACE_COUNT,
 )
-from server.training.semantic_actions.codec import SEMANTIC_CODEC
+from server.training.semantic_actions.choices import (
+    ACTION_CHOICE_COUNT,
+    CARD_CHOICE_BASE_ID,
+    FINISH_CHOICE_ID,
+)
 from server.training.tensor_staging import staged_tensor
 
 _KIND_EMPTY = ACTION_KIND_EMPTY
@@ -44,8 +48,8 @@ class DeviceActionPlanBatch:
     required_same_suit_count: Tensor
     pair_floor: Tensor
     has_tractor: Tensor
-    trace_tokens: Tensor
-    trace_token_mask: Tensor
+    trace_choice_ids: Tensor
+    trace_choice_mask: Tensor
     trace_lengths: Tensor
     trace_row_mask: Tensor
     pair_plan_masks: Tensor
@@ -88,10 +92,10 @@ class DeviceActionPlanBatch:
 
 @dataclass(frozen=True, slots=True)
 class DeviceActionState:
-    """Current semantic token generation state on one torch device."""
+    """Current action-choice generation state on one torch device."""
 
     selected_counts: Tensor
-    selected_token_ids: Tensor
+    selected_choice_ids: Tensor
     step_counts: Tensor
     selected_width: Tensor
     last_face_indices: Tensor
@@ -106,8 +110,8 @@ class DeviceActionState:
             batch_size,
             ACTION_FACE_COUNT,
         )
-        assert self.selected_token_ids.ndim == 2
-        assert int(self.selected_token_ids.shape[0]) == batch_size
+        assert self.selected_choice_ids.ndim == 2
+        assert int(self.selected_choice_ids.shape[0]) == batch_size
         assert self.step_counts.shape == (batch_size,)
         assert self.selected_width.shape == (batch_size,)
         assert self.last_face_indices.shape == (batch_size,)
@@ -187,9 +191,9 @@ def plan_batch_to_device(
             dtype=torch.bool,
             device=device,
         ),
-        trace_tokens=staged_tensor(
+        trace_choice_ids=staged_tensor(
             tuple(
-                _padded_trace_tokens(
+                _padded_trace_choice_ids(
                     spec,
                     max_trace_count=max_trace_count,
                     max_trace_steps=max_trace_steps,
@@ -199,9 +203,9 @@ def plan_batch_to_device(
             dtype=torch.long,
             device=device,
         ),
-        trace_token_mask=staged_tensor(
+        trace_choice_mask=staged_tensor(
             tuple(
-                _padded_trace_token_mask(
+                _padded_trace_choice_mask(
                     spec,
                     max_trace_count=max_trace_count,
                     max_trace_steps=max_trace_steps,
@@ -269,65 +273,54 @@ def pad_candidate_columns(values: Tensor, *, width: int) -> Tensor:
 
 
 @dataclass(frozen=True, slots=True)
-class _TokenTables:
-    is_select: Tensor
+class _ChoiceTables:
+    is_card: Tensor
     face_indices: Tensor
     counts: Tensor
-    select_token_ids: Tensor
-    select_face_indices: Tensor
-    select_counts: Tensor
+    card_choice_ids: Tensor
+    card_face_indices: Tensor
+    card_counts: Tensor
 
 
-_TOKEN_TABLE_CACHE: dict[torch.device, _TokenTables] = {}
+_CHOICE_TABLE_CACHE: dict[torch.device, _ChoiceTables] = {}
 
 
-def token_tables(device: torch.device) -> _TokenTables:
-    cached = _TOKEN_TABLE_CACHE.get(device)
+def choice_tables(device: torch.device) -> _ChoiceTables:
+    cached = _CHOICE_TABLE_CACHE.get(device)
     if cached is not None:
         return cached
-    face_indices = [
-        -1 for _ in range(SEMANTIC_CODEC.argument_vocab_size)
-    ]
-    counts = [0 for _ in range(SEMANTIC_CODEC.argument_vocab_size)]
-    is_select = [
-        False for _ in range(SEMANTIC_CODEC.argument_vocab_size)
-    ]
-    select_token_ids: list[int] = []
-    select_face_indices: list[int] = []
-    select_counts: list[int] = []
+    face_indices = [-1 for _ in range(ACTION_CHOICE_COUNT)]
+    counts = [0 for _ in range(ACTION_CHOICE_COUNT)]
+    is_card = [False for _ in range(ACTION_CHOICE_COUNT)]
+    card_choice_ids: list[int] = []
+    card_face_indices: list[int] = []
+    card_counts: list[int] = []
     for face_index in range(ACTION_FACE_COUNT):
         for count in (1, 2):
-            token_id = (
-                SEMANTIC_CODEC.argument_select_base_id
-                + face_index * 2
-                + count
-                - 1
-            )
-            face_indices[token_id] = face_index
-            counts[token_id] = count
-            is_select[token_id] = True
-            select_token_ids.append(token_id)
-            select_face_indices.append(face_index)
-            select_counts.append(count)
-    tables = _TokenTables(
-        is_select=staged_tensor(
-            is_select, dtype=torch.bool, device=device
-        ),
+            choice_id = CARD_CHOICE_BASE_ID + face_index * 2 + count - 1
+            face_indices[choice_id] = face_index
+            counts[choice_id] = count
+            is_card[choice_id] = True
+            card_choice_ids.append(choice_id)
+            card_face_indices.append(face_index)
+            card_counts.append(count)
+    tables = _ChoiceTables(
+        is_card=staged_tensor(is_card, dtype=torch.bool, device=device),
         face_indices=staged_tensor(
             face_indices, dtype=torch.long, device=device
         ),
         counts=staged_tensor(counts, dtype=torch.long, device=device),
-        select_token_ids=staged_tensor(
-            select_token_ids, dtype=torch.long, device=device
+        card_choice_ids=staged_tensor(
+            card_choice_ids, dtype=torch.long, device=device
         ),
-        select_face_indices=staged_tensor(
-            select_face_indices, dtype=torch.long, device=device
+        card_face_indices=staged_tensor(
+            card_face_indices, dtype=torch.long, device=device
         ),
-        select_counts=staged_tensor(
-            select_counts, dtype=torch.long, device=device
+        card_counts=staged_tensor(
+            card_counts, dtype=torch.long, device=device
         ),
     )
-    _TOKEN_TABLE_CACHE[device] = tables
+    _CHOICE_TABLE_CACHE[device] = tables
     return tables
 
 
@@ -337,8 +330,8 @@ def trace_set_candidates(
     state: DeviceActionState,
 ) -> tuple[Tensor, Tensor]:
     batch_size = batch.batch_size()
-    trace_count = int(batch.trace_tokens.shape[1])
-    step_count = int(batch.trace_tokens.shape[2])
+    trace_count = int(batch.trace_choice_ids.shape[1])
+    step_count = int(batch.trace_choice_ids.shape[2])
     if trace_count == 0:
         return (
             torch.zeros(
@@ -353,9 +346,9 @@ def trace_set_candidates(
     ).view(1, 1, step_count)
     current_steps = state.step_counts.view(batch_size, 1, 1)
     prefix_mask = positions < current_steps
-    selected = state.selected_token_ids[:, :step_count].unsqueeze(1)
+    selected = state.selected_choice_ids[:, :step_count].unsqueeze(1)
     prefix_matches = (
-        (batch.trace_tokens == selected) | ~prefix_mask
+        (batch.trace_choice_ids == selected) | ~prefix_mask
     ).all(dim=2)
     has_next = batch.trace_lengths > state.step_counts.unsqueeze(1)
     valid_traces = (
@@ -370,13 +363,11 @@ def trace_set_candidates(
         .view(batch_size, 1, 1)
         .expand(batch_size, trace_count, 1)
     )
-    next_tokens = batch.trace_tokens.gather(
+    next_choices = batch.trace_choice_ids.gather(
         dim=2, index=gather_index
     ).squeeze(2)
-    sentinel = torch.full_like(
-        next_tokens, SEMANTIC_CODEC.argument_vocab_size
-    )
-    candidates = torch.where(valid_traces, next_tokens, sentinel)
+    sentinel = torch.full_like(next_choices, ACTION_CHOICE_COUNT)
+    candidates = torch.where(valid_traces, next_choices, sentinel)
     sorted_candidates = torch.sort(candidates, dim=1).values
     previous = torch.cat(
         (
@@ -403,17 +394,17 @@ def trace_set_candidates(
     ), packed_mask
 
 
-def selection_candidates(
+def selection_choice_candidates(
     *,
     batch: DeviceActionPlanBatch,
     state: DeviceActionState,
 ) -> tuple[Tensor, Tensor]:
-    tables = token_tables(batch.device)
+    tables = choice_tables(batch.device)
     batch_size = batch.batch_size()
-    face_indices = tables.select_face_indices.unsqueeze(0).expand(
+    face_indices = tables.card_face_indices.unsqueeze(0).expand(
         batch_size, -1
     )
-    counts = tables.select_counts.unsqueeze(0).expand(batch_size, -1)
+    counts = tables.card_counts.unsqueeze(0).expand(batch_size, -1)
     available = batch.available_counts.gather(
         dim=1,
         index=face_indices,
@@ -456,7 +447,7 @@ def selection_candidates(
         & generic_select
         & lead_same_suit
     )
-    lead_stop = (
+    lead_finish = (
         (batch.kind_codes == _KIND_LEAD)
         & (state.selected_width >= batch.min_select)
         & ~state.done
@@ -472,18 +463,18 @@ def selection_candidates(
         )
     )
     selection_mask = discard | lead_select | follow_select
-    stop_ids = torch.full(
+    finish_ids = torch.full(
         (batch_size, 1),
-        SEMANTIC_CODEC.argument_stop_id,
+        FINISH_CHOICE_ID,
         dtype=torch.long,
         device=batch.device,
     )
-    selection_ids = tables.select_token_ids.unsqueeze(0).expand(
+    card_choice_ids = tables.card_choice_ids.unsqueeze(0).expand(
         batch_size, -1
     )
     return (
-        torch.cat((stop_ids, selection_ids), dim=1),
-        torch.cat((lead_stop.unsqueeze(1), selection_mask), dim=1),
+        torch.cat((finish_ids, card_choice_ids), dim=1),
+        torch.cat((lead_finish.unsqueeze(1), selection_mask), dim=1),
     )
 
 
@@ -853,17 +844,17 @@ def _follow_exhausting_suit_can_complete(
 def trace_done(
     *,
     batch: DeviceActionPlanBatch,
-    selected_token_ids: Tensor,
+    selected_choice_ids: Tensor,
     step_counts: Tensor,
 ) -> Tensor:
-    step_count = int(batch.trace_tokens.shape[2])
+    step_count = int(batch.trace_choice_ids.shape[2])
     positions = torch.arange(
         step_count, dtype=torch.long, device=batch.device
     ).view(1, 1, step_count)
-    selected = selected_token_ids[:, :step_count].unsqueeze(1)
+    selected = selected_choice_ids[:, :step_count].unsqueeze(1)
     prefix_mask = positions < step_counts.view(-1, 1, 1)
     prefix_matches = (
-        (batch.trace_tokens == selected) | ~prefix_mask
+        (batch.trace_choice_ids == selected) | ~prefix_mask
     ).all(dim=2)
     complete_length = batch.trace_lengths == step_counts.unsqueeze(1)
     return (
@@ -887,13 +878,13 @@ def _kind_code(spec: ActionPlanFrame) -> int:
 
 
 def _trace_count(spec: ActionPlanFrame) -> int:
-    return max(len(spec.trace_tokens), 1)
+    return max(len(spec.trace_choice_ids), 1)
 
 
 def _trace_steps(spec: ActionPlanFrame) -> int:
-    if not spec.trace_tokens:
+    if not spec.trace_choice_ids:
         return 1
-    return max(len(trace) for trace in spec.trace_tokens)
+    return max(len(trace) for trace in spec.trace_choice_ids)
 
 
 def _pair_plan_count(spec: ActionPlanFrame) -> int:
@@ -944,13 +935,13 @@ def _has_tractor(spec: ActionPlanFrame) -> bool:
     return spec.has_tractor
 
 
-def _padded_trace_tokens(
+def _padded_trace_choice_ids(
     spec: ActionPlanFrame,
     *,
     max_trace_count: int,
     max_trace_steps: int,
 ) -> tuple[tuple[int, ...], ...]:
-    traces = spec.trace_tokens
+    traces = spec.trace_choice_ids
     rows: list[tuple[int, ...]] = []
     for trace in traces:
         rows.append(_pad_int_row(trace, max_trace_steps))
@@ -959,13 +950,13 @@ def _padded_trace_tokens(
     return tuple(rows)
 
 
-def _padded_trace_token_mask(
+def _padded_trace_choice_mask(
     spec: ActionPlanFrame,
     *,
     max_trace_count: int,
     max_trace_steps: int,
 ) -> tuple[tuple[bool, ...], ...]:
-    traces = spec.trace_tokens
+    traces = spec.trace_choice_ids
     rows: list[tuple[bool, ...]] = []
     for trace in traces:
         rows.append(
@@ -981,7 +972,7 @@ def _padded_trace_token_mask(
 def _padded_trace_lengths(
     spec: ActionPlanFrame, *, max_trace_count: int
 ) -> tuple[int, ...]:
-    traces = spec.trace_tokens
+    traces = spec.trace_choice_ids
     values = [len(trace) for trace in traces]
     while len(values) < max_trace_count:
         values.append(0)
@@ -991,7 +982,7 @@ def _padded_trace_lengths(
 def _padded_trace_row_mask(
     spec: ActionPlanFrame, *, max_trace_count: int
 ) -> tuple[bool, ...]:
-    count = len(spec.trace_tokens)
+    count = len(spec.trace_choice_ids)
     return tuple(index < count for index in range(max_trace_count))
 
 

@@ -6,19 +6,15 @@ from dataclasses import dataclass
 from typing import Literal
 
 from server.game.rules.card_faces import MAX_FACE_COUNT
-from server.training.semantic_actions.codec import SEMANTIC_CODEC
+from server.training.semantic_actions.choices import (
+    ACTION_CHOICE_COUNT,
+    CARD_FACE_COUNT,
+    MAX_ACTION_STEPS,
+)
 
-ACTION_FACE_COUNT: int = 54
+ACTION_FACE_COUNT: int = CARD_FACE_COUNT
 MAX_TRACE_COUNT: int = 128
 MAX_PAIR_PLAN_COUNT: int = 64
-LEGAL_SELECTION_CANDIDATE_CAPACITY: int = (
-    1 + ACTION_FACE_COUNT * MAX_FACE_COUNT
-)
-MAX_LEGAL_CANDIDATE_COUNT: int = max(
-    1,
-    MAX_TRACE_COUNT,
-    LEGAL_SELECTION_CANDIDATE_CAPACITY,
-)
 
 type CompiledActionKind = Literal[
     "empty",
@@ -96,11 +92,9 @@ class CompiledActionTraceSet:
         assert self.traces
         for trace in self.traces:
             assert trace
-            assert len(trace) <= SEMANTIC_CODEC.max_argument_tokens
-            for token_id in trace:
-                assert SEMANTIC_CODEC.argument_pass_id <= token_id
-                assert token_id < SEMANTIC_CODEC.argument_vocab_size
-                assert token_id != SEMANTIC_CODEC.argument_bos_id
+            assert len(trace) <= MAX_ACTION_STEPS
+            for choice_id in trace:
+                assert 0 <= choice_id < ACTION_CHOICE_COUNT
 
 
 @dataclass(frozen=True, slots=True)

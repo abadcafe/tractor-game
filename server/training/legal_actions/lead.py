@@ -13,11 +13,11 @@ from server.training.legal_actions.contract import LegalActionIndex
 from server.training.legal_actions.selection import (
     cards_for_face_counts,
 )
-from server.training.semantic_actions.arguments import (
-    InvalidSemanticActionRejected,
-    SemanticArgumentPrefix,
-    SemanticArgumentTrace,
-    semantic_prefix_state,
+from server.training.semantic_actions.choices import (
+    ActionPrefix,
+    ActionTrace,
+    InvalidActionRejected,
+    action_prefix_cards,
 )
 from server.training.semantic_actions.query import ActionQuery
 from server.training.semantic_actions.values import GeneratedAction
@@ -35,31 +35,31 @@ class LeadPlayLegalActionIndex(LegalActionIndex):
         return self._query
 
     def decode(
-        self, trace: SemanticArgumentTrace
+        self, trace: ActionTrace
     ) -> Ok[GeneratedAction] | Rejected:
-        if not trace.arguments or trace.arguments[-1].kind != "stop":
-            return InvalidSemanticActionRejected("领牌动作必须 stop")
-        selected_result = semantic_prefix_state(
-            SemanticArgumentPrefix(arguments=trace.arguments[:-1])
+        if not trace.choices or trace.choices[-1].kind != "finish":
+            return InvalidActionRejected("领牌动作必须以 finish 结束")
+        selected_result = action_prefix_cards(
+            ActionPrefix(choices=trace.choices[:-1])
         )
         if isinstance(selected_result, Rejected):
             return selected_result
         selected = selected_result.value
         if face_count_width(selected) == 0:
-            return InvalidSemanticActionRejected("领牌不能为空")
+            return InvalidActionRejected("领牌不能为空")
         if not _one_effective_suit(
             selected,
             hand_cards=self._hand_cards,
             trump_suit=self._query.trump_suit,
             trump_rank=self._query.level_rank,
         ):
-            return InvalidSemanticActionRejected("领牌必须同一有效花色")
+            return InvalidActionRejected("领牌必须同一有效花色")
         return Ok(
             value=GeneratedAction(
                 action_kind="play",
                 message_type="play",
                 face_counts=selected,
-                semantic_trace=trace,
+                trace=trace,
                 is_pass=False,
             )
         )

@@ -31,12 +31,10 @@ from server.training.semantic_action_plan.spec import (
     PairPlanConstraints,
 )
 from server.training.semantic_action_plan.trace import (
-    semantic_trace_token_ids,
+    action_trace_choice_ids,
 )
-from server.training.semantic_actions.arguments import SemanticArgument
-from server.training.semantic_actions.codec import (
-    SEMANTIC_CODEC,
-    semantic_argument_id,
+from server.training.semantic_actions.choices import (
+    face_index as action_face_index,
 )
 
 
@@ -138,7 +136,7 @@ def _compile_trace_set(
         kind="trace_set",
         trace_set=CompiledActionTraceSet(
             traces=tuple(
-                semantic_trace_token_ids(action.semantic_trace)
+                action_trace_choice_ids(action.trace)
                 for action in legal_action.actions
             )
         ),
@@ -201,12 +199,7 @@ def _empty_pair_plan() -> PairPlanConstraints:
 
 def face_index(face: CardFace) -> int:
     """Return the semantic model face index for a card face."""
-    token_id = semantic_argument_id(
-        SemanticArgument(
-            "select_face_count", FaceCount(face=face, count=1)
-        )
-    )
-    return (token_id - SEMANTIC_CODEC.argument_select_base_id) // 2
+    return action_face_index(face)
 
 
 def _face_effective_suit_code(

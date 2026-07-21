@@ -15,6 +15,7 @@ from server.training.legal_actions import (
     build_legal_action_index,
 )
 from server.training.observation import Observation, build_observation
+from server.training.observation_memory import ObservationMemoryView
 from server.training.policy_inference_batch import (
     PolicyRequestCompiler,
     PolicyRequestInput,
@@ -60,7 +61,6 @@ _MODEL_RANK_CONTROL_PROTOCOL: ProcessControlProtocol[
     decode_command=decode_model_rank_command,
     decode_response=decode_model_rank_response,
 )
-_TEST_MAX_OBSERVATION_TOKENS = 45
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,7 +130,6 @@ async def test_run_until_command_drains_requests_before_command() -> (
                 link1.model_rank_peer,
             ),
             batch_size=4,
-            max_observation_tokens=_TEST_MAX_OBSERVATION_TOKENS,
         )
 
         async with asyncio.TaskGroup() as senders:
@@ -208,7 +207,6 @@ async def test_run_until_command_rejects_stale_policy_version() -> None:
     control_link = _control_link()
     link = _request_link(worker_index=2)
     recorder = _DataPlaneRecorder()
-    max_observation_tokens = 45
     try:
         command_sent = await control_link.coordinator.send_command(
             ModelRankLoadStateCommand(
@@ -220,7 +218,6 @@ async def test_run_until_command_rejects_stale_policy_version() -> None:
             control_link=control_link,
             request_peers=(link.model_rank_peer,),
             batch_size=4,
-            max_observation_tokens=max_observation_tokens,
         )
 
         async with asyncio.TaskGroup() as senders:
@@ -229,7 +226,6 @@ async def test_run_until_command_rejects_stale_policy_version() -> None:
                     link=link,
                     worker_index=2,
                     policy_version=4,
-                    max_observation_tokens=max_observation_tokens,
                 )
             )
             await _wait_for_ready_requests((link,))
@@ -261,7 +257,6 @@ async def test_run_until_command_rejects_only_stale_routes() -> None:
     link1 = _request_link(worker_index=1)
     link2 = _request_link(worker_index=2)
     recorder = _DataPlaneRecorder()
-    max_observation_tokens = 45
     try:
         command_sent = await control_link.coordinator.send_command(
             ModelRankLoadStateCommand(
@@ -277,7 +272,6 @@ async def test_run_until_command_rejects_only_stale_routes() -> None:
                 link2.model_rank_peer,
             ),
             batch_size=4,
-            max_observation_tokens=max_observation_tokens,
         )
 
         async with asyncio.TaskGroup() as senders:
@@ -286,7 +280,6 @@ async def test_run_until_command_rejects_only_stale_routes() -> None:
                     link=link0,
                     worker_index=0,
                     policy_version=4,
-                    max_observation_tokens=max_observation_tokens,
                 )
             )
             senders.create_task(
@@ -294,7 +287,6 @@ async def test_run_until_command_rejects_only_stale_routes() -> None:
                     link=link1,
                     worker_index=1,
                     policy_version=5,
-                    max_observation_tokens=max_observation_tokens,
                 )
             )
             senders.create_task(
@@ -302,7 +294,6 @@ async def test_run_until_command_rejects_only_stale_routes() -> None:
                     link=link2,
                     worker_index=2,
                     policy_version=4,
-                    max_observation_tokens=max_observation_tokens,
                 )
             )
             await _wait_for_ready_requests((link0, link1, link2))
@@ -336,7 +327,6 @@ async def test_run_until_command_batches_until_batch_size() -> None:
     link1 = _request_link(worker_index=1)
     link2 = _request_link(worker_index=2)
     recorder = _DataPlaneRecorder()
-    max_observation_tokens = 45
     try:
         command_sent = await control_link.coordinator.send_command(
             ModelRankLoadStateCommand(
@@ -352,7 +342,6 @@ async def test_run_until_command_batches_until_batch_size() -> None:
                 link2.model_rank_peer,
             ),
             batch_size=2,
-            max_observation_tokens=max_observation_tokens,
         )
 
         async with asyncio.TaskGroup() as senders:
@@ -361,7 +350,6 @@ async def test_run_until_command_batches_until_batch_size() -> None:
                     link=link0,
                     worker_index=0,
                     policy_version=3,
-                    max_observation_tokens=max_observation_tokens,
                 )
             )
             senders.create_task(
@@ -369,7 +357,6 @@ async def test_run_until_command_batches_until_batch_size() -> None:
                     link=link1,
                     worker_index=1,
                     policy_version=3,
-                    max_observation_tokens=max_observation_tokens,
                 )
             )
             senders.create_task(
@@ -377,7 +364,6 @@ async def test_run_until_command_batches_until_batch_size() -> None:
                     link=link2,
                     worker_index=2,
                     policy_version=3,
-                    max_observation_tokens=max_observation_tokens,
                 )
             )
             await _wait_for_ready_requests((link0, link1, link2))
@@ -408,7 +394,6 @@ async def test_ingress_reuses_cuda_single_frame_slot() -> None:
     link = _request_link(worker_index=0)
     ingress = PolicyRequestIngress(
         batch_size=4,
-        max_observation_tokens=_TEST_MAX_OBSERVATION_TOKENS,
         device=torch.device("cuda:0"),
     )
     try:
@@ -419,7 +404,7 @@ async def test_ingress_reuses_cuda_single_frame_slot() -> None:
             policy_version=11,
         )
         first_component_ptr = int(
-            first_batch.device_batch.observation_batch.component_ids.data_ptr()
+            first_batch.device_batch.observation_batch.category_ids.data_ptr()
         )
 
         second_batch = await _receive_single_frame_batch(
@@ -429,7 +414,7 @@ async def test_ingress_reuses_cuda_single_frame_slot() -> None:
             policy_version=12,
         )
         second_component_ptr = int(
-            second_batch.device_batch.observation_batch.component_ids.data_ptr()
+            second_batch.device_batch.observation_batch.category_ids.data_ptr()
         )
 
         assert second_component_ptr == first_component_ptr
@@ -450,7 +435,6 @@ async def test_ingress_materializes_mps_thresholds_as_float32() -> None:
     link = _request_link(worker_index=0)
     ingress = PolicyRequestIngress(
         batch_size=4,
-        max_observation_tokens=_TEST_MAX_OBSERVATION_TOKENS,
         device=torch.device("mps"),
     )
     try:
@@ -478,7 +462,6 @@ async def test_ingress_aggregates_mps_thresholds_as_float32() -> None:
     link1 = _request_link(worker_index=1)
     ingress = PolicyRequestIngress(
         batch_size=4,
-        max_observation_tokens=_TEST_MAX_OBSERVATION_TOKENS,
         device=torch.device("mps:0"),
     )
     try:
@@ -547,14 +530,12 @@ def _data_plane(
     control_link: _ModelRankControlLink,
     request_peers: tuple[AsyncPolicyPeer, ...],
     batch_size: int,
-    max_observation_tokens: int = 512,
 ) -> ModelRankDataPlane:
     return ModelRankDataPlane(
         control=control_link.child,
         request_peers=request_peers,
         ingress=PolicyRequestIngress(
             batch_size=batch_size,
-            max_observation_tokens=max_observation_tokens,
             device=torch.device("cpu"),
         ),
     )
@@ -565,7 +546,6 @@ async def _send_request(
     link: _RequestLink,
     worker_index: int,
     policy_version: int,
-    max_observation_tokens: int = _TEST_MAX_OBSERVATION_TOKENS,
 ) -> None:
     frame_result = _request_frame(
         requests=(
@@ -575,7 +555,6 @@ async def _send_request(
             ),
         ),
         batch_capacity=1,
-        max_observation_tokens=max_observation_tokens,
     )
     assert isinstance(frame_result, Ok)
     send_result = await link.worker_peer.send_request(
@@ -627,11 +606,9 @@ def _request_frame(
     *,
     requests: tuple[PolicyRequestInput, ...],
     batch_capacity: int,
-    max_observation_tokens: int,
 ) -> Ok[PolicyRequestWireFrame] | Rejected:
     compiler = PolicyRequestCompiler(
         batch_capacity=batch_capacity,
-        max_observation_tokens=max_observation_tokens,
     )
     batch_result = compiler.compile_batch(requests)
     if isinstance(batch_result, Rejected):
@@ -664,9 +641,11 @@ def _observation() -> Observation:
         trump_rank="2",
     )
     return build_observation(
-        player_index=0,
+        viewer=0,
         snapshot=snapshot,
-        history=(),
+        memory=ObservationMemoryView(
+            bid_actions=(), completed_tricks=()
+        ),
     )
 
 

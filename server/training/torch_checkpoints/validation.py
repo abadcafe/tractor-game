@@ -12,6 +12,7 @@ from torch import Tensor
 from server.foundation import result as _result
 from server.foundation.json_value import JsonObject
 from server.training.config import (
+    MIN_ATTENTION_HEAD_DIMENSION,
     ModelConfig,
     TrainConfig,
 )
@@ -25,6 +26,15 @@ def model_config_from_json(
     path: Path,
 ) -> _result.Ok[ModelConfig] | _result.Rejected:
     """Parse and validate model config from checkpoint JSON."""
+    expected_fields = {"d_model", "layers", "heads"}
+    if set(data) != expected_fields:
+        return checkpoint_corruption(
+            path,
+            (
+                "manifest model_config fields do not match the current "
+                "schema"
+            ),
+        )
     d_model = _json_int_field(
         data, "d_model", path, label="model_config.d_model"
     )
@@ -40,16 +50,10 @@ def model_config_from_json(
     )
     if isinstance(heads, _result.Rejected):
         return heads
-    max_tokens = _json_int_field(
-        data, "max_tokens", path, label="model_config.max_tokens"
-    )
-    if isinstance(max_tokens, _result.Rejected):
-        return max_tokens
     for label, value in (
         ("model_config.d_model", d_model.value),
         ("model_config.layers", layers.value),
         ("model_config.heads", heads.value),
-        ("model_config.max_tokens", max_tokens.value),
     ):
         if value <= 0:
             return checkpoint_corruption(
@@ -61,12 +65,18 @@ def model_config_from_json(
             "manifest model_config.d_model must be divisible by "
             "model_config.heads",
         )
+    if d_model.value // heads.value < MIN_ATTENTION_HEAD_DIMENSION:
+        return checkpoint_corruption(
+            path,
+            "manifest model_config.d_model divided by "
+            "model_config.heads must be at least "
+            f"{MIN_ATTENTION_HEAD_DIMENSION}",
+        )
     return _result.Ok(
         value=ModelConfig(
             d_model=d_model.value,
             layers=layers.value,
             heads=heads.value,
-            max_tokens=max_tokens.value,
         )
     )
 

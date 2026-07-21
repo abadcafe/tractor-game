@@ -286,7 +286,6 @@ async def _run_model_rank_event_loop(
         request_peers=inference_peers,
         ingress=PolicyRequestIngress(
             batch_size=execution_config.model_inference_batch_size,
-            max_observation_tokens=core.model_config.max_tokens,
             device=core.device,
         ),
     )
@@ -620,7 +619,9 @@ def _select_compact_decision_rows(
         choice_counts=tuple(
             decisions.choice_counts[row] for row in rows
         ),
-        trace_token_batch=decisions.trace_token_batch.select_rows(rows),
+        action_choice_batch=decisions.action_choice_batch.select_rows(
+            rows
+        ),
     )
 
 

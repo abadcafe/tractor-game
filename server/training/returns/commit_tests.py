@@ -7,9 +7,9 @@ from server.training.returns import (
     terminal_return_commit,
 )
 from server.training.semantic_actions import (
+    ActionChoice,
+    ActionTrace,
     GeneratedAction,
-    SemanticArgument,
-    SemanticArgumentTrace,
 )
 from server.training.trajectory import DecisionStep
 
@@ -43,9 +43,7 @@ def _step(*, player_index: int, row_index: int) -> DecisionStep:
             action_kind="pass",
             message_type="play",
             face_counts=(),
-            semantic_trace=SemanticArgumentTrace(
-                arguments=(SemanticArgument("pass"),)
-            ),
+            trace=ActionTrace(choices=(ActionChoice("pass"),)),
             is_pass=True,
         ),
         decision_handle=_handle(

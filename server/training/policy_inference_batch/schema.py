@@ -1,21 +1,22 @@
-"""Columnar policy inference request batch schema."""
+"""Columnar wire schema for typed policy inference requests."""
 
 from __future__ import annotations
 
 import struct
 from dataclasses import dataclass
 
-from server.training.feature_schema import NUMERIC_FEATURE_COUNT
 from server.training.packed_observation import (
-    OBSERVATION_COMPONENT_COUNT,
+    MAX_LOSSLESS_OBSERVATION_TOKENS,
 )
 from server.training.semantic_action_plan.spec import (
     ACTION_FACE_COUNT,
     MAX_PAIR_PLAN_COUNT,
     MAX_TRACE_COUNT,
 )
+from server.training.semantic_actions.choices import CARD_CHOICE_COUNT
+from server.training.tokenization.encoding_schema import CATEGORY_COUNT
 
-REQUEST_BATCH_MAGIC = 0x5452504F4C495143
+REQUEST_BATCH_MAGIC = 0x5452504F4C495144
 
 I64 = struct.Struct("<q")
 F32 = struct.Struct("<f")
@@ -28,7 +29,7 @@ MAGIC_INDEX = 0
 TOTAL_BYTES_INDEX = 1
 ROW_COUNT_INDEX = 2
 BATCH_CAPACITY_INDEX = 3
-MAX_OBSERVATION_TOKENS_INDEX = 4
+OBSERVATION_TOKEN_CAPACITY_INDEX = 4
 TRACE_COUNT_INDEX = 5
 PADDED_GENERATION_STEPS_INDEX = 6
 PAIR_PLAN_COUNT_INDEX = 7
@@ -50,10 +51,10 @@ class ColumnLayout:
 
 @dataclass(frozen=True, slots=True)
 class PolicyRequestBatchLayout:
-    """Byte layout for one fixed-capacity request batch frame."""
+    """Exact typed-column layout for one fixed-capacity frame."""
 
     batch_capacity: int
-    max_observation_tokens: int
+    observation_token_capacity: int
     padded_generation_steps: int
     route_worker_indices: ColumnLayout
     route_request_ids: ColumnLayout
@@ -66,16 +67,22 @@ class PolicyRequestBatchLayout:
     required_same_suit_count: ColumnLayout
     pair_floor: ColumnLayout
     has_tractor: ColumnLayout
-    component_ids: ColumnLayout
-    numeric_values: ColumnLayout
-    numeric_masks: ColumnLayout
+    category_ids: ColumnLayout
+    scalar_values: ColumnLayout
+    card_rule_values: ColumnLayout
+    coordinate_values: ColumnLayout
+    coordinate_masks: ColumnLayout
+    candidate_category_ids: ColumnLayout
+    candidate_counts: ColumnLayout
+    candidate_card_rule_values: ColumnLayout
+    query_indices: ColumnLayout
     available_counts: ColumnLayout
     effective_suits: ColumnLayout
     same_suit_mask: ColumnLayout
     off_suit_mask: ColumnLayout
     pair_face_mask: ColumnLayout
-    trace_tokens: ColumnLayout
-    trace_token_mask: ColumnLayout
+    trace_choice_ids: ColumnLayout
+    trace_choice_mask: ColumnLayout
     trace_lengths: ColumnLayout
     trace_row_mask: ColumnLayout
     pair_plan_masks: ColumnLayout
@@ -85,109 +92,79 @@ class PolicyRequestBatchLayout:
 
     def __post_init__(self) -> None:
         assert self.batch_capacity > 0
-        assert self.max_observation_tokens > 0
+        assert (
+            0
+            < self.observation_token_capacity
+            <= MAX_LOSSLESS_OBSERVATION_TOKENS
+        )
         assert self.padded_generation_steps > 0
         assert self.total_bytes > HEADER_BYTES
-
-    def row_columns(self) -> tuple[ColumnLayout, ...]:
-        """Return all per-row columns in frame order."""
-        return (
-            self.route_worker_indices,
-            self.route_request_ids,
-            self.policy_versions,
-            self.generation_step_counts,
-            self.kind_codes,
-            self.min_select,
-            self.max_select,
-            self.exact_select,
-            self.required_same_suit_count,
-            self.pair_floor,
-            self.has_tractor,
-            self.component_ids,
-            self.numeric_values,
-            self.numeric_masks,
-            self.available_counts,
-            self.effective_suits,
-            self.same_suit_mask,
-            self.off_suit_mask,
-            self.pair_face_mask,
-            self.trace_tokens,
-            self.trace_token_mask,
-            self.trace_lengths,
-            self.trace_row_mask,
-            self.pair_plan_masks,
-            self.pair_plan_row_mask,
-            self.sampling_thresholds,
-        )
 
 
 def policy_request_batch_layout(
     *,
     batch_capacity: int,
-    max_observation_tokens: int,
+    observation_token_capacity: int,
     padded_generation_steps: int,
 ) -> PolicyRequestBatchLayout:
-    """Return the canonical columnar layout for one frame capacity."""
+    """Return the sole valid request layout for these dimensions."""
     assert batch_capacity > 0
-    assert max_observation_tokens > 0
+    assert (
+        0
+        < observation_token_capacity
+        <= MAX_LOSSLESS_OBSERVATION_TOKENS
+    )
     assert padded_generation_steps > 0
     builder = _LayoutBuilder(offset=HEADER_BYTES)
-    route_worker_indices = builder.column(batch_capacity, I64.size)
-    route_request_ids = builder.column(batch_capacity, I64.size)
-    policy_versions = builder.column(batch_capacity, I64.size)
-    generation_step_counts = builder.column(batch_capacity, I64.size)
-    kind_codes = builder.column(batch_capacity, I64.size)
-    min_select = builder.column(batch_capacity, I64.size)
-    max_select = builder.column(batch_capacity, I64.size)
-    exact_select = builder.column(batch_capacity, I64.size)
-    required_same_suit_count = builder.column(batch_capacity, I64.size)
-    pair_floor = builder.column(batch_capacity, I64.size)
-    has_tractor = builder.column(batch_capacity, 1)
-    component_ids = builder.column(
-        batch_capacity,
-        max_observation_tokens * OBSERVATION_COMPONENT_COUNT * I64.size,
+
+    def column(row_bytes: int) -> ColumnLayout:
+        return builder.column(batch_capacity, row_bytes)
+
+    route_worker_indices = column(I64.size)
+    route_request_ids = column(I64.size)
+    policy_versions = column(I64.size)
+    generation_step_counts = column(I64.size)
+    kind_codes = column(I64.size)
+    min_select = column(I64.size)
+    max_select = column(I64.size)
+    exact_select = column(I64.size)
+    required_same_suit_count = column(I64.size)
+    pair_floor = column(I64.size)
+    has_tractor = column(1)
+    category_ids = column(
+        observation_token_capacity * CATEGORY_COUNT * I64.size
     )
-    numeric_values = builder.column(
-        batch_capacity,
-        max_observation_tokens * NUMERIC_FEATURE_COUNT * F32.size,
+    scalar_values = column(observation_token_capacity * F32.size)
+    card_rule_values = column(observation_token_capacity * 2 * F32.size)
+    coordinate_values = column(
+        observation_token_capacity * 3 * I64.size
     )
-    numeric_masks = builder.column(
-        batch_capacity,
-        max_observation_tokens * NUMERIC_FEATURE_COUNT * F32.size,
+    coordinate_masks = column(observation_token_capacity * 3)
+    candidate_category_ids = column(CARD_CHOICE_COUNT * 3 * I64.size)
+    candidate_counts = column(CARD_CHOICE_COUNT * F32.size)
+    candidate_card_rule_values = column(
+        CARD_CHOICE_COUNT * 2 * F32.size
     )
-    available_counts = builder.column(
-        batch_capacity, ACTION_FACE_COUNT * I64.size
+    query_indices = column(I64.size)
+    available_counts = column(ACTION_FACE_COUNT * I64.size)
+    effective_suits = column(ACTION_FACE_COUNT * I64.size)
+    same_suit_mask = column(ACTION_FACE_COUNT)
+    off_suit_mask = column(ACTION_FACE_COUNT)
+    pair_face_mask = column(ACTION_FACE_COUNT)
+    trace_choice_ids = column(
+        MAX_TRACE_COUNT * padded_generation_steps * I64.size
     )
-    effective_suits = builder.column(
-        batch_capacity, ACTION_FACE_COUNT * I64.size
+    trace_choice_mask = column(
+        MAX_TRACE_COUNT * padded_generation_steps
     )
-    same_suit_mask = builder.column(batch_capacity, ACTION_FACE_COUNT)
-    off_suit_mask = builder.column(batch_capacity, ACTION_FACE_COUNT)
-    pair_face_mask = builder.column(batch_capacity, ACTION_FACE_COUNT)
-    trace_tokens = builder.column(
-        batch_capacity,
-        MAX_TRACE_COUNT * padded_generation_steps * I64.size,
-    )
-    trace_token_mask = builder.column(
-        batch_capacity,
-        MAX_TRACE_COUNT * padded_generation_steps,
-    )
-    trace_lengths = builder.column(
-        batch_capacity, MAX_TRACE_COUNT * I64.size
-    )
-    trace_row_mask = builder.column(batch_capacity, MAX_TRACE_COUNT)
-    pair_plan_masks = builder.column(
-        batch_capacity, MAX_PAIR_PLAN_COUNT * ACTION_FACE_COUNT
-    )
-    pair_plan_row_mask = builder.column(
-        batch_capacity, MAX_PAIR_PLAN_COUNT
-    )
-    sampling_thresholds = builder.column(
-        batch_capacity, padded_generation_steps * F64.size
-    )
+    trace_lengths = column(MAX_TRACE_COUNT * I64.size)
+    trace_row_mask = column(MAX_TRACE_COUNT)
+    pair_plan_masks = column(MAX_PAIR_PLAN_COUNT * ACTION_FACE_COUNT)
+    pair_plan_row_mask = column(MAX_PAIR_PLAN_COUNT)
+    sampling_thresholds = column(padded_generation_steps * F64.size)
     return PolicyRequestBatchLayout(
         batch_capacity=batch_capacity,
-        max_observation_tokens=max_observation_tokens,
+        observation_token_capacity=observation_token_capacity,
         padded_generation_steps=padded_generation_steps,
         route_worker_indices=route_worker_indices,
         route_request_ids=route_request_ids,
@@ -200,16 +177,22 @@ def policy_request_batch_layout(
         required_same_suit_count=required_same_suit_count,
         pair_floor=pair_floor,
         has_tractor=has_tractor,
-        component_ids=component_ids,
-        numeric_values=numeric_values,
-        numeric_masks=numeric_masks,
+        category_ids=category_ids,
+        scalar_values=scalar_values,
+        card_rule_values=card_rule_values,
+        coordinate_values=coordinate_values,
+        coordinate_masks=coordinate_masks,
+        candidate_category_ids=candidate_category_ids,
+        candidate_counts=candidate_counts,
+        candidate_card_rule_values=candidate_card_rule_values,
+        query_indices=query_indices,
         available_counts=available_counts,
         effective_suits=effective_suits,
         same_suit_mask=same_suit_mask,
         off_suit_mask=off_suit_mask,
         pair_face_mask=pair_face_mask,
-        trace_tokens=trace_tokens,
-        trace_token_mask=trace_token_mask,
+        trace_choice_ids=trace_choice_ids,
+        trace_choice_mask=trace_choice_mask,
         trace_lengths=trace_lengths,
         trace_row_mask=trace_row_mask,
         pair_plan_masks=pair_plan_masks,
@@ -220,15 +203,12 @@ def policy_request_batch_layout(
 
 
 def max_policy_request_batch_frame_bytes(
-    *,
-    batch_capacity: int,
-    max_observation_tokens: int,
-    padded_generation_steps: int,
+    *, batch_capacity: int, padded_generation_steps: int
 ) -> int:
-    """Return the exact bytes for one fixed-capacity request frame."""
+    """Return bytes for a lossless worst-case request frame."""
     return policy_request_batch_layout(
         batch_capacity=batch_capacity,
-        max_observation_tokens=max_observation_tokens,
+        observation_token_capacity=MAX_LOSSLESS_OBSERVATION_TOKENS,
         padded_generation_steps=padded_generation_steps,
     ).total_bytes
 
@@ -242,13 +222,12 @@ class _LayoutBuilder:
     ) -> ColumnLayout:
         alignment = _alignment_for_row(row_bytes)
         self.offset = _align(self.offset, alignment)
-        total_bytes = batch_capacity * row_bytes
         layout = ColumnLayout(
             offset=self.offset,
             row_bytes=row_bytes,
-            total_bytes=total_bytes,
+            total_bytes=batch_capacity * row_bytes,
         )
-        self.offset += total_bytes
+        self.offset += layout.total_bytes
         return layout
 
 
@@ -262,6 +241,17 @@ def _alignment_for_row(row_bytes: int) -> int:
 
 def _align(offset: int, alignment: int) -> int:
     remainder = offset % alignment
-    if remainder == 0:
-        return offset
-    return offset + alignment - remainder
+    return offset if remainder == 0 else offset + alignment - remainder
+
+
+__all__ = (
+    "F32",
+    "F64",
+    "I64",
+    "MAX_PAIR_PLAN_COUNT",
+    "MAX_TRACE_COUNT",
+    "ColumnLayout",
+    "PolicyRequestBatchLayout",
+    "max_policy_request_batch_frame_bytes",
+    "policy_request_batch_layout",
+)

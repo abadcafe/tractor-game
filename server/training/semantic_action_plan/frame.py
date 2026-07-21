@@ -12,7 +12,7 @@ from server.training.semantic_action_plan.spec import (
     ACTION_FACE_COUNT,
     CompiledActionSpec,
 )
-from server.training.semantic_actions.codec import SEMANTIC_CODEC
+from server.training.semantic_actions.choices import MAX_ACTION_STEPS
 
 ACTION_KIND_EMPTY = 0
 ACTION_KIND_TRACE_SET = 1
@@ -37,7 +37,7 @@ class ActionPlanFrame:
     required_same_suit_count: int
     pair_floor: int
     has_tractor: bool
-    trace_tokens: tuple[tuple[int, ...], ...]
+    trace_choice_ids: tuple[tuple[int, ...], ...]
     pair_plan_masks: tuple[tuple[bool, ...], ...]
 
     def __post_init__(self) -> None:
@@ -74,23 +74,18 @@ def compile_legal_action_frame(
 def action_plan_generation_step_count(
     action_plan: ActionPlanFrame,
 ) -> int:
-    """Return the maximum semantic token count for one action plan."""
+    """Return the maximum choice count for one action plan."""
     if action_plan.kind_code == ACTION_KIND_EMPTY:
         return 1
     if action_plan.kind_code == ACTION_KIND_TRACE_SET:
-        return max(len(trace) for trace in action_plan.trace_tokens)
+        return max(len(trace) for trace in action_plan.trace_choice_ids)
     if action_plan.kind_code == ACTION_KIND_LEAD:
-        assert (
-            action_plan.max_select <= SEMANTIC_CODEC.max_argument_tokens
-        )
+        assert action_plan.max_select + 1 <= MAX_ACTION_STEPS
         return max(action_plan.max_select + 1, 1)
     if action_plan.exact_select >= 0:
-        assert (
-            action_plan.exact_select
-            <= SEMANTIC_CODEC.max_argument_tokens
-        )
+        assert action_plan.exact_select <= MAX_ACTION_STEPS
         return max(action_plan.exact_select, 1)
-    assert action_plan.max_select <= SEMANTIC_CODEC.max_argument_tokens
+    assert action_plan.max_select <= MAX_ACTION_STEPS
     return max(action_plan.max_select, 1)
 
 
@@ -131,7 +126,7 @@ def action_plan_frame_from_spec(
         has_tractor=False
         if selection is None
         else selection.pair_plan.has_tractor,
-        trace_tokens=() if trace_set is None else trace_set.traces,
+        trace_choice_ids=() if trace_set is None else trace_set.traces,
         pair_plan_masks=()
         if selection is None
         else selection.pair_plan.pair_plan_masks,
