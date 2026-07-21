@@ -116,6 +116,15 @@ export interface CheckpointStreamMessage {
   readonly through_sequence: number;
 }
 
+export interface CheckpointCursor {
+  readonly store_id: string | null;
+  readonly through_sequence: number;
+}
+
+export interface StoreReplacement {
+  readonly store_id: string | null;
+}
+
 export interface TrainingEvent {
   readonly schema_version: 2;
   readonly event: TrainingEventName;
@@ -288,30 +297,24 @@ export function parseLogPage(value: unknown): TrainingLogPage {
   };
 }
 
-export function parseLogMessage(value: unknown): TrainingLogMessage {
-  const record = requiredRecord(value, "training log message");
-  const type = requiredString(record.type, "type");
-  if (type === "replacement") {
-    return {
-      type,
-      store_id: nullableStoreId(record.store_id),
-    };
-  }
-  if (type !== "event") throw new Error("Unknown training log message");
-  const entry = parseLogEntry(record);
-  return { type, ...entry };
+export function parseStoreReplacement(
+  value: unknown,
+): StoreReplacement {
+  const record = requiredRecord(value, "store replacement");
+  rejectUnknownKeys(record, ["store_id"], "store replacement");
+  return { store_id: nullableStoreId(record.store_id) };
 }
 
-export function parseCheckpointStreamMessage(
+export function parseCheckpointCursor(
   value: unknown,
-): CheckpointStreamMessage {
-  const record = requiredRecord(value, "checkpoint stream message");
-  const type = requiredString(record.type, "type");
-  if (type !== "invalidation" && type !== "replacement") {
-    throw new Error("Unknown checkpoint stream message");
-  }
+): CheckpointCursor {
+  const record = requiredRecord(value, "checkpoint cursor");
+  rejectUnknownKeys(
+    record,
+    ["store_id", "through_sequence"],
+    "checkpoint cursor",
+  );
   return {
-    type,
     store_id: nullableStoreId(record.store_id),
     through_sequence: nonNegativeInteger(
       record.through_sequence,
@@ -483,7 +486,7 @@ function metricPoints(
   });
 }
 
-function parseLogEntry(value: unknown): TrainingLogEntry {
+export function parseLogEntry(value: unknown): TrainingLogEntry {
   const record = requiredRecord(value, "training log entry");
   return {
     sequence: positiveInteger(record.sequence, "sequence"),

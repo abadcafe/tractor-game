@@ -145,7 +145,7 @@ Deno.test("live metrics precede completed-update metrics", async () => {
   }
 });
 
-Deno.test("Metrics owns one route-scoped WebSocket transport", async () => {
+Deno.test("Metrics owns one route-scoped EventSource transport", async () => {
   const domain = await Deno.readTextFile(
     new URL("../metrics-domain.ts", import.meta.url),
   );
@@ -165,11 +165,33 @@ Deno.test("Metrics owns one route-scoped WebSocket transport", async () => {
     }
   }
   if (
-    !domain.includes("MetricsSnapshotStream") ||
+    !domain.includes("MetricEventStream") ||
     !domain.includes("this.#stream.disconnect()") ||
     !main.includes("metricsDomain.deactivate()")
   ) {
-    throw new Error("Metrics WebSocket must follow the active route");
+    throw new Error("Metrics EventSource must follow the active route");
+  }
+});
+
+Deno.test("training dashboard contains no WebSocket transport", async () => {
+  const files = [
+    "../event-source.ts",
+    "../log-events.ts",
+    "../metric-events.ts",
+    "../process-events.ts",
+    "../checkpoint-events.ts",
+  ];
+  const sources = await Promise.all(
+    files.map((file) =>
+      Deno.readTextFile(new URL(file, import.meta.url))
+    ),
+  );
+  const source = sources.join("\n");
+  if (source.includes("WebSocket") || source.includes("/ws/training")) {
+    throw new Error("Training dashboard still contains WebSocket code");
+  }
+  if (source.includes("reconnectTimer")) {
+    throw new Error("EventSource must own network reconnection");
   }
 });
 

@@ -1,8 +1,5 @@
 import { fetchLogPage } from "./api.ts";
-import {
-  TrainingStreamClient,
-  type TrainingStreamTarget,
-} from "./stream.ts";
+import { LogEventStream, type LogEventTarget } from "./log-events.ts";
 import type {
   TrainingEvent,
   TrainingLogEntry,
@@ -27,7 +24,7 @@ export class LogsDomain {
   #generation = 0;
   #renderFrame: number | null = null;
   #rendering = false;
-  readonly #stream = new TrainingStreamClient(
+  readonly #stream = new LogEventStream(
     () => this.#streamTarget(),
     {
       onMessage: (message) => this.#receive(message),
@@ -169,7 +166,7 @@ export class LogsDomain {
     }
   }
 
-  #streamTarget(): TrainingStreamTarget | null {
+  #streamTarget(): LogEventTarget | null {
     if (this.runDir() === "" || !this.isActive()) return null;
     return {
       runDir: this.runDir(),

@@ -1,19 +1,26 @@
-"""Tests for server/server.py -- REST + WebSocket API.
+"""Tests for the server's REST, SSE, and game WebSocket APIs.
 
 REST tests use httpx.AsyncClient with ASGITransport.
-WebSocket tests use starlette.testclient.TestClient which supports
-ASGI WebSocket testing natively.
+SSE tests call the public ASGI interface so streaming is observable.
+Game WebSocket tests use starlette.testclient.TestClient.
 """
 
+import asyncio
 import json
 import logging
 import os
 import sqlite3
 import time
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import (
+    AsyncGenerator,
+    Awaitable,
+    Callable,
+    Generator,
+)
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, TypeGuard
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 import pytest
@@ -24,6 +31,7 @@ from anyio import (
     WouldBlock,
 )
 from starlette.testclient import TestClient, WebSocketTestSession
+from starlette.types import Message, Receive, Scope, Send
 from starlette.websockets import WebSocketDisconnect
 
 from server.game.players import AIPlayer, HumanPlayer
@@ -100,11 +108,11 @@ def test_training_config_returns_server_default_directory(
     )
 
 
-def test_training_logs_have_rest_history_and_cursor_tail(
-    sync_client: SyncServerClient,
+async def test_training_logs_have_rest_history_and_cursor_tail(
+    client: AsyncRestClient,
     tmp_path: Path,
 ) -> None:
-    initialized = sync_client.post(
+    initialized = await client.post(
         "/api/training/init",
         json={
             "run_dir": str(tmp_path),
@@ -121,19 +129,31 @@ def test_training_logs_have_rest_history_and_cursor_tail(
         }
     )
 
-    page = sync_client.get(f"/api/training/logs?{query}")
+    page = await client.get(f"/api/training/logs?{query}")
     assert page.status_code == 200
     document = page.json()
     assert _is_dict(document)
     events = document["events"]
     assert isinstance(events, list) and events
-    with sync_client.websocket_connect(
-        f"/ws/training/logs?{query}&after_sequence=0"
-    ) as websocket:
-        message = _receive_ws_json(websocket)
+    store_id = document["store_id"]
+    assert isinstance(store_id, str)
+    response = await _read_sse(
+        "/api/training/events/logs?"
+        f"{query}&store_id={store_id}&after_sequence=0"
+    )
+    assert response.status == 200
+    assert response.headers["content-type"].startswith(
+        "text/event-stream"
+    )
+    assert response.headers["cache-control"] == "no-cache, no-transform"
+    assert response.headers["x-accel-buffering"] == "no"
+    event = response.events[0]
+    assert event.name == "log"
+    message = event.json()
     assert _is_dict(message)
-    assert message["type"] == "event"
-    assert isinstance(message["sequence"], int)
+    sequence = message["sequence"]
+    assert isinstance(sequence, int)
+    assert event.event_id == f"{store_id}:{sequence}"
 
 
 def test_training_summary_route_is_removed(
@@ -142,26 +162,18 @@ def test_training_summary_route_is_removed(
     assert sync_client.get("/api/training/summary").status_code == 404
 
 
-def test_training_process_snapshot_is_websocket_only(
-    sync_client: SyncServerClient,
+async def test_training_process_events_send_current_snapshot(
     tmp_path: Path,
 ) -> None:
     query = urlencode({"run_dir": str(tmp_path)})
 
-    with sync_client.websocket_connect(
-        f"/ws/training/process?{query}"
-    ) as websocket:
-        snapshot = _receive_ws_json(websocket)
-
+    response = await _read_sse(f"/api/training/events/process?{query}")
+    assert response.events[0].name == "process"
+    snapshot = response.events[0].json()
     assert snapshot == {"process": None}
-    assert (
-        sync_client.get(f"/api/training/process?{query}").status_code
-        == 404
-    )
 
 
-def test_training_metrics_snapshot_is_websocket_only(
-    sync_client: SyncServerClient,
+async def test_training_metrics_events_send_complete_snapshot(
     tmp_path: Path,
 ) -> None:
     query = urlencode(
@@ -172,24 +184,18 @@ def test_training_metrics_snapshot_is_websocket_only(
         }
     )
 
-    with sync_client.websocket_connect(
-        f"/ws/training/metrics?{query}"
-    ) as websocket:
-        snapshot = _receive_ws_json(websocket)
-
+    response = await _read_sse(f"/api/training/events/metrics?{query}")
+    assert response.events[0].name == "metrics"
+    snapshot = response.events[0].json()
     assert _is_dict(snapshot)
     assert snapshot["schema_version"] == 2
     assert snapshot["store_id"] is None
     assert snapshot["through_sequence"] == 0
     assert _is_dict(snapshot["datasets"])
-    assert (
-        sync_client.get(f"/api/training/metrics?{query}").status_code
-        == 404
-    )
 
 
-def test_training_metrics_stream_pushes_replacement_snapshot(
-    sync_client: SyncServerClient,
+async def test_training_metrics_events_push_replacement_snapshot(
+    client: AsyncRestClient,
     tmp_path: Path,
 ) -> None:
     query = urlencode(
@@ -200,11 +206,9 @@ def test_training_metrics_stream_pushes_replacement_snapshot(
         }
     )
 
-    with sync_client.websocket_connect(
-        f"/ws/training/metrics?{query}"
-    ) as websocket:
-        initial = _receive_ws_json(websocket)
-        initialized = sync_client.post(
+    async def initialize_after_initial(_event: _SseEvent) -> None:
+        nonlocal initialized
+        initialized = await client.post(
             "/api/training/init",
             json={
                 "run_dir": str(tmp_path),
@@ -214,7 +218,6 @@ def test_training_metrics_stream_pushes_replacement_snapshot(
                 "max_tokens": 512,
             },
         )
-        replacement = _receive_ws_json(websocket)
         sink = StructuredEventSink(
             run_dir=tmp_path,
             process=ProcessIdentity(kind="worker", index=0),
@@ -229,16 +232,20 @@ def test_training_metrics_stream_pushes_replacement_snapshot(
             fields={"batch_size": 1},
         )
         sink.close()
-        updated = _receive_ws_json(websocket)
 
-    assert initialized.status_code == 204
+    initialized: httpx.Response | None = None
+    response = await _read_sse(
+        f"/api/training/events/metrics?{query}",
+        event_count=2,
+        after_first=initialize_after_initial,
+    )
+    initial, updated = [event.json() for event in response.events]
+
+    assert initialized is not None and initialized.status_code == 204
     assert _is_dict(initial)
     assert initial["store_id"] is None
-    assert _is_dict(replacement)
-    assert isinstance(replacement["store_id"], str)
-    assert replacement["through_sequence"] == 0
     assert _is_dict(updated)
-    assert updated["store_id"] == replacement["store_id"]
+    assert isinstance(updated["store_id"], str)
     updated_sequence = updated["through_sequence"]
     assert isinstance(updated_sequence, int)
     assert updated_sequence >= 1
@@ -248,11 +255,11 @@ def test_training_metrics_stream_pushes_replacement_snapshot(
     assert _is_list_of_dict(inference) and len(inference) == 1
 
 
-def test_training_metrics_stream_applies_projection_parameters(
-    sync_client: SyncServerClient,
+async def test_training_metrics_events_apply_projection_parameters(
+    client: AsyncRestClient,
     tmp_path: Path,
 ) -> None:
-    initialized = sync_client.post(
+    initialized = await client.post(
         "/api/training/init",
         json={
             "run_dir": str(tmp_path),
@@ -285,11 +292,8 @@ def test_training_metrics_stream_applies_projection_parameters(
         }
     )
 
-    with sync_client.websocket_connect(
-        f"/ws/training/metrics?{query}"
-    ) as websocket:
-        snapshot = _receive_ws_json(websocket)
-
+    response = await _read_sse(f"/api/training/events/metrics?{query}")
+    snapshot = response.events[0].json()
     assert _is_dict(snapshot)
     datasets = snapshot["datasets"]
     assert _is_dict(datasets)
@@ -301,11 +305,11 @@ def test_training_metrics_stream_applies_projection_parameters(
     assert values["total_updates"] == 2
 
 
-def test_training_streams_report_store_replacement(
-    sync_client: SyncServerClient,
+async def test_training_events_report_store_replacement(
+    client: AsyncRestClient,
     tmp_path: Path,
 ) -> None:
-    initialized = sync_client.post(
+    initialized = await client.post(
         "/api/training/init",
         json={
             "run_dir": str(tmp_path),
@@ -324,17 +328,16 @@ def test_training_streams_report_store_replacement(
     )
 
     for path in ("logs", "checkpoints"):
-        with sync_client.websocket_connect(
-            f"/ws/training/{path}?{query}"
-        ) as websocket:
-            message = _receive_ws_json(websocket)
+        response = await _read_sse(
+            f"/api/training/events/{path}?{query}"
+        )
+        assert response.events[0].name == "replacement"
+        message = response.events[0].json()
         assert _is_dict(message)
-        assert message["type"] == "replacement"
         assert message["store_id"] != "0" * 32
 
 
-def test_training_streams_hold_rejected_run_without_retry(
-    sync_client: SyncServerClient,
+async def test_training_events_send_terminal_rejection(
     tmp_path: Path,
 ) -> None:
     run_dir = tmp_path / ("x" * 120)
@@ -348,16 +351,66 @@ def test_training_streams_hold_rejected_run_without_retry(
     )
 
     for path in ("logs", "metrics", "checkpoints"):
-        with sync_client.websocket_connect(
-            f"/ws/training/{path}?{query}"
-        ) as websocket:
-            message = _receive_ws_json(websocket)
-            assert _is_dict(message)
-            assert message == {
-                "type": "rejected",
-                "error": expected_error,
-            }
-            _assert_ws_remains_open(websocket)
+        response = await _read_sse(
+            f"/api/training/events/{path}?{query}"
+        )
+        assert len(response.events) == 1
+        assert response.events[0].name == "rejected"
+        assert response.events[0].json() == {"error": expected_error}
+
+
+async def test_training_log_events_resume_from_last_event_id(
+    client: AsyncRestClient,
+    tmp_path: Path,
+) -> None:
+    initialized = await client.post(
+        "/api/training/init",
+        json={
+            "run_dir": str(tmp_path),
+            "d_model": 2,
+            "layers": 1,
+            "heads": 1,
+            "max_tokens": 512,
+        },
+    )
+    assert initialized.status_code == 204
+    page = await client.get(
+        f"/api/training/logs?{urlencode({'run_dir': str(tmp_path)})}"
+    )
+    document = page.json()
+    assert _is_dict(document)
+    store_id = document["store_id"]
+    events = document["events"]
+    assert isinstance(store_id, str)
+    assert _is_list_of_dict(events) and events
+    first = events[0]
+    first_sequence = first["sequence"]
+    assert isinstance(first_sequence, int)
+    sink = StructuredEventSink(
+        run_dir=tmp_path,
+        process=ProcessIdentity(kind="coordinator"),
+    )
+    sink.emit("training", fields={"total_updates": 0})
+    sink.close()
+    query = urlencode(
+        {
+            "run_dir": str(tmp_path),
+            "store_id": store_id,
+            "after_sequence": "0",
+        }
+    )
+
+    response = await _read_sse(
+        f"/api/training/events/logs?{query}",
+        headers=(
+            (b"last-event-id", f"{store_id}:{first_sequence}".encode()),
+        ),
+    )
+
+    message = response.events[0].json()
+    assert _is_dict(message)
+    sequence = message["sequence"]
+    assert isinstance(sequence, int) and sequence > first_sequence
 
 
 def test_training_init_requires_yes_before_replacement(
@@ -469,9 +522,141 @@ def test_ai_debug_transcript_rest_endpoint_removed(
     assert response.status_code == 404
 
 
+@dataclass(frozen=True, slots=True)
+class _SseEvent:
+    name: str
+    data: str
+    event_id: str | None
+
+    def json(self) -> object:
+        return json.loads(self.data)
+
+
+@dataclass(frozen=True, slots=True)
+class _SseResponse:
+    status: int
+    headers: dict[str, str]
+    events: tuple[_SseEvent, ...]
+
+
+async def _read_sse(
+    url: str,
+    *,
+    event_count: int = 1,
+    headers: tuple[tuple[bytes, bytes], ...] = (),
+    after_first: Callable[[_SseEvent], Awaitable[None]] | None = None,
+) -> _SseResponse:
+    """Read named SSE events through the app's public ASGI interface."""
+    assert event_count > 0
+    parsed = urlsplit(url)
+    disconnect = asyncio.Event()
+    request_sent = False
+    status: int | None = None
+    response_headers: dict[str, str] = {}
+    events: list[_SseEvent] = []
+    buffer = bytearray()
+    called_after_first = False
+
+    async def receive() -> Message:
+        nonlocal request_sent
+        if not request_sent:
+            request_sent = True
+            return {
+                "type": "http.request",
+                "body": b"",
+                "more_body": False,
+            }
+        await disconnect.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message: Message) -> None:
+        nonlocal status, buffer, called_after_first
+        if message["type"] == "http.response.start":
+            status = message["status"]
+            response_headers.update(
+                {
+                    key.decode("latin-1"): value.decode("latin-1")
+                    for key, value in message["headers"]
+                }
+            )
+            return
+        assert message["type"] == "http.response.body"
+        buffer.extend(message.get("body", b""))
+        blocks = bytes(buffer).split(b"\n\n")
+        buffer = bytearray(blocks.pop())
+        for block in blocks:
+            event = _parse_sse_event(block)
+            if event is None:
+                continue
+            events.append(event)
+            if len(events) == 1 and after_first is not None:
+                assert not called_after_first
+                called_after_first = True
+                await after_first(event)
+            if len(events) >= event_count:
+                disconnect.set()
+
+    scope: Scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": parsed.path,
+        "raw_path": parsed.path.encode("ascii"),
+        "query_string": parsed.query.encode("ascii"),
+        "root_path": "",
+        "headers": ((b"accept", b"text/event-stream"), *headers),
+        "client": ("test", 123),
+        "server": ("test", 80),
+        "state": {},
+    }
+    app_receive: Receive = receive
+    app_send: Send = send
+    await asyncio.wait_for(
+        app(scope, app_receive, app_send), timeout=8.0
+    )
+    assert status is not None
+    assert len(events) >= event_count
+    return _SseResponse(
+        status=status,
+        headers=response_headers,
+        events=tuple(events[:event_count]),
+    )
+
+
+def _parse_sse_event(block: bytes) -> _SseEvent | None:
+    name: str | None = None
+    event_id: str | None = None
+    data: list[str] = []
+    for raw_line in block.decode("utf-8").splitlines():
+        if raw_line.startswith(":") or raw_line.startswith("retry:"):
+            continue
+        field, separator, raw_value = raw_line.partition(":")
+        value = (
+            raw_value[1:] if raw_value.startswith(" ") else raw_value
+        )
+        if separator == "":
+            continue
+        if field == "event":
+            name = value
+        elif field == "id":
+            event_id = value
+        elif field == "data":
+            data.append(value)
+    if name is None:
+        return None
+    return _SseEvent(name=name, data="\n".join(data), event_id=event_id)
+
+
 class AsyncRestClient(Protocol):
     async def get(self, url: str) -> httpx.Response: ...
-    async def post(self, url: str) -> httpx.Response: ...
+    async def post(
+        self,
+        url: str,
+        *,
+        json: dict[str, object] | None = None,
+    ) -> httpx.Response: ...
     async def delete(self, url: str) -> httpx.Response: ...
 
 
@@ -585,22 +770,6 @@ def _receive_ws_json(
                     "timed out waiting for websocket message"
                 ) from exc
             time.sleep(0.001)
-
-
-def _assert_ws_remains_open(
-    ws: WebSocketTestSession,
-    *,
-    duration: float = 0.05,
-) -> None:
-    deadline = time.monotonic() + duration
-    while time.monotonic() < deadline:
-        try:
-            message = _private_send_rx(ws).receive_nowait()
-        except WouldBlock:
-            time.sleep(0.001)
-            continue
-        _private_raise_on_close(ws)(message)
-        assert False, f"unexpected websocket message: {message}"
 
 
 def _try_receive_ws_json(

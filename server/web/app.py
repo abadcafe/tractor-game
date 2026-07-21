@@ -13,7 +13,7 @@ from server.web.logging_config import configure_server_logging
 from server.web.state import ServerState
 from server.web.static_assets import register_static_routes
 from server.web.training_api import register_training_routes
-from server.web.training_stream import register_training_stream_route
+from server.web.training_events import register_training_event_routes
 
 configure_server_logging()
 
@@ -27,5 +27,5 @@ app = FastAPI(lifespan=lifespan_for(state))
 register_game_routes(app, state)
 register_ai_debug_routes(app, state, static_dir)
 register_training_routes(app, state)
-register_training_stream_route(app, state)
+register_training_event_routes(app, state)
 register_static_routes(app, static_dir)

@@ -1,6 +1,6 @@
 import { ProcessStatus } from "../process-status.ts";
 
-Deno.test("process success preserves websocket reconnecting state", () => {
+Deno.test("process success preserves event-stream reconnecting state", () => {
   const status = new ProcessStatus();
   status.setConnection("reconnecting");
   status.clearError("process");
@@ -8,7 +8,7 @@ Deno.test("process success preserves websocket reconnecting state", () => {
   const snapshot = status.snapshot();
   if (snapshot.label !== "RECONNECTING") {
     throw new Error(
-      "Process success overwrote WebSocket reconnecting state",
+      "Process success overwrote event-stream reconnecting state",
     );
   }
 });

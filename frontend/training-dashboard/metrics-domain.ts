@@ -1,8 +1,8 @@
 import { DashboardCharts, type MetricAxis } from "./charts.ts";
 import {
-  MetricsSnapshotStream,
-  type MetricsStreamTarget,
-} from "./metrics.ts";
+  MetricEventStream,
+  type MetricEventTarget,
+} from "./metric-events.ts";
 import type { JsonPrimitive, TrainingMetrics } from "./types.ts";
 
 export interface MetricsDomainCallbacks {
@@ -14,7 +14,7 @@ export class MetricsDomain {
   #metrics: TrainingMetrics | null = null;
   #axis: MetricAxis = "update";
   readonly #charts = new DashboardCharts();
-  readonly #stream = new MetricsSnapshotStream(
+  readonly #stream = new MetricEventStream(
     () => this.#streamTarget(),
     {
       onSnapshot: (snapshot) => {
@@ -105,7 +105,7 @@ export class MetricsDomain {
     else this.#charts.setData(this.#metrics, this.#axis);
   }
 
-  #streamTarget(): MetricsStreamTarget | null {
+  #streamTarget(): MetricEventTarget | null {
     const runDir = this.runDir();
     if (runDir === "" || !this.isActive() || document.hidden) {
       return null;

@@ -43,7 +43,7 @@ Deno.test("REST artifact reads exclude Metrics snapshots", async () => {
     source.includes("fetchMetrics") ||
     source.includes("metricsRequestPath")
   ) {
-    throw new Error("Metrics snapshots must be WebSocket-only");
+    throw new Error("Metrics snapshots must be event-stream-only");
   }
   const logs = new URL(paths[1] ?? "", "https://example.test");
   if (
