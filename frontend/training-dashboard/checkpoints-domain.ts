@@ -1,5 +1,5 @@
 import { fetchCheckpoints } from "./api.ts";
-import { CheckpointInvalidationStream } from "./checkpoints.ts";
+import { CheckpointEventStream } from "./checkpoint-events.ts";
 import type {
   CheckpointCatalog,
   CheckpointManifest,
@@ -20,7 +20,7 @@ export class CheckpointsDomain {
   #storeId: string | null = null;
   #dirtyThrough = -1;
   #appliedThrough = -1;
-  readonly #stream = new CheckpointInvalidationStream(
+  readonly #stream = new CheckpointEventStream(
     () => this.runDir() || null,
     () => this.#storeId,
     {
@@ -53,10 +53,8 @@ export class CheckpointsDomain {
     private readonly callbacks: CheckpointsDomainCallbacks,
   ) {
     document.addEventListener("visibilitychange", () => {
-      if (
-        !document.hidden && this.isActive() &&
-        this.#dirtyThrough > this.#appliedThrough
-      ) void this.refresh();
+      if (document.hidden) this.#stream.disconnect();
+      else if (this.isActive()) this.activate();
     });
   }
 
@@ -64,12 +62,22 @@ export class CheckpointsDomain {
     return this.#catalog !== null;
   }
 
-  connect(): void {
+  activate(): void {
+    if (document.hidden || !this.isActive()) return;
     this.#stream.connect();
+    if (
+      this.#catalog === null ||
+      this.#dirtyThrough > this.#appliedThrough
+    ) void this.refresh();
+  }
+
+  deactivate(): void {
+    this.#stream.disconnect();
   }
 
   reset(): void {
     this.#generation += 1;
+    this.#stream.disconnect();
     this.#catalog = null;
     this.#storeId = null;
     this.#dirtyThrough = -1;

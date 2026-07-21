@@ -1,15 +1,12 @@
-import { processStreamUrl } from "../process.ts";
+import { processEventUrl } from "../process-events.ts";
 import { parseProcessState } from "../types.ts";
 
-Deno.test("process stream is scoped only by canonical run directory", () => {
-  const value = processStreamUrl(
-    "/tmp/run with spaces",
-    { protocol: "https:", host: "training.example:8443" },
-  );
-  const parsed = new URL(value);
+Deno.test("process events are scoped only by canonical run directory", () => {
+  const value = processEventUrl("/tmp/run with spaces");
+  const parsed = new URL(value, "https://training.example:8443");
   if (
-    parsed.protocol !== "wss:" ||
-    parsed.pathname !== "/ws/training/process" ||
+    parsed.protocol !== "https:" ||
+    parsed.pathname !== "/api/training/events/process" ||
     parsed.searchParams.get("run_dir") !== "/tmp/run with spaces" ||
     [...parsed.searchParams].length !== 1
   ) throw new Error(value);

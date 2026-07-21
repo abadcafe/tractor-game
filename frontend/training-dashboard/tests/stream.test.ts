@@ -1,26 +1,25 @@
-import { trainingStreamUrl } from "../stream.ts";
-import { metricsStreamUrl } from "../metrics.ts";
-import { checkpointStreamUrl } from "../checkpoints.ts";
-import { parseTrainingStreamFrame } from "../stream-frame.ts";
+import { checkpointEventUrl } from "../checkpoint-events.ts";
+import { logEventUrl } from "../log-events.ts";
+import { metricEventUrl } from "../metric-events.ts";
 import {
-  parseCheckpointStreamMessage,
-  parseLogMessage,
+  parseCheckpointCursor,
+  parseLogEntry,
   parseLogPage,
   parseMetrics,
+  parseStoreReplacement,
 } from "../types.ts";
 
-Deno.test("training stream resumes strictly after the last sequence", () => {
-  const url = trainingStreamUrl(
-    {
-      runDir: "/tmp/run with spaces",
-      afterSequence: 81,
-      storeId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    },
-    { protocol: "https:", host: "training.example:8443" },
-  );
-  const parsed = new URL(url);
-  if (parsed.protocol !== "wss:") throw new Error(url);
-  if (parsed.pathname !== "/ws/training/logs") throw new Error(url);
+Deno.test("log events resume strictly after the last sequence", () => {
+  const url = logEventUrl({
+    runDir: "/tmp/run with spaces",
+    afterSequence: 81,
+    storeId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  });
+  const parsed = new URL(url, "https://training.example:8443");
+  if (parsed.protocol !== "https:") throw new Error(url);
+  if (parsed.pathname !== "/api/training/events/logs") {
+    throw new Error(url);
+  }
   if (parsed.searchParams.get("after_sequence") !== "81") {
     throw new Error(url);
   }
@@ -40,19 +39,26 @@ Deno.test("training stream resumes strictly after the last sequence", () => {
 });
 
 Deno.test("streams omit store_id before a database exists", () => {
-  const location = { protocol: "http:", host: "training.example" };
-  const logs = new URL(trainingStreamUrl({
-    runDir: "/tmp/run",
-    afterSequence: 0,
-    storeId: null,
-  }, location));
-  const metrics = new URL(metricsStreamUrl({
-    runDir: "/tmp/run",
-    updateLimit: 200,
-    seriesPoints: 500,
-  }, location));
+  const origin = "http://training.example";
+  const logs = new URL(
+    logEventUrl({
+      runDir: "/tmp/run",
+      afterSequence: 0,
+      storeId: null,
+    }),
+    origin,
+  );
+  const metrics = new URL(
+    metricEventUrl({
+      runDir: "/tmp/run",
+      updateLimit: 200,
+      seriesPoints: 500,
+    }),
+    origin,
+  );
   const checkpoints = new URL(
-    checkpointStreamUrl("/tmp/run", null, location),
+    checkpointEventUrl("/tmp/run", null),
+    origin,
   );
   if (
     logs.searchParams.has("store_id") ||
@@ -62,14 +68,18 @@ Deno.test("streams omit store_id before a database exists", () => {
 });
 
 Deno.test("metrics stream owns snapshot projection parameters", () => {
-  const url = new URL(metricsStreamUrl({
-    runDir: "/tmp/run with spaces",
-    updateLimit: 50,
-    seriesPoints: 200,
-  }, { protocol: "https:", host: "training.example:8443" }));
+  const url = new URL(
+    metricEventUrl({
+      runDir: "/tmp/run with spaces",
+      updateLimit: 50,
+      seriesPoints: 200,
+    }),
+    "https://training.example:8443",
+  );
 
   if (
-    url.protocol !== "wss:" || url.pathname !== "/ws/training/metrics"
+    url.protocol !== "https:" ||
+    url.pathname !== "/api/training/events/metrics"
   ) {
     throw new Error(url.toString());
   }
@@ -83,12 +93,10 @@ Deno.test("metrics stream owns snapshot projection parameters", () => {
 
 Deno.test("replacement messages preserve strict store generations", () => {
   const storeId = "0123456789abcdef0123456789abcdef";
-  const logs = parseLogMessage({
-    type: "replacement",
+  const logs = parseStoreReplacement({
     store_id: storeId,
   });
-  const checkpoints = parseCheckpointStreamMessage({
-    type: "replacement",
+  const checkpoints = parseCheckpointCursor({
     store_id: storeId,
     through_sequence: 9,
   });
@@ -98,8 +106,8 @@ Deno.test("replacement messages preserve strict store generations", () => {
     next_before_sequence: null,
   });
   if (
-    logs.type !== "replacement" ||
-    checkpoints.type !== "replacement" ||
+    logs.store_id !== storeId ||
+    checkpoints.store_id !== storeId ||
     page.store_id !== storeId
   ) throw new Error("Replacement generation was lost");
 });
@@ -132,8 +140,7 @@ Deno.test("metrics stream frames are complete snapshots", () => {
 Deno.test("structured log parser rejects legacy lifecycle suffixes", () => {
   let rejected = false;
   try {
-    parseLogMessage({
-      type: "event",
+    parseLogEntry({
       sequence: 8,
       event: {
         schema_version: 2,
@@ -151,8 +158,7 @@ Deno.test("structured log parser rejects legacy lifecycle suffixes", () => {
 });
 
 Deno.test("structured log parser accepts the terminal event protocol", () => {
-  const event = parseLogMessage({
-    type: "event",
+  const event = parseLogEntry({
     sequence: 7,
     event: {
       schema_version: 2,
@@ -163,7 +169,7 @@ Deno.test("structured log parser accepts the terminal event protocol", () => {
       fields: {},
     },
   });
-  if (event.type !== "event" || event.sequence !== 7) {
+  if (event.sequence !== 7) {
     throw new Error("event");
   }
 });
@@ -171,8 +177,7 @@ Deno.test("structured log parser accepts the terminal event protocol", () => {
 Deno.test("event parser rejects unknown correlation fields", () => {
   let rejected = false;
   try {
-    parseLogMessage({
-      type: "event",
+    parseLogEntry({
       sequence: 7,
       event: {
         schema_version: 2,
@@ -187,30 +192,4 @@ Deno.test("event parser rejects unknown correlation fields", () => {
     rejected = true;
   }
   if (!rejected) throw new Error("Unknown context field was accepted");
-});
-
-Deno.test("rejected stream frame preserves the terminal error", () => {
-  const frame = parseTrainingStreamFrame({
-    type: "rejected",
-    error: "unsupported training database schema",
-  });
-
-  if (
-    frame.type !== "rejected" ||
-    frame.error !== "unsupported training database schema"
-  ) {
-    throw new Error("Rejected run reason was lost");
-  }
-});
-
-Deno.test("domain stream frame passes through unchanged", () => {
-  const message: unknown = {
-    type: "invalidation",
-    through_sequence: 9,
-  };
-  const frame = parseTrainingStreamFrame(message);
-
-  if (frame.type !== "message" || frame.value !== message) {
-    throw new Error("Domain message was changed");
-  }
 });

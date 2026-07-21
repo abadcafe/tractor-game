@@ -474,7 +474,7 @@ async function waitUntil(
 function withFakeDashboardDom(): DashboardHarness {
   const document = new FakeDocument();
   const fetchCalls: FetchCall[] = [];
-  const openSockets: Array<{ close: () => void }> = [];
+  const openEventSources: Array<{ close: () => void }> = [];
 
   defineGlobal("Event", Event);
   defineGlobal("document", document as unknown as Document);
@@ -557,11 +557,21 @@ function withFakeDashboardDom(): DashboardHarness {
     } as unknown as typeof ResizeObserver,
   );
 
-  class FakeWebSocket {
+  class FakeEventSource {
     #listeners = new Map<string, Set<(event: Event) => void>>();
     #closed = false;
-    constructor(_url: string) {
-      openSockets.push(this);
+    readonly CONNECTING = 0;
+    readonly OPEN = 1;
+    readonly CLOSED = 2;
+    readyState = this.CONNECTING;
+    withCredentials = false;
+    onopen: ((this: EventSource, event: Event) => void) | null = null;
+    onmessage:
+      | ((this: EventSource, event: MessageEvent) => void)
+      | null = null;
+    onerror: ((this: EventSource, event: Event) => void) | null = null;
+    constructor(readonly url: string) {
+      openEventSources.push(this);
       setTimeout(() => this.#dispatch("open", new Event("open")), 0);
     }
     addEventListener(
@@ -576,9 +586,10 @@ function withFakeDashboardDom(): DashboardHarness {
     close(): void {
       if (this.#closed) return;
       this.#closed = true;
-      setTimeout(() => this.#dispatch("close", new Event("close")), 0);
+      this.readyState = this.CLOSED;
     }
     #dispatch(type: string, event: Event): void {
+      if (type === "open") this.readyState = this.OPEN;
       const handlers = this.#listeners.get(type);
       if (handlers === undefined) return;
       for (const handler of handlers) handler(event);
@@ -586,8 +597,8 @@ function withFakeDashboardDom(): DashboardHarness {
   }
 
   defineGlobal(
-    "WebSocket",
-    FakeWebSocket as unknown as typeof WebSocket,
+    "EventSource",
+    FakeEventSource as unknown as typeof EventSource,
   );
 
   const create = (id: string, tag: string = "div"): FakeElement => {
@@ -936,8 +947,8 @@ function withFakeDashboardDom(): DashboardHarness {
     confirmResumeButton: confirmResume as unknown as HTMLButtonElement,
     fetchCalls,
     cleanup: async (): Promise<void> => {
-      for (const socket of openSockets) {
-        socket.close();
+      for (const source of openEventSources) {
+        source.close();
       }
       for (const timer of scheduledTimeouts) {
         globalThis.clearTimeout(timer);

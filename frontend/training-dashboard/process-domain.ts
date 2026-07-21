@@ -1,4 +1,4 @@
-import { ProcessStreamClient } from "./process.ts";
+import { ProcessEventStream } from "./process-events.ts";
 import type {
   ProcessDetails,
   ProcessSnapshot,
@@ -24,7 +24,7 @@ export class ProcessDomain {
     resuming: false,
     stopping: false,
   };
-  readonly #stream = new ProcessStreamClient(
+  readonly #stream = new ProcessEventStream(
     () => this.runDir() || null,
     {
       onSnapshot: (value) => {

@@ -236,8 +236,9 @@ function connectStreams(): void {
   processStatus.setConnection("connecting");
   renderProcessStatus();
   processDomain.connect();
-  checkpointsDomain.connect();
   if (currentRoute() === "logs") logsDomain.activate();
+  if (currentRoute() === "metrics") metricsDomain.activate();
+  if (currentRoute() === "checkpoints") checkpointsDomain.activate();
 }
 
 async function refreshCurrentDomain(): Promise<void> {
@@ -269,9 +270,8 @@ function renderRoute(): void {
   else logsDomain.deactivate();
   if (route === "metrics") metricsDomain.activate();
   else metricsDomain.deactivate();
-  if (route === "checkpoints" && !checkpointsDomain.loaded) {
-    void checkpointsDomain.refresh();
-  }
+  if (route === "checkpoints") checkpointsDomain.activate();
+  else checkpointsDomain.deactivate();
 }
 
 function currentRoute(): ViewName {
