@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 from server.foundation.json_value import JsonObject
 
+MIN_ATTENTION_HEAD_DIMENSION: int = 8
+
 
 @dataclass(frozen=True, slots=True)
 class ModelConfig:
@@ -15,30 +17,30 @@ class ModelConfig:
     d_model: int = 128
     layers: int = 3
     heads: int = 4
-    max_tokens: int = 768
 
     def __post_init__(self) -> None:
         assert self.d_model > 0
         assert self.layers > 0
         assert self.heads > 0
         assert self.d_model % self.heads == 0
-        assert self.max_tokens > 0
+        assert (
+            self.d_model // self.heads >= MIN_ATTENTION_HEAD_DIMENSION
+        )
 
     def to_json(self) -> JsonObject:
         return {
             "d_model": self.d_model,
             "layers": self.layers,
             "heads": self.heads,
-            "max_tokens": self.max_tokens,
         }
 
     @classmethod
     def from_json(cls, data: JsonObject) -> ModelConfig:
+        assert set(data) == {"d_model", "layers", "heads"}
         return cls(
             d_model=_int_json_field(data, "d_model"),
             layers=_int_json_field(data, "layers"),
             heads=_int_json_field(data, "heads"),
-            max_tokens=_int_json_field(data, "max_tokens"),
         )
 
 

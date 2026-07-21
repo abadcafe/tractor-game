@@ -112,7 +112,7 @@ class _ReturnCommitBuilder:
         ):
             self.append_decision(
                 handle=step.decision_handle,
-                step_count=len(step.action.semantic_trace.arguments),
+                step_count=len(step.action.trace.choices),
                 return_value=return_value,
             )
 

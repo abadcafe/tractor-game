@@ -9,6 +9,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from server.foundation import result as _result
+from server.training.config import MIN_ATTENTION_HEAD_DIMENSION
 from server.training.stop import TrainingStopRequest
 
 type ManagedCheckpointName = Annotated[
@@ -26,7 +27,6 @@ class TrainingInitOptions(BaseModel):
     d_model: int = Field(default=128, gt=0)
     layers: int = Field(default=3, gt=0)
     heads: int = Field(default=4, gt=0)
-    max_tokens: int = Field(default=768, ge=512)
     seed: int = Field(default=0, ge=0)
     learning_rate: float = Field(
         default=0.0003, gt=0.0, allow_inf_nan=False
@@ -58,6 +58,11 @@ class TrainingInitOptions(BaseModel):
     def validate_model_shape(self) -> TrainingInitOptions:
         if self.d_model % self.heads != 0:
             raise ValueError("--d-model must be divisible by --heads")
+        if self.d_model // self.heads < MIN_ATTENTION_HEAD_DIMENSION:
+            raise ValueError(
+                "--d-model divided by --heads must be at least "
+                f"{MIN_ATTENTION_HEAD_DIMENSION}"
+            )
         return self
 
 
@@ -171,7 +176,6 @@ def initialize_run(
             d_model=options.d_model,
             layers=options.layers,
             heads=options.heads,
-            max_tokens=options.max_tokens,
         ),
         train_config=TrainConfig(
             seed=options.seed,

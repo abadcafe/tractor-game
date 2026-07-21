@@ -17,9 +17,8 @@ type _ProfileField = Literal[
     "observation_batch_seconds",
     "observation_encode_seconds",
     "value_head_seconds",
-    "argument_select_seconds",
-    "argument_decode_seconds",
-    "argument_distribution_seconds",
+    "action_decode_seconds",
+    "action_distribution_seconds",
     "backward_seconds",
     "optimizer_step_seconds",
 ]
@@ -34,17 +33,16 @@ class PPOUpdateProfile:
     observation_batch_seconds: float
     observation_encode_seconds: float
     value_head_seconds: float
-    argument_select_seconds: float
-    argument_decode_seconds: float
-    argument_distribution_seconds: float
+    action_decode_seconds: float
+    action_distribution_seconds: float
     backward_seconds: float
     optimizer_step_seconds: float
-    argument_decode_fraction: float
-    argument_trace_batch_count: int
-    argument_trace_row_count: int
-    argument_trace_token_count: int
-    argument_trace_valid_token_count: int
-    argument_trace_padding_token_count: int
+    action_decode_fraction: float
+    action_trace_batch_count: int
+    action_trace_row_count: int
+    action_trace_choice_count: int
+    action_trace_valid_choice_count: int
+    action_trace_padding_choice_count: int
 
 
 def ppo_update_profile_is_finite(profile: PPOUpdateProfile) -> bool:
@@ -55,9 +53,8 @@ def ppo_update_profile_is_finite(profile: PPOUpdateProfile) -> bool:
         profile.observation_batch_seconds,
         profile.observation_encode_seconds,
         profile.value_head_seconds,
-        profile.argument_select_seconds,
-        profile.argument_decode_seconds,
-        profile.argument_distribution_seconds,
+        profile.action_decode_seconds,
+        profile.action_distribution_seconds,
         profile.backward_seconds,
         profile.optimizer_step_seconds,
     )
@@ -66,13 +63,13 @@ def ppo_update_profile_is_finite(profile: PPOUpdateProfile) -> bool:
             math.isfinite(value) and value >= 0.0
             for value in finite_nonnegative_values
         )
-        and math.isfinite(profile.argument_decode_fraction)
-        and 0.0 <= profile.argument_decode_fraction <= 1.0
-        and profile.argument_trace_batch_count >= 0
-        and profile.argument_trace_row_count >= 0
-        and profile.argument_trace_token_count >= 0
-        and profile.argument_trace_valid_token_count >= 0
-        and profile.argument_trace_padding_token_count >= 0
+        and math.isfinite(profile.action_decode_fraction)
+        and 0.0 <= profile.action_decode_fraction <= 1.0
+        and profile.action_trace_batch_count >= 0
+        and profile.action_trace_row_count >= 0
+        and profile.action_trace_choice_count >= 0
+        and profile.action_trace_valid_choice_count >= 0
+        and profile.action_trace_padding_choice_count >= 0
     )
 
 
@@ -86,17 +83,16 @@ def blank_update_profile(*, update_seconds: float) -> PPOUpdateProfile:
         observation_batch_seconds=0.0,
         observation_encode_seconds=0.0,
         value_head_seconds=0.0,
-        argument_select_seconds=0.0,
-        argument_decode_seconds=0.0,
-        argument_distribution_seconds=0.0,
+        action_decode_seconds=0.0,
+        action_distribution_seconds=0.0,
         backward_seconds=0.0,
         optimizer_step_seconds=0.0,
-        argument_decode_fraction=0.0,
-        argument_trace_batch_count=0,
-        argument_trace_row_count=0,
-        argument_trace_token_count=0,
-        argument_trace_valid_token_count=0,
-        argument_trace_padding_token_count=0,
+        action_decode_fraction=0.0,
+        action_trace_batch_count=0,
+        action_trace_row_count=0,
+        action_trace_choice_count=0,
+        action_trace_valid_choice_count=0,
+        action_trace_padding_choice_count=0,
     )
 
 
@@ -135,16 +131,15 @@ class PPOProfileAccumulator:
     observation_batch_seconds: float = 0.0
     observation_encode_seconds: float = 0.0
     value_head_seconds: float = 0.0
-    argument_select_seconds: float = 0.0
-    argument_decode_seconds: float = 0.0
-    argument_distribution_seconds: float = 0.0
+    action_decode_seconds: float = 0.0
+    action_distribution_seconds: float = 0.0
     backward_seconds: float = 0.0
     optimizer_step_seconds: float = 0.0
-    argument_trace_batch_count: int = 0
-    argument_trace_row_count: int = 0
-    argument_trace_token_count: int = 0
-    argument_trace_valid_token_count: int = 0
-    argument_trace_padding_token_count: int = 0
+    action_trace_batch_count: int = 0
+    action_trace_row_count: int = 0
+    action_trace_choice_count: int = 0
+    action_trace_valid_choice_count: int = 0
+    action_trace_padding_choice_count: int = 0
     _cuda_segments: list[_CudaProfileSegment] = field(
         default_factory=_cuda_profile_segment_list
     )
@@ -197,7 +192,7 @@ class PPOProfileAccumulator:
             )
         )
 
-    def record_argument_trace_lengths(
+    def record_action_trace_lengths(
         self, trace_lengths: Tensor
     ) -> None:
         if self.mode != "detailed":
@@ -208,23 +203,23 @@ class PPOProfileAccumulator:
             int(cpu_lengths[index].item())
             for index in range(int(cpu_lengths.shape[0]))
         )
-        self._record_argument_trace_length_values(lengths)
+        self._record_action_trace_length_values(lengths)
 
-    def _record_argument_trace_length_values(
+    def _record_action_trace_length_values(
         self, trace_lengths: tuple[int, ...]
     ) -> None:
         assert trace_lengths
         assert all(length >= 0 for length in trace_lengths)
         row_count = len(trace_lengths)
-        valid_token_count = sum(trace_lengths)
-        max_token_count = max(trace_lengths)
-        token_count = row_count * max_token_count
-        self.argument_trace_batch_count += 1
-        self.argument_trace_row_count += row_count
-        self.argument_trace_token_count += token_count
-        self.argument_trace_valid_token_count += valid_token_count
-        self.argument_trace_padding_token_count += (
-            token_count - valid_token_count
+        valid_choice_count = sum(trace_lengths)
+        max_choice_count = max(trace_lengths)
+        choice_count = row_count * max_choice_count
+        self.action_trace_batch_count += 1
+        self.action_trace_row_count += row_count
+        self.action_trace_choice_count += choice_count
+        self.action_trace_valid_choice_count += valid_choice_count
+        self.action_trace_padding_choice_count += (
+            choice_count - valid_choice_count
         )
 
     def finish(self) -> PPOUpdateProfile:
@@ -246,7 +241,7 @@ class PPOProfileAccumulator:
         decode_fraction = (
             0.0
             if update_seconds <= 0.0
-            else self.argument_decode_seconds / update_seconds
+            else self.action_decode_seconds / update_seconds
         )
         return PPOUpdateProfile(
             update_seconds=update_seconds,
@@ -254,24 +249,21 @@ class PPOProfileAccumulator:
             observation_batch_seconds=self.observation_batch_seconds,
             observation_encode_seconds=self.observation_encode_seconds,
             value_head_seconds=self.value_head_seconds,
-            argument_select_seconds=self.argument_select_seconds,
-            argument_decode_seconds=self.argument_decode_seconds,
-            argument_distribution_seconds=(
-                self.argument_distribution_seconds
+            action_decode_seconds=self.action_decode_seconds,
+            action_distribution_seconds=(
+                self.action_distribution_seconds
             ),
             backward_seconds=self.backward_seconds,
             optimizer_step_seconds=self.optimizer_step_seconds,
-            argument_decode_fraction=decode_fraction,
-            argument_trace_batch_count=(
-                self.argument_trace_batch_count
+            action_decode_fraction=decode_fraction,
+            action_trace_batch_count=(self.action_trace_batch_count),
+            action_trace_row_count=self.action_trace_row_count,
+            action_trace_choice_count=self.action_trace_choice_count,
+            action_trace_valid_choice_count=(
+                self.action_trace_valid_choice_count
             ),
-            argument_trace_row_count=self.argument_trace_row_count,
-            argument_trace_token_count=self.argument_trace_token_count,
-            argument_trace_valid_token_count=(
-                self.argument_trace_valid_token_count
-            ),
-            argument_trace_padding_token_count=(
-                self.argument_trace_padding_token_count
+            action_trace_padding_choice_count=(
+                self.action_trace_padding_choice_count
             ),
         )
 
@@ -304,14 +296,11 @@ class PPOProfileAccumulator:
         if field_name == "value_head_seconds":
             self.value_head_seconds += seconds
             return
-        if field_name == "argument_select_seconds":
-            self.argument_select_seconds += seconds
+        if field_name == "action_decode_seconds":
+            self.action_decode_seconds += seconds
             return
-        if field_name == "argument_decode_seconds":
-            self.argument_decode_seconds += seconds
-            return
-        if field_name == "argument_distribution_seconds":
-            self.argument_distribution_seconds += seconds
+        if field_name == "action_distribution_seconds":
+            self.action_distribution_seconds += seconds
             return
         if field_name == "backward_seconds":
             self.backward_seconds += seconds

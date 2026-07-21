@@ -16,31 +16,31 @@ from server.training.sampling import (
     policy_choice_threshold,
 )
 from server.training.semantic_action_plan import (
-    SemanticActionSampler,
-    SemanticArgumentLogitDecoder,
+    ActionChoiceLogitDecoder,
+    ActionSampler,
     action_plan_generation_step_count,
+    action_trace_from_choice_ids,
     compile_legal_action_frame,
     plan_batch_to_device,
-    semantic_trace_from_token_ids,
 )
-from server.training.semantic_actions.codec import SEMANTIC_CODEC
+from server.training.semantic_actions.choices import ACTION_CHOICE_COUNT
 from server.training.semantic_actions.values import GeneratedAction
 
 
 @dataclass(slots=True)
-class _UniformArgumentLogitDecoder:
+class _UniformChoiceLogitDecoder:
     batch_size: int
     device: torch.device
 
-    def next_logits(self) -> torch.Tensor:
+    def next_choice_logits(self) -> torch.Tensor:
         return torch.zeros(
-            (self.batch_size, SEMANTIC_CODEC.argument_vocab_size),
+            (self.batch_size, ACTION_CHOICE_COUNT),
             dtype=torch.float32,
             device=self.device,
         )
 
-    def advance(self, selected_token_ids: torch.Tensor) -> None:
-        assert selected_token_ids.shape == (self.batch_size,)
+    def advance(self, selected_choice_ids: torch.Tensor) -> None:
+        assert selected_choice_ids.shape == (self.batch_size,)
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,20 +86,18 @@ class RandomTrainingPolicy:
                 tuple(
                     policy_choice_threshold(
                         key=decision_key,
-                        argument_index=argument_index,
+                        step_index=step_index,
                     )
-                    for argument_index in range(generation_step_count)
+                    for step_index in range(generation_step_count)
                 ),
             ),
             dtype=torch.float64,
             device=device,
         )
-        sampler = SemanticActionSampler.create(
-            batch_capacity=1, device=device
-        )
+        sampler = ActionSampler.create(batch_capacity=1, device=device)
 
-        logit_decoder: SemanticArgumentLogitDecoder = (
-            _UniformArgumentLogitDecoder(batch_size=1, device=device)
+        logit_decoder: ActionChoiceLogitDecoder = (
+            _UniformChoiceLogitDecoder(batch_size=1, device=device)
         )
         sample_result = sampler.sample(
             action_batch=batch,
@@ -118,14 +116,11 @@ class RandomTrainingPolicy:
         step_count = int(sample.step_counts[0].detach().cpu().item())
         trace_ids = tuple(
             int(
-                sample.selected_token_ids_padded[0, index]
-                .detach()
-                .cpu()
-                .item()
+                sample.choice_ids_padded[0, index].detach().cpu().item()
             )
             for index in range(step_count)
         )
-        trace_result = semantic_trace_from_token_ids(trace_ids)
+        trace_result = action_trace_from_choice_ids(trace_ids)
         if isinstance(trace_result, Rejected):
             return trace_result
         trace = trace_result.value

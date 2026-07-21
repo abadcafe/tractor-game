@@ -9,8 +9,8 @@ from server.game.rules.card_faces import (
     bind_face_counts,
 )
 from server.game.rules.cards import Card
-from server.training.semantic_actions.arguments import (
-    InvalidSemanticActionRejected,
+from server.training.semantic_actions.choices import (
+    InvalidActionRejected,
 )
 from server.training.semantic_actions.values import (
     BoundAction,
@@ -53,7 +53,7 @@ def _card_ids_for_face_counts(
         return unique_check
     bound = bind_face_counts(face_counts, hand_cards)
     if isinstance(bound, Rejected):
-        return InvalidSemanticActionRejected(bound.reason)
+        return InvalidActionRejected(bound.reason)
     return Ok(value=tuple(card.id for card in bound.value))
 
 
@@ -63,6 +63,6 @@ def _validate_unique_faces(
     seen: set[CardFace] = set()
     for item in face_counts:
         if item.face in seen:
-            return InvalidSemanticActionRejected("同一牌面重复选择")
+            return InvalidActionRejected("同一牌面重复选择")
         seen.add(item.face)
     return Ok(value=None)

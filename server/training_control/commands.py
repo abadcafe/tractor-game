@@ -14,7 +14,6 @@ from pydantic import (
     model_validator,
 )
 
-MIN_CLI_MAX_TOKENS = 512
 DEFAULT_RUN_DIR = Path("training_runs")
 
 
@@ -40,7 +39,6 @@ class TrainingInitRequest(BaseModel):
     d_model: Annotated[int, Field(gt=0)] = 128
     layers: Annotated[int, Field(gt=0)] = 3
     heads: Annotated[int, Field(gt=0)] = 4
-    max_tokens: Annotated[int, Field(ge=MIN_CLI_MAX_TOKENS)] = 768
     seed: Annotated[int, Field(ge=0)] = 0
     learning_rate: Annotated[
         float, Field(gt=0.0, allow_inf_nan=False)
@@ -246,7 +244,6 @@ def _portable_values(
         ("--d-model", request.d_model),
         ("--layers", request.layers),
         ("--heads", request.heads),
-        ("--max-tokens", request.max_tokens),
         ("--seed", request.seed),
         ("--learning-rate", request.learning_rate),
         ("--ppo-clip", request.ppo_clip),

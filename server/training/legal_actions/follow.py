@@ -15,11 +15,11 @@ from server.training.legal_actions.contract import LegalActionIndex
 from server.training.legal_actions.selection import (
     trace_is_selection_only,
 )
-from server.training.semantic_actions.arguments import (
-    InvalidSemanticActionRejected,
-    SemanticArgumentPrefix,
-    SemanticArgumentTrace,
-    semantic_prefix_state,
+from server.training.semantic_actions.choices import (
+    ActionPrefix,
+    ActionTrace,
+    InvalidActionRejected,
+    action_prefix_cards,
 )
 from server.training.semantic_actions.query import ActionQuery
 from server.training.semantic_actions.values import GeneratedAction
@@ -42,14 +42,14 @@ class FollowPlayLegalActionIndex(LegalActionIndex):
         return self._space
 
     def decode(
-        self, trace: SemanticArgumentTrace
+        self, trace: ActionTrace
     ) -> Ok[GeneratedAction] | Rejected:
         if not trace_is_selection_only(trace):
-            return InvalidSemanticActionRejected(
+            return InvalidActionRejected(
                 "exact-count 动作不能包含终止参数"
             )
-        selected_result = semantic_prefix_state(
-            SemanticArgumentPrefix(arguments=trace.arguments)
+        selected_result = action_prefix_cards(
+            ActionPrefix(choices=trace.choices)
         )
         if isinstance(selected_result, Rejected):
             return selected_result
@@ -62,7 +62,7 @@ class FollowPlayLegalActionIndex(LegalActionIndex):
                 action_kind="play",
                 message_type="play",
                 face_counts=selected,
-                semantic_trace=trace,
+                trace=trace,
                 is_pass=False,
             )
         )

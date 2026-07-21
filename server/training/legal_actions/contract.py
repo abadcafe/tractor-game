@@ -5,16 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from server.foundation.result import Ok, Rejected
-from server.training.semantic_actions.arguments import (
-    InvalidSemanticActionRejected,
-    SemanticArgumentTrace,
+from server.training.semantic_actions.choices import (
+    ActionTrace,
+    InvalidActionRejected,
 )
 from server.training.semantic_actions.query import ActionQuery
 from server.training.semantic_actions.values import GeneratedAction
 
 
 class LegalActionIndex:
-    """Rule-complete next-argument mask for one player decision."""
+    """Rule-complete legal-choice mask for one player decision."""
 
     @property
     def query(self) -> ActionQuery:
@@ -22,7 +22,7 @@ class LegalActionIndex:
         raise NotImplementedError
 
     def decode(
-        self, trace: SemanticArgumentTrace
+        self, trace: ActionTrace
     ) -> Ok[GeneratedAction] | Rejected:
         """Decode a complete legal trace into a generated action."""
         raise NotImplementedError
@@ -39,6 +39,6 @@ class EmptyLegalActionIndex(LegalActionIndex):
         return self._query
 
     def decode(
-        self, trace: SemanticArgumentTrace
+        self, trace: ActionTrace
     ) -> Ok[GeneratedAction] | Rejected:
-        return InvalidSemanticActionRejected("当前没有动作请求")
+        return InvalidActionRejected("当前没有动作请求")

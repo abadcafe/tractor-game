@@ -50,10 +50,10 @@ class ShuffleKey:
 def policy_choice_threshold(
     *,
     key: PolicyDecisionKey,
-    argument_index: int,
+    step_index: int,
 ) -> float:
     """Return the stable threshold for one policy choice."""
-    assert argument_index >= 0
+    assert step_index >= 0
     return _unit_float(
         (
             "policy",
@@ -62,7 +62,7 @@ def policy_choice_threshold(
             key.episode_id,
             key.player_index,
             key.decision_index,
-            argument_index,
+            step_index,
         )
     )
 
@@ -70,14 +70,14 @@ def policy_choice_threshold(
 def uniform_choice_offset(
     *,
     key: PolicyDecisionKey,
-    argument_index: int,
+    step_index: int,
     choice_count: int,
 ) -> int:
     """Return a stable uniform offset for a legal choice count."""
     assert choice_count > 0
     threshold = policy_choice_threshold(
         key=key,
-        argument_index=argument_index,
+        step_index=step_index,
     )
     return min(int(threshold * choice_count), choice_count - 1)
 

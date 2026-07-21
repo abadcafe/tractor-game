@@ -18,7 +18,7 @@ from server.training.policy_sampling.model_rank_sample_arena import (
     ModelRankSampleArena,
 )
 from server.training.semantic_action_plan import (
-    SemanticActionSampler,
+    ActionSampler,
 )
 from server.training.tensor_finiteness import (
     NamedTensorCheck,
@@ -37,7 +37,7 @@ def sample_policy_batch(
     config: ModelConfig,
     device: torch.device,
     requests: DevicePolicyRequestBatch,
-    sampler: SemanticActionSampler,
+    sampler: ActionSampler,
 ) -> PolicySamplingResult:
     """Sample policy decisions for a staged request batch."""
     model.eval()
@@ -56,37 +56,31 @@ def sample_policy_batch(
         if isinstance(value_check, Rejected):
             return value_check
 
-        logit_decoder = model.begin_argument_decode_session(
+        logit_decoder = model.begin_action_decode_session(
             encoding,
             max_steps=requests.padded_generation_steps,
         )
-        semantic_result = sampler.sample(
+        action_result = sampler.sample(
             action_batch=requests.action_plan_batch,
             generation_step_counts=requests.generation_step_counts,
             sampling_thresholds=requests.sampling_thresholds,
             padded_generation_steps=requests.padded_generation_steps,
             logit_decoder=logit_decoder,
         )
-        if isinstance(semantic_result, Rejected):
-            return semantic_result
-        semantic = semantic_result.value
+        if isinstance(action_result, Rejected):
+            return action_result
+        action = action_result.value
         return Ok(
             value=PolicySampleColumns(
                 policy_versions=requests.policy_versions,
                 observation_batch=observation_batch,
-                selected_token_ids_padded=(
-                    semantic.selected_token_ids_padded
-                ),
-                active_sample_indices=semantic.active_sample_indices,
-                active_step_indices=semantic.active_step_indices,
-                choice_token_ids=semantic.choice_token_ids,
-                choice_masks=semantic.choice_masks,
-                selected_choice_offsets=(
-                    semantic.selected_choice_offsets
-                ),
-                step_counts=semantic.step_counts,
-                choice_counts=semantic.choice_counts,
-                old_log_probabilities=semantic.log_probabilities,
+                choice_ids_padded=action.choice_ids_padded,
+                active_sample_indices=action.active_sample_indices,
+                active_step_indices=action.active_step_indices,
+                legal_choice_masks=action.legal_choice_masks,
+                step_counts=action.step_counts,
+                choice_counts=action.choice_counts,
+                old_log_probabilities=action.log_probabilities,
                 old_values=values,
             )
         )
@@ -98,7 +92,7 @@ def sample_policy_batch_into_arena(
     config: ModelConfig,
     device: torch.device,
     requests: DevicePolicyRequestBatch,
-    sampler: SemanticActionSampler,
+    sampler: ActionSampler,
     sample_arena: ModelRankSampleArena,
 ) -> PolicySamplingDecisionResult:
     """Sample policy decisions and append replay tensors to an arena."""
@@ -118,22 +112,22 @@ def sample_policy_batch_into_arena(
         if isinstance(value_check, Rejected):
             return value_check
 
-        logit_decoder = model.begin_argument_decode_session(
+        logit_decoder = model.begin_action_decode_session(
             encoding,
             max_steps=requests.padded_generation_steps,
         )
-        semantic_result = sampler.sample(
+        action_result = sampler.sample(
             action_batch=requests.action_plan_batch,
             generation_step_counts=requests.generation_step_counts,
             sampling_thresholds=requests.sampling_thresholds,
             padded_generation_steps=requests.padded_generation_steps,
             logit_decoder=logit_decoder,
         )
-        if isinstance(semantic_result, Rejected):
-            return semantic_result
+        if isinstance(action_result, Rejected):
+            return action_result
         return sample_arena.store_sampled_result(
             policy_versions=requests.policy_versions,
             observation_batch=observation_batch,
-            semantic_sample=semantic_result.value,
+            action_sample=action_result.value,
             old_values=values,
         )

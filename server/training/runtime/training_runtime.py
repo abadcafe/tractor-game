@@ -1647,13 +1647,13 @@ def _aggregate_ppo_update_profiles(
 ) -> PPOUpdateProfile:
     assert profiles
     update_seconds = max(profile.update_seconds for profile in profiles)
-    argument_decode_seconds = max(
-        profile.argument_decode_seconds for profile in profiles
+    action_decode_seconds = max(
+        profile.action_decode_seconds for profile in profiles
     )
     decode_fraction = (
         0.0
         if update_seconds <= 0.0
-        else argument_decode_seconds / update_seconds
+        else action_decode_seconds / update_seconds
     )
     return PPOUpdateProfile(
         update_seconds=update_seconds,
@@ -1669,13 +1669,9 @@ def _aggregate_ppo_update_profiles(
         value_head_seconds=max(
             profile.value_head_seconds for profile in profiles
         ),
-        argument_select_seconds=max(
-            profile.argument_select_seconds for profile in profiles
-        ),
-        argument_decode_seconds=argument_decode_seconds,
-        argument_distribution_seconds=max(
-            profile.argument_distribution_seconds
-            for profile in profiles
+        action_decode_seconds=action_decode_seconds,
+        action_distribution_seconds=max(
+            profile.action_distribution_seconds for profile in profiles
         ),
         backward_seconds=max(
             profile.backward_seconds for profile in profiles
@@ -1683,22 +1679,22 @@ def _aggregate_ppo_update_profiles(
         optimizer_step_seconds=max(
             profile.optimizer_step_seconds for profile in profiles
         ),
-        argument_decode_fraction=decode_fraction,
-        argument_trace_batch_count=sum(
-            profile.argument_trace_batch_count for profile in profiles
+        action_decode_fraction=decode_fraction,
+        action_trace_batch_count=sum(
+            profile.action_trace_batch_count for profile in profiles
         ),
-        argument_trace_row_count=sum(
-            profile.argument_trace_row_count for profile in profiles
+        action_trace_row_count=sum(
+            profile.action_trace_row_count for profile in profiles
         ),
-        argument_trace_token_count=sum(
-            profile.argument_trace_token_count for profile in profiles
+        action_trace_choice_count=sum(
+            profile.action_trace_choice_count for profile in profiles
         ),
-        argument_trace_valid_token_count=sum(
-            profile.argument_trace_valid_token_count
+        action_trace_valid_choice_count=sum(
+            profile.action_trace_valid_choice_count
             for profile in profiles
         ),
-        argument_trace_padding_token_count=sum(
-            profile.argument_trace_padding_token_count
+        action_trace_padding_choice_count=sum(
+            profile.action_trace_padding_choice_count
             for profile in profiles
         ),
     )

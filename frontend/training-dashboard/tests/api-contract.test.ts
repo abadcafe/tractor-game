@@ -8,10 +8,9 @@ import type { InitRequest } from "../fields.ts";
 const INIT_REQUEST: InitRequest = {
   run_dir: "/tmp/run",
   replace_existing: null,
-  d_model: 2,
+  d_model: 8,
   layers: 1,
   heads: 1,
-  max_tokens: 512,
   seed: 0,
   learning_rate: 0.0003,
   ppo_clip: 0.2,

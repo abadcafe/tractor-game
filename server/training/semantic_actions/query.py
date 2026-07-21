@@ -12,7 +12,8 @@ from server.game.rules.card_faces import (
     face_count_width,
 )
 from server.game.rules.cards import Rank, Suit
-from server.training.token_context import RelativeRole, relative_role
+from server.training.relative_state import RelativeActor
+from server.training.relative_state.relations import relative_actor
 
 type DecisionKind = Literal[
     "bid", "stir", "discard", "lead_play", "follow_play"
@@ -31,11 +32,11 @@ class ActionQuery:
     exact_select: int | None
     action_play_order: int | None
     current_trick_width: int | None
-    lead_actor: RelativeRole | None
+    lead_actor: RelativeActor | None
     discard_count: int | None
     trump_suit: Suit | None
     level_rank: Rank
-    current_best_bid_role: RelativeRole | None
+    current_best_bid_role: RelativeActor | None
 
 
 def build_action_query(
@@ -140,20 +141,20 @@ def _action_play_order(snapshot: StateSnapshot) -> int | None:
 
 def _lead_actor(
     player_index: int, snapshot: StateSnapshot
-) -> RelativeRole | None:
+) -> RelativeActor | None:
     trick = snapshot.trick
     if snapshot.awaiting_action != "play" or trick is None:
         return None
-    return relative_role(player_index, trick.lead_player)
+    return relative_actor(player_index, trick.lead_player)
 
 
 def _current_best_bid_role(
     player_index: int, snapshot: StateSnapshot
-) -> RelativeRole | None:
+) -> RelativeActor | None:
     winner = snapshot.bid_winner
     if winner is None:
         return None
-    return relative_role(player_index, winner.player)
+    return relative_actor(player_index, winner.player)
 
 
 def _play_order(*, lead_player: int, player: int) -> int:

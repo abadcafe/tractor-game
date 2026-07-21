@@ -15,11 +15,12 @@ from server.training.legal_actions import (
     build_legal_action_index,
 )
 from server.training.model import (
-    ArgumentTraceScores,
+    ActionTraceScores,
     ObservationEncoding,
     TractorPolicyModel,
 )
 from server.training.observation import build_observation
+from server.training.observation_memory import ObservationMemoryView
 from server.training.policy_sampling import (
     DecisionHandle,
     RankReturnTargets,
@@ -35,20 +36,20 @@ from server.training.ppo import (
 )
 from server.training.ppo.distributed import PPOUpdatePartition
 from server.training.semantic_action_plan import (
-    SemanticActionSampleBatch,
-    SemanticActionSampler,
-    SemanticArgumentLogitDecoder,
+    ActionChoiceLogitDecoder,
+    ActionSampleBatch,
+    ActionSampler,
     action_plan_generation_step_count,
     compile_legal_action_frame,
     plan_batch_to_device,
 )
 from server.training.semantic_actions import (
-    SemanticArgument,
-    SemanticArgumentTrace,
+    ActionChoice,
+    ActionTrace,
 )
-from server.training.semantic_actions.codec import (
-    SEMANTIC_CODEC,
-    semantic_argument_id,
+from server.training.semantic_actions.choices import (
+    ACTION_CHOICE_COUNT,
+    action_choice_id,
 )
 from server.training.tensorize import (
     ObservationTensorBatch,
@@ -82,27 +83,23 @@ class CountingTractorPolicyModel(TractorPolicyModel):
     ) -> ObservationEncoding:
         self.training_modes.append(self.training)
         self.encode_batch_sizes.append(
-            int(observation.component_ids.shape[0])
+            int(observation.category_ids.shape[0])
         )
         return super().encode_observations(observation)
 
-    def score_argument_traces(
+    def score_action_traces(
         self,
         encoding: ObservationEncoding,
         *,
-        selected_token_ids_padded: Tensor,
+        choice_ids_padded: Tensor,
         step_counts: Tensor,
-    ) -> ArgumentTraceScores:
+    ) -> ActionTraceScores:
         self.training_modes.append(self.training)
-        self.score_batch_sizes.append(
-            int(selected_token_ids_padded.shape[0])
-        )
-        self.score_prefix_widths.append(
-            int(selected_token_ids_padded.shape[1])
-        )
-        return super().score_argument_traces(
+        self.score_batch_sizes.append(int(choice_ids_padded.shape[0]))
+        self.score_prefix_widths.append(int(choice_ids_padded.shape[1]))
+        return super().score_action_traces(
             encoding,
-            selected_token_ids_padded=selected_token_ids_padded,
+            choice_ids_padded=choice_ids_padded,
             step_counts=step_counts,
         )
 
@@ -118,31 +115,31 @@ class NonFiniteValueModel(TractorPolicyModel):
         return torch.full_like(values, torch.inf)
 
 
-class _TraceTokenDecoder:
+class _TraceChoiceDecoder:
     def __init__(
         self,
         *,
-        target_token_ids: tuple[int, ...],
+        target_choice_ids: tuple[int, ...],
         batch_size: int,
         device: torch.device,
     ) -> None:
-        self._target_token_ids = target_token_ids
+        self._target_choice_ids = target_choice_ids
         self._batch_size = batch_size
         self._device = device
         self._step_index = 0
 
-    def next_logits(self) -> Tensor:
+    def next_choice_logits(self) -> Tensor:
         logits = torch.zeros(
-            (self._batch_size, SEMANTIC_CODEC.argument_vocab_size),
+            (self._batch_size, ACTION_CHOICE_COUNT),
             dtype=torch.float32,
             device=self._device,
         )
-        if self._step_index < len(self._target_token_ids):
-            logits[:, self._target_token_ids[self._step_index]] = 100.0
+        if self._step_index < len(self._target_choice_ids):
+            logits[:, self._target_choice_ids[self._step_index]] = 100.0
         return logits
 
-    def advance(self, selected_token_ids: Tensor) -> None:
-        assert selected_token_ids.shape == (self._batch_size,)
+    def advance(self, selected_choice_ids: Tensor) -> None:
+        assert selected_choice_ids.shape == (self._batch_size,)
         self._step_index += 1
 
 
@@ -151,8 +148,7 @@ def test_update_returns_stats_and_adamw_state() -> None:
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=64,
+        heads=1,
     )
     train_config = TrainConfig(
         learning_rate=0.0003,
@@ -185,8 +181,7 @@ def test_update_batches_minibatch_model_forwards() -> None:
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=64,
+        heads=1,
     )
     train_config = TrainConfig(
         learning_rate=0.0003,
@@ -214,13 +209,13 @@ def test_update_batches_minibatch_model_forwards() -> None:
     assert model.score_batch_sizes == [4]
     assert model.score_prefix_widths == [2]
     assert profile.update_seconds > 0.0
-    assert profile.argument_decode_seconds >= 0.0
-    assert 0.0 <= profile.argument_decode_fraction <= 1.0
-    assert profile.argument_trace_batch_count == 1
-    assert profile.argument_trace_row_count == 4
-    assert profile.argument_trace_token_count == 8
-    assert profile.argument_trace_valid_token_count == 8
-    assert profile.argument_trace_padding_token_count == 0
+    assert profile.action_decode_seconds >= 0.0
+    assert 0.0 <= profile.action_decode_fraction <= 1.0
+    assert profile.action_trace_batch_count == 1
+    assert profile.action_trace_row_count == 4
+    assert profile.action_trace_choice_count == 8
+    assert profile.action_trace_valid_choice_count == 8
+    assert profile.action_trace_padding_choice_count == 0
     assert model.training_modes
     assert all(training is True for training in model.training_modes)
     assert model.training is True
@@ -231,8 +226,7 @@ def test_update_rejects_ddp_without_process_group() -> None:
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=64,
+        heads=1,
     )
     train_config = TrainConfig(
         learning_rate=0.0003,
@@ -263,8 +257,7 @@ def test_update_uses_configured_single_rank_partition() -> None:
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=64,
+        heads=1,
     )
     train_config = TrainConfig(
         learning_rate=0.0003,
@@ -296,8 +289,7 @@ def test_update_rejects_empty_single_rank_input() -> None:
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=64,
+        heads=1,
     )
     train_config = TrainConfig(
         learning_rate=0.0003,
@@ -331,8 +323,7 @@ def test_update_disables_profile_by_default() -> None:
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=64,
+        heads=1,
     )
     train_config = TrainConfig(
         learning_rate=0.0003,
@@ -362,8 +353,7 @@ def test_update_basic_profile_records_only_update_seconds() -> None:
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=64,
+        heads=1,
     )
     train_config = TrainConfig(
         learning_rate=0.0003,
@@ -391,17 +381,16 @@ def test_update_basic_profile_records_only_update_seconds() -> None:
     assert profile.observation_batch_seconds == 0.0
     assert profile.observation_encode_seconds == 0.0
     assert profile.value_head_seconds == 0.0
-    assert profile.argument_select_seconds == 0.0
-    assert profile.argument_decode_seconds == 0.0
-    assert profile.argument_distribution_seconds == 0.0
+    assert profile.action_decode_seconds == 0.0
+    assert profile.action_distribution_seconds == 0.0
     assert profile.backward_seconds == 0.0
     assert profile.optimizer_step_seconds == 0.0
-    assert profile.argument_decode_fraction == 0.0
-    assert profile.argument_trace_batch_count == 0
-    assert profile.argument_trace_row_count == 0
-    assert profile.argument_trace_token_count == 0
-    assert profile.argument_trace_valid_token_count == 0
-    assert profile.argument_trace_padding_token_count == 0
+    assert profile.action_decode_fraction == 0.0
+    assert profile.action_trace_batch_count == 0
+    assert profile.action_trace_row_count == 0
+    assert profile.action_trace_choice_count == 0
+    assert profile.action_trace_valid_choice_count == 0
+    assert profile.action_trace_padding_choice_count == 0
 
 
 def test_update_rejects_non_finite_loss_before_optimizer_step() -> None:
@@ -409,8 +398,7 @@ def test_update_rejects_non_finite_loss_before_optimizer_step() -> None:
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=64,
+        heads=1,
     )
     train_config = TrainConfig(
         learning_rate=0.0003,
@@ -448,8 +436,7 @@ def test_update_rejects_non_finite_gradients_before_optimizer_step(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=64,
+        heads=1,
     )
     train_config = TrainConfig(
         learning_rate=0.0003,
@@ -488,7 +475,7 @@ def test_update_rejects_non_finite_gradients_before_optimizer_step(
         assert torch.equal(parameter.detach(), before[index])
 
 
-def test_arena_minibatch_reuses_active_replay_capacity() -> None:
+def test_arena_minibatch_selects_exact_fixed_choice_replay() -> None:
     batch = _single_card_batch(count=3)
     first = batch.select_minibatch(
         indices=torch.tensor((0, 1), dtype=torch.long),
@@ -497,9 +484,11 @@ def test_arena_minibatch_reuses_active_replay_capacity() -> None:
     )
     assert first.replay is not None
     assert first.replay.active_step_count == 4
-    first_choice_ptr = first.replay.choice_token_ids.data_ptr()
-    first_mask_ptr = first.replay.choice_masks.data_ptr()
-    first_offset_ptr = first.replay.selected_choice_offsets.data_ptr()
+    assert first.replay.choice_ids_padded.shape == (2, 2)
+    assert first.replay.legal_choice_masks.shape == (
+        4,
+        ACTION_CHOICE_COUNT,
+    )
 
     second = batch.select_minibatch(
         indices=torch.tensor((2,), dtype=torch.long),
@@ -509,11 +498,10 @@ def test_arena_minibatch_reuses_active_replay_capacity() -> None:
 
     assert second.replay is not None
     assert second.replay.active_step_count == 2
-    assert second.replay.choice_token_ids.data_ptr() == first_choice_ptr
-    assert second.replay.choice_masks.data_ptr() == first_mask_ptr
-    assert (
-        second.replay.selected_choice_offsets.data_ptr()
-        == first_offset_ptr
+    assert second.replay.choice_ids_padded.shape == (1, 2)
+    assert second.replay.legal_choice_masks.shape == (
+        2,
+        ACTION_CHOICE_COUNT,
     )
 
 
@@ -564,17 +552,16 @@ def _assert_profile_zero(profile: PPOUpdateProfile) -> None:
     assert profile.observation_batch_seconds == 0.0
     assert profile.observation_encode_seconds == 0.0
     assert profile.value_head_seconds == 0.0
-    assert profile.argument_select_seconds == 0.0
-    assert profile.argument_decode_seconds == 0.0
-    assert profile.argument_distribution_seconds == 0.0
+    assert profile.action_decode_seconds == 0.0
+    assert profile.action_distribution_seconds == 0.0
     assert profile.backward_seconds == 0.0
     assert profile.optimizer_step_seconds == 0.0
-    assert profile.argument_decode_fraction == 0.0
-    assert profile.argument_trace_batch_count == 0
-    assert profile.argument_trace_row_count == 0
-    assert profile.argument_trace_token_count == 0
-    assert profile.argument_trace_valid_token_count == 0
-    assert profile.argument_trace_padding_token_count == 0
+    assert profile.action_decode_fraction == 0.0
+    assert profile.action_trace_batch_count == 0
+    assert profile.action_trace_row_count == 0
+    assert profile.action_trace_choice_count == 0
+    assert profile.action_trace_valid_choice_count == 0
+    assert profile.action_trace_padding_choice_count == 0
 
 
 def _store_single_card_decision(
@@ -590,36 +577,37 @@ def _store_single_card_decision(
         player_hand=[test_card],
     )
     observation = build_observation(
-        player_index=player_index,
+        viewer=player_index,
         snapshot=snapshot,
-        history=(),
+        memory=ObservationMemoryView(
+            bid_actions=(), completed_tricks=()
+        ),
     )
     legal_actions = build_legal_action_index(
         player_index=player_index,
         snapshot=snapshot,
         query=observation.action_query,
     )
-    trace = SemanticArgumentTrace(
-        arguments=(
-            SemanticArgument(
-                "select_face_count",
+    trace = ActionTrace(
+        choices=(
+            ActionChoice(
+                "card",
                 FaceCount(CardFace(test_card.suit, test_card.rank), 1),
             ),
-            SemanticArgument("stop"),
+            ActionChoice("finish"),
         )
     )
-    semantic_sample = _semantic_sample_for_trace(
+    action_sample = _action_sample_for_trace(
         legal_actions=legal_actions, trace=trace, device=device
     )
     observation_batch = tensorize_observations(
         observations=(observation,),
-        max_observation_tokens=64,
         device=device,
     )
     stored = store.store_sampled_result(
         policy_versions=(0,),
         observation_batch=observation_batch,
-        semantic_sample=semantic_sample,
+        action_sample=action_sample,
         old_values=torch.zeros(
             (1,), dtype=torch.float32, device=device
         ),
@@ -633,27 +621,25 @@ def _store_single_card_decision(
     )
 
 
-def _semantic_sample_for_trace(
+def _action_sample_for_trace(
     *,
     legal_actions: LegalActionIndex,
-    trace: SemanticArgumentTrace,
+    trace: ActionTrace,
     device: torch.device,
-) -> SemanticActionSampleBatch:
+) -> ActionSampleBatch:
     action_plan = compile_legal_action_frame(legal_actions)
     generation_steps = action_plan_generation_step_count(action_plan)
     batch = plan_batch_to_device((action_plan,), device=device)
-    target_token_ids = tuple(
-        semantic_argument_id(argument) for argument in trace.arguments
+    target_choice_ids = tuple(
+        action_choice_id(choice) for choice in trace.choices
     )
 
-    logit_decoder: SemanticArgumentLogitDecoder = _TraceTokenDecoder(
-        target_token_ids=target_token_ids,
+    logit_decoder: ActionChoiceLogitDecoder = _TraceChoiceDecoder(
+        target_choice_ids=target_choice_ids,
         batch_size=1,
         device=device,
     )
-    sampler = SemanticActionSampler.create(
-        batch_capacity=1, device=device
-    )
+    sampler = ActionSampler.create(batch_capacity=1, device=device)
     sample = sampler.sample(
         action_batch=batch,
         generation_step_counts=torch.tensor(

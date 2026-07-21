@@ -1,9 +1,9 @@
 """Policy sampling records owned by model ranks."""
 
 from server.training.policy_sampling.records import (
+    CompactActionChoiceBatch,
+    CompactActionChoiceIds,
     CompactPolicyDecisionBatch,
-    CompactTraceTokenBatch,
-    CompactTraceTokenIds,
     DecisionHandle,
     PolicySampleColumns,
     RankReturnTargets,
@@ -11,8 +11,8 @@ from server.training.policy_sampling.records import (
 
 __all__ = (
     "CompactPolicyDecisionBatch",
-    "CompactTraceTokenBatch",
-    "CompactTraceTokenIds",
+    "CompactActionChoiceBatch",
+    "CompactActionChoiceIds",
     "DecisionHandle",
     "PolicySampleColumns",
     "RankReturnTargets",

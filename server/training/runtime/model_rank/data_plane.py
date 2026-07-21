@@ -361,14 +361,34 @@ def _select_device_request_rows(
 ) -> DevicePolicyRequestBatch:
     return DevicePolicyRequestBatch(
         observation_batch=ObservationTensorBatch(
-            component_ids=_select_tensor_rows(
-                batch.observation_batch.component_ids, row_index
+            category_ids=_select_tensor_rows(
+                batch.observation_batch.category_ids, row_index
             ),
-            numeric_values=_select_tensor_rows(
-                batch.observation_batch.numeric_values, row_index
+            scalar_values=_select_tensor_rows(
+                batch.observation_batch.scalar_values, row_index
             ),
-            numeric_masks=_select_tensor_rows(
-                batch.observation_batch.numeric_masks, row_index
+            card_rule_values=_select_tensor_rows(
+                batch.observation_batch.card_rule_values, row_index
+            ),
+            coordinate_values=_select_tensor_rows(
+                batch.observation_batch.coordinate_values, row_index
+            ),
+            coordinate_masks=_select_tensor_rows(
+                batch.observation_batch.coordinate_masks, row_index
+            ),
+            candidate_category_ids=_select_tensor_rows(
+                batch.observation_batch.candidate_category_ids,
+                row_index,
+            ),
+            candidate_counts=_select_tensor_rows(
+                batch.observation_batch.candidate_counts, row_index
+            ),
+            candidate_card_rule_values=_select_tensor_rows(
+                batch.observation_batch.candidate_card_rule_values,
+                row_index,
+            ),
+            query_indices=_select_tensor_rows(
+                batch.observation_batch.query_indices, row_index
             ),
         ),
         action_plan_batch=_select_action_plan_rows(
@@ -396,13 +416,31 @@ def _slice_device_request_rows(
 ) -> DevicePolicyRequestBatch:
     return DevicePolicyRequestBatch(
         observation_batch=ObservationTensorBatch(
-            component_ids=batch.observation_batch.component_ids[
+            category_ids=batch.observation_batch.category_ids[
                 row_slice
             ],
-            numeric_values=batch.observation_batch.numeric_values[
+            scalar_values=batch.observation_batch.scalar_values[
                 row_slice
             ],
-            numeric_masks=batch.observation_batch.numeric_masks[
+            card_rule_values=batch.observation_batch.card_rule_values[
+                row_slice
+            ],
+            coordinate_values=batch.observation_batch.coordinate_values[
+                row_slice
+            ],
+            coordinate_masks=batch.observation_batch.coordinate_masks[
+                row_slice
+            ],
+            candidate_category_ids=batch.observation_batch.candidate_category_ids[
+                row_slice
+            ],
+            candidate_counts=batch.observation_batch.candidate_counts[
+                row_slice
+            ],
+            candidate_card_rule_values=batch.observation_batch.candidate_card_rule_values[
+                row_slice
+            ],
+            query_indices=batch.observation_batch.query_indices[
                 row_slice
             ],
         ),
@@ -491,9 +529,11 @@ def _select_action_plan_rows(
         ),
         pair_floor=_select_tensor_rows(batch.pair_floor, row_index),
         has_tractor=_select_tensor_rows(batch.has_tractor, row_index),
-        trace_tokens=_select_tensor_rows(batch.trace_tokens, row_index),
-        trace_token_mask=_select_tensor_rows(
-            batch.trace_token_mask, row_index
+        trace_choice_ids=_select_tensor_rows(
+            batch.trace_choice_ids, row_index
+        ),
+        trace_choice_mask=_select_tensor_rows(
+            batch.trace_choice_mask, row_index
         ),
         trace_lengths=_select_tensor_rows(
             batch.trace_lengths, row_index
@@ -531,10 +571,10 @@ def _slice_action_plan_rows(
         ),
         pair_floor=batch.pair_floor[row_slice],
         has_tractor=batch.has_tractor[row_slice],
-        trace_tokens=batch.trace_tokens[
+        trace_choice_ids=batch.trace_choice_ids[
             row_slice, :, :padded_generation_steps
         ],
-        trace_token_mask=batch.trace_token_mask[
+        trace_choice_mask=batch.trace_choice_mask[
             row_slice, :, :padded_generation_steps
         ],
         trace_lengths=batch.trace_lengths[row_slice],

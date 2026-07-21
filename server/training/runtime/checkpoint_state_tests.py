@@ -22,7 +22,7 @@ from server.training.runtime.state import (
 def test_runtime_checkpoint_state_round_trips_torch_checkpoint(
     tmp_path: Path,
 ) -> None:
-    model_config = ModelConfig(d_model=8, layers=1, heads=2)
+    model_config = ModelConfig(d_model=8, layers=1, heads=1)
     train_config = TrainConfig(seed=17)
     execution_config = ExecutionConfig()
     created = create_initial_runtime_checkpoint_state(
@@ -64,7 +64,7 @@ def test_runtime_checkpoint_state_round_trips_torch_checkpoint(
 def test_save_runtime_checkpoint_state_preserves_cpu_rng_state(
     tmp_path: Path,
 ) -> None:
-    model_config = ModelConfig(d_model=8, layers=1, heads=2)
+    model_config = ModelConfig(d_model=8, layers=1, heads=1)
     train_config = TrainConfig(seed=17)
     execution_config = ExecutionConfig()
     created = create_initial_runtime_checkpoint_state(

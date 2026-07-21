@@ -15,10 +15,10 @@ from server.game.rules.cards import Card
 from server.training.legal_actions.contract import (
     LegalActionIndex,
 )
-from server.training.semantic_actions.arguments import (
-    InvalidSemanticActionRejected,
-    SemanticArgument,
-    SemanticArgumentTrace,
+from server.training.semantic_actions.choices import (
+    ActionChoice,
+    ActionTrace,
+    InvalidActionRejected,
 )
 from server.training.semantic_actions.query import ActionQuery
 from server.training.semantic_actions.values import (
@@ -44,26 +44,24 @@ class CompleteTraceLegalActionIndex(LegalActionIndex):
         return self._actions
 
     def decode(
-        self, trace: SemanticArgumentTrace
+        self, trace: ActionTrace
     ) -> Ok[GeneratedAction] | Rejected:
         for action in self._actions:
-            if action.semantic_trace == trace:
+            if action.trace == trace:
                 return Ok(value=action)
-        return InvalidSemanticActionRejected(
-            "动作不在当前规则合法集合内"
-        )
+        return InvalidActionRejected("动作不在当前规则合法集合内")
 
 
 def pass_action(
     message_type: Literal["bid", "stir"],
 ) -> GeneratedAction:
     """Return the complete pass action for bid or stir."""
-    trace = SemanticArgumentTrace(arguments=(SemanticArgument("pass"),))
+    trace = ActionTrace(choices=(ActionChoice("pass"),))
     return GeneratedAction(
         action_kind="pass",
         message_type=message_type,
         face_counts=(),
-        semantic_trace=trace,
+        trace=trace,
         is_pass=True,
     )
 
@@ -77,24 +75,21 @@ def selection_action(
         action_kind=_action_kind(message_type),
         message_type=message_type,
         face_counts=face_counts,
-        semantic_trace=trace_for_selection(
-            face_counts, include_stop=True
-        ),
+        trace=trace_for_selection(face_counts, include_finish=False),
         is_pass=False,
     )
 
 
 def trace_for_selection(
-    face_counts: tuple[FaceCount, ...], *, include_stop: bool
-) -> SemanticArgumentTrace:
+    face_counts: tuple[FaceCount, ...], *, include_finish: bool
+) -> ActionTrace:
     """Return the canonical trace for selected face counts."""
-    arguments = [
-        SemanticArgument("select_face_count", face_count)
-        for face_count in face_counts
+    choices = [
+        ActionChoice("card", face_count) for face_count in face_counts
     ]
-    if include_stop:
-        arguments.append(SemanticArgument("stop"))
-    return SemanticArgumentTrace(arguments=tuple(arguments))
+    if include_finish:
+        choices.append(ActionChoice("finish"))
+    return ActionTrace(choices=tuple(choices))
 
 
 def _action_kind(

@@ -77,8 +77,7 @@ def test_torch_checkpoint_metadata_drives_resume_model_config(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig(
         learning_rate=0.0003,
@@ -117,8 +116,7 @@ def test_read_metadata_uses_manifest_without_torch_load(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -160,8 +158,7 @@ def test_torch_checkpoint_save_rejects_payload_write_failure(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -200,8 +197,7 @@ def test_torch_checkpoint_save_rejects_checkpoint_dir_symlink(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -239,8 +235,7 @@ def test_torch_checkpoint_save_rejects_objects_dir_symlink(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -279,8 +274,7 @@ def test_torch_checkpoint_save_rolls_back_manifest_write_failure(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -354,8 +348,7 @@ def test_torch_checkpoint_save_reports_post_commit_prune_unlink_failure(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -419,8 +412,7 @@ def test_torch_checkpoint_save_rejects_prune_symlink_before_commit(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -472,8 +464,7 @@ def test_torch_checkpoint_save_rejects_retained_symlink_before_commit(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -529,8 +520,7 @@ def test_torch_checkpoint_save_rejects_retained_file_before_commit(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -587,8 +577,7 @@ def test_torch_checkpoint_save_reports_post_commit_prune_rmtree_failure(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -650,8 +639,7 @@ def test_torch_checkpoint_state_payload_is_weights_only_safe(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -694,8 +682,7 @@ def test_torch_checkpoint_alias_manifests_share_one_state_object(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -735,8 +722,7 @@ def test_torch_checkpoint_save_rejects_unmanaged_manifest_path(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -771,8 +757,7 @@ def test_torch_checkpoint_save_rejects_zero_update_manifest_path(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -807,8 +792,7 @@ def test_torch_checkpoint_save_rejects_update_number_mismatch(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -847,8 +831,7 @@ def test_torch_checkpoint_save_removes_overwritten_latest_object(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -897,8 +880,7 @@ def test_torch_checkpoint_save_keeps_latest_and_recent_updates(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -942,8 +924,7 @@ def test_torch_checkpoint_save_ignores_unmanaged_json(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -991,8 +972,7 @@ def test_torch_checkpoint_save_ignores_noncanonical_update_json(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -1049,8 +1029,7 @@ def test_torch_checkpoint_save_reports_corrupt_update_manifest(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -1098,14 +1077,13 @@ def test_torch_checkpoint_save_reports_corrupt_update_manifest(
     assert metadata.total_updates == 1
 
 
-def test_torch_checkpoint_read_rejects_bad_model_config(
+def test_torch_checkpoint_read_rejects_legacy_model_config_fields(
     tmp_path: Path,
 ) -> None:
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -1127,14 +1105,22 @@ def test_torch_checkpoint_read_rejects_bad_model_config(
         retained_update_count=5,
     )
     manifest = _read_json_object(path)
-    manifest["model_config"] = {}
+    manifest["model_config"] = {
+        "d_model": 8,
+        "layers": 1,
+        "heads": 1,
+        "max_tokens": 192,
+    }
     _write_json_object(path, manifest)
 
     result = _read_torch_checkpoint_metadata(path)
 
     assert isinstance(result, Rejected)
     assert "checkpoint corruption:" in result.reason
-    assert "model_config.d_model" in result.reason
+    assert (
+        "manifest model_config fields do not match the current schema"
+        in result.reason
+    )
 
 
 def test_torch_checkpoint_manifest_excludes_execution_fields(
@@ -1199,8 +1185,7 @@ def test_torch_checkpoint_read_rejects_negative_total_rounds(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -1238,8 +1223,7 @@ def test_torch_checkpoint_load_rejects_negative_total_updates(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -1283,8 +1267,7 @@ def test_torch_checkpoint_load_rejects_state_hash_mismatch(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -1416,8 +1399,7 @@ def test_torch_checkpoint_load_rejects_directory_state_payload(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -1461,8 +1443,7 @@ def test_torch_checkpoint_load_rejects_non_torch_state_payload(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -1506,8 +1487,7 @@ def test_torch_checkpoint_load_rejects_missing_payload_field(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -1551,8 +1531,7 @@ def test_torch_checkpoint_save_payload_excludes_rng_state(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -1584,8 +1563,7 @@ def test_torch_checkpoint_load_rejects_optimizer_dtype_mismatch(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -1643,8 +1621,7 @@ def test_torch_checkpoint_load_does_not_restore_global_rng_state(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -1687,8 +1664,7 @@ def test_create_training_state_seeds_initial_model() -> None:
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
 
     first = create_training_state(
@@ -1720,8 +1696,7 @@ def test_torch_checkpoint_load_rejects_seed_mismatch(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig(seed=7)
     state = create_training_state(
@@ -1762,8 +1737,7 @@ def test_torch_checkpoint_load_rejects_model_config_mismatch(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig(seed=7)
     state = create_training_state(
@@ -1791,7 +1765,6 @@ def test_torch_checkpoint_load_rejects_model_config_mismatch(
             d_model=16,
             layers=1,
             heads=2,
-            max_tokens=192,
         ),
         train_config=train_config,
         execution_config=ExecutionConfig(),
@@ -1810,8 +1783,7 @@ def test_torch_checkpoint_cuda_resume_loads_payload_on_cpu(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(
@@ -2027,8 +1999,7 @@ def _saved_checkpoint(
     model_config = ModelConfig(
         d_model=8,
         layers=1,
-        heads=2,
-        max_tokens=192,
+        heads=1,
     )
     train_config = TrainConfig()
     state = create_training_state(

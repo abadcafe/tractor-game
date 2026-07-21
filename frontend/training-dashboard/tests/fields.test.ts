@@ -39,7 +39,6 @@ Deno.test("command previews include explicit subcommands", () => {
     d_model: 128,
     layers: 3,
     heads: 4,
-    max_tokens: 768,
     seed: 0,
     learning_rate: 0.0003,
     ppo_clip: 0.2,

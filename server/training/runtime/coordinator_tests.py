@@ -101,10 +101,9 @@ def test_run_training_coordinator_spawns_worker_and_commits_progress(
     tmp_path: Path,
 ) -> None:
     model_config = ModelConfig(
-        d_model=2,
+        d_model=8,
         layers=1,
         heads=1,
-        max_tokens=512,
     )
     train_config = TrainConfig(ppo_epochs=1, minibatch_size=512)
     checkpoint_policy = CheckpointPolicy(
@@ -155,10 +154,9 @@ def test_run_training_coordinator_synchronizes_cpu_arena_update(
     tmp_path: Path,
 ) -> None:
     model_config = ModelConfig(
-        d_model=2,
+        d_model=8,
         layers=1,
         heads=1,
-        max_tokens=512,
     )
     train_config = TrainConfig(ppo_epochs=1, minibatch_size=512)
     checkpoint_policy = CheckpointPolicy(
@@ -217,9 +215,7 @@ def test_run_training_coordinator_synchronizes_cpu_arena_update(
 def test_coordinator_honors_pre_requested_stop_and_saves_checkpoint(
     tmp_path: Path,
 ) -> None:
-    model_config = ModelConfig(
-        d_model=2, layers=1, heads=1, max_tokens=512
-    )
+    model_config = ModelConfig(d_model=8, layers=1, heads=1)
     train_config = TrainConfig()
     execution_config = ExecutionConfig(samples_per_update=32)
     initialized = initialize_training_run(
@@ -343,10 +339,9 @@ async def test_runtime_stops_sampling_after_rollout_wait_failure(
     tmp_path: Path,
 ) -> None:
     model_config = ModelConfig(
-        d_model=2,
+        d_model=8,
         layers=1,
         heads=1,
-        max_tokens=512,
     )
     train_config = TrainConfig(
         ppo_epochs=1,
@@ -414,7 +409,7 @@ def _install_runtime(
 
 
 def _model_config() -> ModelConfig:
-    return ModelConfig(d_model=2, layers=1, heads=1, max_tokens=512)
+    return ModelConfig(d_model=8, layers=1, heads=1)
 
 
 def _rollout_snapshot(

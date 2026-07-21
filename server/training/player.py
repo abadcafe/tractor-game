@@ -10,10 +10,8 @@ from server.game.players.base import GameView, Player
 from server.game.protocol import PlayerMessage, StateMessage
 from server.game.rules.cards import Card
 from server.training.legal_actions import build_legal_action_index
-from server.training.observation import (
-    PublicHistoryRecorder,
-    build_observation,
-)
+from server.training.observation import build_observation
+from server.training.observation_memory import ObservationMemory
 from server.training.policy import TrainingPolicy
 from server.training.sampling import PolicyDecisionKey
 from server.training.semantic_actions.binding import (
@@ -55,12 +53,14 @@ class TrainingPlayer(Player):
         *,
         policy: TrainingPolicy,
         recorder: TrajectoryRecorder | None = None,
-        history: PublicHistoryRecorder | None = None,
+        observation_memory: ObservationMemory | None = None,
     ) -> None:
         super().__init__(index)
         self._policy = policy
         self._recorder = recorder or TrajectoryRecorder()
-        self._history = history or PublicHistoryRecorder()
+        self._observation_memory = (
+            observation_memory or ObservationMemory()
+        )
         self._pending: PendingDecision | None = None
         self._held_scoring_message: StateMessage | None = None
         self._action_tasks: set[asyncio.Task[None]] = set()
@@ -79,8 +79,10 @@ class TrainingPlayer(Player):
     async def on_state(
         self, game: GameView, message: StateMessage
     ) -> None:
-        if message.state.scoring is None:
-            self._history.update(message.state)
+        memory_result = self._observation_memory.observe(message)
+        if isinstance(memory_result, Rejected):
+            self._policy_rejection = memory_result
+            return
         if self._settle_pending(message):
             return
         if message.state.awaiting_action is None:
@@ -126,7 +128,7 @@ class TrainingPlayer(Player):
         background_result = self.raise_background_errors()
         if isinstance(background_result, Rejected):
             return background_result
-        self._history.clear()
+        self._observation_memory.reset_episode()
         self._pending = None
         self._policy_rejection = None
         self._stats = TrainingPlayerStats()
@@ -205,9 +207,9 @@ class TrainingPlayer(Player):
         message: StateMessage,
     ) -> None:
         observation = build_observation(
-            player_index=self.index,
+            viewer=self.index,
             snapshot=message.state,
-            history=self._history.tricks(),
+            memory=self._observation_memory.view(),
         )
         legal_actions = build_legal_action_index(
             player_index=self.index,

@@ -6,9 +6,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from server.game.rules.card_faces import FaceCount
-from server.training.semantic_actions.arguments import (
-    SemanticArgumentTrace,
-)
+from server.training.semantic_actions.choices import ActionTrace
 
 type PlayerActionKind = Literal["bid", "stir", "discard", "play"]
 
@@ -20,7 +18,7 @@ class GeneratedAction:
     action_kind: PlayerActionKind | Literal["pass"]
     message_type: PlayerActionKind
     face_counts: tuple[FaceCount, ...]
-    semantic_trace: SemanticArgumentTrace
+    trace: ActionTrace
     is_pass: bool
 
 

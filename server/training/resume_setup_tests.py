@@ -23,9 +23,7 @@ from server.training_events.store import database_path
 def test_canonicalize_resume_timeline_removes_future_state(
     tmp_path: Path,
 ) -> None:
-    model_config = ModelConfig(
-        d_model=2, layers=1, heads=1, max_tokens=512
-    )
+    model_config = ModelConfig(d_model=8, layers=1, heads=1)
     train_config = TrainConfig()
     initialized = initialize_training_run(
         run_dir=tmp_path,

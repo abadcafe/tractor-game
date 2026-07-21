@@ -212,7 +212,6 @@ class BatchedPolicyClient:
     """Batch policy requests over one model-rank transport."""
 
     worker_index: int
-    max_observation_tokens: int
     transport: PolicyBatchTransport
     timeout_seconds: float
     batch_size: int
@@ -241,12 +240,10 @@ class BatchedPolicyClient:
 
     def __post_init__(self) -> None:
         assert self.worker_index >= 0
-        assert self.max_observation_tokens > 0
         assert self.timeout_seconds > 0.0
         assert self.batch_size > 0
         self._compiler = PolicyRequestCompiler(
-            batch_capacity=self.batch_size,
-            max_observation_tokens=self.max_observation_tokens,
+            batch_capacity=self.batch_size
         )
 
     async def decide(

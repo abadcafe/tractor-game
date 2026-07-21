@@ -10,6 +10,9 @@ from torch import Tensor
 
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
+from server.training.packed_observation import (
+    MAX_LOSSLESS_OBSERVATION_TOKENS,
+)
 from server.training.policy_inference_batch import (
     DevicePolicyRequestBatch,
     PolicyRequestRoute,
@@ -33,7 +36,7 @@ from server.training.runtime.model_rank.inference_transport import (
     AsyncPolicyPeer,
 )
 from server.training.semantic_action_plan import DeviceActionPlanBatch
-from server.training.semantic_actions.codec import SEMANTIC_CODEC
+from server.training.semantic_actions.choices import MAX_ACTION_STEPS
 from server.training.tensorize import ObservationTensorBatch
 
 
@@ -124,7 +127,6 @@ class PolicyRequestIngress:
     """Receive request frames and assemble one final device batch."""
 
     batch_size: int
-    max_observation_tokens: int
     device: torch.device
     _max_frame_bytes: int = field(init=False)
     _host_slots: list[_PinnedHostFrameSlot] = field(
@@ -146,11 +148,9 @@ class PolicyRequestIngress:
 
     def __post_init__(self) -> None:
         assert self.batch_size > 0
-        assert self.max_observation_tokens > 0
         self._max_frame_bytes = max_policy_request_batch_frame_bytes(
             batch_capacity=self.batch_size,
-            max_observation_tokens=self.max_observation_tokens,
-            padded_generation_steps=SEMANTIC_CODEC.max_argument_tokens,
+            padded_generation_steps=MAX_ACTION_STEPS,
         )
         self._next_slot_index = 0
         self._builder = None
@@ -282,13 +282,6 @@ class PolicyRequestIngress:
     ) -> _result.Ok[None] | _result.Rejected:
         if metadata.batch_capacity > self.batch_size:
             return Rejected(reason="policy request frame exceeds slot")
-        if (
-            metadata.max_observation_tokens
-            != self.max_observation_tokens
-        ):
-            return Rejected(
-                reason="policy request observation layout mismatch"
-            )
         return Ok(value=None)
 
     def _append_or_defer(
@@ -481,6 +474,7 @@ class _FinalPolicyRequestBatchBuilder:
     )
     row_count: int = 0
     padded_generation_steps: int = 0
+    observation_token_count: int = 0
     generation_step_count_values: list[int] = field(
         default_factory=_generation_step_count_list
     )
@@ -500,33 +494,19 @@ class _FinalPolicyRequestBatchBuilder:
     ) -> _FinalPolicyRequestBatchBuilder:
         observation = template.observation_batch
         return cls(
-            observation_batch=ObservationTensorBatch(
-                component_ids=_empty_like_rows(
-                    observation.component_ids,
-                    row_count=batch_size,
-                    device=device,
-                ),
-                numeric_values=_empty_like_rows(
-                    observation.numeric_values,
-                    row_count=batch_size,
-                    device=device,
-                ),
-                numeric_masks=_empty_like_rows(
-                    observation.numeric_masks,
-                    row_count=batch_size,
-                    device=device,
-                ),
+            observation_batch=_empty_observation_batch(
+                template=observation,
+                row_count=batch_size,
+                device=device,
             ),
             action_plan_batch=_empty_action_plan_batch(
                 template.action_plan_batch,
                 row_count=batch_size,
-                padded_generation_steps=(
-                    SEMANTIC_CODEC.max_argument_tokens
-                ),
+                padded_generation_steps=(MAX_ACTION_STEPS),
                 device=device,
             ),
             sampling_thresholds=torch.zeros(
-                (batch_size, SEMANTIC_CODEC.max_argument_tokens),
+                (batch_size, MAX_ACTION_STEPS),
                 dtype=sampling_threshold_dtype_for_device(device),
                 device=device,
             ),
@@ -548,11 +528,11 @@ class _FinalPolicyRequestBatchBuilder:
         """Return whether this workspace can stage another batch."""
         return (
             self.max_batch_size == batch_size
-            and self.observation_batch.component_ids.device == device
-            and self.observation_batch.component_ids.dtype
-            == template.observation_batch.component_ids.dtype
-            and self.observation_batch.numeric_values.dtype
-            == template.observation_batch.numeric_values.dtype
+            and self.observation_batch.category_ids.device == device
+            and self.observation_batch.category_ids.dtype
+            == template.observation_batch.category_ids.dtype
+            and self.observation_batch.scalar_values.dtype
+            == template.observation_batch.scalar_values.dtype
             and self.sampling_thresholds.dtype
             == sampling_threshold_dtype_for_device(device)
             and self.generation_step_counts.dtype
@@ -565,6 +545,7 @@ class _FinalPolicyRequestBatchBuilder:
         self.policy_versions.clear()
         self.row_count = 0
         self.padded_generation_steps = 0
+        self.observation_token_count = 0
         self.generation_step_count_values.clear()
         self.wire_byte_count = 0
         self.recv_seconds = 0.0
@@ -624,6 +605,14 @@ class _FinalPolicyRequestBatchBuilder:
             self.padded_generation_steps,
             frame.padded_generation_steps(),
         )
+        self.observation_token_count = max(
+            self.observation_token_count,
+            int(
+                frame.device_batch.observation_batch.category_ids.shape[
+                    1
+                ]
+            ),
+        )
         self.wire_byte_count += frame.wire_byte_count
         self.recv_seconds += frame.recv_seconds
         self.device_decode_seconds += frame.device_decode_seconds
@@ -637,16 +626,10 @@ class _FinalPolicyRequestBatchBuilder:
         return ModelRankInferenceBatch(
             routes=tuple(self.routes),
             device_batch=DevicePolicyRequestBatch(
-                observation_batch=ObservationTensorBatch(
-                    component_ids=(
-                        self.observation_batch.component_ids[row_slice]
-                    ),
-                    numeric_values=(
-                        self.observation_batch.numeric_values[row_slice]
-                    ),
-                    numeric_masks=(
-                        self.observation_batch.numeric_masks[row_slice]
-                    ),
+                observation_batch=_slice_observation_batch(
+                    self.observation_batch,
+                    row_count=self.row_count,
+                    token_count=self.observation_token_count,
                 ),
                 action_plan_batch=_slice_action_plan_batch(
                     self.action_plan_batch,
@@ -697,11 +680,13 @@ def _slice_action_plan_batch(
         ),
         pair_floor=batch.pair_floor[row_slice],
         has_tractor=batch.has_tractor[row_slice],
-        trace_tokens=(
-            batch.trace_tokens[row_slice, :, :padded_generation_steps]
+        trace_choice_ids=(
+            batch.trace_choice_ids[
+                row_slice, :, :padded_generation_steps
+            ]
         ),
-        trace_token_mask=(
-            batch.trace_token_mask[
+        trace_choice_mask=(
+            batch.trace_choice_mask[
                 row_slice, :, :padded_generation_steps
             ]
         ),
@@ -760,24 +745,24 @@ def _empty_action_plan_batch(
         has_tractor=_empty_like_rows(
             template.has_tractor, row_count=row_count, device=device
         ),
-        trace_tokens=torch.zeros(
-            (*template.trace_tokens.shape[:1],),
-            dtype=template.trace_tokens.dtype,
+        trace_choice_ids=torch.zeros(
+            (*template.trace_choice_ids.shape[:1],),
+            dtype=template.trace_choice_ids.dtype,
             device=device,
         ).new_zeros(
             (
                 row_count,
-                int(template.trace_tokens.shape[1]),
+                int(template.trace_choice_ids.shape[1]),
                 padded_generation_steps,
             )
         ),
-        trace_token_mask=torch.zeros(
+        trace_choice_mask=torch.zeros(
             (
                 row_count,
-                int(template.trace_token_mask.shape[1]),
+                int(template.trace_choice_mask.shape[1]),
                 padded_generation_steps,
             ),
-            dtype=template.trace_token_mask.dtype,
+            dtype=template.trace_choice_mask.dtype,
             device=device,
         ),
         trace_lengths=_empty_like_rows(
@@ -807,34 +792,133 @@ def _empty_like_rows(
     )
 
 
+def _empty_observation_batch(
+    *,
+    template: ObservationTensorBatch,
+    row_count: int,
+    device: torch.device,
+) -> ObservationTensorBatch:
+    token_count = MAX_LOSSLESS_OBSERVATION_TOKENS
+    return ObservationTensorBatch(
+        category_ids=torch.zeros(
+            (
+                row_count,
+                token_count,
+                int(template.category_ids.shape[2]),
+            ),
+            dtype=template.category_ids.dtype,
+            device=device,
+        ),
+        scalar_values=torch.zeros(
+            (row_count, token_count),
+            dtype=template.scalar_values.dtype,
+            device=device,
+        ),
+        card_rule_values=torch.zeros(
+            (row_count, token_count, 2),
+            dtype=template.card_rule_values.dtype,
+            device=device,
+        ),
+        coordinate_values=torch.zeros(
+            (row_count, token_count, 3),
+            dtype=template.coordinate_values.dtype,
+            device=device,
+        ),
+        coordinate_masks=torch.zeros(
+            (row_count, token_count, 3),
+            dtype=template.coordinate_masks.dtype,
+            device=device,
+        ),
+        candidate_category_ids=_empty_like_rows(
+            template.candidate_category_ids,
+            row_count=row_count,
+            device=device,
+        ),
+        candidate_counts=_empty_like_rows(
+            template.candidate_counts,
+            row_count=row_count,
+            device=device,
+        ),
+        candidate_card_rule_values=_empty_like_rows(
+            template.candidate_card_rule_values,
+            row_count=row_count,
+            device=device,
+        ),
+        query_indices=_empty_like_rows(
+            template.query_indices,
+            row_count=row_count,
+            device=device,
+        ),
+    )
+
+
+def _slice_observation_batch(
+    batch: ObservationTensorBatch,
+    *,
+    row_count: int,
+    token_count: int,
+) -> ObservationTensorBatch:
+    rows = slice(0, row_count)
+    tokens = slice(0, token_count)
+    return ObservationTensorBatch(
+        category_ids=batch.category_ids[rows, tokens],
+        scalar_values=batch.scalar_values[rows, tokens],
+        card_rule_values=batch.card_rule_values[rows, tokens],
+        coordinate_values=batch.coordinate_values[rows, tokens],
+        coordinate_masks=batch.coordinate_masks[rows, tokens],
+        candidate_category_ids=batch.candidate_category_ids[rows],
+        candidate_counts=batch.candidate_counts[rows],
+        candidate_card_rule_values=(
+            batch.candidate_card_rule_values[rows]
+        ),
+        query_indices=batch.query_indices[rows],
+    )
+
+
 def _copy_observation_rows(
     *,
     destination: ObservationTensorBatch,
     source: ObservationTensorBatch,
     start: int,
 ) -> None:
-    count = int(source.component_ids.shape[0])
-    destination.component_ids[start : start + count].copy_(
-        source.component_ids,
-        non_blocking=_non_blocking_copy(
-            destination=destination.component_ids,
-            source=source.component_ids,
-        ),
+    count = int(source.category_ids.shape[0])
+    token_count = int(source.category_ids.shape[1])
+    sequence_pairs = (
+        (destination.category_ids, source.category_ids),
+        (destination.scalar_values, source.scalar_values),
+        (destination.card_rule_values, source.card_rule_values),
+        (destination.coordinate_values, source.coordinate_values),
+        (destination.coordinate_masks, source.coordinate_masks),
     )
-    destination.numeric_values[start : start + count].copy_(
-        source.numeric_values,
-        non_blocking=_non_blocking_copy(
-            destination=destination.numeric_values,
-            source=source.numeric_values,
+    for destination_values, source_values in sequence_pairs:
+        destination_values[start : start + count].zero_()
+        destination_values[start : start + count, :token_count].copy_(
+            source_values,
+            non_blocking=_non_blocking_copy(
+                destination=destination_values,
+                source=source_values,
+            ),
+        )
+    fixed_pairs = (
+        (
+            destination.candidate_category_ids,
+            source.candidate_category_ids,
         ),
-    )
-    destination.numeric_masks[start : start + count].copy_(
-        source.numeric_masks,
-        non_blocking=_non_blocking_copy(
-            destination=destination.numeric_masks,
-            source=source.numeric_masks,
+        (destination.candidate_counts, source.candidate_counts),
+        (
+            destination.candidate_card_rule_values,
+            source.candidate_card_rule_values,
         ),
+        (destination.query_indices, source.query_indices),
     )
+    for destination_values, source_values in fixed_pairs:
+        destination_values[start : start + count].copy_(
+            source_values,
+            non_blocking=_non_blocking_copy(
+                destination=destination_values,
+                source=source_values,
+            ),
+        )
 
 
 def _copy_action_plan_rows(
@@ -876,25 +960,25 @@ def _copy_action_plan_rows(
     _copy_fixed(
         destination.has_tractor, source.has_tractor, start=start
     )
-    generation_width = int(source.trace_tokens.shape[-1])
-    destination.trace_tokens[start : start + count].zero_()
-    destination.trace_token_mask[start : start + count].fill_(False)
-    destination.trace_tokens[
+    generation_width = int(source.trace_choice_ids.shape[-1])
+    destination.trace_choice_ids[start : start + count].zero_()
+    destination.trace_choice_mask[start : start + count].fill_(False)
+    destination.trace_choice_ids[
         start : start + count, :, :generation_width
     ].copy_(
-        source.trace_tokens,
+        source.trace_choice_ids,
         non_blocking=_non_blocking_copy(
-            destination=destination.trace_tokens,
-            source=source.trace_tokens,
+            destination=destination.trace_choice_ids,
+            source=source.trace_choice_ids,
         ),
     )
-    destination.trace_token_mask[
+    destination.trace_choice_mask[
         start : start + count, :, :generation_width
     ].copy_(
-        source.trace_token_mask,
+        source.trace_choice_mask,
         non_blocking=_non_blocking_copy(
-            destination=destination.trace_token_mask,
-            source=source.trace_token_mask,
+            destination=destination.trace_choice_mask,
+            source=source.trace_choice_mask,
         ),
     )
     _copy_fixed(

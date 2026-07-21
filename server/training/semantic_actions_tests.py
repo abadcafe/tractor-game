@@ -7,18 +7,18 @@ from server.game.players.test_helpers import card, make_snapshot
 from server.game.protocol import TrickSlotSnapshot, TrickSnapshot
 from server.game.rules.card_faces import CardFace, FaceCount
 from server.training.semantic_actions import (
+    ActionChoice,
+    ActionPrefix,
+    ActionTrace,
     GeneratedAction,
-    SemanticArgument,
-    SemanticArgumentPrefix,
-    SemanticArgumentTrace,
+    action_prefix_cards,
     bind_generated_action,
     build_action_query,
-    semantic_prefix_state,
 )
-from server.training.semantic_actions.codec import (
-    semantic_argument_from_id,
-    semantic_argument_id,
-    semantic_argument_name,
+from server.training.semantic_actions.choices import (
+    action_choice_from_id,
+    action_choice_id,
+    action_choice_name,
 )
 
 
@@ -31,16 +31,16 @@ def test_bind_generated_action_binds_face_to_current_hand_ids() -> None:
         face_counts=(
             FaceCount(CardFace(heart_five.suit, heart_five.rank), 1),
         ),
-        semantic_trace=SemanticArgumentTrace(
-            arguments=(
-                SemanticArgument(
-                    "select_face_count",
+        trace=ActionTrace(
+            choices=(
+                ActionChoice(
+                    "card",
                     FaceCount(
                         CardFace(heart_five.suit, heart_five.rank),
                         1,
                     ),
                 ),
-                SemanticArgument("stop"),
+                ActionChoice("finish"),
             )
         ),
         is_pass=False,
@@ -65,7 +65,7 @@ def test_bind_generated_action_binds_pair_face_count_to_two_cards() -> (
         action_kind="play",
         message_type="play",
         face_counts=(FaceCount(face, 2),),
-        semantic_trace=SemanticArgumentTrace(arguments=()),
+        trace=ActionTrace(choices=()),
         is_pass=False,
     )
 
@@ -91,7 +91,7 @@ def test_bind_generated_action_rejects_duplicate_face_counts() -> None:
             FaceCount(face, 1),
             FaceCount(face, 1),
         ),
-        semantic_trace=SemanticArgumentTrace(arguments=()),
+        trace=ActionTrace(choices=()),
         is_pass=False,
     )
 
@@ -112,7 +112,7 @@ def test_bind_generated_action_rejects_missing_face_count() -> None:
         face_counts=(
             FaceCount(CardFace(heart_five.suit, heart_five.rank), 1),
         ),
-        semantic_trace=SemanticArgumentTrace(arguments=()),
+        trace=ActionTrace(choices=()),
         is_pass=False,
     )
 
@@ -121,15 +121,15 @@ def test_bind_generated_action_rejects_missing_face_count() -> None:
     assert isinstance(bound, Rejected)
 
 
-def test_semantic_prefix_state_rejects_duplicate_face() -> None:
+def test_action_prefix_rejects_duplicate_face() -> None:
     first = card("spades", "A", 1)
     spade_single = FaceCount(CardFace(first.suit, first.rank), 1)
 
-    result = semantic_prefix_state(
-        SemanticArgumentPrefix(
-            arguments=(
-                SemanticArgument("select_face_count", spade_single),
-                SemanticArgument("select_face_count", spade_single),
+    result = action_prefix_cards(
+        ActionPrefix(
+            choices=(
+                ActionChoice("card", spade_single),
+                ActionChoice("card", spade_single),
             )
         )
     )
@@ -137,16 +137,16 @@ def test_semantic_prefix_state_rejects_duplicate_face() -> None:
     assert isinstance(result, Rejected)
 
 
-def test_semantic_prefix_state_rejects_argument_after_stop() -> None:
+def test_action_prefix_rejects_choice_after_finish() -> None:
     first = card("spades", "A", 1)
     spade_single = FaceCount(CardFace(first.suit, first.rank), 1)
 
-    result = semantic_prefix_state(
-        SemanticArgumentPrefix(
-            arguments=(
-                SemanticArgument("select_face_count", spade_single),
-                SemanticArgument("stop"),
-                SemanticArgument("select_face_count", spade_single),
+    result = action_prefix_cards(
+        ActionPrefix(
+            choices=(
+                ActionChoice("card", spade_single),
+                ActionChoice("finish"),
+                ActionChoice("card", spade_single),
             )
         )
     )
@@ -186,9 +186,9 @@ def test_action_query_requires_current_trick_width_when_following() -> (
     assert query.exact_select == 1
 
 
-def test_semantic_argument_id_round_trips_face_counts() -> None:
-    argument = SemanticArgument(
-        "select_face_count",
+def test_action_choice_id_round_trips_face_counts() -> None:
+    choice = ActionChoice(
+        "card",
         FaceCount(
             CardFace(
                 card("clubs", "3", 1).suit,
@@ -198,8 +198,8 @@ def test_semantic_argument_id_round_trips_face_counts() -> None:
         ),
     )
 
-    decoded = semantic_argument_from_id(semantic_argument_id(argument))
+    decoded = action_choice_from_id(action_choice_id(choice))
 
     assert isinstance(decoded, Ok)
-    assert decoded.value == argument
-    assert semantic_argument_name(argument) == "SELECT_clubs_3_X2"
+    assert decoded.value == choice
+    assert action_choice_name(choice) == "CARD_clubs_3_X2"

@@ -45,13 +45,11 @@ def test_module_cli_init_creates_zero_update_run(
             str(run_dir),
             "init",
             "--d-model",
-            "4",
+            "8",
             "--layers",
             "1",
             "--heads",
             "1",
-            "--max-tokens",
-            "512",
             "--seed",
             "123",
         ],
@@ -67,7 +65,7 @@ def test_module_cli_init_creates_zero_update_run(
     assert isinstance(metadata, Ok)
     assert metadata.value.total_updates == 0
     assert metadata.value.model_config == ModelConfig(
-        d_model=4, layers=1, heads=1, max_tokens=512
+        d_model=8, layers=1, heads=1
     )
     assert metadata.value.train_config == TrainConfig(seed=123)
 
@@ -95,6 +93,35 @@ def test_cli_init_rejects_invalid_model_shape_without_traceback(
 
     assert completed.returncode == 2
     assert "--d-model must be divisible by --heads" in completed.stderr
+    assert "Traceback" not in completed.stderr
+
+
+def test_cli_init_rejects_attention_head_too_narrow(
+    tmp_path: Path,
+) -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "server.training_cli",
+            "--run-dir",
+            str(tmp_path / "invalid-run"),
+            "init",
+            "--d-model",
+            "8",
+            "--heads",
+            "2",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "--d-model divided by --heads must be at least 8"
+        in completed.stderr
+    )
     assert "Traceback" not in completed.stderr
 
 
@@ -160,7 +187,7 @@ def test_main_requires_one_subcommand(
     assert "required" in capsys.readouterr().err
 
 
-def test_main_init_rejects_too_small_token_limit(
+def test_main_init_rejects_removed_max_tokens_option(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     exit_code: int | str | None = None
@@ -178,4 +205,6 @@ def test_main_init_rejects_too_small_token_limit(
         exit_code = error.code
 
     assert exit_code == 2
-    assert "max_tokens" in capsys.readouterr().err
+    assert "unrecognized arguments: --max-tokens 511" in (
+        capsys.readouterr().err
+    )

@@ -633,36 +633,33 @@ def _record_update_completed(
                 profile.observation_encode_seconds
             ),
             "ppo_value_head_seconds": profile.value_head_seconds,
-            "ppo_argument_select_seconds": (
-                profile.argument_select_seconds
+            "ppo_action_decode_seconds": (
+                profile.action_decode_seconds
             ),
-            "ppo_argument_decode_seconds": (
-                profile.argument_decode_seconds
-            ),
-            "ppo_argument_distribution_seconds": (
-                profile.argument_distribution_seconds
+            "ppo_action_distribution_seconds": (
+                profile.action_distribution_seconds
             ),
             "ppo_backward_seconds": profile.backward_seconds,
             "ppo_optimizer_step_seconds": (
                 profile.optimizer_step_seconds
             ),
-            "ppo_argument_decode_fraction": (
-                profile.argument_decode_fraction
+            "ppo_action_decode_fraction": (
+                profile.action_decode_fraction
             ),
-            "ppo_argument_trace_batch_count": (
-                profile.argument_trace_batch_count
+            "ppo_action_trace_batch_count": (
+                profile.action_trace_batch_count
             ),
-            "ppo_argument_trace_row_count": (
-                profile.argument_trace_row_count
+            "ppo_action_trace_row_count": (
+                profile.action_trace_row_count
             ),
-            "ppo_argument_trace_token_count": (
-                profile.argument_trace_token_count
+            "ppo_action_trace_choice_count": (
+                profile.action_trace_choice_count
             ),
-            "ppo_argument_trace_valid_token_count": (
-                profile.argument_trace_valid_token_count
+            "ppo_action_trace_valid_choice_count": (
+                profile.action_trace_valid_choice_count
             ),
-            "ppo_argument_trace_padding_token_count": (
-                profile.argument_trace_padding_token_count
+            "ppo_action_trace_padding_choice_count": (
+                profile.action_trace_padding_choice_count
             ),
         },
     )

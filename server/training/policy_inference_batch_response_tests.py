@@ -1,198 +1,139 @@
-"""Tests for policy inference batch response ABI."""
+"""Black-box tests for strict action-choice response transport."""
 
 from __future__ import annotations
 
-import struct
+import torch
 
 from server.foundation.result import Ok, Rejected
 from server.game.players.test_helpers import card, make_snapshot
-from server.training.legal_actions import (
-    LegalActionIndex,
-    build_legal_action_index,
-)
-from server.training.observation import Observation, build_observation
+from server.game.rules.card_faces import CardFace, FaceCount
+from server.training.legal_actions import build_legal_action_index
 from server.training.policy_inference_batch import (
     CompletedPolicyResponse,
     PolicyRequestRoute,
-    PolicyResponseBatchWire,
     RejectedPolicyResponse,
     build_completed_policy_responses,
-    build_rejected_policy_responses,
     decode_policy_response,
     decode_policy_response_batch_wire,
     encode_policy_response_batch_wire,
 )
 from server.training.policy_sampling import (
+    CompactActionChoiceBatch,
+    CompactActionChoiceIds,
     CompactPolicyDecisionBatch,
-    CompactTraceTokenBatch,
-    CompactTraceTokenIds,
 )
-from server.training.semantic_actions import SemanticArgument
-from server.training.semantic_actions.codec import semantic_argument_id
+from server.training.semantic_actions.choices import (
+    FINISH_CHOICE_ID,
+    PASS_CHOICE_ID,
+    ActionChoice,
+    action_choice_id,
+)
 
 
-def test_policy_response_batch_wire_decodes_rule_action() -> None:
-    responses = build_completed_policy_responses(
-        routes=(_route(),),
-        decisions=_compact_policy_decision_batch(),
+def test_response_wire_round_trips_completed_and_rejected_rows() -> (
+    None
+):
+    completed = CompletedPolicyResponse(
+        route=PolicyRequestRoute(worker_index=2, request_id=7),
+        action_choice_ids=CompactActionChoiceIds.from_tuple(
+            (PASS_CHOICE_ID,)
+        ),
+        decision_handle_model_rank=1,
+        decision_handle_policy_version=5,
+        decision_handle_row_index=13,
+        choice_count=1,
     )
-    assert isinstance(responses, Ok)
-    response_wire = encode_policy_response_batch_wire(responses.value)
-    assert isinstance(response_wire, Ok)
-
-    decoded_wire = decode_policy_response_batch_wire(
-        response_wire.value.data
-    )
-    assert isinstance(decoded_wire, Ok)
-    assert len(decoded_wire.value) == 1
-    completed = decoded_wire.value[0]
-    assert isinstance(completed, CompletedPolicyResponse)
-    assert not isinstance(completed.trace_token_ids, tuple)
-    assert completed.trace_token_ids.to_tuple() == (
-        semantic_argument_id(SemanticArgument("pass")),
-    )
-    decoded_decision = decode_policy_response(
-        legal_actions=_legal_actions(),
-        response=completed,
+    rejected = RejectedPolicyResponse(
+        route=PolicyRequestRoute(worker_index=3, request_id=8),
+        reason="policy unavailable",
     )
 
-    assert isinstance(decoded_decision, Ok)
-    assert decoded_decision.value.decision_handle.model_rank_index == 1
-    assert decoded_decision.value.decision_handle.policy_version == 3
-
-
-def test_policy_response_batch_wire_decodes_mixed_rows() -> None:
-    completed = build_completed_policy_responses(
-        routes=(_route(),),
-        decisions=_compact_policy_decision_batch(),
-    )
-    rejected = build_rejected_policy_responses(
-        routes=(PolicyRequestRoute(worker_index=2, request_id=6),),
-        reason="bad logits",
-    )
-    assert isinstance(completed, Ok)
-    assert isinstance(rejected, Ok)
-
-    wire = encode_policy_response_batch_wire(
-        completed.value + rejected.value
-    )
-    assert isinstance(wire, Ok)
-    decoded = decode_policy_response_batch_wire(wire.value.data)
+    encoded = encode_policy_response_batch_wire((completed, rejected))
+    assert isinstance(encoded, Ok)
+    decoded = decode_policy_response_batch_wire(encoded.value.data)
 
     assert isinstance(decoded, Ok)
-    assert len(decoded.value) == 2
-    assert isinstance(decoded.value[0], CompletedPolicyResponse)
-    assert isinstance(decoded.value[1], RejectedPolicyResponse)
-    assert decoded.value[1].route.request_id == 6
-    assert decoded.value[1].reason == "bad logits"
+    assert decoded.value == (completed, rejected)
 
 
-def test_build_completed_policy_responses_uses_compact_decisions() -> (
-    None
-):
-    result = build_completed_policy_responses(
-        routes=(_route(),),
-        decisions=_compact_policy_decision_batch(),
+def test_completed_response_batch_keeps_fixed_choice_ids() -> None:
+    choice_ids = torch.tensor(
+        ((PASS_CHOICE_ID, 0), (FINISH_CHOICE_ID, 0)),
+        dtype=torch.long,
     )
-
-    assert isinstance(result, Ok)
-    assert len(result.value) == 1
-    response = result.value[0]
-    assert response.route == _route()
-    assert response.decision_handle_model_rank == 1
-    assert response.decision_handle_policy_version == 3
-    assert response.decision_handle_row_index == 7
-    assert response.choice_count == 1
-    assert response.trace_token_ids.to_tuple() == (
-        semantic_argument_id(SemanticArgument("pass")),
-    )
-
-
-def test_policy_response_batch_wire_rejects_negative_worker_route() -> (
-    None
-):
-    wire = _completed_response_wire()
-    corrupted = bytearray(wire.data)
-    _I64.pack_into(corrupted, _WORKER_INDEX_OFFSET, -1)
-
-    result = decode_policy_response_batch_wire(bytes(corrupted))
-
-    assert isinstance(result, Rejected)
-    assert result.reason == "policy response route is invalid"
-
-
-def test_decode_response_batch_rejects_negative_request_route() -> None:
-    wire = _completed_response_wire()
-    corrupted = bytearray(wire.data)
-    _I64.pack_into(corrupted, _REQUEST_ID_OFFSET, -1)
-
-    result = decode_policy_response_batch_wire(bytes(corrupted))
-
-    assert isinstance(result, Rejected)
-    assert result.reason == "policy response route is invalid"
-
-
-def _completed_response_wire() -> PolicyResponseBatchWire:
-    responses = build_completed_policy_responses(
-        routes=(_route(),),
-        decisions=_compact_policy_decision_batch(),
-    )
-    assert isinstance(responses, Ok)
-    result = encode_policy_response_batch_wire(responses.value)
-    assert isinstance(result, Ok)
-    return result.value
-
-
-def _compact_policy_decision_batch() -> CompactPolicyDecisionBatch:
-    trace_token_ids = CompactTraceTokenIds.from_tuple(
-        (semantic_argument_id(SemanticArgument("pass")),)
-    )
-    return CompactPolicyDecisionBatch(
+    decisions = CompactPolicyDecisionBatch(
         model_rank_index=1,
-        policy_versions=(3,),
-        row_indices=(7,),
-        choice_counts=(1,),
-        trace_token_batch=CompactTraceTokenBatch(
-            encoded_i64_rows=trace_token_ids.encoded_i64,
-            row_count=1,
-            max_trace_count=1,
-            trace_counts=(1,),
+        policy_versions=(4, 4),
+        row_indices=(10, 11),
+        choice_counts=(1, 1),
+        action_choice_batch=CompactActionChoiceBatch.from_cpu_tensor(
+            choice_ids=choice_ids,
+            choice_counts=(1, 1),
         ),
+    )
+    routes = (
+        PolicyRequestRoute(worker_index=0, request_id=3),
+        PolicyRequestRoute(worker_index=0, request_id=4),
+    )
+
+    result = build_completed_policy_responses(
+        routes=routes, decisions=decisions
+    )
+
+    assert isinstance(result, Ok)
+    assert result.value[0].action_choice_ids.to_tuple() == (
+        PASS_CHOICE_ID,
+    )
+    assert result.value[1].action_choice_ids.to_tuple() == (
+        FINISH_CHOICE_ID,
     )
 
 
-def _route() -> PolicyRequestRoute:
-    return PolicyRequestRoute(worker_index=2, request_id=5)
-
-
-def _observation() -> Observation:
-    return build_observation(
-        player_index=0,
-        snapshot=make_snapshot(
-            phase="DEAL_BID",
-            awaiting_action="bid",
-            player_hand=[card("hearts", "2", 1)],
-            trump_rank="2",
+def test_worker_decodes_card_then_finish_through_legal_rules() -> None:
+    ace = card("spades", "A", 1)
+    snapshot = make_snapshot(player_hand=[ace])
+    legal = build_legal_action_index(player_index=0, snapshot=snapshot)
+    card_choice_id = action_choice_id(
+        ActionChoice(
+            "card",
+            FaceCount(CardFace(ace.suit, ace.rank), 1),
+        )
+    )
+    response = CompletedPolicyResponse(
+        route=PolicyRequestRoute(worker_index=0, request_id=1),
+        action_choice_ids=CompactActionChoiceIds.from_tuple(
+            (card_choice_id, FINISH_CHOICE_ID)
         ),
-        history=(),
+        decision_handle_model_rank=2,
+        decision_handle_policy_version=6,
+        decision_handle_row_index=9,
+        choice_count=2,
     )
 
-
-def _legal_actions() -> LegalActionIndex:
-    observation = _observation()
-    return build_legal_action_index(
-        player_index=0,
-        snapshot=make_snapshot(
-            phase="DEAL_BID",
-            awaiting_action="bid",
-            player_hand=[card("hearts", "2", 1)],
-            trump_rank="2",
-        ),
-        query=observation.action_query,
+    decoded = decode_policy_response(
+        legal_actions=legal, response=response
     )
 
+    assert isinstance(decoded, Ok)
+    assert decoded.value.action.face_counts == (
+        FaceCount(CardFace(ace.suit, ace.rank), 1),
+    )
+    assert decoded.value.decision_handle.row_index == 9
 
-_I64 = struct.Struct("<q")
-_HEADER_BYTES = 5 * _I64.size
-_WORKER_INDEX_OFFSET = _HEADER_BYTES
-_REQUEST_ID_OFFSET = _HEADER_BYTES + _I64.size
+
+def test_response_wire_rejects_previous_schema_magic() -> None:
+    response = RejectedPolicyResponse(
+        route=PolicyRequestRoute(worker_index=0, request_id=1),
+        reason="no model",
+    )
+    encoded = encode_policy_response_batch_wire((response,))
+    assert isinstance(encoded, Ok)
+    stale = bytearray(encoded.value.data)
+    stale[0] ^= 1
+
+    decoded = decode_policy_response_batch_wire(bytes(stale))
+
+    assert isinstance(decoded, Rejected)
+    assert (
+        decoded.reason == "policy response batch wire schema is invalid"
+    )

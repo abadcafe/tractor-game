@@ -51,7 +51,7 @@ def test_select_canonical_state_rejects_optimizer_divergence() -> None:
 
 
 def test_capture_and_load_runtime_training_state_round_trips() -> None:
-    model_config = ModelConfig(d_model=4, layers=1, heads=1)
+    model_config = ModelConfig(d_model=8, layers=1, heads=1)
     train_config = TrainConfig()
     source = create_training_state(
         model_config=model_config,

@@ -90,18 +90,22 @@ const SPECS: readonly ChartSpec[] = [
         color: "#20262d",
       },
       {
-        key: "observation_encode_seconds",
+        key: "ppo_observation_encode_seconds",
         label: "Encode",
         color: "#1769aa",
       },
       {
-        key: "argument_decode_seconds",
+        key: "ppo_action_decode_seconds",
         label: "Decode",
         color: "#7253a6",
       },
-      { key: "backward_seconds", label: "Backward", color: "#b23a48" },
       {
-        key: "optimizer_step_seconds",
+        key: "ppo_backward_seconds",
+        label: "Backward",
+        color: "#b23a48",
+      },
+      {
+        key: "ppo_optimizer_step_seconds",
         label: "Optimizer",
         color: "#138a72",
       },

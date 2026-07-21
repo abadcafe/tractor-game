@@ -19,6 +19,7 @@ from server.training.observation import (
     Observation,
     build_observation,
 )
+from server.training.observation_memory import ObservationMemoryView
 from server.training.policy_inference_batch import (
     BorrowedPolicyRequestBatch,
     CompletedPolicyResponse,
@@ -38,9 +39,9 @@ from server.training.policy_inference_batch.types import (
     PolicyRequestFrameMetadata,
 )
 from server.training.policy_sampling import (
+    CompactActionChoiceBatch,
+    CompactActionChoiceIds,
     CompactPolicyDecisionBatch,
-    CompactTraceTokenBatch,
-    CompactTraceTokenIds,
     RankReturnTargets,
 )
 from server.training.ppo import PPOUpdateProfile, PPOUpdateStats
@@ -57,12 +58,12 @@ from server.training.runtime.model_rank.inference_transport import (
 from server.training.runtime.state import RuntimeTrainingState
 from server.training.sampling import PolicyDecisionKey
 from server.training.semantic_actions import (
-    SemanticArgument,
-    SemanticArgumentTrace,
+    ActionChoice,
+    ActionTrace,
 )
-from server.training.semantic_actions.codec import (
-    SEMANTIC_CODEC,
-    semantic_argument_id,
+from server.training.semantic_actions.choices import (
+    MAX_ACTION_STEPS,
+    action_choice_id,
 )
 from server.training_events import NullEventSink
 
@@ -85,7 +86,6 @@ async def test_local_policy_client_batches_same_loop() -> None:
 
     client = BatchedPolicyClient(
         worker_index=2,
-        max_observation_tokens=512,
         transport=LocalPolicyBatchTransport(replica=replica),
         timeout_seconds=1.0,
         batch_size=4,
@@ -104,8 +104,8 @@ async def test_local_policy_client_batches_same_loop() -> None:
 
     assert isinstance(first_result, Ok)
     assert isinstance(second_result, Ok)
-    assert first_result.value.action.semantic_trace == _pass_trace()
-    assert second_result.value.action.semantic_trace == _pass_trace()
+    assert first_result.value.action.trace == _pass_trace()
+    assert second_result.value.action.trace == _pass_trace()
     assert first_result.value.decision_handle.row_index == 0
     assert second_result.value.decision_handle.row_index == 1
     assert first_result.value.choice_count == 1
@@ -136,7 +136,6 @@ async def test_local_policy_client_drains_cancelled_response() -> None:
     )
     client = BatchedPolicyClient(
         worker_index=0,
-        max_observation_tokens=512,
         transport=transport,
         timeout_seconds=1.0,
         batch_size=1,
@@ -156,7 +155,7 @@ async def test_local_policy_client_drains_cancelled_response() -> None:
     )
 
     assert isinstance(second, Ok)
-    assert second.value.action.semantic_trace == _pass_trace()
+    assert second.value.action.trace == _pass_trace()
 
 
 def test_local_model_rank_loads_updates_and_snapshots_replica() -> None:
@@ -193,7 +192,6 @@ async def test_remote_policy_client_roundtrips_async_payload() -> None:
         task = asyncio.create_task(
             BatchedPolicyClient(
                 worker_index=2,
-                max_observation_tokens=512,
                 transport=AsyncRemotePolicyBatchTransport(
                     peer=peers.worker_peer,
                 ),
@@ -229,7 +227,7 @@ async def test_remote_policy_client_roundtrips_async_payload() -> None:
         result = await task
 
         assert isinstance(result, Ok)
-        assert result.value.action.semantic_trace == _pass_trace()
+        assert result.value.action.trace == _pass_trace()
         assert result.value.decision_handle.row_index == 0
         assert result.value.choice_count == 1
     finally:
@@ -245,7 +243,6 @@ async def test_remote_policy_client_rejects_response_mismatch() -> None:
         task = asyncio.create_task(
             BatchedPolicyClient(
                 worker_index=2,
-                max_observation_tokens=512,
                 transport=AsyncRemotePolicyBatchTransport(
                     peer=peers.worker_peer,
                 ),
@@ -298,7 +295,6 @@ async def test_remote_policy_client_sends_concurrent_frames() -> None:
     try:
         client = BatchedPolicyClient(
             worker_index=2,
-            max_observation_tokens=512,
             transport=AsyncRemotePolicyBatchTransport(
                 peer=peers.worker_peer
             ),
@@ -339,10 +335,8 @@ async def test_remote_policy_client_sends_concurrent_frames() -> None:
         )
         assert isinstance(first_result, Ok)
         assert isinstance(second_result, Ok)
-        assert first_result.value.action.semantic_trace == _pass_trace()
-        assert (
-            second_result.value.action.semantic_trace == _pass_trace()
-        )
+        assert first_result.value.action.trace == _pass_trace()
+        assert second_result.value.action.trace == _pass_trace()
     finally:
         peers.close()
 
@@ -356,7 +350,6 @@ async def test_remote_policy_client_rejects_unsent_route_response() -> (
     transport = _MismatchedFirstResponseTransport()
     client = BatchedPolicyClient(
         worker_index=2,
-        max_observation_tokens=512,
         transport=transport,
         timeout_seconds=1.0,
         batch_size=1,
@@ -385,7 +378,7 @@ async def test_remote_policy_client_rejects_unsent_route_response() -> (
         == "model rank inference response route mismatch"
     )
     assert isinstance(second_result, Ok)
-    assert second_result.value.action.semantic_trace == _pass_trace()
+    assert second_result.value.action.trace == _pass_trace()
 
 
 async def _receive_request_metadata(
@@ -395,8 +388,7 @@ async def _receive_request_metadata(
     request_buffer = bytearray(
         max_policy_request_batch_frame_bytes(
             batch_capacity=4,
-            max_observation_tokens=512,
-            padded_generation_steps=SEMANTIC_CODEC.max_argument_tokens,
+            padded_generation_steps=MAX_ACTION_STEPS,
         )
     )
     request_result = await peer.receive_request_into(
@@ -587,19 +579,19 @@ class _FakeReplica:
 def _compact_policy_decision_batch(
     *, row_count: int
 ) -> CompactPolicyDecisionBatch:
-    trace_token_ids = CompactTraceTokenIds.from_tuple(
-        (semantic_argument_id(SemanticArgument("pass")),)
+    action_choice_ids = CompactActionChoiceIds.from_tuple(
+        (action_choice_id(ActionChoice("pass")),)
     )
     return CompactPolicyDecisionBatch(
         model_rank_index=0,
         policy_versions=tuple(0 for _ in range(row_count)),
         row_indices=tuple(range(row_count)),
         choice_counts=tuple(1 for _ in range(row_count)),
-        trace_token_batch=CompactTraceTokenBatch(
-            encoded_i64_rows=trace_token_ids.encoded_i64 * row_count,
+        action_choice_batch=CompactActionChoiceBatch(
+            encoded_i64_rows=action_choice_ids.encoded_i64 * row_count,
             row_count=row_count,
-            max_trace_count=1,
-            trace_counts=tuple(1 for _ in range(row_count)),
+            max_choice_count=1,
+            choice_counts=tuple(1 for _ in range(row_count)),
         ),
     )
 
@@ -610,7 +602,7 @@ def _completed_policy_response(
     decisions = _compact_policy_decision_batch(row_count=1)
     return CompletedPolicyResponse(
         route=route,
-        trace_token_ids=decisions.trace_token_batch.compact_row(0),
+        action_choice_ids=decisions.action_choice_batch.compact_row(0),
         decision_handle_model_rank=decisions.model_rank_index,
         decision_handle_policy_version=decisions.policy_versions[0],
         decision_handle_row_index=decisions.row_indices[0],
@@ -618,8 +610,8 @@ def _completed_policy_response(
     )
 
 
-def _pass_trace() -> SemanticArgumentTrace:
-    return SemanticArgumentTrace(arguments=(SemanticArgument("pass"),))
+def _pass_trace() -> ActionTrace:
+    return ActionTrace(choices=(ActionChoice("pass"),))
 
 
 def _observation() -> Observation:
@@ -630,9 +622,11 @@ def _observation() -> Observation:
         trump_rank="2",
     )
     return build_observation(
-        player_index=0,
+        viewer=0,
         snapshot=snapshot,
-        history=(),
+        memory=ObservationMemoryView(
+            bid_actions=(), completed_tricks=()
+        ),
     )
 
 
@@ -702,16 +696,15 @@ def _ppo_update_stats() -> PPOUpdateStats:
             observation_batch_seconds=0.0,
             observation_encode_seconds=0.0,
             value_head_seconds=0.0,
-            argument_select_seconds=0.0,
-            argument_decode_seconds=0.0,
-            argument_distribution_seconds=0.0,
+            action_decode_seconds=0.0,
+            action_distribution_seconds=0.0,
             backward_seconds=0.0,
             optimizer_step_seconds=0.0,
-            argument_decode_fraction=0.0,
-            argument_trace_batch_count=0,
-            argument_trace_row_count=0,
-            argument_trace_token_count=0,
-            argument_trace_valid_token_count=0,
-            argument_trace_padding_token_count=0,
+            action_decode_fraction=0.0,
+            action_trace_batch_count=0,
+            action_trace_row_count=0,
+            action_trace_choice_count=0,
+            action_trace_valid_choice_count=0,
+            action_trace_padding_choice_count=0,
         ),
     )
