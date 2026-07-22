@@ -197,18 +197,11 @@ class _PolicyRequestColumnWriter:
             ),
         )
         self._write_i64_values(
-            self.layout.coordinate_values,
-            row_index,
-            tuple(
-                value for row in padded.coordinate_rows for value in row
-            ),
-        )
-        self._write_bool_values(
-            self.layout.coordinate_masks,
+            self.layout.encoded_structure_coordinates,
             row_index,
             tuple(
                 value
-                for row in padded.coordinate_mask_rows
+                for row in padded.encoded_structure_rows
                 for value in row
             ),
         )

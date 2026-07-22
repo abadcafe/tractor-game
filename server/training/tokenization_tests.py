@@ -60,10 +60,8 @@ def test_tokenize_binds_play_cards_by_address_not_card_fields() -> None:
         and node.address.payload_role == "played"
     )
 
-    assert played.address.trick_time == play.address.trick_time
-    assert played.address.action_position == (
-        play.address.action_position
-    )
+    assert played.address.trick == play.address.trick
+    assert played.address.play_position == (play.address.play_position)
     assert not hasattr(played.payload, "actor")
     assert not hasattr(played.payload, "trick_position")
     assert not hasattr(played.payload, "play_width")

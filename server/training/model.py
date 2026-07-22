@@ -176,8 +176,9 @@ class TractorPolicyModel(nn.Module):
                 card_rule_values=observation.card_rule_values,
             ),
             padding_mask=memory_padding_mask,
-            coordinates=observation.coordinate_values,
-            coordinate_masks=observation.coordinate_masks,
+            encoded_structure_coordinates=(
+                observation.encoded_structure_coordinates
+            ),
         )
         batch_indices = torch.arange(
             int(memory.shape[0]),

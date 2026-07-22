@@ -57,10 +57,10 @@ def test_observe_records_bid_pass_and_reveal_at_decision_ordinal() -> (
     actions = result.value.bid_actions
     assert len(actions) == 2
     assert actions[0].actor == 0
-    assert actions[0].deal_ordinal == 1
+    assert actions[0].deal_ordinal.value == 1
     assert actions[0].revealed_cards == ()
     assert actions[1].actor == 1
-    assert actions[1].deal_ordinal == 2
+    assert actions[1].deal_ordinal.value == 2
     assert actions[1].revealed_cards == (revealed,)
 
 

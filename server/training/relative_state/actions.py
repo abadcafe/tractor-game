@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from server.game.rules.card_faces import FaceCount
+from server.training.observation_structure import RoundEventOrdinal
 from server.training.relative_state.relations import (
     RelativeActor,
     TrickPosition,
@@ -21,7 +22,7 @@ class RelativeBidAction:
     actor: RelativeActor
     disposition: ActionDisposition
     revealed: tuple[FaceCount, ...]
-    event_time: int
+    event_ordinal: RoundEventOrdinal
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +32,7 @@ class RelativeStirAction:
     actor: RelativeActor
     disposition: ActionDisposition
     revealed: tuple[FaceCount, ...]
-    event_time: int
+    event_ordinal: RoundEventOrdinal
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +41,7 @@ class RelativeExchangeAction:
 
     picked_up: tuple[FaceCount, ...]
     discarded: tuple[FaceCount, ...]
-    event_time: int
+    event_ordinal: RoundEventOrdinal
 
 
 @dataclass(frozen=True, slots=True)

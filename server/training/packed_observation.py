@@ -58,8 +58,7 @@ from server.training.tokenization.structure import PayloadRole
 type CategoryRow = tuple[int, ...]
 type CardRuleRow = tuple[float, float]
 type CandidateCategoryRow = tuple[int, int, int]
-type CoordinateRow = tuple[int, int, int]
-type CoordinateMaskRow = tuple[bool, bool, bool]
+type EncodedStructureRow = tuple[int, int, int]
 
 _MAX_PLAYABLE_HAND: int = (
     TOTAL_CARDS - BOTTOM_CARD_COUNT
@@ -102,8 +101,7 @@ class PackedObservation:
     category_rows: tuple[CategoryRow, ...]
     scalar_values: tuple[float, ...]
     card_rule_rows: tuple[CardRuleRow, ...]
-    coordinate_rows: tuple[CoordinateRow, ...]
-    coordinate_mask_rows: tuple[CoordinateMaskRow, ...]
+    encoded_structure_rows: tuple[EncodedStructureRow, ...]
     candidate_category_rows: tuple[CandidateCategoryRow, ...]
     candidate_counts: tuple[float, ...]
     candidate_card_rule_rows: tuple[CardRuleRow, ...]
@@ -114,8 +112,7 @@ class PackedObservation:
         assert 0 < count <= MAX_LOSSLESS_OBSERVATION_TOKENS
         assert len(self.scalar_values) == count
         assert len(self.card_rule_rows) == count
-        assert len(self.coordinate_rows) == count
-        assert len(self.coordinate_mask_rows) == count
+        assert len(self.encoded_structure_rows) == count
         assert all(
             len(row) == CATEGORY_COUNT for row in self.category_rows
         )
@@ -134,16 +131,14 @@ def pack_observation(observation: Observation) -> PackedObservation:
     categories: list[CategoryRow] = []
     scalars: list[float] = []
     card_rules: list[CardRuleRow] = []
-    coordinates: list[CoordinateRow] = []
-    coordinate_masks: list[CoordinateMaskRow] = []
+    encoded_structure: list[EncodedStructureRow] = []
     for node in observation.tokens:
         category, scalar, card_rule = _pack_node(node, observation)
-        coordinate, coordinate_mask = _pack_address(node.address)
+        encoded_address = _pack_address(node.address)
         categories.append(category)
         scalars.append(scalar)
         card_rules.append(card_rule)
-        coordinates.append(coordinate)
-        coordinate_masks.append(coordinate_mask)
+        encoded_structure.append(encoded_address)
     candidate_categories: list[CandidateCategoryRow] = []
     candidate_counts: list[float] = []
     candidate_rules: list[CardRuleRow] = []
@@ -165,8 +160,7 @@ def pack_observation(observation: Observation) -> PackedObservation:
         category_rows=tuple(categories),
         scalar_values=tuple(scalars),
         card_rule_rows=tuple(card_rules),
-        coordinate_rows=tuple(coordinates),
-        coordinate_mask_rows=tuple(coordinate_masks),
+        encoded_structure_rows=tuple(encoded_structure),
         candidate_category_rows=tuple(candidate_categories),
         candidate_counts=tuple(candidate_counts),
         candidate_card_rule_rows=tuple(candidate_rules),
@@ -194,13 +188,9 @@ def padded_packed_observation(
             *packed.card_rule_rows,
             *((0.0, 0.0) for _ in range(padding)),
         ),
-        coordinate_rows=(
-            *packed.coordinate_rows,
+        encoded_structure_rows=(
+            *packed.encoded_structure_rows,
             *((0, 0, 0) for _ in range(padding)),
-        ),
-        coordinate_mask_rows=(
-            *packed.coordinate_mask_rows,
-            *((False, False, False) for _ in range(padding)),
         ),
         candidate_category_rows=packed.candidate_category_rows,
         candidate_counts=packed.candidate_counts,
@@ -314,22 +304,16 @@ def _pack_round(token: RoundToken, values: list[int]) -> float:
 
 def _pack_address(
     address: TokenAddress,
-) -> tuple[CoordinateRow, CoordinateMaskRow]:
-    values = (
+) -> EncodedStructureRow:
+    return (
         0
-        if address.round_event_time is None
-        else address.round_event_time,
-        0 if address.trick_time is None else address.trick_time,
+        if address.round_event is None
+        else address.round_event.value + 1,
+        0 if address.trick is None else address.trick.value + 1,
         0
-        if address.action_position is None
-        else address.action_position,
+        if address.play_position is None
+        else _trick_position_id(address.play_position),
     )
-    masks = (
-        address.round_event_time is not None,
-        address.trick_time is not None,
-        address.action_position is not None,
-    )
-    return (values, masks)
 
 
 def _round_variant(field: RoundField) -> TokenVariant:

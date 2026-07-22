@@ -10,6 +10,7 @@ from torch import Tensor
 
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
+from server.training.observation_structure import STRUCTURE_AXIS_COUNT
 from server.training.packed_observation import (
     MAX_LOSSLESS_OBSERVATION_TOKENS,
 )
@@ -819,14 +820,9 @@ def _empty_observation_batch(
             dtype=template.card_rule_values.dtype,
             device=device,
         ),
-        coordinate_values=torch.zeros(
-            (row_count, token_count, 3),
-            dtype=template.coordinate_values.dtype,
-            device=device,
-        ),
-        coordinate_masks=torch.zeros(
-            (row_count, token_count, 3),
-            dtype=template.coordinate_masks.dtype,
+        encoded_structure_coordinates=torch.zeros(
+            (row_count, token_count, STRUCTURE_AXIS_COUNT),
+            dtype=template.encoded_structure_coordinates.dtype,
             device=device,
         ),
         candidate_category_ids=_empty_like_rows(
@@ -864,8 +860,9 @@ def _slice_observation_batch(
         category_ids=batch.category_ids[rows, tokens],
         scalar_values=batch.scalar_values[rows, tokens],
         card_rule_values=batch.card_rule_values[rows, tokens],
-        coordinate_values=batch.coordinate_values[rows, tokens],
-        coordinate_masks=batch.coordinate_masks[rows, tokens],
+        encoded_structure_coordinates=(
+            batch.encoded_structure_coordinates[rows, tokens]
+        ),
         candidate_category_ids=batch.candidate_category_ids[rows],
         candidate_counts=batch.candidate_counts[rows],
         candidate_card_rule_values=(
@@ -887,8 +884,10 @@ def _copy_observation_rows(
         (destination.category_ids, source.category_ids),
         (destination.scalar_values, source.scalar_values),
         (destination.card_rule_values, source.card_rule_values),
-        (destination.coordinate_values, source.coordinate_values),
-        (destination.coordinate_masks, source.coordinate_masks),
+        (
+            destination.encoded_structure_coordinates,
+            source.encoded_structure_coordinates,
+        ),
     )
     for destination_values, source_values in sequence_pairs:
         destination_values[start : start + count].zero_()

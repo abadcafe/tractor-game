@@ -12,6 +12,7 @@ from server.game.protocol import (
     StateSnapshot,
 )
 from server.game.rules.cards import Card
+from server.training.observation_structure import RoundEventOrdinal
 
 type BidDisposition = Literal["pass", "reveal"]
 type CompletedTrickKey = tuple[
@@ -19,6 +20,7 @@ type CompletedTrickKey = tuple[
     int,
     tuple[tuple[int, tuple[str, ...]], ...],
 ]
+type PendingBid = tuple[int, RoundEventOrdinal]
 
 
 class _ObservationMemoryRejected(Rejected):
@@ -35,7 +37,7 @@ class ObservedBidAction:
     actor: int
     disposition: BidDisposition
     revealed_cards: tuple[Card, ...]
-    deal_ordinal: int
+    deal_ordinal: RoundEventOrdinal
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,7 +66,7 @@ class ObservationMemory:
 
     _last_seq: int | None = None
     _previous: StateSnapshot | None = None
-    _pending_bid: tuple[int, int] | None = None
+    _pending_bid: PendingBid | None = None
     _seen_bid_count: int = 0
     _bid_actions: list[ObservedBidAction] = field(
         default_factory=_bid_actions
@@ -218,7 +220,7 @@ class ObservationMemory:
 
 def _initial_pending_bid(
     snapshot: StateSnapshot,
-) -> tuple[int, int] | None:
+) -> PendingBid | None:
     if snapshot.phase != "DEAL_BID":
         return None
     dealt = sum(snapshot.player_hand_counts)
@@ -231,12 +233,12 @@ def _initial_pending_bid(
     ]
     if len(actors) != 1:
         return None
-    return (actors[0], dealt)
+    return (actors[0], RoundEventOrdinal(dealt))
 
 
 def _pending_bid(
     previous: StateSnapshot, current: StateSnapshot
-) -> tuple[int, int] | None:
+) -> PendingBid | None:
     if current.phase != "DEAL_BID":
         return None
     previous_counts = previous.player_hand_counts
@@ -249,7 +251,10 @@ def _pending_bid(
     ]
     if len(increased) != 1:
         return None
-    return (increased[0], sum(current_counts))
+    return (
+        increased[0],
+        RoundEventOrdinal(sum(current_counts)),
+    )
 
 
 def _completed_trick_key(

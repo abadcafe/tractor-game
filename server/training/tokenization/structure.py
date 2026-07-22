@@ -6,6 +6,11 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import Literal
 
+from server.training.observation_structure import (
+    RoundEventOrdinal,
+    TrickRecency,
+)
+from server.training.relative_state.relations import TrickPosition
 from server.training.tokenization.payloads import (
     ActionToken,
     CardToken,
@@ -41,9 +46,9 @@ class TokenFamily(IntEnum):
 class TokenAddress:
     """Temporal and ownership structure independent of token content."""
 
-    round_event_time: int | None = None
-    trick_time: int | None = None
-    action_position: int | None = None
+    round_event: RoundEventOrdinal | None = None
+    trick: TrickRecency | None = None
+    play_position: TrickPosition | None = None
     payload_role: PayloadRole | None = None
 
 
