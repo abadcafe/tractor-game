@@ -101,19 +101,19 @@ def test_request_uses_batch_local_padding_without_limit() -> None:
     )
 
 
-def test_request_wire_rejects_previous_schema_magic() -> None:
+def test_request_wire_rejects_invalid_schema_magic() -> None:
     hand = [card("spades", "A", 1)]
     observation = _observation(hand)
     compiled = PolicyRequestCompiler(batch_capacity=1).compile_batch(
         (_request(observation, hand=hand, request_id=1),)
     )
     assert isinstance(compiled, Ok)
-    stale = bytearray(compiled.value.frame.view())
-    I64.pack_into(stale, 0, 0x5452504F4C495144)
+    invalid = bytearray(compiled.value.frame.view())
+    I64.pack_into(invalid, 0, 0)
 
     result = materialize_policy_request_batch_frame(
         frame=PolicyRequestWireFrame(
-            buffer=stale, byte_count=len(stale)
+            buffer=invalid, byte_count=len(invalid)
         ),
         device=torch.device("cpu"),
     )

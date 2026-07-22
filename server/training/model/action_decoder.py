@@ -1,4 +1,4 @@
-"""Position-independent Transformer policy/value model for Tractor."""
+"""Autoregressive action decoding over shared semantic choices."""
 
 from __future__ import annotations
 
@@ -9,16 +9,15 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from server.training.network import (
-    StructuredObservationEncoder,
-    TypedTokenEncoder,
-)
 from server.training.semantic_actions.choices import (
     ACTION_CHOICE_COUNT,
-    CARD_CHOICE_COUNT,
     MAX_ACTION_STEPS,
 )
-from server.training.tensorize import ObservationTensorBatch
+
+from .observation_encoder import (
+    ActionDecoderInputs,
+    EncodedObservation,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,54 +27,45 @@ class ActionTraceScores:
     choice_logits: Tensor
 
 
-@dataclass(frozen=True, slots=True)
-class ObservationEncoding:
-    """Reusable observation memory and observation-specific choices."""
-
-    memory: Tensor
-    memory_padding_mask: Tensor
-    observation_context: Tensor
-    choice_embeddings: Tensor
-
-
 @dataclass(slots=True)
 class ActionDecodeSession:
-    """Incremental decoder seeded by the decision query itself."""
+    """Incremental decoder state for one encoded observation batch."""
 
-    _model: TractorPolicyModel
-    _encoding: ObservationEncoding
-    _cache: ActionDecodeCache
+    _decoder: ActionDecoder
+    _encoding: EncodedObservation
+    _cache: _ActionDecodeCache
     _step_index: int = 0
 
     def next_choice_logits(self) -> Tensor:
-        """Return logits for all 110 choices at the current prefix."""
-        prefix_context = self._model.decode_live_action_step(
+        """Return choice logits for the current prefix."""
+        prefix_context = self._decoder.decode_live_action_step(
             cache=self._cache
         )
-        return self._model.choice_logits_from_prefix_context(
+        return self._decoder.choice_logits_from_prefix_context(
             encoding=self._encoding,
             prefix_context=prefix_context,
         )
 
     def advance(self, selected_choice_ids: Tensor) -> None:
-        """Append selected choices to the live prefix cache."""
+        """Append one choice per row to the live cache."""
         next_index = self._step_index + 1
         assert next_index < self._cache.max_steps
         assert selected_choice_ids.shape == (self._cache.batch_size,)
-        embeddings = self._model.embed_selected_choices(
+        embeddings = self._decoder.embed_selected_choices(
             encoding=self._encoding,
             choice_ids=selected_choice_ids,
             position=next_index,
         )
-        self._model.append_live_action_choice(
-            cache=self._cache, choice_embeddings=embeddings
+        self._decoder.append_live_action_choice(
+            cache=self._cache,
+            choice_embeddings=embeddings,
         )
         self._step_index = next_index
 
 
 @dataclass(slots=True)
-class ActionDecodeCache:
-    """Projected K/V cache for one live action batch."""
+class _ActionDecodeCache:
+    """Projected key/value cache for one live action batch."""
 
     self_keys: Tensor
     self_values: Tensor
@@ -115,23 +105,11 @@ class ActionDecodeCache:
         return int(self.self_keys.shape[0])
 
 
-class TractorPolicyModel(nn.Module):
-    """Typed observation encoder and shared-card action decoder."""
+class ActionDecoder(nn.Module):
+    """Own all parameters and state transitions for action decoding."""
 
-    def __init__(
-        self,
-        *,
-        d_model: int,
-        layers: int,
-        heads: int,
-    ) -> None:
+    def __init__(self, *, d_model: int, heads: int) -> None:
         super().__init__()
-        assert d_model > 0
-        assert d_model % heads == 0
-        self._token_encoder = TypedTokenEncoder(d_model=d_model)
-        self._observation_encoder = StructuredObservationEncoder(
-            d_model=d_model, layers=layers, heads=heads
-        )
         self._control_choice_embeddings = nn.Parameter(
             torch.empty(2, d_model)
         )
@@ -153,8 +131,9 @@ class TractorPolicyModel(nn.Module):
             nn.GELU(),
             nn.LayerNorm(d_model),
         )
-        self._action_decoder = _ActionDecoderLayer(
-            d_model=d_model, heads=heads
+        self._transformer = _ActionDecoderLayer(
+            d_model=d_model,
+            heads=heads,
         )
         self._decision_projection = nn.Linear(d_model * 2, d_model)
         self._choice_query = nn.Linear(d_model, d_model, bias=False)
@@ -162,137 +141,27 @@ class TractorPolicyModel(nn.Module):
         self._choice_logit_bias = nn.Parameter(
             torch.zeros(ACTION_CHOICE_COUNT)
         )
-        self._value_head = nn.Linear(d_model, 1)
-
-    def encode_observations(
-        self, observation: ObservationTensorBatch
-    ) -> ObservationEncoding:
-        """Encode observations and rule-conditioned card choices."""
-        memory_padding_mask = observation.category_ids[:, :, 0].eq(0)
-        memory = self._observation_encoder(
-            self._token_encoder(
-                category_ids=observation.category_ids,
-                scalar_values=observation.scalar_values,
-                card_rule_values=observation.card_rule_values,
-            ),
-            padding_mask=memory_padding_mask,
-            encoded_structure_coordinates=(
-                observation.encoded_structure_coordinates
-            ),
-        )
-        batch_indices = torch.arange(
-            int(memory.shape[0]),
-            dtype=torch.long,
-            device=memory.device,
-        )
-        observation_context = memory[
-            batch_indices, observation.query_indices
-        ]
-        card_categories = observation.candidate_category_ids
-        card_choices = self._token_encoder.encode_card_candidates(
-            suit_ids=card_categories[:, :, 0],
-            rank_ids=card_categories[:, :, 1],
-            effective_suit_ids=card_categories[:, :, 2],
-            counts=observation.candidate_counts,
-            rule_values=observation.candidate_card_rule_values,
-        )
-        assert int(card_choices.shape[1]) == CARD_CHOICE_COUNT
-        controls = self._control_choice_embeddings.unsqueeze(0).expand(
-            int(memory.shape[0]), -1, -1
-        )
-        return ObservationEncoding(
-            memory=memory,
-            memory_padding_mask=memory_padding_mask,
-            observation_context=observation_context,
-            choice_embeddings=torch.cat(
-                (controls, card_choices), dim=1
-            ),
-        )
-
-    def select_observation_encoding(
-        self,
-        encoding: ObservationEncoding,
-        *,
-        active_indices: Tensor,
-    ) -> ObservationEncoding:
-        """Select rows from a reusable observation encoding."""
-        assert active_indices.ndim == 1
-        assert int(active_indices.shape[0]) > 0
-        index = active_indices.to(
-            dtype=torch.long, device=encoding.memory.device
-        )
-        return ObservationEncoding(
-            memory=encoding.memory.index_select(0, index),
-            memory_padding_mask=encoding.memory_padding_mask.index_select(
-                0, index
-            ),
-            observation_context=encoding.observation_context.index_select(
-                0, index
-            ),
-            choice_embeddings=encoding.choice_embeddings.index_select(
-                0, index
-            ),
-        )
-
-    def value_estimates(self, encoding: ObservationEncoding) -> Tensor:
-        return self._value_head(encoding.observation_context).squeeze(
-            -1
-        )
-
-    def begin_action_decode_session(
-        self,
-        encoding: ObservationEncoding,
-        *,
-        max_steps: int,
-    ) -> ActionDecodeSession:
-        """Decode from the contextual query without a start token."""
-        assert 0 < max_steps <= MAX_ACTION_STEPS
-        seed = self._query_seed(encoding.observation_context)
-        seed = seed + self._action_position_embedding(
-            torch.zeros(
-                (int(seed.shape[0]),),
-                dtype=torch.long,
-                device=seed.device,
-            )
-        )
-        cache = self._action_decoder.begin_decode_cache(
-            first_embeddings=seed,
-            memory=encoding.memory,
-            memory_padding_mask=encoding.memory_padding_mask,
-            max_steps=max_steps,
-        )
-        return ActionDecodeSession(
-            _model=self, _encoding=encoding, _cache=cache
-        )
-
-    def decode_live_action_step(
-        self, *, cache: ActionDecodeCache
-    ) -> Tensor:
-        return self._action_decoder.decode_cached_step(cache=cache)
-
-    def append_live_action_choice(
-        self, *, cache: ActionDecodeCache, choice_embeddings: Tensor
-    ) -> None:
-        self._action_decoder.append_cached_choice(
-            cache=cache, choice_embeddings=choice_embeddings
-        )
 
     def score_action_traces(
         self,
-        encoding: ObservationEncoding,
+        encoding: EncodedObservation,
         *,
         choice_ids_padded: Tensor,
         step_counts: Tensor,
     ) -> ActionTraceScores:
-        """Score traces without Python autoregressive replay."""
+        """Score complete traces with causal teacher forcing."""
         assert choice_ids_padded.ndim == 2
         assert step_counts.shape == (int(choice_ids_padded.shape[0]),)
+        inputs = encoding.action_decoder_inputs()
         prefix_embeddings = self._teacher_forced_prefix_embeddings(
-            encoding=encoding, choice_ids_padded=choice_ids_padded
+            inputs=inputs,
+            choice_ids_padded=choice_ids_padded,
         )
         max_steps = int(choice_ids_padded.shape[1])
         positions = torch.arange(
-            max_steps, dtype=torch.long, device=choice_ids_padded.device
+            max_steps,
+            dtype=torch.long,
+            device=choice_ids_padded.device,
         )
         prefix_padding_mask = positions.unsqueeze(
             0
@@ -305,14 +174,14 @@ class TractorPolicyModel(nn.Module):
             ),
             diagonal=1,
         )
-        decoded = self._action_decoder.forward_prefix(
+        decoded = self._transformer.forward_prefix(
             prefix_embeddings=prefix_embeddings,
-            memory=encoding.memory,
+            memory=inputs.memory,
             prefix_padding_mask=prefix_padding_mask,
-            memory_padding_mask=encoding.memory_padding_mask,
+            memory_padding_mask=inputs.memory_padding_mask,
             self_attention_mask=causal_mask,
         )
-        observation_context = encoding.observation_context.unsqueeze(
+        observation_context = inputs.observation_context.unsqueeze(
             1
         ).expand(-1, max_steps, -1)
         decision_context = torch.tanh(
@@ -323,37 +192,91 @@ class TractorPolicyModel(nn.Module):
         return ActionTraceScores(
             choice_logits=self._score_choices(
                 decision_context=decision_context,
-                choice_embeddings=encoding.choice_embeddings,
+                choice_embeddings=self._choice_embeddings(
+                    batch_size=encoding.batch_size,
+                    inputs=inputs,
+                ),
             )
+        )
+
+    def begin_decode_session(
+        self,
+        encoding: EncodedObservation,
+        *,
+        max_steps: int,
+    ) -> ActionDecodeSession:
+        """Decode from contextual query state without a start token."""
+        assert 0 < max_steps <= MAX_ACTION_STEPS
+        inputs = encoding.action_decoder_inputs()
+        seed = self._query_seed(inputs.observation_context)
+        seed = seed + self._action_position_embedding(
+            torch.zeros(
+                (encoding.batch_size,),
+                dtype=torch.long,
+                device=seed.device,
+            )
+        )
+        cache = self._transformer.begin_decode_cache(
+            first_embeddings=seed,
+            memory=inputs.memory,
+            memory_padding_mask=inputs.memory_padding_mask,
+            max_steps=max_steps,
+        )
+        return ActionDecodeSession(
+            _decoder=self,
+            _encoding=encoding,
+            _cache=cache,
+        )
+
+    def decode_live_action_step(
+        self, *, cache: _ActionDecodeCache
+    ) -> Tensor:
+        return self._transformer.decode_cached_step(cache=cache)
+
+    def append_live_action_choice(
+        self,
+        *,
+        cache: _ActionDecodeCache,
+        choice_embeddings: Tensor,
+    ) -> None:
+        self._transformer.append_cached_choice(
+            cache=cache,
+            choice_embeddings=choice_embeddings,
         )
 
     def choice_logits_from_prefix_context(
         self,
         *,
-        encoding: ObservationEncoding,
+        encoding: EncodedObservation,
         prefix_context: Tensor,
     ) -> Tensor:
+        inputs = encoding.action_decoder_inputs()
         decision_context = torch.tanh(
             self._decision_projection(
                 torch.cat(
-                    (encoding.observation_context, prefix_context),
+                    (
+                        inputs.observation_context,
+                        prefix_context,
+                    ),
                     dim=-1,
                 )
             )
         )
         return self._score_choices(
             decision_context=decision_context,
-            choice_embeddings=encoding.choice_embeddings,
+            choice_embeddings=self._choice_embeddings(
+                batch_size=encoding.batch_size,
+                inputs=inputs,
+            ),
         )
 
     def embed_selected_choices(
         self,
         *,
-        encoding: ObservationEncoding,
+        encoding: EncodedObservation,
         choice_ids: Tensor,
         position: int,
     ) -> Tensor:
-        """Embed outputs with their shared candidate encodings."""
         assert choice_ids.ndim == 1
         assert 0 < position < MAX_ACTION_STEPS
         batch_indices = torch.arange(
@@ -361,7 +284,10 @@ class TractorPolicyModel(nn.Module):
             dtype=torch.long,
             device=choice_ids.device,
         )
-        selected = encoding.choice_embeddings[batch_indices, choice_ids]
+        selected = self._choice_embeddings(
+            batch_size=encoding.batch_size,
+            inputs=encoding.action_decoder_inputs(),
+        )[batch_indices, choice_ids]
         positions = torch.full_like(choice_ids, position)
         return self._selected_choice_adapter(
             selected
@@ -370,14 +296,12 @@ class TractorPolicyModel(nn.Module):
     def _teacher_forced_prefix_embeddings(
         self,
         *,
-        encoding: ObservationEncoding,
+        inputs: ActionDecoderInputs,
         choice_ids_padded: Tensor,
     ) -> Tensor:
         max_steps = int(choice_ids_padded.shape[1])
         assert 0 < max_steps <= MAX_ACTION_STEPS
-        seed = self._query_seed(encoding.observation_context).unsqueeze(
-            1
-        )
+        seed = self._query_seed(inputs.observation_context).unsqueeze(1)
         if max_steps == 1:
             prefix = seed
         else:
@@ -387,12 +311,16 @@ class TractorPolicyModel(nn.Module):
                 dtype=torch.long,
                 device=choice_ids_padded.device,
             ).unsqueeze(1)
-            selected = encoding.choice_embeddings[
+            selected = self._choice_embeddings(
+                batch_size=batch_size,
+                inputs=inputs,
+            )[
                 batch_indices,
                 choice_ids_padded[:, : max_steps - 1],
             ]
             prefix = torch.cat(
-                (seed, self._selected_choice_adapter(selected)), dim=1
+                (seed, self._selected_choice_adapter(selected)),
+                dim=1,
             )
         positions = torch.arange(
             max_steps,
@@ -401,8 +329,29 @@ class TractorPolicyModel(nn.Module):
         ).unsqueeze(0)
         return prefix + self._action_position_embedding(positions)
 
+    def _choice_embeddings(
+        self,
+        *,
+        batch_size: int,
+        inputs: ActionDecoderInputs,
+    ) -> Tensor:
+        controls = self._control_choice_embeddings.unsqueeze(0).expand(
+            batch_size,
+            -1,
+            -1,
+        )
+        choice_embeddings = torch.cat(
+            (controls, inputs.card_choice_embeddings),
+            dim=1,
+        )
+        assert int(choice_embeddings.shape[1]) == ACTION_CHOICE_COUNT
+        return choice_embeddings
+
     def _score_choices(
-        self, *, decision_context: Tensor, choice_embeddings: Tensor
+        self,
+        *,
+        decision_context: Tensor,
+        choice_embeddings: Tensor,
     ) -> Tensor:
         queries = self._choice_query(decision_context)
         keys = self._choice_key(choice_embeddings)
@@ -423,10 +372,16 @@ class _ActionDecoderLayer(nn.Module):
         super().__init__()
         self._heads = heads
         self._self_attn = nn.MultiheadAttention(
-            d_model, heads, dropout=0.0, batch_first=True
+            d_model,
+            heads,
+            dropout=0.0,
+            batch_first=True,
         )
         self._cross_attn = nn.MultiheadAttention(
-            d_model, heads, dropout=0.0, batch_first=True
+            d_model,
+            heads,
+            dropout=0.0,
+            batch_first=True,
         )
         self._linear1 = nn.Linear(d_model, d_model * 4)
         self._linear2 = nn.Linear(d_model * 4, d_model)
@@ -469,8 +424,7 @@ class _ActionDecoderLayer(nn.Module):
         memory: Tensor,
         memory_padding_mask: Tensor,
         max_steps: int,
-    ) -> ActionDecodeCache:
-        """Create a cache seeded by the contextual decision query."""
+    ) -> _ActionDecodeCache:
         assert first_embeddings.ndim == 2
         assert memory.ndim == 3
         assert max_steps > 0
@@ -492,7 +446,7 @@ class _ActionDecoderLayer(nn.Module):
         values = torch.empty_like(keys)
         keys[:, :, 0:1].copy_(self_key)
         values[:, :, 0:1].copy_(self_value)
-        return ActionDecodeCache(
+        return _ActionDecodeCache(
             self_keys=keys,
             self_values=values,
             memory_keys=memory_key,
@@ -505,7 +459,10 @@ class _ActionDecoderLayer(nn.Module):
         )
 
     def append_cached_choice(
-        self, *, cache: ActionDecodeCache, choice_embeddings: Tensor
+        self,
+        *,
+        cache: _ActionDecodeCache,
+        choice_embeddings: Tensor,
     ) -> None:
         assert choice_embeddings.shape == cache.current_embedding.shape
         assert cache.current_length < cache.max_steps
@@ -521,7 +478,9 @@ class _ActionDecoderLayer(nn.Module):
         )
         cache.current_length += 1
 
-    def decode_cached_step(self, *, cache: ActionDecodeCache) -> Tensor:
+    def decode_cached_step(
+        self, *, cache: _ActionDecodeCache
+    ) -> Tensor:
         self_attended = self._scaled_attention(
             query=cache.current_query,
             key=cache.self_keys[:, :, : cache.current_length],
@@ -545,43 +504,56 @@ class _ActionDecoderLayer(nn.Module):
 
     def _project_self_query(self, embeddings: Tensor) -> Tensor:
         return self._project_query(
-            embeddings, attention=self._self_attn
+            embeddings,
+            attention=self._self_attn,
         )
 
     def _project_cross_query(self, embeddings: Tensor) -> Tensor:
         return self._project_query(
-            embeddings, attention=self._cross_attn
+            embeddings,
+            attention=self._cross_attn,
         )
 
     def _project_query(
-        self, embeddings: Tensor, *, attention: nn.MultiheadAttention
+        self,
+        embeddings: Tensor,
+        *,
+        attention: nn.MultiheadAttention,
     ) -> Tensor:
         weight = attention.in_proj_weight
         bias = attention.in_proj_bias
         embed_dim = attention.embed_dim
         projected = F.linear(
-            embeddings, weight[:embed_dim], bias[:embed_dim]
+            embeddings,
+            weight[:embed_dim],
+            bias[:embed_dim],
         )
         return _split_heads(
-            projected.unsqueeze(1), heads=self._heads
+            projected.unsqueeze(1),
+            heads=self._heads,
         ).squeeze(2)
 
     def _project_self_key_value(
         self, embeddings: Tensor
     ) -> tuple[Tensor, Tensor]:
         return self._project_key_value(
-            embeddings, attention=self._self_attn
+            embeddings,
+            attention=self._self_attn,
         )
 
     def _project_cross_key_value(
         self, embeddings: Tensor
     ) -> tuple[Tensor, Tensor]:
         return self._project_key_value(
-            embeddings, attention=self._cross_attn
+            embeddings,
+            attention=self._cross_attn,
         )
 
     def _project_key_value(
-        self, embeddings: Tensor, *, attention: nn.MultiheadAttention
+        self,
+        embeddings: Tensor,
+        *,
+        attention: nn.MultiheadAttention,
     ) -> tuple[Tensor, Tensor]:
         weight = attention.in_proj_weight
         bias = attention.in_proj_bias
@@ -611,14 +583,17 @@ class _ActionDecoderLayer(nn.Module):
         out_projection: nn.Linear,
     ) -> Tensor:
         scores = torch.matmul(
-            query.unsqueeze(2), key.transpose(-2, -1)
+            query.unsqueeze(2),
+            key.transpose(-2, -1),
         ).squeeze(2) / math.sqrt(float(query.shape[-1]))
         if key_padding_mask is not None:
             scores = scores.masked_fill(
-                key_padding_mask.unsqueeze(1), -torch.inf
+                key_padding_mask.unsqueeze(1),
+                -torch.inf,
             )
         context = torch.matmul(
-            torch.softmax(scores, dim=-1).unsqueeze(2), value
+            torch.softmax(scores, dim=-1).unsqueeze(2),
+            value,
         ).squeeze(2)
         return out_projection(_merge_heads(context))
 
@@ -638,13 +613,9 @@ def _split_heads(values: Tensor, *, heads: int) -> Tensor:
 def _merge_heads(values: Tensor) -> Tensor:
     assert values.ndim == 3
     return values.reshape(
-        int(values.shape[0]), int(values.shape[1] * values.shape[2])
+        int(values.shape[0]),
+        int(values.shape[1] * values.shape[2]),
     )
 
 
-__all__ = (
-    "ActionDecodeSession",
-    "ActionTraceScores",
-    "ObservationEncoding",
-    "TractorPolicyModel",
-)
+__all__ = ("ActionDecodeSession", "ActionDecoder", "ActionTraceScores")

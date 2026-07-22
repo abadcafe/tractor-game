@@ -8,10 +8,10 @@ from pathlib import Path
 from server.foundation import result as _result
 from server.training.config import (
     CheckpointPolicy,
-    ModelConfig,
     TrainConfig,
 )
 from server.training.interface import TrainingResumeOptions
+from server.training.model import ModelConfig
 from server.training.runtime import (
     ExecutionConfig,
     ExecutionTimeouts,

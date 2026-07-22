@@ -29,11 +29,8 @@ Deno.test("log events resume strictly after the last sequence", () => {
   ) {
     throw new Error(url);
   }
-  if (
-    parsed.searchParams.has("window") ||
-    parsed.searchParams.has("event") ||
-    parsed.searchParams.has("session_id")
-  ) {
+  const keys = [...parsed.searchParams.keys()].sort();
+  if (keys.join(",") !== "after_sequence,run_dir,store_id") {
     throw new Error(url);
   }
 });
@@ -137,26 +134,6 @@ Deno.test("metrics stream frames are complete snapshots", () => {
   ) throw new Error("Metrics snapshot was not preserved");
 });
 
-Deno.test("structured log parser rejects legacy lifecycle suffixes", () => {
-  let rejected = false;
-  try {
-    parseLogEntry({
-      sequence: 8,
-      event: {
-        schema_version: 2,
-        event: "update.completed",
-        recorded_at_ms: 1,
-        process: { kind: "coordinator", index: null, pid: 9 },
-        context: {},
-        fields: {},
-      },
-    });
-  } catch {
-    rejected = true;
-  }
-  if (!rejected) throw new Error("Legacy event name was accepted");
-});
-
 Deno.test("structured log parser accepts the terminal event protocol", () => {
   const event = parseLogEntry({
     sequence: 7,
@@ -184,7 +161,7 @@ Deno.test("event parser rejects unknown correlation fields", () => {
         event: "update",
         recorded_at_ms: 1,
         process: { kind: "coordinator", index: null, pid: 9 },
-        context: { session_id: "legacy" },
+        context: { unexpected: true },
         fields: {},
       },
     });

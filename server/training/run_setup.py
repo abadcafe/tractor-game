@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from server.foundation import result as _result
-from server.training.config import ModelConfig, TrainConfig
+from server.training.config import TrainConfig
+from server.training.model import ModelConfig
 from server.training.runtime.config import ExecutionConfig
 from server.training.torch_checkpoints.save import save_torch_checkpoint
 from server.training.training_state import create_training_state

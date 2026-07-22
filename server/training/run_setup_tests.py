@@ -9,7 +9,8 @@ from pydantic import TypeAdapter
 
 from server.foundation.json_value import JsonObject
 from server.foundation.result import Ok, Rejected
-from server.training.config import ModelConfig, TrainConfig
+from server.training.config import TrainConfig
+from server.training.model import ModelConfig
 from server.training.run_setup import initialize_training_run
 from server.training.torch_checkpoints.load import (
     read_torch_checkpoint_metadata,

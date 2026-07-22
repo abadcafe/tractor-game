@@ -5,7 +5,7 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
-from server.training.network.attention import (
+from .structured_attention import (
     StructuredObservationEncoder,
 )
 

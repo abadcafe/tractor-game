@@ -12,9 +12,9 @@ from server.foundation.json_value import JsonObject
 from server.foundation.result import Ok, Rejected
 from server.training.config import (
     CheckpointPolicy,
-    ModelConfig,
     TrainConfig,
 )
+from server.training.model import ModelConfig
 from server.training.runtime.checkpoint_state import (
     RuntimeCheckpointState,
     load_runtime_checkpoint_state,

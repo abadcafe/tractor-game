@@ -9,7 +9,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from server.foundation import result as _result
-from server.training.config import MIN_ATTENTION_HEAD_DIMENSION
+from server.training.model import MIN_ATTENTION_HEAD_DIMENSION
 from server.training.stop import TrainingStopRequest
 
 type ManagedCheckpointName = Annotated[
@@ -167,7 +167,8 @@ def initialize_run(
     options: TrainingInitOptions,
 ) -> _result.Ok[InitializedRun] | _result.Rejected:
     """Create a portable zero-update checkpoint and event store."""
-    from server.training.config import ModelConfig, TrainConfig
+    from server.training.config import TrainConfig
+    from server.training.model import ModelConfig
     from server.training.run_setup import initialize_training_run
 
     result = initialize_training_run(

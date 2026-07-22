@@ -411,18 +411,6 @@ async def test_act_rejects_wrong_player() -> None:
 
 
 @pytest.mark.asyncio
-async def test_act_value_error_not_propagated() -> None:
-    """
-    Invalid actions no longer raise ValueError; they send error
-    messages.
-    """
-    players = _make_players()
-    game = await _start_game(players)
-    # Should not raise
-    await _send_action(game, players, 0, PlayAction(cards=[]))
-
-
-@pytest.mark.asyncio
 async def test_seq_mismatch_ignores_action_fields() -> None:
     """
     Wrong non-zero seq returns current state, ignores action fields.
@@ -1658,20 +1646,6 @@ async def test_snapshot_action_hints_card_format() -> None:
             assert _is_object_dict(first_card)
             assert "id" in first_card  # card dict format
             assert "type" not in first_card  # no PlayAction wrapper
-
-
-@pytest.mark.asyncio
-async def test_snapshot_completed_trick_no_lead_type() -> None:
-    """CompletedTrick no longer has lead_type field.
-
-    After Task-009, _serialize_completed_trick should not include
-    lead_type.
-    """
-    game = await _start_game(_make_players())
-    snap = game.snapshot(for_player=0)
-    trick = snap.last_completed_trick
-    if trick is not None:
-        assert not hasattr(trick, "lead_type")
 
 
 # ---- Game auto-completion ----

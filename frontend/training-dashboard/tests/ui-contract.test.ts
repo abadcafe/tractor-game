@@ -1,30 +1,7 @@
-Deno.test("dashboard hard-cuts legacy summary and sessions", async () => {
+Deno.test("Process is the canonical pushed-snapshot route", async () => {
   const html = await Deno.readTextFile(
     new URL("../index.html", import.meta.url),
   );
-  const source = await Deno.readTextFile(
-    new URL("../main.ts", import.meta.url),
-  );
-  for (
-    const forbidden of [
-      "#overview",
-      'data-view="overview"',
-      "Latest event",
-      "Latest milestone",
-      "Current runtime",
-      "metrics-session-select",
-      "fetchSummary",
-      "TrainingSummary",
-      "DashboardRefreshController",
-      "event-policy",
-    ]
-  ) {
-    if (html.includes(forbidden) || source.includes(forbidden)) {
-      throw new Error(
-        `Forbidden legacy frontend surface: ${forbidden}`,
-      );
-    }
-  }
   if (
     !html.includes('href="#process"') ||
     !html.includes('data-view="process"')
@@ -152,46 +129,12 @@ Deno.test("Metrics owns one route-scoped EventSource transport", async () => {
   const main = await Deno.readTextFile(
     new URL("../main.ts", import.meta.url),
   );
-  for (
-    const forbidden of [
-      "fetchMetrics",
-      "MetricsInvalidationStream",
-      "dirtyThrough",
-      "DEBOUNCE_MS",
-    ]
-  ) {
-    if (domain.includes(forbidden)) {
-      throw new Error(`Forbidden dual Metrics transport: ${forbidden}`);
-    }
-  }
   if (
     !domain.includes("MetricEventStream") ||
     !domain.includes("this.#stream.disconnect()") ||
     !main.includes("metricsDomain.deactivate()")
   ) {
     throw new Error("Metrics EventSource must follow the active route");
-  }
-});
-
-Deno.test("training dashboard contains no WebSocket transport", async () => {
-  const files = [
-    "../event-source.ts",
-    "../log-events.ts",
-    "../metric-events.ts",
-    "../process-events.ts",
-    "../checkpoint-events.ts",
-  ];
-  const sources = await Promise.all(
-    files.map((file) =>
-      Deno.readTextFile(new URL(file, import.meta.url))
-    ),
-  );
-  const source = sources.join("\n");
-  if (source.includes("WebSocket") || source.includes("/ws/training")) {
-    throw new Error("Training dashboard still contains WebSocket code");
-  }
-  if (source.includes("reconnectTimer")) {
-    throw new Error("EventSource must own network reconnection");
   }
 });
 

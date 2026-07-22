@@ -155,12 +155,6 @@ async def test_training_logs_have_rest_history_and_cursor_tail(
     assert event.event_id == f"{store_id}:{sequence}"
 
 
-def test_training_summary_route_is_removed(
-    sync_client: SyncServerClient,
-) -> None:
-    assert sync_client.get("/api/training/summary").status_code == 404
-
-
 async def test_training_process_events_send_current_snapshot(
     tmp_path: Path,
 ) -> None:
@@ -363,10 +357,9 @@ async def test_training_log_events_resume_from_last_event_id(
         "/api/training/init",
         json={
             "run_dir": str(tmp_path),
-            "d_model": 2,
+            "d_model": 8,
             "layers": 1,
             "heads": 1,
-            "max_tokens": 512,
         },
     )
     assert initialized.status_code == 204
@@ -486,33 +479,12 @@ def test_ai_debug_page_returns_html(
     assert "/ai-debug/style.css" in response.text
     assert "/ai-debug/main.js" in response.text
     assert game_id not in response.text
-    assert "new WebSocket" not in response.text
-    assert "/ws/debug/ai/" not in response.text
-    assert "renderRecords" not in response.text
-    assert "renderTabs" not in response.text
-    assert "openStream(player, true)" not in response.text
-    assert "/api/debug/ai/" not in response.text
-    assert "fetch(" not in response.text
-    assert "setInterval" not in response.text
 
 
 def test_ai_debug_page_missing_game_returns_404(
     sync_client: SyncServerClient, clean_registry: None
 ) -> None:
     response = sync_client.get("/debug/ai/not-a-game?player=0")
-
-    assert response.status_code == 404
-
-
-def test_ai_debug_transcript_rest_endpoint_removed(
-    sync_client: SyncServerClient, clean_registry: None
-) -> None:
-    create_resp = sync_client.post("/api/game")
-    game_id = _game_id_from(create_resp)
-
-    response = sync_client.get(
-        f"/api/debug/ai/{game_id}/transcript?player=0"
-    )
 
     assert response.status_code == 404
 

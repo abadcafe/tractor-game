@@ -9,7 +9,7 @@ from torch import Tensor
 
 from server.foundation import result as _result
 from server.training.model import (
-    ObservationEncoding,
+    EncodedObservation,
     TractorPolicyModel,
 )
 from server.training.ppo.minibatch import TensorizedPPOMinibatch
@@ -97,7 +97,7 @@ def evaluate_trace_batch(
 def _action_step_batch_eval(
     *,
     model: TractorPolicyModel,
-    encoding: ObservationEncoding,
+    encoding: EncodedObservation,
     replay: PPOReplayTensorBatch,
     profile: PPOProfileAccumulator,
 ) -> _result.Ok[ActionStepBatchEval] | _result.Rejected:

@@ -16,10 +16,10 @@
 - **所有 Python 代码**（包括 `*_tests.py`）必须有完整的类型注解
 - 必须使用 `type` 类型别名语法和泛型函数语法
 - 禁止 `Any`、禁止裸 `list` / `dict` / `tuple`（必须写泛型参数如 `list[str]`）
-- 禁止使用 `# pyright: ignore` 和 `# type: ignore` 掩盖错误
+- 禁止使用 `# pyright: ignore` 和 `# type: ignore` 等方式掩盖错误
 - 优先使用 `Pydantic` 而不是 `cast`
+- 必须通过 `ruff format --check` 和 `ruff check`，**0 errors, 0 warnings**
 - 必须通过 `pyright` **strict 模式**，**0 errors, 0 warnings**
-- 必须通过 `ruff check` 和 `ruff format --check`，**0 errors, 0 warnings**
 - 全量验证必须包含所有依赖：
   - `uv run --extra dev --extra training ruff format --check`
   - `uv run --extra dev --extra training ruff check`
@@ -35,7 +35,7 @@
 
 ## 项目技术栈
 
-- **Backend**: Python 3.14, FastAPI, Pydantic v2, WebSocket
+- **Backend**: Python >= 3.14, FastAPI, Pydantic v2, WebSocket
 - **Frontend**: TypeScript, 原生 DOM（无框架）
 - **Game Logic**: 纯函数状态机（SM），不可变状态模式
 - **Testing**: pytest, pytest-asyncio

@@ -97,7 +97,7 @@ def test_schema_rejects_incomplete_event_envelopes(
     nested_reason["fields"] = {"reason": "wrong layer"}
     invalid.append(nested_reason)
     unknown_event = dict(base)
-    unknown_event["event"] = "update.finished"
+    unknown_event["event"] = "unknown"
     invalid.append(unknown_event)
     unknown_process = dict(base)
     unknown_process["process"] = {"kind": "unknown", "pid": 1}

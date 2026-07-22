@@ -9,14 +9,15 @@ from torch import Tensor
 from server.foundation.result import Ok, Rejected
 from server.game.players.test_helpers import card, make_snapshot
 from server.game.rules.card_faces import CardFace, FaceCount
-from server.training.config import ModelConfig, TrainConfig
+from server.training.config import TrainConfig
 from server.training.legal_actions import (
     LegalActionIndex,
     build_legal_action_index,
 )
 from server.training.model import (
     ActionTraceScores,
-    ObservationEncoding,
+    EncodedObservation,
+    ModelConfig,
     TractorPolicyModel,
 )
 from server.training.observation import build_observation
@@ -80,7 +81,7 @@ class CountingTractorPolicyModel(TractorPolicyModel):
     def encode_observations(
         self,
         observation: ObservationTensorBatch,
-    ) -> ObservationEncoding:
+    ) -> EncodedObservation:
         self.training_modes.append(self.training)
         self.encode_batch_sizes.append(
             int(observation.category_ids.shape[0])
@@ -89,7 +90,7 @@ class CountingTractorPolicyModel(TractorPolicyModel):
 
     def score_action_traces(
         self,
-        encoding: ObservationEncoding,
+        encoding: EncodedObservation,
         *,
         choice_ids_padded: Tensor,
         step_counts: Tensor,
@@ -109,7 +110,7 @@ class NonFiniteValueModel(TractorPolicyModel):
 
     def value_estimates(
         self,
-        encoding: ObservationEncoding,
+        encoding: EncodedObservation,
     ) -> Tensor:
         values = super().value_estimates(encoding)
         return torch.full_like(values, torch.inf)

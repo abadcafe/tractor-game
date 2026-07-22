@@ -1,4 +1,4 @@
-"""Typed semantic token encoding with one shared card encoder."""
+"""Typed semantic token encoding owned by the policy model package."""
 
 from __future__ import annotations
 

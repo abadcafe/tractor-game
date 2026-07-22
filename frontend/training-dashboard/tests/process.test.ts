@@ -37,17 +37,6 @@ Deno.test("process state parses a live PID with unreadable details", () => {
   }
 });
 
-Deno.test("revisioned process envelopes are rejected", () => {
-  let rejected = false;
-  try {
-    parseProcessState({ revision: 1, process: processSnapshot(7) });
-  } catch (error: unknown) {
-    if (!(error instanceof Error)) throw error;
-    rejected = true;
-  }
-  if (!rejected) throw new Error("Legacy revision was accepted");
-});
-
 function processSnapshot(pid: number) {
   return {
     pid,

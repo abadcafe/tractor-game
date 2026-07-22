@@ -59,11 +59,16 @@ def test_event_sink_batches_typed_json_and_preserves_context(
     event_json = row[0]
     assert isinstance(event_json, str)
     event = _JSON_OBJECT_ADAPTER.validate_json(event_json)
+    assert set(event) == {
+        "schema_version",
+        "event",
+        "recorded_at_ms",
+        "process",
+        "context",
+        "fields",
+    }
     assert event["schema_version"] == 2
     assert event["event"] == "round"
-    assert "session_id" not in event
-    assert "level" not in event
-    assert "error" not in event
     context = event["context"]
     assert isinstance(context, dict)
     assert context["episode_id"] == 7
@@ -129,7 +134,7 @@ def test_null_sink_enforces_the_same_event_contract() -> None:
     with pytest.raises(AssertionError):
         sink.emit("update", fields={"error": "wrong layer"})
     with pytest.raises(AssertionError):
-        sink.emit(cast(EventName, "update.finished"))
+        sink.emit(cast(EventName, "unknown"))
 
 
 def test_store_accepts_every_contract_event_name(

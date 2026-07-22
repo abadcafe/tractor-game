@@ -7,11 +7,8 @@ from dataclasses import dataclass
 import torch
 
 from server.foundation import result as _result
-from server.training.config import (
-    ModelConfig,
-    TrainConfig,
-)
-from server.training.model import TractorPolicyModel
+from server.training.config import TrainConfig
+from server.training.model import ModelConfig, TractorPolicyModel
 from server.training.ppo import PPOTrainer
 from server.training.ppo.distributed import PPOUpdatePartition
 from server.training.runtime.config import ExecutionConfig
