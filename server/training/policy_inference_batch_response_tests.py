@@ -121,17 +121,17 @@ def test_worker_decodes_card_then_finish_through_legal_rules() -> None:
     assert decoded.value.decision_handle.row_index == 9
 
 
-def test_response_wire_rejects_previous_schema_magic() -> None:
+def test_response_wire_rejects_invalid_schema_magic() -> None:
     response = RejectedPolicyResponse(
         route=PolicyRequestRoute(worker_index=0, request_id=1),
         reason="no model",
     )
     encoded = encode_policy_response_batch_wire((response,))
     assert isinstance(encoded, Ok)
-    stale = bytearray(encoded.value.data)
-    stale[0] ^= 1
+    invalid = bytearray(encoded.value.data)
+    invalid[0] ^= 1
 
-    decoded = decode_policy_response_batch_wire(bytes(stale))
+    decoded = decode_policy_response_batch_wire(bytes(invalid))
 
     assert isinstance(decoded, Rejected)
     assert (

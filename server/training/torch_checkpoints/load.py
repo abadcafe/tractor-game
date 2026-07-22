@@ -8,8 +8,8 @@ import torch
 
 from server.foundation import result as _result
 from server.training import training_state as _training_state
-from server.training.config import ModelConfig, TrainConfig
-from server.training.model import TractorPolicyModel
+from server.training.config import TrainConfig
+from server.training.model import ModelConfig, TractorPolicyModel
 from server.training.ppo import PPOTrainer
 from server.training.runtime.config import ExecutionConfig
 from server.training.torch_checkpoints.filesystem import (

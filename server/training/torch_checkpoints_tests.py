@@ -14,8 +14,8 @@ import torch
 
 from server.foundation.result import Ok, Rejected
 from server.training import training_state
-from server.training.config import ModelConfig, TrainConfig
-from server.training.model import TractorPolicyModel
+from server.training.config import TrainConfig
+from server.training.model import ModelConfig, TractorPolicyModel
 from server.training.ppo import PPOTrainer
 from server.training.resume_config import (
     ExecutionConfigOverrides,
@@ -668,7 +668,7 @@ def test_torch_checkpoint_state_payload_is_weights_only_safe(
     )
 
     assert isinstance(loaded, dict)
-    assert loaded["schema_version"] == 21
+    assert loaded["schema_version"] == 22
     assert isinstance(loaded["checkpoint_id"], str)
     assert "model_config" not in loaded
     assert "train_config" not in loaded
@@ -1077,7 +1077,7 @@ def test_torch_checkpoint_save_reports_corrupt_update_manifest(
     assert metadata.total_updates == 1
 
 
-def test_torch_checkpoint_read_rejects_legacy_model_config_fields(
+def test_torch_checkpoint_read_rejects_unknown_model_config_fields(
     tmp_path: Path,
 ) -> None:
     model_config = ModelConfig(
@@ -1109,7 +1109,7 @@ def test_torch_checkpoint_read_rejects_legacy_model_config_fields(
         "d_model": 8,
         "layers": 1,
         "heads": 1,
-        "max_tokens": 192,
+        "unexpected": True,
     }
     _write_json_object(path, manifest)
 
@@ -1525,7 +1525,7 @@ def test_torch_checkpoint_load_rejects_missing_payload_field(
     assert "state payload missing schema_version" in result.reason
 
 
-def test_torch_checkpoint_load_rejects_schema_20_payload(
+def test_torch_checkpoint_load_rejects_mismatched_payload_schema(
     tmp_path: Path,
 ) -> None:
     model_config = ModelConfig(d_model=8, layers=1, heads=1)
@@ -1550,7 +1550,7 @@ def test_torch_checkpoint_load_rejects_schema_20_payload(
     )
     state_path = _single_state_path(path)
     payload = _load_state_payload(state_path)
-    payload["schema_version"] = 20
+    payload["schema_version"] = 0
     _write_state_payload(path, state_path, payload)
 
     result = _load_torch_checkpoint(

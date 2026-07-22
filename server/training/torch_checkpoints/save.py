@@ -9,7 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from server.foundation import result as _result
-from server.training.config import ModelConfig, TrainConfig
+from server.training.config import TrainConfig
+from server.training.model import (
+    ModelConfig,
+)
 from server.training.model import (
     TractorPolicyModel as _TractorPolicyModel,
 )

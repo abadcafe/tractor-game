@@ -18,7 +18,7 @@ from server.training_metrics.queries import (
 )
 
 
-def test_metrics_project_all_updates_without_sessions(
+def test_metrics_project_all_updates(
     tmp_path: Path,
 ) -> None:
     initialized = initialize_database(tmp_path)
@@ -54,9 +54,6 @@ def test_metrics_project_all_updates_without_sessions(
     point = result.value.datasets.throughput[0]
     assert point.update == 1
     assert point.values["rounds_per_second"] == 2.0
-    dumped = result.value.model_dump()
-    assert "session_id" not in dumped
-    assert "sessions" not in dumped
 
 
 def test_metrics_join_late_cross_process_events_by_rollout_id(

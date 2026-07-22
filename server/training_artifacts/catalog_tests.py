@@ -6,7 +6,8 @@ import sys
 from pathlib import Path
 
 from server.foundation.result import Ok
-from server.training.config import ModelConfig, TrainConfig
+from server.training.config import TrainConfig
+from server.training.model import ModelConfig
 from server.training.torch_checkpoints.manifest import (
     write_checkpoint_manifest,
 )
@@ -76,7 +77,7 @@ def test_read_checkpoint_catalog_keeps_invalid_manifest_visible(
     assert result.value.manifests[0].kind == "invalid"
 
 
-def test_read_checkpoint_catalog_rejects_schema_20_manifest(
+def test_read_checkpoint_catalog_rejects_mismatched_schema_manifest(
     tmp_path: Path,
 ) -> None:
     checkpoint_id = "a" * 32
@@ -84,7 +85,7 @@ def test_read_checkpoint_catalog_rejects_schema_20_manifest(
     manifest_path = tmp_path / "checkpoints" / "latest.json"
     current = manifest_path.read_text(encoding="utf-8")
     stale = current.replace(
-        '"schema_version": 21', '"schema_version": 20'
+        '"schema_version": 22', '"schema_version": 0'
     )
     assert stale != current
     manifest_path.write_text(stale, encoding="utf-8")
@@ -96,7 +97,7 @@ def test_read_checkpoint_catalog_rejects_schema_20_manifest(
     manifest = result.value.manifests[0]
     assert manifest.valid is False
     assert manifest.error is not None
-    assert "Input should be 21" in manifest.error
+    assert "Input should be 22" in manifest.error
 
 
 def test_web_application_import_does_not_load_torch() -> None:

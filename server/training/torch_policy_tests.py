@@ -9,14 +9,14 @@ from torch import Tensor
 from server.foundation.result import Ok, Rejected
 from server.game.players.test_helpers import card, make_snapshot
 from server.game.rules.card_faces import FaceCount, card_face
-from server.training.config import ModelConfig
 from server.training.legal_actions import (
     LegalActionIndex,
     build_legal_action_index,
 )
 from server.training.model import (
     ActionDecodeSession,
-    ObservationEncoding,
+    EncodedObservation,
+    ModelConfig,
     TractorPolicyModel,
 )
 from server.training.observation import Observation, build_observation
@@ -168,20 +168,20 @@ class _FixedChoiceModel(TractorPolicyModel):
 
     def encode_observations(
         self, observation: ObservationTensorBatch
-    ) -> ObservationEncoding:
+    ) -> EncodedObservation:
         self.encode_calls += 1
         return super().encode_observations(observation)
 
     def begin_action_decode_session(
         self,
-        encoding: ObservationEncoding,
+        encoding: EncodedObservation,
         *,
         max_steps: int,
     ) -> ActionDecodeSession:
         return _FixedChoiceSession(
             choice_logits=self._fixed_choice_logits,
-            batch_size=int(encoding.memory.shape[0]),
-            device=encoding.memory.device,
+            batch_size=encoding.batch_size,
+            device=encoding.device,
             score_batch_sizes=self.score_batch_sizes,
             max_steps=max_steps,
         )

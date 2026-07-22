@@ -20,7 +20,7 @@ class _ManifestDocument(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    schema_version: Literal[21]
+    schema_version: Literal[22]
     checkpoint_id: str = Field(pattern=_CHECKPOINT_ID_PATTERN)
     state_path: str = Field(min_length=1)
     state_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")

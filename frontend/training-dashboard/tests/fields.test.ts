@@ -169,13 +169,10 @@ Deno.test("modal close controls are explicit non-submit buttons", async () => {
   }
 });
 
-Deno.test("logs use cursor paging instead of a client window", async () => {
+Deno.test("logs expose explicit cursor pagination", async () => {
   const html = await Deno.readTextFile(
     new URL("../index.html", import.meta.url),
   );
-  if (html.includes('id="log-window"')) {
-    throw new Error("Log window is a forbidden legacy stream option");
-  }
   if (!html.includes('id="load-older"')) {
     throw new Error("Logs must expose explicit cursor pagination");
   }

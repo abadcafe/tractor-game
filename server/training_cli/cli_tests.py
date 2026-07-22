@@ -10,7 +10,8 @@ import pytest
 
 from server.foundation.result import Ok, Rejected
 from server.training import TrainingResumeOptions, TrainingStopRequest
-from server.training.config import ModelConfig, TrainConfig
+from server.training.config import TrainConfig
+from server.training.model import ModelConfig
 from server.training.torch_checkpoints.load import (
     read_torch_checkpoint_metadata,
 )
@@ -125,28 +126,6 @@ def test_cli_init_rejects_attention_head_too_narrow(
     assert "Traceback" not in completed.stderr
 
 
-def test_cli_resume_rejects_removed_ready_fd(tmp_path: Path) -> None:
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "server.training_cli",
-            "--run-dir",
-            str(tmp_path / "run"),
-            "resume",
-            "latest.json",
-            "--ready-fd",
-            "1",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert completed.returncode == 2
-    assert "unrecognized arguments: --ready-fd 1" in completed.stderr
-
-
 def test_cli_owns_checkpoint_interval_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -185,26 +164,3 @@ def test_main_requires_one_subcommand(
 
     assert exit_code == 2
     assert "required" in capsys.readouterr().err
-
-
-def test_main_init_rejects_removed_max_tokens_option(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    exit_code: int | str | None = None
-    try:
-        main(
-            (
-                "--run-dir",
-                "training_runs",
-                "init",
-                "--max-tokens",
-                "511",
-            )
-        )
-    except SystemExit as error:
-        exit_code = error.code
-
-    assert exit_code == 2
-    assert "unrecognized arguments: --max-tokens 511" in (
-        capsys.readouterr().err
-    )

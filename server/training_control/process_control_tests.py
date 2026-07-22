@@ -98,7 +98,7 @@ async def test_resume_writes_pid_and_survives_controller_restart(
 
 
 @pytest.mark.asyncio
-async def test_watch_observes_pid_file_lifecycle_without_revision(
+async def test_watch_observes_pid_file_lifecycle(
     tmp_path: Path,
 ) -> None:
     _write_fixture_cli(tmp_path)

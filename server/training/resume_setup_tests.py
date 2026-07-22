@@ -8,7 +8,8 @@ from pathlib import Path
 import torch
 
 from server.foundation.result import Ok
-from server.training.config import ModelConfig, TrainConfig
+from server.training.config import TrainConfig
+from server.training.model import ModelConfig
 from server.training.resume_setup import canonicalize_resume_timeline
 from server.training.run_setup import initialize_training_run
 from server.training.runtime.config import ExecutionConfig

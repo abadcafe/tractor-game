@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from server.foundation.result import Ok, Rejected
-from server.training.config import ModelConfig, TrainConfig
+from server.training.config import TrainConfig
+from server.training.model import ModelConfig
 from server.training.run_setup import initialize_training_run
 from server.training.run_validation import validate_training_run
 from server.training_events import (

@@ -179,7 +179,10 @@ class FakeElement extends EventTarget {
   setAttribute(name: string, value: string): void {
     this.attributes.set(name, value);
     if (name.startsWith("data-")) {
-      this.dataset.set(name.slice("data-".length), value);
+      this.dataset.set(
+        dataPropertyName(name.slice("data-".length)),
+        value,
+      );
     }
     if (name === "id") this.id = value;
     if (name === "class") this.className = value;
@@ -390,14 +393,14 @@ class FakeDocument extends EventTarget {
     if (selector === "[data-view]") {
       return all.filter((node) => node.dataset.has("view"));
     }
-    if (selector === "[data-refresh]") {
-      return all.filter((node) => node.dataset.has("refresh"));
+    if (selector === "[data-refresh-domain]") {
+      return all.filter((node) => node.dataset.has("refreshDomain"));
     }
     if (selector === "[data-axis]") {
       return all.filter((node) => node.dataset.has("axis"));
     }
     if (selector === "[data-close-dialog]") {
-      return all.filter((node) => node.dataset.has("close-dialog"));
+      return all.filter((node) => node.dataset.has("closeDialog"));
     }
     return [];
   }
@@ -677,20 +680,12 @@ function withFakeDashboardDom(): DashboardHarness {
   const checkpointDialogTitle = create("checkpoint-dialog-title");
   const checkpointDialogContent = create("checkpoint-dialog-content");
 
-  const connectionState = create("connection-state");
   const runCaption = create("run-caption");
   const processPresence = create("process-presence");
-  const runtimeDetails = create("runtime-details");
   const processDetails = create("process-details");
-  const sessionPresence = create("session-presence");
   const processCommand = create("process-command");
   const processConnectionState = create("process-connection-state");
   const processError = create("process-error");
-  const metricsSession = create("metrics-session");
-  const metricsSessionSelect = create(
-    "metrics-session-select",
-    "select",
-  ) as FakeSelectElement;
   const metricsRange = create(
     "metrics-range",
     "select",
@@ -700,8 +695,6 @@ function withFakeDashboardDom(): DashboardHarness {
     "select",
   ) as FakeSelectElement;
   const metricStrip = create("metric-strip");
-  const metricStripOverview = create("overview");
-  const logWindow = create("log-window", "input") as FakeInputElement;
   const logCount = create("log-count");
   const logContent = create("log-content");
   const loadOlder = create(
@@ -752,21 +745,21 @@ function withFakeDashboardDom(): DashboardHarness {
   axisElapsed.setAttribute("data-axis", "elapsed");
 
   const refreshButtons: FakeButtonElement[] = [];
-  for (let index = 0; index < 4; index += 1) {
+  for (const domain of ["metrics", "logs", "checkpoints"]) {
     const refresh = document.createElement(
       "button",
     ) as FakeButtonElement;
-    refresh.setAttribute("data-refresh", "");
+    refresh.setAttribute("data-refresh-domain", domain);
     refreshButtons.push(refresh);
   }
 
-  for (const route of ["overview", "metrics", "logs", "checkpoints"]) {
+  for (const route of ["process", "metrics", "logs", "checkpoints"]) {
     const link = document.createElement("a");
     link.setAttribute("data-route", route);
     link.textContent = route;
     document.body.append(link);
   }
-  for (const view of ["overview", "metrics", "logs", "checkpoints"]) {
+  for (const view of ["process", "metrics", "logs", "checkpoints"]) {
     const section = document.createElement("section");
     section.setAttribute("data-view", view);
     document.body.append(section);
@@ -805,12 +798,9 @@ function withFakeDashboardDom(): DashboardHarness {
 
   directoryForm.append(runDirectory, useRunDirectory);
 
-  logWindow.value = "5000";
-  metricsSessionSelect.value = "";
   metricsRange.value = "200";
   metricsResolution.value = "500";
 
-  metricsSessionSelect.append(createOption(), createOption());
   metricsRange.append(createOption(), createOption(), createOption());
   metricsResolution.append(
     createOption(),
@@ -840,7 +830,6 @@ function withFakeDashboardDom(): DashboardHarness {
       openResume,
       openInit,
       runCaption,
-      connectionState,
       runDirectory,
       useRunDirectory,
       directoryForm,
@@ -855,19 +844,13 @@ function withFakeDashboardDom(): DashboardHarness {
       resumeCommandPreview,
       resumeFields,
       processPresence,
-      runtimeDetails,
       processDetails,
-      sessionPresence,
       processCommand,
       processConnectionState,
       processError,
-      metricsSession,
-      metricsSessionSelect,
       metricsRange,
       metricsResolution,
       metricStrip,
-      metricStripOverview,
-      logWindow,
       logCount,
       logContent,
       loadOlder,
@@ -960,6 +943,14 @@ function withFakeDashboardDom(): DashboardHarness {
 }
 
 const scheduledTimeouts: number[] = [];
+
+function dataPropertyName(attributeName: string): string {
+  return attributeName.replace(
+    /-([a-z])/g,
+    (_match: string, letter: string) => letter.toUpperCase(),
+  );
+}
+
 const originalSetTimeout = globalThis.setTimeout;
 const originalClearTimeout = globalThis.clearTimeout;
 defineGlobal(

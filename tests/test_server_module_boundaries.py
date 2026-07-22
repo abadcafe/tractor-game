@@ -1,11 +1,11 @@
-"""Enforce package dependency direction from Python import syntax."""
+"""Enforce dependency direction between server packages."""
 
 from __future__ import annotations
 
 import ast
 from pathlib import Path
 
-_SERVER_ROOT = Path(__file__).parent
+_SERVER_ROOT = Path(__file__).parents[1] / "server"
 
 
 def test_training_control_is_process_only() -> None:
@@ -84,10 +84,48 @@ def test_web_never_imports_training_implementation() -> None:
     )
 
 
+def test_training_model_internals_stay_behind_package_boundary() -> (
+    None
+):
+    imports = _package_imports_outside_subpackage("training", "model")
+    internal_model_imports = {
+        imported
+        for imported in imports
+        if imported.startswith("server.training.model.")
+    }
+
+    assert not internal_model_imports
+
+
 def _package_imports(package: str) -> set[str]:
     imports: set[str] = set()
     for path in (_SERVER_ROOT / package).rglob("*.py"):
         if path.name.endswith("_tests.py"):
+            continue
+        module = ast.parse(
+            path.read_text(encoding="utf-8"), filename=str(path)
+        )
+        for node in ast.walk(module):
+            if isinstance(node, ast.Import):
+                imports.update(alias.name for alias in node.names)
+            elif (
+                isinstance(node, ast.ImportFrom)
+                and node.module is not None
+            ):
+                imports.add(node.module)
+    return imports
+
+
+def _package_imports_outside_subpackage(
+    package: str, excluded_subpackage: str
+) -> set[str]:
+    imports: set[str] = set()
+    package_root = _SERVER_ROOT / package
+    excluded_root = package_root / excluded_subpackage
+    for path in package_root.rglob("*.py"):
+        if path.name.endswith("_tests.py") or path.is_relative_to(
+            excluded_root
+        ):
             continue
         module = ast.parse(
             path.read_text(encoding="utf-8"), filename=str(path)

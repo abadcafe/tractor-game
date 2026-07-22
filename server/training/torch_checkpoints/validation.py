@@ -11,10 +11,10 @@ from torch import Tensor
 
 from server.foundation import result as _result
 from server.foundation.json_value import JsonObject
-from server.training.config import (
+from server.training.config import TrainConfig
+from server.training.model import (
     MIN_ATTENTION_HEAD_DIMENSION,
     ModelConfig,
-    TrainConfig,
 )
 from server.training.torch_checkpoints.schema import (
     checkpoint_corruption,

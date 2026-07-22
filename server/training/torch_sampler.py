@@ -5,8 +5,7 @@ from __future__ import annotations
 import torch
 
 from server.foundation.result import Ok, Rejected
-from server.training.config import ModelConfig
-from server.training.model import TractorPolicyModel
+from server.training.model import ModelConfig, TractorPolicyModel
 from server.training.policy_inference_batch import (
     DevicePolicyRequestBatch,
 )

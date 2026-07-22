@@ -13,7 +13,8 @@ from pathlib import Path
 import pytest
 
 from server.foundation.result import Ok, Rejected
-from server.training.config import ModelConfig, TrainConfig
+from server.training.config import TrainConfig
+from server.training.model import ModelConfig
 from server.training.ppo import PPOUpdateStats
 from server.training.ppo.profile import blank_update_profile
 from server.training.runtime import training_runtime

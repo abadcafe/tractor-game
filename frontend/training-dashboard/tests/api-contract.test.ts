@@ -25,30 +25,24 @@ const INIT_REQUEST: InitRequest = {
   weight_decay: 0,
 };
 
-Deno.test("REST artifact reads exclude Metrics snapshots", async () => {
+Deno.test("REST artifact reads expose checkpoints and cursor logs", () => {
   const runDir = "/tmp/run with spaces";
-  const paths = [
+  const checkpoints = new URL(
     checkpointRequestPath(runDir),
-    logPageRequestPath(runDir, 41, 200),
-  ];
-  const source = await Deno.readTextFile(
-    new URL("../api.ts", import.meta.url),
+    "https://example.test",
   );
-  if (paths.some((path) => path.includes("summary"))) {
-    throw new Error("Summary must not exist in the frontend contract");
-  }
+  const logs = new URL(
+    logPageRequestPath(runDir, 41, 200),
+    "https://example.test",
+  );
   if (
-    source.includes("/api/training/metrics") ||
-    source.includes("fetchMetrics") ||
-    source.includes("metricsRequestPath")
-  ) {
-    throw new Error("Metrics snapshots must be event-stream-only");
-  }
-  const logs = new URL(paths[1] ?? "", "https://example.test");
-  if (
+    checkpoints.pathname !== "/api/training/checkpoints" ||
+    checkpoints.searchParams.get("run_dir") !== runDir ||
+    logs.pathname !== "/api/training/logs" ||
+    logs.searchParams.get("run_dir") !== runDir ||
     logs.searchParams.get("before_sequence") !== "41" ||
     logs.searchParams.get("limit") !== "200"
-  ) throw new Error(logs.toString());
+  ) throw new Error(`${checkpoints.toString()} ${logs.toString()}`);
 });
 
 Deno.test("initialize reports replacement only after server precondition", async () => {

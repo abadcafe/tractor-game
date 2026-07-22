@@ -7,11 +7,12 @@ import math
 import torch
 from torch import Tensor, nn
 
-from server.training.config import MIN_ATTENTION_HEAD_DIMENSION
 from server.training.observation_structure import (
     STRUCTURE_AXIS_COUNT,
     StructureAxis,
 )
+
+from .config import MIN_ATTENTION_HEAD_DIMENSION
 
 STRUCTURE_AXIS_DIMENSION = 4
 _STRUCTURE_SCORE_DIMENSION = (

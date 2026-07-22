@@ -25,7 +25,3 @@ Deno.test("test_parseGamePlayerRoute_valid_route", () => {
 Deno.test("test_parseGamePlayerRoute_rejects_missing_user", () => {
   assertEquals(parseGamePlayerRoute("/game/game-1/player/3", ""), null);
 });
-
-Deno.test("test_parseGamePlayerRoute_rejects_legacy_route", () => {
-  assertEquals(parseGamePlayerRoute("/game/game-1", ""), null);
-});

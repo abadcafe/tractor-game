@@ -10,7 +10,8 @@ import torch
 
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
-from server.training.config import ModelConfig, TrainConfig
+from server.training.config import TrainConfig
+from server.training.model import ModelConfig
 from server.training.policy_inference_batch import (
     PolicyRequestRoute,
     build_completed_policy_responses,

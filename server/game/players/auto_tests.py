@@ -307,7 +307,7 @@ async def test_auto_player_stir_pass() -> None:
 @pytest.mark.asyncio
 async def test_auto_player_stir_randomly_skips_hint() -> None:
     """
-    AutoPlayer keeps the old optional-stir behavior by skipping half the
+    AutoPlayer randomly skips an available optional stir action half the
     time.
     """
     card1 = card("hearts", "2", 1)
