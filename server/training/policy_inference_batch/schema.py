@@ -5,6 +5,7 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 
+from server.training.observation_structure import STRUCTURE_AXIS_COUNT
 from server.training.packed_observation import (
     MAX_LOSSLESS_OBSERVATION_TOKENS,
 )
@@ -16,7 +17,7 @@ from server.training.semantic_action_plan.spec import (
 from server.training.semantic_actions.choices import CARD_CHOICE_COUNT
 from server.training.tokenization.encoding_schema import CATEGORY_COUNT
 
-REQUEST_BATCH_MAGIC = 0x5452504F4C495144
+REQUEST_BATCH_MAGIC = 0x5452504F4C495145
 
 I64 = struct.Struct("<q")
 F32 = struct.Struct("<f")
@@ -70,8 +71,7 @@ class PolicyRequestBatchLayout:
     category_ids: ColumnLayout
     scalar_values: ColumnLayout
     card_rule_values: ColumnLayout
-    coordinate_values: ColumnLayout
-    coordinate_masks: ColumnLayout
+    encoded_structure_coordinates: ColumnLayout
     candidate_category_ids: ColumnLayout
     candidate_counts: ColumnLayout
     candidate_card_rule_values: ColumnLayout
@@ -136,10 +136,9 @@ def policy_request_batch_layout(
     )
     scalar_values = column(observation_token_capacity * F32.size)
     card_rule_values = column(observation_token_capacity * 2 * F32.size)
-    coordinate_values = column(
-        observation_token_capacity * 3 * I64.size
+    encoded_structure_coordinates = column(
+        observation_token_capacity * STRUCTURE_AXIS_COUNT * I64.size
     )
-    coordinate_masks = column(observation_token_capacity * 3)
     candidate_category_ids = column(CARD_CHOICE_COUNT * 3 * I64.size)
     candidate_counts = column(CARD_CHOICE_COUNT * F32.size)
     candidate_card_rule_values = column(
@@ -180,8 +179,7 @@ def policy_request_batch_layout(
         category_ids=category_ids,
         scalar_values=scalar_values,
         card_rule_values=card_rule_values,
-        coordinate_values=coordinate_values,
-        coordinate_masks=coordinate_masks,
+        encoded_structure_coordinates=encoded_structure_coordinates,
         candidate_category_ids=candidate_category_ids,
         candidate_counts=candidate_counts,
         candidate_card_rule_values=candidate_card_rule_values,

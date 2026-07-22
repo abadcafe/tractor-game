@@ -19,6 +19,7 @@ from server.training.policy_inference_batch import (
 from server.training.policy_inference_batch.device import (
     materialize_policy_request_batch_frame,
 )
+from server.training.policy_inference_batch.schema import I64
 from server.training.policy_inference_batch.types import (
     PolicyRequestWireFrame,
 )
@@ -108,7 +109,7 @@ def test_request_wire_rejects_previous_schema_magic() -> None:
     )
     assert isinstance(compiled, Ok)
     stale = bytearray(compiled.value.frame.view())
-    stale[0] ^= 1
+    I64.pack_into(stale, 0, 0x5452504F4C495144)
 
     result = materialize_policy_request_batch_frame(
         frame=PolicyRequestWireFrame(

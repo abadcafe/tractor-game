@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from server.foundation.result import Ok, Rejected
 from server.game.protocol import (
     BottomExchangeSnapshot,
@@ -21,8 +23,16 @@ from server.game.rules.required_progress import (
     distance_to_target,
     stage_target,
 )
-from server.game.state_machine.constants import PLAYER_COUNT
+from server.game.state_machine.constants import (
+    BOTTOM_CARD_COUNT,
+    PLAYER_COUNT,
+    TOTAL_CARDS,
+)
 from server.training.observation_memory import ObservationMemoryView
+from server.training.observation_structure import (
+    RoundEventOrdinal,
+    TrickRecency,
+)
 from server.training.relative_state.actions import (
     RelativeBidAction,
     RelativeExchangeAction,
@@ -96,17 +106,18 @@ def project_relative_observation(
             (viewer + 3) % 4
         ],
     )
+    timeline = _round_timeline(viewer, snapshot, memory)
     return Ok(
         value=RelativeObservation(
             global_context=GlobalContext(
                 mandatory_levels=MANDATORY_LEVELS
             ),
             round_context=round_context,
-            round_actions=_round_actions(viewer, snapshot, memory),
+            round_actions=timeline.actions,
             tricks=_tricks(viewer, snapshot, memory),
             hand=canonical_face_counts(snapshot.player_hand),
             visible_bottom=canonical_face_counts(snapshot.bottom_cards),
-            query=_query(snapshot),
+            query=_query(snapshot, timeline.next_ordinal),
         )
     )
 
@@ -129,29 +140,43 @@ def _trump_state(snapshot: StateSnapshot) -> TrumpState:
     return TrumpState(mode=TrumpMode.SUITED, suit=suit)
 
 
-def _round_actions(
+@dataclass(frozen=True, slots=True)
+class _RoundTimeline:
+    actions: tuple[RelativeRoundAction, ...]
+    next_ordinal: RoundEventOrdinal
+
+
+def _round_timeline(
     viewer: int,
     snapshot: StateSnapshot,
     memory: ObservationMemoryView,
-) -> tuple[RelativeRoundAction, ...]:
-    actions: list[RelativeRoundAction] = [
-        RelativeBidAction(
-            actor=relative_actor(viewer, action.actor),
-            disposition=action.disposition,
-            revealed=canonical_face_counts(action.revealed_cards),
-            event_time=action.deal_ordinal,
+) -> _RoundTimeline:
+    actions: list[RelativeRoundAction] = []
+    next_value = 1
+    deal_event_limit = TOTAL_CARDS - BOTTOM_CARD_COUNT
+    for action in memory.bid_actions:
+        ordinal = action.deal_ordinal
+        assert ordinal.value <= deal_event_limit
+        assert ordinal.value >= next_value
+        actions.append(
+            RelativeBidAction(
+                actor=relative_actor(viewer, action.actor),
+                disposition=action.disposition,
+                revealed=canonical_face_counts(action.revealed_cards),
+                event_ordinal=ordinal,
+            )
         )
-        for action in memory.bid_actions
-    ]
-    event_time = 101
+        next_value = ordinal.value + 1
+    if snapshot.phase != "DEAL_BID":
+        next_value = max(next_value, deal_event_limit + 1)
     if snapshot.own_initial_bottom_exchange is not None:
         actions.append(
             _exchange_action(
                 snapshot.own_initial_bottom_exchange,
-                event_time=event_time,
+                event_ordinal=RoundEventOrdinal(next_value),
             )
         )
-        event_time += 1
+        next_value += 1
     for event in snapshot.stir_events:
         actions.append(
             RelativeStirAction(
@@ -160,25 +185,28 @@ def _round_actions(
                 if event.kind == "pass"
                 else "reveal",
                 revealed=canonical_face_counts(event.cards),
-                event_time=event_time,
+                event_ordinal=RoundEventOrdinal(next_value),
             )
         )
-        event_time += 1
+        next_value += 1
         if event.own_bottom_exchange is not None:
             actions.append(
                 _exchange_action(
                     event.own_bottom_exchange,
-                    event_time=event_time,
+                    event_ordinal=RoundEventOrdinal(next_value),
                 )
             )
-            event_time += 1
-    return tuple(actions)
+            next_value += 1
+    return _RoundTimeline(
+        actions=tuple(actions),
+        next_ordinal=RoundEventOrdinal(next_value),
+    )
 
 
 def _exchange_action(
     exchange: BottomExchangeSnapshot,
     *,
-    event_time: int,
+    event_ordinal: RoundEventOrdinal,
 ) -> RelativeExchangeAction:
     return RelativeExchangeAction(
         picked_up=canonical_face_counts(
@@ -187,7 +215,7 @@ def _exchange_action(
         discarded=canonical_face_counts(
             exchange.discarded_bottom_cards
         ),
-        event_time=event_time,
+        event_ordinal=event_ordinal,
     )
 
 
@@ -203,7 +231,7 @@ def _tricks(
             _completed_trick(
                 viewer,
                 completed,
-                trick_time=total - index,
+                recency=TrickRecency(total - index),
             )
         )
     if snapshot.trick is not None:
@@ -215,11 +243,11 @@ def _completed_trick(
     viewer: int,
     trick: CompletedTrickSnapshot,
     *,
-    trick_time: int,
+    recency: TrickRecency,
 ) -> RelativeTrick:
     return RelativeTrick(
         status="completed",
-        trick_time=trick_time,
+        recency=recency,
         actions=_play_actions(
             viewer,
             lead_player=trick.lead_player,
@@ -234,7 +262,7 @@ def _completed_trick(
 def _open_trick(viewer: int, trick: TrickSnapshot) -> RelativeTrick:
     return RelativeTrick(
         status="open",
-        trick_time=0,
+        recency=TrickRecency(0),
         actions=_play_actions(
             viewer,
             lead_player=trick.lead_player,
@@ -300,24 +328,27 @@ def _revealed_extra(
     return tuple(result)
 
 
-def _query(snapshot: StateSnapshot) -> DecisionQuery | None:
+def _query(
+    snapshot: StateSnapshot,
+    next_round_event: RoundEventOrdinal,
+) -> DecisionQuery | None:
     awaiting = snapshot.awaiting_action
     if awaiting == "bid":
         return DecisionQuery(
             kind="bid",
-            event_time=sum(snapshot.player_hand_counts),
+            round_event=next_round_event,
             trick_position=None,
         )
     if awaiting == "stir":
         return DecisionQuery(
             kind="stir",
-            event_time=101 + len(snapshot.stir_events),
+            round_event=next_round_event,
             trick_position=None,
         )
     if awaiting == "discard":
         return DecisionQuery(
             kind="bottom_exchange",
-            event_time=101 + len(snapshot.stir_events),
+            round_event=next_round_event,
             trick_position=None,
         )
     if awaiting == "play":
@@ -325,12 +356,12 @@ def _query(snapshot: StateSnapshot) -> DecisionQuery | None:
         if trick is None:
             return DecisionQuery(
                 kind="play",
-                event_time=None,
+                round_event=None,
                 trick_position=TrickPosition.LEAD,
             )
         return DecisionQuery(
             kind="play",
-            event_time=None,
+            round_event=None,
             trick_position=trick_position(
                 lead_player=trick.lead_player,
                 actor=trick.current_player,

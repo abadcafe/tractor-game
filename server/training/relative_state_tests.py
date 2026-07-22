@@ -5,7 +5,9 @@ from __future__ import annotations
 from server.foundation.result import Ok
 from server.game.players.test_helpers import card, make_snapshot
 from server.game.protocol import (
+    BottomExchangeSnapshot,
     FailedThrowSnapshot,
+    StirDeclarationEventSnapshot,
     TrickSlotSnapshot,
     TrickSnapshot,
 )
@@ -160,6 +162,81 @@ def test_project_failed_throw_keeps_only_revealed_extra() -> None:
         (item.face.rank.value, item.count)
         for item in action.revealed_extra
     ] == [("K", 1)]
+
+
+def test_round_timeline_has_unique_ordinals_and_query_tail() -> None:
+    bottom = BottomExchangeSnapshot(
+        picked_up_bottom_cards=[card("clubs", "2")],
+        discarded_bottom_cards=[card("diamonds", "3")],
+    )
+    snapshot = make_snapshot(
+        phase="STIRRING",
+        awaiting_action="stir",
+        own_initial_bottom_exchange=bottom,
+        stir_events=[
+            StirDeclarationEventSnapshot(
+                player=1,
+                kind="stir",
+                cards=[card("hearts", "2")],
+                new_suit=card("hearts", "2").suit,
+                priority=1,
+                own_bottom_exchange=bottom,
+            )
+        ],
+    )
+
+    result = project_relative_observation(
+        viewer=0,
+        snapshot=snapshot,
+        memory=ObservationMemoryView(
+            bid_actions=(), completed_tricks=()
+        ),
+    )
+
+    assert isinstance(result, Ok)
+    ordinals = tuple(
+        action.event_ordinal.value
+        for action in result.value.round_actions
+    )
+    assert ordinals == (101, 102, 103)
+    query = result.value.query
+    assert query is not None
+    assert query.round_event is not None
+    assert query.round_event.value == 104
+    assert query.round_event.value not in ordinals
+
+
+def test_round_timeline_uses_only_visible_private_exchanges() -> None:
+    public_event = StirDeclarationEventSnapshot(
+        player=1,
+        kind="pass",
+        cards=[],
+        new_suit=None,
+        priority=None,
+        own_bottom_exchange=None,
+    )
+    result = project_relative_observation(
+        viewer=0,
+        snapshot=make_snapshot(
+            phase="STIRRING",
+            awaiting_action="stir",
+            own_initial_bottom_exchange=None,
+            stir_events=[public_event],
+        ),
+        memory=ObservationMemoryView(
+            bid_actions=(), completed_tricks=()
+        ),
+    )
+
+    assert isinstance(result, Ok)
+    assert tuple(
+        action.event_ordinal.value
+        for action in result.value.round_actions
+    ) == (101,)
+    query = result.value.query
+    assert query is not None
+    assert query.round_event is not None
+    assert query.round_event.value == 102
 
 
 def _open_trick(

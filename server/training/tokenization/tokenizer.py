@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from server.game.rules.card_faces import FaceCount
+from server.training.observation_structure import TrickRecency
 from server.training.relative_state import (
     RelativeActor,
     RelativeObservation,
@@ -61,16 +62,11 @@ def tokenize(observation: RelativeObservation) -> TokenSequence:
                     winner=trick.winner,
                     points=trick.points,
                 ),
-                TokenAddress(trick_time=trick.trick_time),
+                TokenAddress(trick=trick.recency),
             )
         )
         for action in trick.actions:
-            _append_play_action(
-                nodes, action, trick_time=trick.trick_time
-            )
-    query_position = None
-    if query.trick_position is not None:
-        query_position = _position_index(query.trick_position.value)
+            _append_play_action(nodes, action, recency=trick.recency)
     query_index = len(nodes)
     nodes.append(
         _node(
@@ -82,9 +78,9 @@ def tokenize(observation: RelativeObservation) -> TokenSequence:
                 trick_position=query.trick_position,
             ),
             TokenAddress(
-                round_event_time=query.event_time,
-                trick_time=0 if query.kind == "play" else None,
-                action_position=query_position,
+                round_event=query.round_event,
+                trick=TrickRecency(0) if query.kind == "play" else None,
+                play_position=query.trick_position,
             ),
         )
     )
@@ -162,7 +158,7 @@ def _append_round_action(
     | RelativeStirAction
     | RelativeExchangeAction,
 ) -> None:
-    address = TokenAddress(round_event_time=action.event_time)
+    address = TokenAddress(round_event=action.event_ordinal)
     if isinstance(action, RelativeBidAction):
         nodes.append(
             _node(
@@ -229,12 +225,11 @@ def _append_play_action(
     nodes: list[TokenNode],
     action: RelativePlayAction,
     *,
-    trick_time: int,
+    recency: TrickRecency,
 ) -> None:
-    position = _position_index(action.trick_position.value)
     address = TokenAddress(
-        trick_time=trick_time,
-        action_position=position,
+        trick=recency,
+        play_position=action.trick_position,
     )
     nodes.append(
         _node(
@@ -279,9 +274,9 @@ def _with_payload(
     address: TokenAddress, payload_role: PayloadRole
 ) -> TokenAddress:
     return TokenAddress(
-        round_event_time=address.round_event_time,
-        trick_time=address.trick_time,
-        action_position=address.action_position,
+        round_event=address.round_event,
+        trick=address.trick,
+        play_position=address.play_position,
         payload_role=payload_role,
     )
 
@@ -298,10 +293,6 @@ def _node(
         payload=payload,
         address=address if address is not None else TokenAddress(),
     )
-
-
-def _position_index(value: str) -> int:
-    return ("lead", "follow_1", "follow_2", "follow_3").index(value)
 
 
 __all__ = ("tokenize",)

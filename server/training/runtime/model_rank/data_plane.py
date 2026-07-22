@@ -370,11 +370,9 @@ def _select_device_request_rows(
             card_rule_values=_select_tensor_rows(
                 batch.observation_batch.card_rule_values, row_index
             ),
-            coordinate_values=_select_tensor_rows(
-                batch.observation_batch.coordinate_values, row_index
-            ),
-            coordinate_masks=_select_tensor_rows(
-                batch.observation_batch.coordinate_masks, row_index
+            encoded_structure_coordinates=_select_tensor_rows(
+                batch.observation_batch.encoded_structure_coordinates,
+                row_index,
             ),
             candidate_category_ids=_select_tensor_rows(
                 batch.observation_batch.candidate_category_ids,
@@ -425,12 +423,11 @@ def _slice_device_request_rows(
             card_rule_values=batch.observation_batch.card_rule_values[
                 row_slice
             ],
-            coordinate_values=batch.observation_batch.coordinate_values[
-                row_slice
-            ],
-            coordinate_masks=batch.observation_batch.coordinate_masks[
-                row_slice
-            ],
+            encoded_structure_coordinates=(
+                batch.observation_batch.encoded_structure_coordinates[
+                    row_slice
+                ]
+            ),
             candidate_category_ids=batch.observation_batch.candidate_category_ids[
                 row_slice
             ],

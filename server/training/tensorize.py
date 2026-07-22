@@ -8,6 +8,7 @@ import torch
 from torch import Tensor
 
 from server.training.observation import Observation
+from server.training.observation_structure import STRUCTURE_AXIS_COUNT
 from server.training.packed_observation import (
     MAX_LOSSLESS_OBSERVATION_TOKENS,
     PackedObservation,
@@ -26,8 +27,7 @@ class ObservationTensorBatch:
     category_ids: Tensor
     scalar_values: Tensor
     card_rule_values: Tensor
-    coordinate_values: Tensor
-    coordinate_masks: Tensor
+    encoded_structure_coordinates: Tensor
     candidate_category_ids: Tensor
     candidate_counts: Tensor
     candidate_card_rule_values: Tensor
@@ -39,8 +39,11 @@ class ObservationTensorBatch:
         batch, tokens = self.category_ids.shape[:2]
         assert self.scalar_values.shape == (batch, tokens)
         assert self.card_rule_values.shape == (batch, tokens, 2)
-        assert self.coordinate_values.shape == (batch, tokens, 3)
-        assert self.coordinate_masks.shape == (batch, tokens, 3)
+        assert self.encoded_structure_coordinates.shape == (
+            batch,
+            tokens,
+            STRUCTURE_AXIS_COUNT,
+        )
         assert self.candidate_category_ids.shape == (
             batch,
             CARD_CHOICE_COUNT,
@@ -107,14 +110,9 @@ def tensorize_packed_observations(
             dtype=torch.float32,
             device=device,
         ),
-        coordinate_values=staged_tensor(
-            tuple(item.coordinate_rows for item in rows),
+        encoded_structure_coordinates=staged_tensor(
+            tuple(item.encoded_structure_rows for item in rows),
             dtype=torch.long,
-            device=device,
-        ),
-        coordinate_masks=staged_tensor(
-            tuple(item.coordinate_mask_rows for item in rows),
-            dtype=torch.bool,
             device=device,
         ),
         candidate_category_ids=staged_tensor(

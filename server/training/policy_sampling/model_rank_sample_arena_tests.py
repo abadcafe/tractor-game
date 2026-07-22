@@ -86,11 +86,8 @@ def _observation_batch(
         card_rule_values=torch.zeros(
             (3, 2, 2), dtype=torch.float32, device=device
         ),
-        coordinate_values=torch.zeros(
+        encoded_structure_coordinates=torch.zeros(
             (3, 2, 3), dtype=torch.long, device=device
-        ),
-        coordinate_masks=torch.zeros(
-            (3, 2, 3), dtype=torch.bool, device=device
         ),
         candidate_category_ids=torch.zeros(
             (3, CARD_CHOICE_COUNT, 3),

@@ -76,6 +76,29 @@ def test_read_checkpoint_catalog_keeps_invalid_manifest_visible(
     assert result.value.manifests[0].kind == "invalid"
 
 
+def test_read_checkpoint_catalog_rejects_schema_20_manifest(
+    tmp_path: Path,
+) -> None:
+    checkpoint_id = "a" * 32
+    _write_checkpoint(tmp_path, "latest.json", checkpoint_id, b"state")
+    manifest_path = tmp_path / "checkpoints" / "latest.json"
+    current = manifest_path.read_text(encoding="utf-8")
+    stale = current.replace(
+        '"schema_version": 21', '"schema_version": 20'
+    )
+    assert stale != current
+    manifest_path.write_text(stale, encoding="utf-8")
+
+    result = read_checkpoint_catalog(tmp_path)
+
+    assert isinstance(result, Ok)
+    assert len(result.value.manifests) == 1
+    manifest = result.value.manifests[0]
+    assert manifest.valid is False
+    assert manifest.error is not None
+    assert "Input should be 21" in manifest.error
+
+
 def test_web_application_import_does_not_load_torch() -> None:
     completed = subprocess.run(
         (

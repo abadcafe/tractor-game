@@ -8,6 +8,10 @@ from typing import Literal
 from server.game.rules.card_faces import FaceCount
 from server.game.rules.cards import Rank
 from server.game.rules.required_progress import ProgressTarget
+from server.training.observation_structure import (
+    RoundEventOrdinal,
+    TrickRecency,
+)
 from server.training.relative_state.actions import (
     RelativePlayAction,
     RelativeRoundAction,
@@ -53,7 +57,7 @@ class RelativeTrick:
     """One completed or open trick in chronological memory."""
 
     status: TrickStatus
-    trick_time: int
+    recency: TrickRecency
     actions: tuple[RelativePlayAction, ...]
     winner: RelativeActor | None
     points: int | None
@@ -64,7 +68,7 @@ class DecisionQuery:
     """The semantic decision requested from the policy."""
 
     kind: DecisionKind
-    event_time: int | None
+    round_event: RoundEventOrdinal | None
     trick_position: TrickPosition | None
 
 

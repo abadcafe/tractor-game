@@ -9,6 +9,7 @@ from torch import Tensor
 
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
+from server.training.observation_structure import STRUCTURE_AXIS_COUNT
 from server.training.policy_sampling.records import (
     CompactActionChoiceBatch,
     CompactPolicyDecisionBatch,
@@ -83,8 +84,7 @@ class ModelRankSampleArena:
     _category_ids: Tensor | None = None
     _scalar_values: Tensor | None = None
     _card_rule_values: Tensor | None = None
-    _coordinate_values: Tensor | None = None
-    _coordinate_masks: Tensor | None = None
+    _encoded_structure_coordinates: Tensor | None = None
     _candidate_category_ids: Tensor | None = None
     _candidate_counts: Tensor | None = None
     _candidate_card_rule_values: Tensor | None = None
@@ -355,11 +355,10 @@ class ModelRankSampleArena:
             torch.float32,
             self.device,
         )
-        self._coordinate_values = _zeros(
-            (row_capacity, token_capacity, 3), torch.long, self.device
-        )
-        self._coordinate_masks = _zeros(
-            (row_capacity, token_capacity, 3), torch.bool, self.device
+        self._encoded_structure_coordinates = _zeros(
+            (row_capacity, token_capacity, STRUCTURE_AXIS_COUNT),
+            torch.long,
+            self.device,
         )
         self._candidate_category_ids = _zeros(
             (row_capacity, CARD_CHOICE_COUNT, 3),
@@ -403,10 +402,9 @@ class ModelRankSampleArena:
             (self._scalar_values_tensor(), source.scalar_values),
             (self._card_rule_values_tensor(), source.card_rule_values),
             (
-                self._coordinate_values_tensor(),
-                source.coordinate_values,
+                self._encoded_structure_coordinates_tensor(),
+                source.encoded_structure_coordinates,
             ),
-            (self._coordinate_masks_tensor(), source.coordinate_masks),
         )
         for destination, values in sequence_pairs:
             destination[rows].zero_()
@@ -435,11 +433,10 @@ class ModelRankSampleArena:
             card_rule_values=self._card_rule_values_tensor().index_select(
                 0, rows
             ),
-            coordinate_values=self._coordinate_values_tensor().index_select(
-                0, rows
-            ),
-            coordinate_masks=self._coordinate_masks_tensor().index_select(
-                0, rows
+            encoded_structure_coordinates=(
+                self._encoded_structure_coordinates_tensor().index_select(
+                    0, rows
+                )
             ),
             candidate_category_ids=self._candidate_category_ids_tensor().index_select(
                 0, rows
@@ -519,11 +516,8 @@ class ModelRankSampleArena:
         self._card_rule_values = _grow_first_dimension(
             self._card_rule_values_tensor(), capacity
         )
-        self._coordinate_values = _grow_first_dimension(
-            self._coordinate_values_tensor(), capacity
-        )
-        self._coordinate_masks = _grow_first_dimension(
-            self._coordinate_masks_tensor(), capacity
+        self._encoded_structure_coordinates = _grow_first_dimension(
+            self._encoded_structure_coordinates_tensor(), capacity
         )
         self._candidate_category_ids = _grow_first_dimension(
             self._candidate_category_ids_tensor(), capacity
@@ -564,11 +558,8 @@ class ModelRankSampleArena:
         self._card_rule_values = _grow_second_dimension(
             self._card_rule_values_tensor(), capacity
         )
-        self._coordinate_values = _grow_second_dimension(
-            self._coordinate_values_tensor(), capacity
-        )
-        self._coordinate_masks = _grow_second_dimension(
-            self._coordinate_masks_tensor(), capacity
+        self._encoded_structure_coordinates = _grow_second_dimension(
+            self._encoded_structure_coordinates_tensor(), capacity
         )
         self._token_capacity = capacity
 
@@ -590,11 +581,8 @@ class ModelRankSampleArena:
     def _card_rule_values_tensor(self) -> Tensor:
         return _present(self._card_rule_values)
 
-    def _coordinate_values_tensor(self) -> Tensor:
-        return _present(self._coordinate_values)
-
-    def _coordinate_masks_tensor(self) -> Tensor:
-        return _present(self._coordinate_masks)
+    def _encoded_structure_coordinates_tensor(self) -> Tensor:
+        return _present(self._encoded_structure_coordinates)
 
     def _candidate_category_ids_tensor(self) -> Tensor:
         return _present(self._candidate_category_ids)

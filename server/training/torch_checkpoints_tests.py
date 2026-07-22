@@ -668,7 +668,7 @@ def test_torch_checkpoint_state_payload_is_weights_only_safe(
     )
 
     assert isinstance(loaded, dict)
-    assert loaded["schema_version"] == 20
+    assert loaded["schema_version"] == 21
     assert isinstance(loaded["checkpoint_id"], str)
     assert "model_config" not in loaded
     assert "train_config" not in loaded
@@ -1523,6 +1523,46 @@ def test_torch_checkpoint_load_rejects_missing_payload_field(
     assert isinstance(result, Rejected)
     assert "checkpoint corruption:" in result.reason
     assert "state payload missing schema_version" in result.reason
+
+
+def test_torch_checkpoint_load_rejects_schema_20_payload(
+    tmp_path: Path,
+) -> None:
+    model_config = ModelConfig(d_model=8, layers=1, heads=1)
+    train_config = TrainConfig()
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        execution_config=ExecutionConfig(),
+        device=torch.device("cpu"),
+    )
+    path = tmp_path / "latest.json"
+    save_torch_checkpoint(
+        manifest_paths=(path,),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=11,
+        total_samples=0,
+        total_updates=5,
+        retained_update_count=5,
+    )
+    state_path = _single_state_path(path)
+    payload = _load_state_payload(state_path)
+    payload["schema_version"] = 20
+    _write_state_payload(path, state_path, payload)
+
+    result = _load_torch_checkpoint(
+        path=path,
+        model_config=model_config,
+        train_config=train_config,
+        execution_config=ExecutionConfig(),
+        device=torch.device("cpu"),
+    )
+
+    assert isinstance(result, Rejected)
+    assert "state payload schema version mismatch" in result.reason
 
 
 def test_torch_checkpoint_save_payload_excludes_rng_state(

@@ -7,6 +7,7 @@ from torch import Tensor
 
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
+from server.training.observation_structure import STRUCTURE_AXIS_COUNT
 from server.training.policy_inference_batch.frame import (
     decode_policy_request_frame_metadata,
 )
@@ -117,15 +118,10 @@ def materialize_policy_request_frame(
             layout.card_rule_values,
             (capacity, tokens, 2),
         )[:rows],
-        coordinate_values=_view_i64_column(
+        encoded_structure_coordinates=_view_i64_column(
             device_frame,
-            layout.coordinate_values,
-            (capacity, tokens, 3),
-        )[:rows],
-        coordinate_masks=_view_bool_column(
-            device_frame,
-            layout.coordinate_masks,
-            (capacity, tokens, 3),
+            layout.encoded_structure_coordinates,
+            (capacity, tokens, STRUCTURE_AXIS_COUNT),
         )[:rows],
         candidate_category_ids=_view_i64_column(
             device_frame,
