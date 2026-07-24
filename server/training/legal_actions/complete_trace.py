@@ -7,11 +7,11 @@ from dataclasses import dataclass
 from typing import Literal
 
 from server.foundation.result import Ok, Rejected
-from server.game.rules.card_faces import (
+from server.game.rules.cards import Card
+from server.game.rules.cards.faces import (
     FaceCount,
     canonical_face_counts,
 )
-from server.game.rules.cards import Card
 from server.training.legal_actions.contract import (
     LegalActionIndex,
 )

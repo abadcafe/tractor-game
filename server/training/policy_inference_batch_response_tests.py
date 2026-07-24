@@ -5,8 +5,7 @@ from __future__ import annotations
 import torch
 
 from server.foundation.result import Ok, Rejected
-from server.game.players.test_helpers import card, make_snapshot
-from server.game.rules.card_faces import CardFace, FaceCount
+from server.game.rules.cards.faces import CardFace, FaceCount
 from server.training.legal_actions import build_legal_action_index
 from server.training.policy_inference_batch import (
     CompletedPolicyResponse,
@@ -28,6 +27,8 @@ from server.training.semantic_actions.choices import (
     ActionChoice,
     action_choice_id,
 )
+from tests.support import card
+from tests.support import snapshot as make_snapshot
 
 
 def test_response_wire_round_trips_completed_and_rejected_rows() -> (

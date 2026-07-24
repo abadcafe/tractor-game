@@ -2,10 +2,11 @@
 
 import torch
 
-from server.game.players.test_helpers import card, make_snapshot
 from server.training.observation import build_observation
 from server.training.observation_memory import ObservationMemoryView
 from server.training.tensorize import tensorize_observation
+from tests.support import card
+from tests.support import snapshot as make_snapshot
 
 from .observation_encoder import ObservationEncoder
 

@@ -7,8 +7,7 @@ import torch
 from torch import Tensor
 
 from server.foundation.result import Ok, Rejected
-from server.game.players.test_helpers import card, make_snapshot
-from server.game.rules.card_faces import CardFace, FaceCount
+from server.game.rules.cards.faces import CardFace, FaceCount
 from server.training.config import TrainConfig
 from server.training.legal_actions import (
     LegalActionIndex,
@@ -56,6 +55,8 @@ from server.training.tensorize import (
     ObservationTensorBatch,
     tensorize_observations,
 )
+from tests.support import card
+from tests.support import snapshot as make_snapshot
 
 
 class CountingTractorPolicyModel(TractorPolicyModel):

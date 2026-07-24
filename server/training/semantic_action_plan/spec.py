@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from server.game.rules.card_faces import MAX_FACE_COUNT
+from server.game.rules.cards.faces import MAX_FACE_COUNT
 from server.training.semantic_actions.choices import (
     ACTION_CHOICE_COUNT,
     CARD_FACE_COUNT,

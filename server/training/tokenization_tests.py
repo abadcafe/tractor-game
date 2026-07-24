@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from server.foundation.result import Ok
-from server.game.players.test_helpers import card, make_snapshot
-from server.game.protocol import TrickSlotSnapshot, TrickSnapshot
+from server.game import Seat
+from server.game.snapshots.tricks import (
+    TrickSlotSnapshot,
+    TrickSnapshot,
+)
 from server.training.observation_memory import ObservationMemoryView
 from server.training.relative_state import project_relative_observation
 from server.training.tokenization import (
@@ -17,6 +20,8 @@ from server.training.tokenization import (
     TrickToken,
     tokenize,
 )
+from tests.support import card
+from tests.support import snapshot as make_snapshot
 
 
 def test_tokenize_emits_only_five_semantic_families() -> None:
@@ -98,14 +103,17 @@ def _sequence() -> TokenSequence:
     first = card("spades", "A", 1)
     second = card("spades", "A", 2)
     trick = TrickSnapshot(
-        lead_player=1,
-        current_player=2,
-        slots=[
-            TrickSlotSnapshot(player=0, cards=[]),
-            TrickSlotSnapshot(player=1, cards=[card("hearts", "K")]),
-            TrickSlotSnapshot(player=2, cards=[]),
-            TrickSlotSnapshot(player=3, cards=[]),
-        ],
+        lead_player=Seat.WEST,
+        current_player=Seat.SOUTH,
+        slots=(
+            TrickSlotSnapshot(player=Seat.NORTH, cards=()),
+            TrickSlotSnapshot(
+                player=Seat.WEST,
+                cards=(card("hearts", "K"),),
+            ),
+            TrickSlotSnapshot(player=Seat.SOUTH, cards=()),
+            TrickSlotSnapshot(player=Seat.EAST, cards=()),
+        ),
     )
     projected = project_relative_observation(
         viewer=2,

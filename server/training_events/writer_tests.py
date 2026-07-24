@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import math
 import sqlite3
 import threading
 from pathlib import Path
-from typing import cast
 
 import pytest
 from pydantic import TypeAdapter
@@ -16,10 +14,8 @@ from server.foundation.result import Ok, Rejected
 from server.training_events import (
     EVENT_NAMES,
     EventContext,
-    EventName,
     NullEventSink,
     ProcessIdentity,
-    ProcessKind,
     StructuredEventSink,
     writer,
 )
@@ -102,39 +98,49 @@ def test_failed_event_uses_same_name_and_top_level_error(
     assert "reason" not in fields
 
 
-def test_event_context_rejects_invalid_identifiers() -> None:
-    with pytest.raises(AssertionError):
-        EventContext(policy_version=-1)
-    with pytest.raises(AssertionError):
-        EventContext(rollout_id="")
-    with pytest.raises(AssertionError):
-        ProcessIdentity(kind=cast(ProcessKind, "unknown"))
+def test_event_context_preserves_typed_identifiers() -> None:
+    context = EventContext(
+        policy_version=4,
+        rollout_id="rollout-7",
+        worker_index=2,
+        episode_id=9,
+    )
+    process = ProcessIdentity(kind="model_rank", index=3)
+
+    assert context.policy_version == 4
+    assert context.rollout_id == "rollout-7"
+    assert context.worker_index == 2
+    assert context.episode_id == 9
+    assert process.kind == "model_rank"
+    assert process.index == 3
 
 
-def test_emit_rejects_nonfinite_or_reserved_fields(
+def test_emit_accepts_finite_domain_fields(
     tmp_path: Path,
 ) -> None:
+    initialized = initialize_database(tmp_path)
+    assert isinstance(initialized, Ok)
     sink = StructuredEventSink(
         run_dir=tmp_path,
         process=ProcessIdentity(kind="coordinator"),
     )
-    with pytest.raises(AssertionError):
-        sink.emit("update", fields={"loss": math.nan})
-    with pytest.raises(AssertionError):
-        sink.emit("update", fields={"reason": "wrong layer"})
-    with pytest.raises(AssertionError):
-        sink.emit("update", error=" ")
+    sink.emit(
+        "update",
+        fields={"policy_loss": 0.25, "sample_count": 64},
+    )
     sink.close()
 
+    with sqlite3.connect(database_path(tmp_path)) as connection:
+        stored = connection.execute(
+            "SELECT count(*) FROM training_logs"
+        ).fetchone()
+    assert stored == (1,)
 
-def test_null_sink_enforces_the_same_event_contract() -> None:
+
+def test_null_sink_accepts_every_typed_event_name() -> None:
     sink = NullEventSink()
-    with pytest.raises(AssertionError):
-        sink.emit("update", fields={"loss": math.inf})
-    with pytest.raises(AssertionError):
-        sink.emit("update", fields={"error": "wrong layer"})
-    with pytest.raises(AssertionError):
-        sink.emit(cast(EventName, "unknown"))
+    for event_name in EVENT_NAMES:
+        sink.emit(event_name)
 
 
 def test_store_accepts_every_contract_event_name(

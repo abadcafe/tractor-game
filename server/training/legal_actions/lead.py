@@ -6,9 +6,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from server.foundation.result import Ok, Rejected
-from server.game.rules.card_faces import FaceCount, face_count_width
+from server.game.rules import play
 from server.game.rules.cards import Card, Rank, Suit
-from server.game.rules.ordering import effective_suit
+from server.game.rules.cards.faces import (
+    FaceCount,
+    face_count_width,
+)
 from server.training.legal_actions.contract import LegalActionIndex
 from server.training.legal_actions.selection import (
     cards_for_face_counts,
@@ -76,7 +79,7 @@ def _one_effective_suit(
     if isinstance(cards_result, Rejected):
         return False
     suits = {
-        effective_suit(card, trump_suit, trump_rank)
+        play.effective_suit(card, trump_suit, trump_rank)
         for card in cards_result.value
     }
     return len(suits) == 1

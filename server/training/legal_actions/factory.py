@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from server.game.protocol import StateSnapshot
+from server.game.snapshots import PlayerSnapshot
 from server.training.legal_actions.bid import build_bid_index
 from server.training.legal_actions.contract import (
     EmptyLegalActionIndex,
@@ -23,7 +23,7 @@ from server.training.semantic_actions.query import (
 def build_legal_action_index(
     *,
     player_index: int,
-    snapshot: StateSnapshot,
+    snapshot: PlayerSnapshot,
     query: ActionQuery | None = None,
 ) -> LegalActionIndex:
     """Build the rule-complete action index for a snapshot."""

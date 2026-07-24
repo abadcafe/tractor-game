@@ -14,9 +14,8 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, Response
 
-from server.game.players import AIPlayer
-from server.game.players.ai.transcript import TranscriptRecordDict
-from server.game.room.game_room import GameRoom
+from server.game_agents.llm import LLMAgent, TranscriptRecordDict
+from server.game_runtime.room import GameRoom
 from server.web.state import ServerState
 
 
@@ -79,11 +78,11 @@ def _room_or_404(state: ServerState, game_id: str) -> GameRoom:
 
 def _ai_player_at(
     room: GameRoom, player: int | None
-) -> AIPlayer | None:
+) -> LLMAgent | None:
     if player is None or player < 0 or player >= 4:
         return None
     candidate = room.player_at(player)
-    if isinstance(candidate, AIPlayer):
+    if isinstance(candidate, LLMAgent):
         return candidate
     return None
 

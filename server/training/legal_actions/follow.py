@@ -5,12 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from server.foundation.result import Ok, Rejected
-from server.game.protocol import StateSnapshot, TrickSnapshot
+from server.game.rules import play
 from server.game.rules.cards import Card
-from server.game.rules.follow_action_space import (
-    FollowActionSpace,
-    build_follow_action_space,
-)
+from server.game.snapshots import PlayerSnapshot
+from server.game.snapshots.tricks import TrickSnapshot
 from server.training.legal_actions.contract import LegalActionIndex
 from server.training.legal_actions.selection import (
     trace_is_selection_only,
@@ -30,14 +28,14 @@ class FollowPlayLegalActionIndex(LegalActionIndex):
     """Following action space using the full follow-rule validator."""
 
     _query: ActionQuery
-    _space: FollowActionSpace
+    _space: play.FollowActionSpace
 
     @property
     def query(self) -> ActionQuery:
         return self._query
 
     @property
-    def space(self) -> FollowActionSpace:
+    def space(self) -> play.FollowActionSpace:
         """Return compiled follow constraints for this decision."""
         return self._space
 
@@ -70,15 +68,15 @@ class FollowPlayLegalActionIndex(LegalActionIndex):
 
 def build_follow_index(
     *,
-    snapshot: StateSnapshot,
+    snapshot: PlayerSnapshot,
     query: ActionQuery,
 ) -> FollowPlayLegalActionIndex:
     """Build a legal action index for a follow-play decision."""
     lead_cards = _lead_cards(snapshot.trick)
     assert lead_cards
-    space_result = build_follow_action_space(
-        hand=snapshot.player_hand,
-        lead_cards=lead_cards,
+    space_result = play.build_follow_action_space(
+        hand=list(snapshot.player_hand),
+        lead_cards=list(lead_cards),
         trump_suit=query.trump_suit,
         trump_rank=query.level_rank,
     )
@@ -86,10 +84,10 @@ def build_follow_index(
     return FollowPlayLegalActionIndex(query, space_result.value)
 
 
-def _lead_cards(trick: TrickSnapshot | None) -> list[Card]:
+def _lead_cards(trick: TrickSnapshot | None) -> tuple[Card, ...]:
     if trick is None:
-        return []
+        return ()
     for slot in trick.slots:
         if slot.player == trick.lead_player:
-            return list(slot.cards)
-    return []
+            return slot.cards
+    return ()

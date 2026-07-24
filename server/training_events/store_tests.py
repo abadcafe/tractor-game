@@ -4,8 +4,6 @@ import json
 import sqlite3
 from pathlib import Path
 
-import pytest
-
 from server.foundation.json_value import JsonObject
 from server.foundation.result import Ok, Rejected
 from server.training_events.store import (
@@ -104,11 +102,15 @@ def test_schema_rejects_incomplete_event_envelopes(
     invalid.append(unknown_process)
     with sqlite3.connect(database_path(tmp_path)) as connection:
         for payload in invalid:
-            with pytest.raises(sqlite3.IntegrityError):
-                connection.execute(
-                    "INSERT INTO training_logs(event_json) VALUES (?)",
-                    (json.dumps(payload),),
-                )
+            connection.execute(
+                "INSERT OR IGNORE INTO training_logs(event_json) "
+                "VALUES (?)",
+                (json.dumps(payload),),
+            )
+        stored = connection.execute(
+            "SELECT count(*) FROM training_logs"
+        ).fetchone()
+    assert stored == (0,)
 
 
 def test_initialize_database_rejects_fake_v3_without_store(

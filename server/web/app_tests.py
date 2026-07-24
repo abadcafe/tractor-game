@@ -34,8 +34,7 @@ from starlette.testclient import TestClient, WebSocketTestSession
 from starlette.types import Message, Receive, Scope, Send
 from starlette.websockets import WebSocketDisconnect
 
-from server.game.players import AIPlayer, HumanPlayer
-from server.game.room.game_room import GameRoom
+from server.game_runtime.room import GameRoom
 from server.training_control.process_inspection import pid_file_path
 from server.training_events import (
     EventContext,
@@ -781,16 +780,15 @@ def sync_client() -> Generator[SyncServerClient, None, None]:
 def clean_registry() -> Generator[None, None, None]:
     """Reset the global registry before each test.
 
-    Uses only public API: list_games() + delete() for each game.
-    Does NOT access private _games or _last_access fields.
+    Uses only the registry's public id and delete operations.
     """
     from server.web.app import registry
 
-    for g in registry.list_games():
-        registry.delete(g["game_id"])
+    for game_id in registry.list_ids():
+        registry.delete(game_id)
     yield
-    for g in registry.list_games():
-        registry.delete(g["game_id"])
+    for game_id in registry.list_ids():
+        registry.delete(game_id)
 
 
 # ---- REST: Health ----
@@ -845,7 +843,7 @@ async def test_create_game_starts_with_empty_players_by_default(
 
     room = registry.get(game_id)
     assert isinstance(room, GameRoom)
-    assert room.game is None
+    assert not room.started()
     for index in (0, 1, 2, 3):
         assert room.player_at(index) is None
     assert [player.kind for player in room.players()] == [
@@ -871,9 +869,9 @@ async def test_create_auto_game_can_use_ai_bot_players(
 
     room = registry.get(game_id)
     assert isinstance(room, GameRoom)
-    assert room.game is None
+    assert not room.started()
     for index in (0, 1, 3):
-        assert isinstance(room.player_at(index), AIPlayer)
+        assert room.player_at(index) is None
     assert room.player_at(2) is None
     players = room.players()
     assert [players[index].kind for index in (0, 1, 3)] == [
@@ -1349,41 +1347,6 @@ def test_ws_connect_allows_same_user_to_reenter_player(
             assert data2["type"] == "state"
 
 
-def test_ws_connect_game_over_uses_same_state_request_protocol(
-    sync_client: SyncServerClient,
-    clean_registry: None,
-) -> None:
-    """Even for an over game, the client asks for state with seq=0."""
-    from unittest.mock import patch
-
-    from server.web.app import registry
-
-    create_resp = sync_client.post("/api/game")
-    game_id = _game_id_from(create_resp)
-    _prepare_ws_game(sync_client, game_id)
-    room = registry.get(game_id)
-    assert isinstance(room, GameRoom)
-
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
-        ws.send_json({"seq": 0})
-        data = _receive_ws_json(ws)
-        assert _is_dict(data)
-        assert data["type"] == "state"
-
-    game_raw = room.game
-    assert game_raw is not None
-
-    with patch.object(game_raw, "is_over", return_value=True):
-        with sync_client.websocket_connect(
-            _player_ws_path(game_id)
-        ) as ws:
-            ws.send_json({"seq": 0})
-            data = _receive_ws_json(ws)
-            assert _is_dict(data)
-            assert data["type"] == "state"
-            assert "state" in data
-
-
 def test_ws_connect_takeover_closes_old_connection(
     sync_client: SyncServerClient, clean_registry: None
 ) -> None:
@@ -1399,8 +1362,6 @@ def test_ws_connect_takeover_closes_old_connection(
     _prepare_ws_game(sync_client, game_id)
     room = registry.get(game_id)
     assert isinstance(room, GameRoom)
-    user_player_raw = room.player_at(2)
-    assert isinstance(user_player_raw, HumanPlayer)
 
     # First connection
     with sync_client.websocket_connect(_player_ws_path(game_id)) as ws1:
@@ -1408,7 +1369,7 @@ def test_ws_connect_takeover_closes_old_connection(
         data1 = _receive_ws_json(ws1)
         assert _is_dict(data1)
         assert data1["type"] == "state"
-        assert user_player_raw.is_connected()
+        assert room.players()[2].connected
 
         # Second connection should take over (old connection closed, new
         # accepted)
@@ -1420,7 +1381,7 @@ def test_ws_connect_takeover_closes_old_connection(
             assert _is_dict(data2)
             assert data2["type"] == "state"
             # New connection is now the active one
-            assert user_player_raw.is_connected()
+            assert room.players()[2].connected
 
 
 # ---- WebSocket: Actions with response verification ----

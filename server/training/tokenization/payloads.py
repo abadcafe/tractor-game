@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Literal
 
-from server.game.rules.card_faces import MAX_FACE_COUNT, CardFace
 from server.game.rules.cards import Rank
-from server.game.rules.required_progress import (
+from server.game.rules.cards.faces import MAX_FACE_COUNT, CardFace
+from server.game.rules.progression import (
     ProgressTarget,
     TerminalProgress,
 )

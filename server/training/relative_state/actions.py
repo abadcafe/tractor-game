@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from server.game.rules.card_faces import FaceCount
+from server.game.rules.cards.faces import FaceCount
 from server.training.observation_structure import RoundEventOrdinal
 from server.training.relative_state.relations import (
     RelativeActor,

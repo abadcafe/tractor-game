@@ -6,13 +6,13 @@ from dataclasses import dataclass
 from typing import Literal
 
 from server.foundation.result import Ok, Rejected
-from server.game.rules.card_faces import (
+from server.game.rules.cards import Rank, Suit
+from server.game.rules.cards.faces import (
     MAX_FACE_COUNT,
     CardFace,
     FaceCount,
     face_sort_key,
 )
-from server.game.rules.cards import Rank, Suit
 
 type ActionChoiceKind = Literal["pass", "finish", "card"]
 

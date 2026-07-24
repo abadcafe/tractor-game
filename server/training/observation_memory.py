@@ -6,12 +6,9 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from server.foundation.result import Ok, Rejected
-from server.game.protocol import (
-    CompletedTrickSnapshot,
-    StateMessage,
-    StateSnapshot,
-)
 from server.game.rules.cards import Card
+from server.game.snapshots import PlayerSnapshot
+from server.game.snapshots.tricks import CompletedTrickSnapshot
 from server.training.observation_structure import RoundEventOrdinal
 
 type BidDisposition = Literal["pass", "reveal"]
@@ -65,7 +62,7 @@ class ObservationMemory:
     """Accumulate public history from contiguous state pushes."""
 
     _last_seq: int | None = None
-    _previous: StateSnapshot | None = None
+    _previous: PlayerSnapshot | None = None
     _pending_bid: PendingBid | None = None
     _seen_bid_count: int = 0
     _bid_actions: list[ObservedBidAction] = field(
@@ -79,30 +76,34 @@ class ObservationMemory:
     )
 
     def observe(
-        self, message: StateMessage
+        self,
+        *,
+        seq: int,
+        snapshot: PlayerSnapshot,
+        error: str | None = None,
     ) -> Ok[ObservationMemoryView] | Rejected:
-        """Consume one state envelope and return the current memory."""
-        if message.error is not None:
-            if self._last_seq is None or message.seq != self._last_seq:
+        """Consume one contiguous player snapshot."""
+        if error is not None:
+            if self._last_seq is None or seq != self._last_seq:
                 return _ObservationMemoryRejected(
                     "observation memory received an unknown-state error"
                 )
             return Ok(value=self.view())
 
         if self._last_seq is None:
-            initial = self._accept_initial(message)
+            initial = self._accept_initial(seq, snapshot)
             if isinstance(initial, Rejected):
                 return initial
             return Ok(value=self.view())
 
-        if message.seq == self._last_seq:
+        if seq == self._last_seq:
             previous = self._previous
             assert previous is not None
-            assert message.state == previous
+            assert snapshot == previous
             return Ok(value=self.view())
 
         expected = self._last_seq + 1
-        if message.seq != expected:
+        if seq != expected:
             return _ObservationMemoryRejected(
                 f"observation memory missed state sequence {expected}"
             )
@@ -110,18 +111,18 @@ class ObservationMemory:
         previous = self._previous
         assert previous is not None
         if previous.phase in ("SCORING", "WAITING") and (
-            message.state.phase == "DEAL_BID"
+            snapshot.phase == "DEAL_BID"
         ):
             self._clear_round()
 
-        bid_result = self._settle_pending_bid(message.state)
+        bid_result = self._settle_pending_bid(snapshot)
         if isinstance(bid_result, Rejected):
             return bid_result
-        self._record_completed(message.state)
-        self._pending_bid = _pending_bid(previous, message.state)
-        self._seen_bid_count = len(message.state.bid_events)
-        self._last_seq = message.seq
-        self._previous = message.state
+        self._record_completed(snapshot)
+        self._pending_bid = _pending_bid(previous, snapshot)
+        self._seen_bid_count = len(snapshot.bid_events)
+        self._last_seq = seq
+        self._previous = snapshot
         return Ok(value=self.view())
 
     def view(self) -> ObservationMemoryView:
@@ -138,9 +139,10 @@ class ObservationMemory:
         self._clear_round()
 
     def _accept_initial(
-        self, message: StateMessage
+        self,
+        seq: int,
+        snapshot: PlayerSnapshot,
     ) -> Ok[None] | Rejected:
-        snapshot = message.state
         if snapshot.phase == "WAITING":
             pass
         elif snapshot.phase == "DEAL_BID":
@@ -155,7 +157,7 @@ class ObservationMemory:
             return _ObservationMemoryRejected(
                 "observation memory did not observe round start"
             )
-        self._last_seq = message.seq
+        self._last_seq = seq
         self._previous = snapshot
         self._seen_bid_count = len(snapshot.bid_events)
         self._pending_bid = _initial_pending_bid(snapshot)
@@ -163,7 +165,7 @@ class ObservationMemory:
         return Ok(value=None)
 
     def _settle_pending_bid(
-        self, snapshot: StateSnapshot
+        self, snapshot: PlayerSnapshot
     ) -> Ok[None] | Rejected:
         pending = self._pending_bid
         if pending is None:
@@ -200,7 +202,7 @@ class ObservationMemory:
         self._bid_actions.append(action)
         return Ok(value=None)
 
-    def _record_completed(self, snapshot: StateSnapshot) -> None:
+    def _record_completed(self, snapshot: PlayerSnapshot) -> None:
         completed = snapshot.last_completed_trick
         if completed is None:
             return
@@ -219,7 +221,7 @@ class ObservationMemory:
 
 
 def _initial_pending_bid(
-    snapshot: StateSnapshot,
+    snapshot: PlayerSnapshot,
 ) -> PendingBid | None:
     if snapshot.phase != "DEAL_BID":
         return None
@@ -237,7 +239,7 @@ def _initial_pending_bid(
 
 
 def _pending_bid(
-    previous: StateSnapshot, current: StateSnapshot
+    previous: PlayerSnapshot, current: PlayerSnapshot
 ) -> PendingBid | None:
     if current.phase != "DEAL_BID":
         return None

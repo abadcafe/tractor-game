@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from server.game.rules.card_faces import CardFace
 from server.game.rules.cards import Rank, Suit
-from server.game.rules.ordering import RANK_ORDER
+from server.game.rules.cards.faces import FACE_RANKS, CardFace
 from server.training.relative_state import TrumpMode
 from server.training.relative_state.contexts import RoundContext
 
@@ -59,8 +58,8 @@ def _strength(
             return 80
         return 70
     if trump_suit is not None and face.suit == trump_suit:
-        return 45 + RANK_ORDER[face.rank]
-    return RANK_ORDER[face.rank] - 2
+        return 45 + FACE_RANKS.index(face.rank) + 2
+    return FACE_RANKS.index(face.rank)
 
 
 def _printed_suit_id(suit: Suit) -> int:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import torch
 
-from server.game.players.test_helpers import card, make_snapshot
 from server.training import model as model_api
 from server.training.model import TractorPolicyModel
 from server.training.observation import Observation, build_observation
@@ -15,6 +14,8 @@ from server.training.semantic_actions.choices import (
     PASS_CHOICE_ID,
 )
 from server.training.tensorize import tensorize_observation
+from tests.support import card
+from tests.support import snapshot as make_snapshot
 
 
 def test_model_package_exposes_only_complete_model_api() -> None:

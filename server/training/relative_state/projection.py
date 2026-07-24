@@ -5,28 +5,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from server.foundation.result import Ok, Rejected
-from server.game.protocol import (
-    BottomExchangeSnapshot,
-    CompletedTrickSnapshot,
-    FailedThrowSnapshot,
-    StateSnapshot,
-    TrickSlotSnapshot,
-    TrickSnapshot,
-)
-from server.game.rules.card_faces import (
+from server.game.rules.cards import Rank
+from server.game.rules.cards.faces import (
     FaceCount,
     canonical_face_counts,
 )
-from server.game.rules.cards import Rank, Suit
-from server.game.rules.required_progress import (
-    MANDATORY_LEVELS,
+from server.game.rules.progression import (
     distance_to_target,
     stage_target,
 )
-from server.game.state_machine.constants import (
-    BOTTOM_CARD_COUNT,
-    PLAYER_COUNT,
-    TOTAL_CARDS,
+from server.game.snapshots import PlayerSnapshot
+from server.game.snapshots.contract import (
+    NoTrump,
+    PendingTrump,
+    SuitedTrump,
+)
+from server.game.snapshots.events import BottomExchangeSnapshot
+from server.game.snapshots.tricks import (
+    CompletedTrickSnapshot,
+    FailedThrowSnapshot,
+    TrickSlotSnapshot,
+    TrickSnapshot,
 )
 from server.training.observation_memory import ObservationMemoryView
 from server.training.observation_structure import (
@@ -63,24 +62,31 @@ class RelativeProjectionRejected(Rejected):
         super().__init__(reason)
 
 
+_PLAYER_COUNT = 4
+_DEALT_CARD_COUNT = 100
+
+
 def project_relative_observation(
     *,
     viewer: int,
-    snapshot: StateSnapshot,
+    snapshot: PlayerSnapshot,
     memory: ObservationMemoryView,
 ) -> Ok[RelativeObservation] | Rejected:
     """Build one complete viewer-relative observation."""
-    if viewer < 0 or viewer >= PLAYER_COUNT:
+    if viewer < 0 or viewer >= _PLAYER_COUNT:
         return RelativeProjectionRejected(
             "viewer is outside player topology"
         )
-    if len(snapshot.player_hand_counts) != PLAYER_COUNT:
+    if len(snapshot.player_hand_counts) != _PLAYER_COUNT:
         return RelativeProjectionRejected(
             "player hand counts do not match player topology"
         )
     own_level, opponent_level = _relative_levels(viewer, snapshot)
-    own_target = stage_target(own_level)
-    opponent_target = stage_target(opponent_level)
+    own_target = stage_target(own_level, snapshot.mandatory_levels)
+    opponent_target = stage_target(
+        opponent_level,
+        snapshot.mandatory_levels,
+    )
     round_context = RoundContext(
         declarer_actor=None
         if snapshot.declarer_player is None
@@ -110,7 +116,7 @@ def project_relative_observation(
     return Ok(
         value=RelativeObservation(
             global_context=GlobalContext(
-                mandatory_levels=MANDATORY_LEVELS
+                mandatory_levels=snapshot.mandatory_levels
             ),
             round_context=round_context,
             round_actions=timeline.actions,
@@ -123,21 +129,23 @@ def project_relative_observation(
 
 
 def _relative_levels(
-    viewer: int, snapshot: StateSnapshot
+    viewer: int, snapshot: PlayerSnapshot
 ) -> tuple[Rank, Rank]:
     if viewer % 2 == 0:
         return (snapshot.team0_level, snapshot.team1_level)
     return (snapshot.team1_level, snapshot.team0_level)
 
 
-def _trump_state(snapshot: StateSnapshot) -> TrumpState:
-    suit = snapshot.trump_suit
-    if snapshot.phase == "DEAL_BID":
+def _trump_state(snapshot: PlayerSnapshot) -> TrumpState:
+    if isinstance(snapshot.trump, PendingTrump):
         return TrumpState(mode=TrumpMode.UNSET, suit=None)
-    if suit is None:
+    if isinstance(snapshot.trump, NoTrump):
         return TrumpState(mode=TrumpMode.NO_TRUMP, suit=None)
-    assert suit != Suit.JOKER
-    return TrumpState(mode=TrumpMode.SUITED, suit=suit)
+    assert isinstance(snapshot.trump, SuitedTrump)
+    return TrumpState(
+        mode=TrumpMode.SUITED,
+        suit=snapshot.trump.suit,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,12 +156,12 @@ class _RoundTimeline:
 
 def _round_timeline(
     viewer: int,
-    snapshot: StateSnapshot,
+    snapshot: PlayerSnapshot,
     memory: ObservationMemoryView,
 ) -> _RoundTimeline:
     actions: list[RelativeRoundAction] = []
     next_value = 1
-    deal_event_limit = TOTAL_CARDS - BOTTOM_CARD_COUNT
+    deal_event_limit = _DEALT_CARD_COUNT
     for action in memory.bid_actions:
         ordinal = action.deal_ordinal
         assert ordinal.value <= deal_event_limit
@@ -221,7 +229,7 @@ def _exchange_action(
 
 def _tricks(
     viewer: int,
-    snapshot: StateSnapshot,
+    snapshot: PlayerSnapshot,
     memory: ObservationMemoryView,
 ) -> tuple[RelativeTrick, ...]:
     result: list[RelativeTrick] = []
@@ -309,7 +317,7 @@ def _play_actions(
 
 
 def _position_index(*, lead_player: int, actor: int) -> int:
-    return (actor - lead_player) % PLAYER_COUNT
+    return (actor - lead_player) % _PLAYER_COUNT
 
 
 def _revealed_extra(
@@ -329,7 +337,7 @@ def _revealed_extra(
 
 
 def _query(
-    snapshot: StateSnapshot,
+    snapshot: PlayerSnapshot,
     next_round_event: RoundEventOrdinal,
 ) -> DecisionQuery | None:
     awaiting = snapshot.awaiting_action

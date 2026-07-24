@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from server.game.state_machine.constants import get_team_index
 from server.training.policy_sampling.records import DecisionHandle
 from server.training.trajectory import DecisionStep
 
@@ -63,7 +62,7 @@ def terminal_return_commit(
         team_steps = tuple(
             step
             for step in steps
-            if get_team_index(step.player_index) == team_index
+            if step.player_index % 2 == team_index
         )
         if team_steps:
             builder.append_terminal_trajectory(

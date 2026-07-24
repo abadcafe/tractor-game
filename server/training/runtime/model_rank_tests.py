@@ -10,7 +10,6 @@ import pytest
 import torch
 
 from server.foundation.result import Ok, Rejected
-from server.game.players.test_helpers import card, make_snapshot
 from server.training.legal_actions import (
     LegalActionIndex,
     build_legal_action_index,
@@ -66,6 +65,8 @@ from server.training.semantic_actions.choices import (
     action_choice_id,
 )
 from server.training_events import NullEventSink
+from tests.support import card
+from tests.support import snapshot as make_snapshot
 
 
 @dataclass(frozen=True, slots=True)

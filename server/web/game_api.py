@@ -7,14 +7,15 @@ from typing import TypedDict
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import JSONResponse
 
-from server.foundation.result import Rejected
-from server.game.room.bot_factory import (
-    BotKind,
+from server.foundation.result import Ok, Rejected
+from server.game import Seat
+from server.game_runtime.room import BotKind, GameRoom, RoomPlayer
+from server.web.game_composition import (
     bot_kind_from_env,
     bot_kind_from_str,
+    create_game_room,
 )
-from server.game.room.game_room import GameRoom, RoomPlayer
-from server.game.room.player_factory import create_game_room
+from server.web.game_connection import handle_game_connection
 from server.web.state import ServerState
 
 _PLAYER_CAPACITY = 4
@@ -51,12 +52,11 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
 
     async def create_auto_game() -> dict[str, str]:
         room = create_game_room()
-        result = await room.fill_empty_players_for_setup(
+        result = room.fill_empty_bots(
             kind=bot_kind_from_env(),
-            preserve_players={2},
+            preserve={Seat.SOUTH},
         )
-        if isinstance(result, Rejected):
-            raise RuntimeError(result.reason)
+        assert isinstance(result, Ok)
         game_id = state.registry.create(room)
         return {"game_id": game_id}
 
@@ -65,16 +65,15 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
     ) -> dict[str, list[ListedGameResponse]]:
         return {
             "games": [
-                _listed_game_response(state, game["game_id"], user_id)
-                for game in state.registry.list_games()
+                _listed_game_response(state, game_id, user_id)
+                for game_id in state.registry.list_ids()
             ]
         }
 
     async def delete_game(game_id: str) -> dict[str, bool]:
-        room = state.registry.get(game_id)
+        room = state.registry.delete(game_id)
         if room is not None:
-            await room.close_all()
-        state.registry.delete(game_id)
+            await room.close()
         return {"ok": True}
 
     async def attach_player(
@@ -124,7 +123,7 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
             return bot_kind
         if user_id is None:
             return _player_error_response("missing user id")
-        result = await room.fill_bot_players(
+        result = await room.fill_bots(
             kind=bot_kind,
             user_id=user_id,
         )
@@ -146,8 +145,9 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
             await websocket.close(code=4410, reason="missing user id")
             return
 
-        await room.connect_player(
+        await handle_game_connection(
             websocket,
+            room,
             player=player,
             user_id=user_id,
         )

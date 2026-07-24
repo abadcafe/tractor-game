@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from server.game.room.game_registry import GameRegistry
-from server.game.room.game_room import GameRoom
+from server.game_runtime.registry import GameRegistry
+from server.game_runtime.room import GameRoom
 from server.training_control.config import (
     TrainingControlConfig,
     training_control_config,
@@ -35,4 +35,6 @@ class ServerState:
     async def cleanup_expired_games(
         self, *, max_age_seconds: int
     ) -> None:
-        self.registry.cleanup_expired(max_age_seconds=max_age_seconds)
+        rooms = self.registry.expire(max_idle_seconds=max_age_seconds)
+        for room in rooms:
+            await room.close()

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from server.game.rules.card_faces import FaceCount
+from server.game.rules.cards.faces import FaceCount
 from server.training.observation_structure import TrickRecency
 from server.training.relative_state import (
     RelativeActor,

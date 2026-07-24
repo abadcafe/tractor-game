@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from server.game.rules.card_faces import FaceCount
+from server.game.rules.cards.faces import FaceCount
 from server.training.semantic_actions.choices import ActionTrace
 
 type PlayerActionKind = Literal["bid", "stir", "discard", "play"]
@@ -20,10 +20,3 @@ class GeneratedAction:
     face_counts: tuple[FaceCount, ...]
     trace: ActionTrace
     is_pass: bool
-
-
-@dataclass(frozen=True, slots=True)
-class BoundAction:
-    """Semantic action bound to physical ids for Game.receive()."""
-
-    raw: dict[str, object]

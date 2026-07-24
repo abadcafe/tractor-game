@@ -30,8 +30,128 @@ def test_training_and_game_do_not_depend_on_control_or_cli() -> None:
     assert not _matching(_package_imports("training"), forbidden)
     assert not _matching(
         _package_imports("game"),
-        (*forbidden, "server.training"),
+        (
+            *forbidden,
+            "server.training",
+            "server.game_agents",
+            "server.game_runtime",
+            "server.web",
+        ),
     )
+
+
+def test_game_runtime_and_agents_follow_dependency_direction() -> None:
+    assert not _matching(
+        _package_imports("game_runtime"),
+        (
+            "server.game_agents",
+            "server.training",
+            "server.web",
+        ),
+    )
+    assert not _matching(
+        _package_imports("game_agents"),
+        ("server.training", "server.web"),
+    )
+    assert not _matching(
+        _package_imports("training"),
+        (
+            "server.game_agents",
+            "server.game_runtime",
+            "server.web",
+        ),
+    )
+
+
+def test_game_domain_has_no_io_or_synchronization_dependencies() -> (
+    None
+):
+    imports = _package_imports("game")
+
+    assert not _matching(
+        imports,
+        (
+            "asyncio",
+            "fastapi",
+            "httpx",
+            "os",
+            "pathlib",
+            "socket",
+            "sqlite3",
+            "threading",
+            "time",
+            "server.game_runtime",
+            "server.game_agents",
+            "server.web",
+        ),
+    )
+
+
+def test_process_local_game_runtime_has_no_locks() -> None:
+    forbidden_calls = {
+        "Lock",
+        "RLock",
+        "Semaphore",
+        "BoundedSemaphore",
+        "Condition",
+    }
+
+    assert not _called_attributes("game_runtime", forbidden_calls)
+
+
+def test_game_internals_stay_behind_public_facades() -> None:
+    imports = _imports_outside_package("game")
+    game_imports = {
+        imported
+        for imported in imports
+        if imported == "server.game"
+        or imported.startswith("server.game.")
+    }
+    allowed = {
+        "server.game",
+        "server.game.rules",
+        "server.game.rules.bidding",
+        "server.game.rules.cards",
+        "server.game.rules.cards.faces",
+        "server.game.rules.play",
+        "server.game.rules.progression",
+        "server.game.rules.scoring",
+        "server.game.snapshots",
+        "server.game.snapshots.contract",
+        "server.game.snapshots.events",
+        "server.game.snapshots.player",
+        "server.game.snapshots.review",
+        "server.game.snapshots.tricks",
+    }
+
+    assert game_imports <= allowed
+
+
+def test_runtime_and_agent_internals_stay_behind_facades() -> None:
+    imports = _imports_outside_package("game_runtime")
+    runtime_imports = {
+        imported
+        for imported in imports
+        if imported == "server.game_runtime"
+        or imported.startswith("server.game_runtime.")
+    }
+    assert runtime_imports <= {
+        "server.game_runtime.registry",
+        "server.game_runtime.room",
+        "server.game_runtime.session",
+    }
+
+    imports = _imports_outside_package("game_agents")
+    agent_imports = {
+        imported
+        for imported in imports
+        if imported == "server.game_agents"
+        or imported.startswith("server.game_agents.")
+    }
+    assert agent_imports <= {
+        "server.game_agents.factory",
+        "server.game_agents.llm",
+    }
 
 
 def test_events_metrics_and_artifacts_follow_read_model_dag() -> None:
@@ -141,6 +261,28 @@ def _package_imports_outside_subpackage(
     return imports
 
 
+def _imports_outside_package(package: str) -> set[str]:
+    imports: set[str] = set()
+    excluded_root = _SERVER_ROOT / package
+    for path in _SERVER_ROOT.rglob("*.py"):
+        if path.name.endswith("_tests.py") or path.is_relative_to(
+            excluded_root
+        ):
+            continue
+        module = ast.parse(
+            path.read_text(encoding="utf-8"), filename=str(path)
+        )
+        for node in ast.walk(module):
+            if isinstance(node, ast.Import):
+                imports.update(alias.name for alias in node.names)
+            elif (
+                isinstance(node, ast.ImportFrom)
+                and node.module is not None
+            ):
+                imports.add(node.module)
+    return imports
+
+
 def _matching(
     imports: set[str], forbidden_prefixes: tuple[str, ...]
 ) -> set[str]:
@@ -152,3 +294,31 @@ def _matching(
             for prefix in forbidden_prefixes
         )
     }
+
+
+def _called_attributes(
+    package: str,
+    forbidden_names: set[str],
+) -> set[str]:
+    called: set[str] = set()
+    for path in (_SERVER_ROOT / package).rglob("*.py"):
+        if path.name.endswith("_tests.py"):
+            continue
+        module = ast.parse(
+            path.read_text(encoding="utf-8"), filename=str(path)
+        )
+        for node in ast.walk(module):
+            if not isinstance(node, ast.Call):
+                continue
+            function = node.func
+            if (
+                isinstance(function, ast.Name)
+                and function.id in forbidden_names
+            ):
+                called.add(function.id)
+            elif (
+                isinstance(function, ast.Attribute)
+                and function.attr in forbidden_names
+            ):
+                called.add(function.attr)
+    return called

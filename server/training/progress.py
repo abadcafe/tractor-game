@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from server.game.rules.cards import Rank
-from server.game.rules.required_progress import (
+from server.game.rules.progression import (
     TerminalProgress,
     progress_target_index,
     stage_target,
@@ -28,10 +28,12 @@ class RoundScore:
 
     declarer_team: int
     total_defender_points: int
+    mandatory_levels: tuple[Rank, ...]
 
     def __post_init__(self) -> None:
         assert self.declarer_team in (0, 1)
         assert self.total_defender_points >= 0
+        assert self.mandatory_levels
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +47,7 @@ class TeamReward:
 def progress_delta(
     before: TeamProgress,
     after: TeamProgress,
+    mandatory_levels: tuple[Rank, ...],
 ) -> int:
     """
     Return this team's stage progress delta for one round.
@@ -55,7 +58,7 @@ def progress_delta(
     but only from a round the team started as declarer.
     """
     assert isinstance(before.level, Rank)
-    target = stage_target(before.level)
+    target = stage_target(before.level, mandatory_levels)
     if after.level == TerminalProgress.WIN:
         assert before.is_declarer
         assert after.is_declarer
@@ -126,16 +129,22 @@ def continuous_progress_delta(
             score.total_defender_points
         )
     )
-    clipped_level_gain = min(raw_gain, _level_gain_limit(before))
+    clipped_level_gain = min(
+        raw_gain,
+        _level_gain_limit(before, score.mandatory_levels),
+    )
     control_delta = (
         1.0 if not before.is_declarer and after.is_declarer else 0.0
     )
     return control_delta + clipped_level_gain
 
 
-def _level_gain_limit(before: TeamProgress) -> float:
+def _level_gain_limit(
+    before: TeamProgress,
+    mandatory_levels: tuple[Rank, ...],
+) -> float:
     assert isinstance(before.level, Rank)
-    target = stage_target(before.level)
+    target = stage_target(before.level, mandatory_levels)
     if target == TerminalProgress.WIN and not before.is_declarer:
         return 0.0
     before_index = progress_target_index(before.level)

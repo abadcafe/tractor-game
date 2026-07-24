@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from server.foundation.result import Ok
-from server.game.players.test_helpers import card, make_snapshot
-from server.game.protocol import (
+from server.game import Seat
+from server.game.snapshots.events import (
     BottomExchangeSnapshot,
-    FailedThrowSnapshot,
     StirDeclarationEventSnapshot,
+)
+from server.game.snapshots.tricks import (
+    FailedThrowSnapshot,
     TrickSlotSnapshot,
     TrickSnapshot,
 )
@@ -17,6 +19,8 @@ from server.training.relative_state import (
     TrumpMode,
     project_relative_observation,
 )
+from tests.support import card
+from tests.support import snapshot as make_snapshot
 
 
 def test_project_removes_viewer_and_absolute_team_identity() -> None:
@@ -124,18 +128,18 @@ def test_project_failed_throw_keeps_only_revealed_extra() -> None:
     forced = card("hearts", "Q")
     extra = card("hearts", "K")
     trick = TrickSnapshot(
-        lead_player=1,
-        current_player=2,
-        slots=[
-            TrickSlotSnapshot(player=0, cards=[]),
-            TrickSlotSnapshot(player=1, cards=[forced]),
-            TrickSlotSnapshot(player=2, cards=[]),
-            TrickSlotSnapshot(player=3, cards=[]),
-        ],
+        lead_player=Seat.WEST,
+        current_player=Seat.SOUTH,
+        slots=(
+            TrickSlotSnapshot(player=Seat.NORTH, cards=()),
+            TrickSlotSnapshot(player=Seat.WEST, cards=(forced,)),
+            TrickSlotSnapshot(player=Seat.SOUTH, cards=()),
+            TrickSlotSnapshot(player=Seat.EAST, cards=()),
+        ),
         failed_throw=FailedThrowSnapshot(
-            player=1,
-            attempted_cards=[forced, extra],
-            forced_cards=[forced],
+            player=Seat.WEST,
+            attempted_cards=(forced, extra),
+            forced_cards=(forced,),
         ),
     )
 
@@ -166,8 +170,12 @@ def test_project_failed_throw_keeps_only_revealed_extra() -> None:
 
 def test_round_timeline_has_unique_ordinals_and_query_tail() -> None:
     bottom = BottomExchangeSnapshot(
-        picked_up_bottom_cards=[card("clubs", "2")],
-        discarded_bottom_cards=[card("diamonds", "3")],
+        player=Seat.NORTH,
+        trigger="initial",
+        stir_event_index=None,
+        picked_up_bottom_cards=(card("clubs", "2"),),
+        discarded_bottom_cards=(card("diamonds", "3"),),
+        resulting_bottom_cards=(card("diamonds", "3"),),
     )
     snapshot = make_snapshot(
         phase="STIRRING",
@@ -175,9 +183,9 @@ def test_round_timeline_has_unique_ordinals_and_query_tail() -> None:
         own_initial_bottom_exchange=bottom,
         stir_events=[
             StirDeclarationEventSnapshot(
-                player=1,
+                player=Seat.WEST,
                 kind="stir",
-                cards=[card("hearts", "2")],
+                cards=(card("hearts", "2"),),
                 new_suit=card("hearts", "2").suit,
                 priority=1,
                 own_bottom_exchange=bottom,
@@ -208,9 +216,9 @@ def test_round_timeline_has_unique_ordinals_and_query_tail() -> None:
 
 def test_round_timeline_uses_only_visible_private_exchanges() -> None:
     public_event = StirDeclarationEventSnapshot(
-        player=1,
+        player=Seat.WEST,
         kind="pass",
-        cards=[],
+        cards=(),
         new_suit=None,
         priority=None,
         own_bottom_exchange=None,
@@ -244,15 +252,15 @@ def _open_trick(
 ) -> TrickSnapshot:
     lead_card = card("hearts", "2")
     slots = [
-        TrickSlotSnapshot(player=player, cards=[])
+        TrickSlotSnapshot(player=Seat(player), cards=())
         for player in range(4)
     ]
     if lead_player != current_player:
         slots[lead_player] = TrickSlotSnapshot(
-            player=lead_player, cards=[lead_card]
+            player=Seat(lead_player), cards=(lead_card,)
         )
     return TrickSnapshot(
-        lead_player=lead_player,
-        current_player=current_player,
-        slots=slots,
+        lead_player=Seat(lead_player),
+        current_player=Seat(current_player),
+        slots=tuple(slots),
     )

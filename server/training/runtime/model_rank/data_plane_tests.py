@@ -9,7 +9,6 @@ import torch
 
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
-from server.game.players.test_helpers import card, make_snapshot
 from server.training.legal_actions import (
     LegalActionIndex,
     build_legal_action_index,
@@ -49,6 +48,8 @@ from server.training.runtime.model_rank.staging import (
 )
 from server.training.runtime.state import RuntimeTrainingState
 from server.training.sampling import PolicyDecisionKey
+from tests.support import card
+from tests.support import snapshot as make_snapshot
 
 type _ModelRankControlLink = AsyncProcessControlLink[
     ModelRankCommand, ModelRankResponse

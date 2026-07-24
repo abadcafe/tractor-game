@@ -1,7 +1,7 @@
 """Black-box contract tests for the closed action vocabulary."""
 
 from server.foundation.result import Ok, Rejected
-from server.game.rules.card_faces import FaceCount
+from server.game.rules.cards.faces import FaceCount
 from server.training.semantic_actions.choices import (
     ACTION_CHOICE_COUNT,
     CARD_FACES,

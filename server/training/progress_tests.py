@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from server.game.rules.cards import Rank
-from server.game.rules.required_progress import TerminalProgress
+from server.game.rules.progression import TerminalProgress
 from server.training.progress import (
     RoundScore,
     TeamProgress,
@@ -12,40 +12,42 @@ from server.training.progress import (
     zero_sum_rewards,
 )
 
+_MANDATORY_LEVELS = (Rank.ACE,)
+
 
 def test_progress_delta_stays_zero_without_progress() -> None:
     before = TeamProgress(level=Rank.KING, is_declarer=True)
     after = TeamProgress(level=Rank.KING, is_declarer=True)
 
-    assert progress_delta(before, after) == 0
+    assert progress_delta(before, after, _MANDATORY_LEVELS) == 0
 
 
 def test_progress_delta_counts_j_to_ace_as_three_steps() -> None:
     before = TeamProgress(level=Rank.JACK, is_declarer=True)
     after = TeamProgress(level=Rank.ACE, is_declarer=True)
 
-    assert progress_delta(before, after) == 3
+    assert progress_delta(before, after, _MANDATORY_LEVELS) == 3
 
 
 def test_progress_delta_counts_taking_stage_control() -> None:
     before = TeamProgress(level=Rank.KING, is_declarer=False)
     after = TeamProgress(level=Rank.ACE, is_declarer=True)
 
-    assert progress_delta(before, after) == 2
+    assert progress_delta(before, after, _MANDATORY_LEVELS) == 2
 
 
 def test_progress_delta_counts_declarer_ace_to_win() -> None:
     before = TeamProgress(level=Rank.ACE, is_declarer=True)
     after = TeamProgress(level=TerminalProgress.WIN, is_declarer=True)
 
-    assert progress_delta(before, after) == 1
+    assert progress_delta(before, after, _MANDATORY_LEVELS) == 1
 
 
 def test_progress_delta_counts_non_declarer_ace_taking_stage() -> None:
     before = TeamProgress(level=Rank.ACE, is_declarer=False)
     after = TeamProgress(level=Rank.ACE, is_declarer=True)
 
-    assert progress_delta(before, after) == 1
+    assert progress_delta(before, after, _MANDATORY_LEVELS) == 1
 
 
 def test_zero_sum_rewards_are_opposites() -> None:
@@ -54,7 +56,11 @@ def test_zero_sum_rewards_are_opposites() -> None:
         team1_before=TeamProgress(level=Rank.TEN, is_declarer=False),
         team0_after=TeamProgress(level=Rank.JACK, is_declarer=True),
         team1_after=TeamProgress(level=Rank.TEN, is_declarer=False),
-        score=RoundScore(declarer_team=0, total_defender_points=40),
+        score=RoundScore(
+            declarer_team=0,
+            total_defender_points=40,
+            mandatory_levels=_MANDATORY_LEVELS,
+        ),
     )
 
     assert reward.team0 == 1.0
@@ -117,7 +123,11 @@ def test_continuous_delta_blocks_non_declarer_win_gain() -> None:
         team=1,
         before=TeamProgress(level=Rank.ACE, is_declarer=False),
         after=TeamProgress(level=Rank.ACE, is_declarer=True),
-        score=RoundScore(declarer_team=0, total_defender_points=160),
+        score=RoundScore(
+            declarer_team=0,
+            total_defender_points=160,
+            mandatory_levels=_MANDATORY_LEVELS,
+        ),
     )
 
     assert delta == 1.0
@@ -131,7 +141,11 @@ def test_continuous_progress_delta_allows_declarer_win_gain() -> None:
             level=TerminalProgress.WIN,
             is_declarer=True,
         ),
-        score=RoundScore(declarer_team=0, total_defender_points=0),
+        score=RoundScore(
+            declarer_team=0,
+            total_defender_points=0,
+            mandatory_levels=_MANDATORY_LEVELS,
+        ),
     )
 
     assert delta == 1.0
@@ -146,6 +160,7 @@ def _declarer_team_reward(*, total_defender_points: int) -> float:
         score=RoundScore(
             declarer_team=0,
             total_defender_points=total_defender_points,
+            mandatory_levels=_MANDATORY_LEVELS,
         ),
     )
     return reward.team0
@@ -167,6 +182,7 @@ def _defender_team_reward(
         score=RoundScore(
             declarer_team=0,
             total_defender_points=total_defender_points,
+            mandatory_levels=_MANDATORY_LEVELS,
         ),
     )
     return reward.team1

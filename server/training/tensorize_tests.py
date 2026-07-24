@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import torch
 
-from server.game.players.test_helpers import card, make_snapshot
 from server.game.rules.cards import Card
 from server.training.observation import Observation, build_observation
 from server.training.observation_memory import ObservationMemoryView
@@ -18,6 +17,8 @@ from server.training.tensorize import (
     tensorize_observations,
 )
 from server.training.tokenization.encoding_schema import CATEGORY_COUNT
+from tests.support import card
+from tests.support import snapshot as make_snapshot
 
 
 def test_tensorize_observation_exposes_every_typed_column() -> None:
@@ -115,6 +116,80 @@ def test_card_multiplicity_is_a_universal_scalar() -> None:
         float(candidate_counts[index].item())
         for index in range(int(candidate_counts.shape[0]))
     } == {1.0, 2.0}
+
+
+def test_canonical_observation_has_exact_vocab_and_structure_rows() -> (
+    None
+):
+    """Pin the model-facing vocabulary without an opaque hash."""
+    observation = _observation(
+        player_hand=[
+            card("spades", "A", 1),
+            card("spades", "A", 2),
+        ]
+    )
+    batch = tensorize_observation(
+        observation=observation,
+        device=torch.device("cpu"),
+    )
+
+    expected_categories: tuple[tuple[int, ...], ...] = (
+        (1, 1, 0, 13, 0, 0, 0, 0, 0, 0, 0),
+        (2, 2, 0, 0, 0, 0, 0, 1, 0, 0, 0),
+        (2, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0),
+        (2, 4, 0, 1, 0, 0, 0, 0, 0, 0, 0),
+        (2, 5, 0, 13, 0, 0, 0, 0, 0, 0, 0),
+        (2, 6, 0, 13, 0, 0, 0, 0, 0, 0, 0),
+        (2, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+        (2, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+        (2, 9, 0, 0, 0, 0, 0, 2, 0, 0, 0),
+        (2, 10, 0, 1, 0, 0, 0, 0, 0, 0, 0),
+        (2, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+        (2, 12, 2, 0, 0, 0, 0, 0, 0, 0, 0),
+        (2, 12, 3, 0, 0, 0, 0, 0, 0, 0, 0),
+        (2, 12, 4, 0, 0, 0, 0, 0, 0, 0, 0),
+        (5, 15, 0, 13, 2, 3, 0, 0, 0, 0, 1),
+        (4, 14, 0, 0, 0, 0, 4, 8, 0, 1, 0),
+    )
+    expected_scalars: tuple[float, ...] = (
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        12.0,
+        12.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        2.0,
+        0.0,
+    )
+    expected_structure: tuple[tuple[int, int, int], ...] = (
+        *((0, 0, 0) for _ in range(15)),
+        (0, 1, 1),
+    )
+    assert torch.equal(
+        batch.category_ids[0],
+        torch.tensor(expected_categories, dtype=torch.long),
+    )
+    assert torch.equal(
+        batch.scalar_values[0],
+        torch.tensor(expected_scalars, dtype=torch.float32),
+    )
+    assert torch.equal(
+        batch.encoded_structure_coordinates[0],
+        torch.tensor(expected_structure, dtype=torch.long),
+    )
+    assert torch.equal(
+        batch.card_rule_values[0, 14],
+        torch.tensor([0.0, 0.12], dtype=torch.float32),
+    )
+    assert int(batch.query_indices[0].item()) == 15
 
 
 def _observation(*, player_hand: list[Card]) -> Observation:

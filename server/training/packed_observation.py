@@ -4,14 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from server.game.rules.card_faces import RANK_ORDER, SUIT_ORDER
 from server.game.rules.cards import Rank, Suit
-from server.game.rules.required_progress import TerminalProgress
-from server.game.state_machine.constants import (
-    BOTTOM_CARD_COUNT,
-    PLAYER_COUNT,
-    TOTAL_CARDS,
-)
+from server.game.rules.cards.faces import FACE_RANKS, FACE_SUITS
+from server.game.rules.progression import TerminalProgress
 from server.training.observation import Observation
 from server.training.relative_state import (
     RelativeActor,
@@ -60,26 +55,29 @@ type CardRuleRow = tuple[float, float]
 type CandidateCategoryRow = tuple[int, int, int]
 type EncodedStructureRow = tuple[int, int, int]
 
+_BOTTOM_CARD_COUNT = 8
+_PLAYER_COUNT = 4
+_TOTAL_CARDS = 108
 _MAX_PLAYABLE_HAND: int = (
-    TOTAL_CARDS - BOTTOM_CARD_COUNT
-) // PLAYER_COUNT
+    _TOTAL_CARDS - _BOTTOM_CARD_COUNT
+) // _PLAYER_COUNT
 _MAX_TRICKS: int = _MAX_PLAYABLE_HAND
-_MAX_PLAY_ACTIONS: int = _MAX_TRICKS * PLAYER_COUNT
+_MAX_PLAY_ACTIONS: int = _MAX_TRICKS * _PLAYER_COUNT
 _MAX_FAILED_EXTRA_TOKENS: int = (
-    PLAYER_COUNT * _MAX_PLAYABLE_HAND * (_MAX_PLAYABLE_HAND - 1) // 2
+    _PLAYER_COUNT * _MAX_PLAYABLE_HAND * (_MAX_PLAYABLE_HAND - 1) // 2
 )
-_MAX_BID_NODES: int = 2 * (TOTAL_CARDS - BOTTOM_CARD_COUNT)
+_MAX_BID_NODES: int = 2 * (_TOTAL_CARDS - _BOTTOM_CARD_COUNT)
 _MAX_STIR_DECLARATIONS: int = 6
 _MAX_STIR_ACTIONS: int = (
     _MAX_STIR_DECLARATIONS + 1
-) * PLAYER_COUNT + _MAX_STIR_DECLARATIONS
+) * _PLAYER_COUNT + _MAX_STIR_DECLARATIONS
 _MAX_EXCHANGES: int = _MAX_STIR_DECLARATIONS + 1
-_MAX_EXCHANGE_NODES: int = _MAX_EXCHANGES * (1 + 2 * BOTTOM_CARD_COUNT)
+_MAX_EXCHANGE_NODES: int = _MAX_EXCHANGES * (1 + 2 * _BOTTOM_CARD_COUNT)
 _CONTEXT_NODES: int = 1 + 13
 _PLAY_NODES: int = (
     _MAX_TRICKS
     + _MAX_PLAY_ACTIONS
-    + (TOTAL_CARDS - BOTTOM_CARD_COUNT)
+    + (_TOTAL_CARDS - _BOTTOM_CARD_COUNT)
     + _MAX_FAILED_EXTRA_TOKENS
 )
 MAX_LOSSLESS_OBSERVATION_TOKENS: int = (
@@ -89,7 +87,7 @@ MAX_LOSSLESS_OBSERVATION_TOKENS: int = (
     + _MAX_EXCHANGE_NODES
     + _PLAY_NODES
     + _MAX_PLAYABLE_HAND
-    + BOTTOM_CARD_COUNT
+    + _BOTTOM_CARD_COUNT
     + 1
 )
 
@@ -342,11 +340,11 @@ def _actor_id(actor: RelativeActor) -> int:
 
 
 def _rank_id(rank: Rank) -> int:
-    return RANK_ORDER.index(rank) + 1
+    return FACE_RANKS.index(rank) + 1
 
 
 def _suit_id(suit: Suit) -> int:
-    return SUIT_ORDER.index(suit) + 1
+    return FACE_SUITS.index(suit) + 1
 
 
 def _action_kind_id(kind: TokenActionKind) -> int:

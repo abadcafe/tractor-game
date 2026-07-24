@@ -5,9 +5,8 @@ Visible Playwright playthrough pytest test for the Tractor browser UI.
 Default behavior:
 - build the frontend into static/
 - start uvicorn with websockets-sansio
-- open a tab in an existing debug-enabled Chromium when available,
-otherwise
-  launch a visible Chromium window
+- launch an isolated visible Chromium window
+  (or use an explicitly configured CDP URL)
 - drive a full game through the rendered UI
 - write screenshots and reports under test-results/playthrough/
 """
@@ -18,7 +17,6 @@ import importlib
 import json
 import os
 import shutil
-import socket
 import subprocess
 import sys
 import time
@@ -29,7 +27,7 @@ from itertools import combinations
 from pathlib import Path
 from typing import Literal, Protocol, TextIO, TypeGuard, cast
 from urllib.error import URLError
-from urllib.parse import urlparse
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 import pytest
@@ -70,32 +68,7 @@ RANK_ORDER: dict[str, int] = {
 }
 
 
-class LocatorLike(Protocol):
-    @property
-    def first(self) -> LocatorLike: ...
-
-    def click(self, *, timeout: float | None = None) -> None: ...
-
-    def count(self) -> int: ...
-
-    def is_enabled(self, *, timeout: float | None = None) -> bool: ...
-
-    def scroll_into_view_if_needed(
-        self, *, timeout: float | None = None
-    ) -> None: ...
-
-
 class PageLike(Protocol):
-    def get_by_role(
-        self,
-        role: str,
-        *,
-        name: str,
-        exact: bool | None = None,
-    ) -> LocatorLike: ...
-
-    def locator(self, selector: str) -> LocatorLike: ...
-
     def evaluate(self, expression: str) -> object: ...
 
     def screenshot(self, *, path: str, full_page: bool) -> None: ...
@@ -124,7 +97,7 @@ class BrowserLike(Protocol):
     def contexts(self) -> list[BrowserContextLike]: ...
 
     def new_context(
-        self, *, viewport: dict[str, int]
+        self, *, no_viewport: bool
     ) -> BrowserContextLike: ...
 
     def close(self) -> None: ...
@@ -142,6 +115,8 @@ class BrowserTypeLike(Protocol):
     def connect_over_cdp(
         self,
         endpoint_url: str,
+        *,
+        timeout: float | None = None,
     ) -> BrowserLike: ...
 
 
@@ -180,6 +155,9 @@ INJECTED_SCRIPT = r"""
 (() => {
   if (window.__TRACTOR_PLAYWRIGHT_INSTALLED) return;
   window.__TRACTOR_PLAYWRIGHT_INSTALLED = true;
+  const nativeSetTimeout = window.setTimeout.bind(window);
+  window.setTimeout = (callback, delay = 0, ...args) =>
+    nativeSetTimeout(callback, Math.min(delay, 25), ...args);
   window.__TRACTOR_LAST_STATE_JSON = "";
   window.__TRACTOR_EVENTS = [];
   window.__TRACTOR_ERRORS = [];
@@ -284,7 +262,6 @@ class Config:
     max_seconds: int
     browser_executable: str | None
     cdp_url: str | None
-    prefer_existing_browser: bool
     start_server: bool
     build_frontend: bool
     keep_open: bool
@@ -331,17 +308,79 @@ class BugEntry:
 @dataclass(frozen=True)
 class RoundEntry:
     index: int
-    team0: str
-    team1: str
+    team0_before: str
+    team0_after: str
+    team1_before: str
+    team1_after: str
+    round_winning_team: int
     defender_points: int
+    bottom_card_bonus: int
+    total_defender_points: int
 
     def to_json(self) -> JsonObject:
         return {
             "index": self.index,
-            "team0": self.team0,
-            "team1": self.team1,
+            "team0_before": self.team0_before,
+            "team0_after": self.team0_after,
+            "team1_before": self.team1_before,
+            "team1_after": self.team1_after,
+            "round_winning_team": self.round_winning_team,
             "defender_points": self.defender_points,
+            "bottom_card_bonus": self.bottom_card_bonus,
+            "total_defender_points": self.total_defender_points,
         }
+
+
+@dataclass
+class RoundTracker:
+    """Record completed rounds from the public scoring lifecycle."""
+
+    team0_level: str
+    team1_level: str
+    completed_count: int = 0
+    _review_active: bool = False
+
+    def observe(self, state: JsonObject) -> RoundEntry | None:
+        scoring = object_field(state, "scoring")
+        if string_field(state, "phase") != "WAITING" or scoring is None:
+            self._review_active = False
+            return None
+        if self._review_active:
+            return None
+        self._review_active = True
+
+        team0_after = string_field(state, "team0_level")
+        team1_after = string_field(state, "team1_level")
+        round_winning_team = int_field(scoring, "round_winning_team")
+        defender_points = int_field(scoring, "defender_points")
+        bottom_card_bonus = int_field(scoring, "bottom_card_bonus")
+        total_defender_points = int_field(
+            scoring, "total_defender_points"
+        )
+        winning_team = int_field(state, "winning_team")
+        assert team0_after is not None
+        assert team1_after is not None
+        assert round_winning_team in (0, 1)
+        assert defender_points is not None
+        assert bottom_card_bonus is not None
+        assert total_defender_points is not None
+        assert winning_team in (None, 0, 1)
+
+        self.completed_count += 1
+        entry = RoundEntry(
+            index=self.completed_count,
+            team0_before=self.team0_level,
+            team0_after="WIN" if winning_team == 0 else team0_after,
+            team1_before=self.team1_level,
+            team1_after="WIN" if winning_team == 1 else team1_after,
+            round_winning_team=round_winning_team,
+            defender_points=defender_points,
+            bottom_card_bonus=bottom_card_bonus,
+            total_defender_points=total_defender_points,
+        )
+        self.team0_level = team0_after
+        self.team1_level = team1_after
+        return entry
 
 
 @dataclass(frozen=True)
@@ -423,15 +462,6 @@ class BrowserSession:
     context: BrowserContextLike
     page: PageLike
     attached_existing_browser: bool
-
-
-@dataclass(frozen=True)
-class BrowserEndpoint:
-    browser_id: str
-    label: str
-    port: int
-    endpoint_url: str
-    source: str
 
 
 def utc_now() -> str:
@@ -774,75 +804,130 @@ def css_attr_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def click_button(
-    page: PageLike, name: str, timeout_ms: int = 5000
-) -> None:
-    page.get_by_role("button", name=name, exact=True).first.click(
-        timeout=timeout_ms
+def click_button(page: PageLike, name: str) -> bool:
+    encoded_name = json.dumps(name, ensure_ascii=False)
+    clicked = page.evaluate(
+        f"""() => {{
+          const name = {encoded_name};
+          const button = Array.from(
+            document.querySelectorAll("button")
+          ).find((candidate) =>
+            candidate.textContent?.trim() === name
+          );
+          if (!(button instanceof HTMLButtonElement)) return false;
+          if (button.disabled) return false;
+          button.click();
+          return true;
+        }}"""
     )
+    return clicked is True
 
 
 def click_clear_selection_if_available(page: PageLike) -> None:
-    locator = page.get_by_role(
-        "button", name=CLEAR_SELECTION_BUTTON, exact=True
+    encoded_name = json.dumps(
+        CLEAR_SELECTION_BUTTON,
+        ensure_ascii=False,
     )
-    try:
-        if locator.count() > 0 and locator.first.is_enabled(
-            timeout=500
-        ):
-            locator.first.click(timeout=1000)
-    except PLAYWRIGHT_EXCEPTIONS:
-        return
+    page.evaluate(
+        f"""() => {{
+          const name = {encoded_name};
+          const button = Array.from(
+            document.querySelectorAll("button")
+          ).find((candidate) =>
+            candidate.textContent?.trim() === name
+          );
+          if (
+            button instanceof HTMLButtonElement &&
+            !button.disabled
+          ) {{
+            button.click();
+          }}
+        }}"""
+    )
 
 
-def click_cards(page: PageLike, card_ids: Sequence[str]) -> None:
+def click_cards(page: PageLike, card_ids: Sequence[str]) -> bool:
     click_clear_selection_if_available(page)
     for card in card_ids:
         selector = (
             f'.hand-view .card[data-card-id="{css_attr_value(card)}"]'
         )
-        locator = page.locator(selector).first
-        locator.scroll_into_view_if_needed(timeout=3000)
-        locator.click(timeout=3000)
+        clicked = page.evaluate(
+            f"""() => {{
+              const element = document.querySelector(
+                {json.dumps(selector)}
+              );
+              if (!(element instanceof HTMLElement)) return false;
+              element.click();
+              return true;
+            }}"""
+        )
+        if clicked is not True:
+            return False
+    return True
 
 
-def click_first_bid_option(page: PageLike) -> None:
-    locator = page.locator(BID_ACTION_BUTTON_SELECTOR).first
-    locator.scroll_into_view_if_needed(timeout=3000)
-    locator.click(timeout=3000)
+def click_first_bid_option(page: PageLike) -> bool:
+    clicked = page.evaluate(
+        f"""() => {{
+          const button = document.querySelector(
+            {json.dumps(BID_ACTION_BUTTON_SELECTOR)}
+          );
+          if (!(button instanceof HTMLButtonElement)) return false;
+          if (button.disabled) return false;
+          button.click();
+          return true;
+        }}"""
+    )
+    return clicked is True
 
 
-def click_next_round(page: PageLike) -> None:
-    overlay_button = page.locator(NEXT_ROUND_BUTTON_SELECTOR)
-    if overlay_button.count() > 0:
-        overlay_button.first.scroll_into_view_if_needed(timeout=3000)
-        overlay_button.first.click(timeout=3000)
-        return
-    click_button(page, "下一轮")
+def click_next_round(page: PageLike) -> bool:
+    clicked = page.evaluate(
+        f"""() => {{
+          const button = document.querySelector(
+            {json.dumps(NEXT_ROUND_BUTTON_SELECTOR)}
+          );
+          if (!(button instanceof HTMLButtonElement)) return false;
+          if (button.disabled) return false;
+          button.click();
+          return true;
+        }}"""
+    )
+    if clicked is True:
+        return True
+    return click_button(page, "下一轮")
 
 
 def perform_action(
     page: PageLike, action: UiAction, recorder: Recorder
 ) -> bool:
+    performed = False
     try:
         if action.kind == "bid":
-            click_first_bid_option(page)
+            performed = click_first_bid_option(page)
         elif action.kind == "next_round":
-            click_next_round(page)
+            performed = click_next_round(page)
         elif action.kind == "stir_pass":
-            click_button(page, "不反")
+            performed = click_button(page, "不反")
         elif action.kind == "discard":
-            click_cards(page, action.card_ids)
-            click_button(page, "换底牌")
+            performed = click_cards(
+                page,
+                action.card_ids,
+            ) and click_button(page, "换底牌")
         elif action.kind == "play":
-            click_cards(page, action.card_ids)
-            click_button(page, "出牌")
+            performed = click_cards(
+                page,
+                action.card_ids,
+            ) and click_button(page, "出牌")
     except PLAYWRIGHT_EXCEPTIONS as error:
         recorder.bug(
             category="ui_action_failed",
             description=f"{action.kind}: {error}",
             severity="high",
         )
+        return False
+    if not performed:
         return False
     recorder.event(
         "ui_action",
@@ -960,6 +1045,48 @@ def server_ready(server_url: str) -> bool:
         return False
 
 
+def prepare_playthrough_game(
+    server_url: str,
+    recorder: Recorder,
+) -> str:
+    """Create the current lobby contract and return its player route."""
+    user_id = "playwright-human"
+    created = post_json(f"{server_url}/api/game")
+    game_id = string_field(created, "game_id")
+    assert game_id is not None
+
+    attached = post_json(
+        f"{server_url}/api/game/{quote(game_id)}/player/"
+        f"{HUMAN_PLAYER}?user_id={quote(user_id)}"
+    )
+    assert attached.get("ok") is True
+    filled = post_json(
+        f"{server_url}/api/game/{quote(game_id)}/bots"
+        f"?kind=auto&user_id={quote(user_id)}"
+    )
+    assert filled.get("ok") is True
+
+    route = (
+        f"{server_url}/game/{quote(game_id)}/player/{HUMAN_PLAYER}"
+        f"?user_id={quote(user_id)}"
+    )
+    recorder.event(
+        "game_setup",
+        f"created game {game_id} for player {HUMAN_PLAYER}",
+    )
+    return route
+
+
+def post_json(url: str) -> JsonObject:
+    """POST to one public setup endpoint and decode its JSON object."""
+    with urlopen(Request(url, method="POST"), timeout=5) as response:
+        assert response.status in (200, 201)
+        payload = response.read().decode("utf-8")
+    value = parse_json_object(payload)
+    assert value is not None
+    return value
+
+
 def start_server(config: Config, recorder: Recorder) -> ManagedServer:
     config.output_dir.mkdir(parents=True, exist_ok=True)
     log_file = (config.output_dir / "uvicorn.log").open(
@@ -1017,238 +1144,20 @@ def find_chromium(explicit_path: str | None) -> str | None:
     return None
 
 
-def cdp_url_ready(url: str) -> bool:
-    parsed = urlparse(url)
-    if parsed.scheme in ("ws", "wss"):
-        port = parsed.port
-        host = parsed.hostname or "127.0.0.1"
-        return port is not None and tcp_port_ready(host, port)
-
-    if parsed.scheme in ("http", "https"):
-        port = parsed.port
-        host = parsed.hostname or "127.0.0.1"
-        if port is not None and tcp_port_ready(host, port):
-            return True
-
-    version_url = f"{url.rstrip('/')}/json/version"
-    try:
-        with urlopen(Request(version_url), timeout=0.5) as response:
-            return response.status == 200
-    except OSError, URLError, TimeoutError:
-        return False
-
-
-def tcp_port_ready(host: str, port: int) -> bool:
-    try:
-        with socket.create_connection((host, port), timeout=0.5):
-            return True
-    except OSError:
-        return False
-
-
-def known_devtools_paths() -> list[tuple[str, str, Path]]:
-    home = Path.home()
-    if sys.platform == "darwin":
-        return [
-            (
-                "chrome",
-                "Chrome",
-                home
-                / "Library/Application Support"
-                / "Google"
-                / "Chrome"
-                / "DevToolsActivePort",
-            ),
-            (
-                "chrome-canary",
-                "Chrome Canary",
-                home
-                / "Library/Application Support"
-                / "Google"
-                / "Chrome Canary"
-                / "DevToolsActivePort",
-            ),
-            (
-                "chromium",
-                "Chromium",
-                home
-                / "Library/Application Support"
-                / "Chromium"
-                / "DevToolsActivePort",
-            ),
-            (
-                "edge",
-                "Microsoft Edge",
-                home
-                / "Library/Application Support"
-                / "Microsoft Edge"
-                / "DevToolsActivePort",
-            ),
-        ]
-    if sys.platform.startswith("linux"):
-        return [
-            (
-                "chrome",
-                "Chrome",
-                home / ".config/google-chrome/DevToolsActivePort",
-            ),
-            (
-                "chromium",
-                "Chromium",
-                home / ".config/chromium/DevToolsActivePort",
-            ),
-            (
-                "edge",
-                "Microsoft Edge",
-                home / ".config/microsoft-edge/DevToolsActivePort",
-            ),
-        ]
-    if sys.platform == "win32":
-        local_app_data = os.environ.get("LOCALAPPDATA")
-        if local_app_data is None:
-            return []
-        root = Path(local_app_data)
-        return [
-            (
-                "chrome",
-                "Chrome",
-                root / "Google/Chrome/User Data/DevToolsActivePort",
-            ),
-            (
-                "chromium",
-                "Chromium",
-                root / "Chromium/User Data/DevToolsActivePort",
-            ),
-            (
-                "edge",
-                "Microsoft Edge",
-                root / "Microsoft/Edge/User Data/DevToolsActivePort",
-            ),
-        ]
-    return []
-
-
-def discover_devtools_endpoints() -> list[BrowserEndpoint]:
-    result: list[BrowserEndpoint] = []
-    for browser_id, label, path in known_devtools_paths():
-        try:
-            content = path.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        lines = [
-            line.strip()
-            for line in content.splitlines()
-            if line.strip()
-        ]
-        if not lines:
-            continue
-        try:
-            port = int(lines[0])
-        except ValueError:
-            continue
-        if port <= 0 or port >= 65536:
-            continue
-        if not tcp_port_ready("127.0.0.1", port):
-            continue
-        ws_path = lines[1] if len(lines) > 1 else ""
-        endpoint_url = (
-            f"ws://127.0.0.1:{port}{ws_path}"
-            if ws_path
-            else f"http://127.0.0.1:{port}"
-        )
-        result.append(
-            BrowserEndpoint(
-                browser_id=browser_id,
-                label=label,
-                port=port,
-                endpoint_url=endpoint_url,
-                source=str(path),
-            )
-        )
-    return result
-
-
-def running_chromium_commands() -> list[str]:
-    commands: list[str] = []
-    for process_name in (
-        "chromium",
-        "chromium-browser",
-        "google-chrome",
-    ):
-        result = subprocess.run(
-            ["pgrep", "-a", process_name],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode not in (0, 1):
-            continue
-        for raw_line in result.stdout.splitlines():
-            line = raw_line.strip()
-            if not line or " --type=" in line:
-                continue
-            if line not in commands:
-                commands.append(line)
-    return commands
-
-
-def choose_existing_cdp_url(
+def configured_cdp_url(
     config: Config, recorder: Recorder
 ) -> str | None:
-    if not config.prefer_existing_browser:
-        return None
-    if config.cdp_url is not None:
-        if cdp_url_ready(config.cdp_url):
-            return config.cdp_url
-        raise SystemExit(
-            f"CDP endpoint is not reachable: {config.cdp_url}. "
-            "Start Chromium with --remote-debugging-port=9222 or omit"
-            "--cdp-url."
-        )
-    endpoints = discover_devtools_endpoints()
-    if endpoints:
-        endpoint = endpoints[0]
+    if config.cdp_url is None:
         recorder.event(
             "browser",
-            f"using existing {endpoint.label} at port {endpoint.port}",
-            {
-                "browser_id": endpoint.browser_id,
-                "endpoint_url": endpoint.endpoint_url,
-                "source": endpoint.source,
-            },
+            "launching an isolated visible Chromium",
         )
-        return endpoint.endpoint_url
-    for port in (9222, 9223, 9224):
-        candidate = f"http://127.0.0.1:{port}"
-        if cdp_url_ready(candidate):
-            recorder.event(
-                "browser", f"using existing Chromium at {candidate}"
-            )
-            return candidate
-    running_commands = running_chromium_commands()
-    if running_commands:
-        command_preview = running_commands[0]
-        raise SystemExit(
-            "Chromium is already running, but it does not expose a"
-            "reachable"
-            "remote debugging endpoint on 9222/9223/9224.\n"
-            f"Detected Chromium: {command_preview}\n"
-            "Playwright cannot attach to a normal Chromium process"
-            "after it"
-            "has started. To reuse your browser window, fully quit"
-            "Chromium"
-            "and start it with:\n"
-            "  chromium --remote-debugging-port=9222\n"
-            "Then run this script again. To intentionally launch a"
-            "separate"
-            "visible browser, pass --new-browser."
-        )
+        return None
     recorder.event(
         "browser",
-        "no running Chromium found; launching a new visible Chromium",
+        f"connecting to configured CDP endpoint {config.cdp_url}",
     )
-    return None
+    return config.cdp_url
 
 
 def setup_browser(config: Config, recorder: Recorder) -> BrowserSession:
@@ -1256,15 +1165,16 @@ def setup_browser(config: Config, recorder: Recorder) -> BrowserSession:
         os.environ.setdefault("DISPLAY", ":0")
 
     playwright = load_playwright_module().sync_playwright().start()
-    cdp_url = choose_existing_cdp_url(config, recorder)
+    cdp_url = configured_cdp_url(config, recorder)
     if cdp_url is not None:
-        browser = playwright.chromium.connect_over_cdp(cdp_url)
+        browser = playwright.chromium.connect_over_cdp(
+            cdp_url,
+            timeout=10_000,
+        )
         if browser.contexts:
             context = browser.contexts[0]
         else:
-            context = browser.new_context(
-                viewport={"width": 1400, "height": 950}
-            )
+            context = browser.new_context(no_viewport=True)
         context.add_init_script(
             script="localStorage.removeItem('tractor-game-id');"
         )
@@ -1285,12 +1195,10 @@ def setup_browser(config: Config, recorder: Recorder) -> BrowserSession:
         args=[
             "--no-sandbox",
             "--disable-setuid-sandbox",
-            "--window-size=1400,950",
+            "--start-maximized",
         ],
     )
-    context = browser.new_context(
-        viewport={"width": 1400, "height": 950}
-    )
+    context = browser.new_context(no_viewport=True)
     context.add_init_script(
         script="localStorage.removeItem('tractor-game-id');"
     )
@@ -1360,8 +1268,12 @@ def run_playthrough(config: Config) -> None:
         browser_session = setup_browser(config, recorder)
         page = browser_session.page
         attach_page_logging(page, recorder)
-        recorder.event("navigation", config.server_url)
-        page.goto(config.server_url, wait_until="domcontentloaded")
+        player_url = prepare_playthrough_game(
+            config.server_url,
+            recorder,
+        )
+        recorder.event("navigation", player_url)
+        page.goto(player_url, wait_until="domcontentloaded")
 
         initial_state = wait_for_initial_state(
             page, timeout_seconds=30, recorder=recorder
@@ -1382,6 +1294,31 @@ def run_playthrough(config: Config) -> None:
         take_screenshot(
             page, config.output_dir, "initial_state", recorder
         )
+        initial_payload = object_field(initial_state, "state")
+        if initial_payload is None:
+            recorder.bug(
+                "bad_initial_state",
+                "initial state message missing state object",
+                "critical",
+            )
+            return
+        initial_team0_level = string_field(
+            initial_payload, "team0_level"
+        )
+        initial_team1_level = string_field(
+            initial_payload, "team1_level"
+        )
+        if initial_team0_level is None or initial_team1_level is None:
+            recorder.bug(
+                "bad_initial_state",
+                "initial state message missing team levels",
+                "critical",
+            )
+            return
+        round_tracker = RoundTracker(
+            team0_level=initial_team0_level,
+            team1_level=initial_team1_level,
+        )
 
         last_phase: str | None = None
         last_phase_time = time.monotonic()
@@ -1389,8 +1326,6 @@ def run_playthrough(config: Config) -> None:
         last_action_seq: int | None = None
         last_action: UiAction | None = None
         rejected_play_candidates: set[tuple[str, ...]] = set()
-        last_team0_level = "2"
-        last_team1_level = "2"
         phase_stuck_seconds = 180
         action_count = 0
 
@@ -1412,7 +1347,7 @@ def run_playthrough(config: Config) -> None:
 
             state_message = latest_state(page)
             if state_message is None:
-                time.sleep(0.25)
+                time.sleep(0.05)
                 continue
 
             final_state = state_message
@@ -1467,25 +1402,19 @@ def run_playthrough(config: Config) -> None:
                     "browser_error_toast", text, "medium", phase=phase
                 )
 
-            if (
-                team0_level != last_team0_level
-                or team1_level != last_team1_level
-            ):
-                rounds.append(
-                    RoundEntry(
-                        index=len(rounds) + 1,
-                        team0=f"{last_team0_level}->{team0_level}",
-                        team1=f"{last_team1_level}->{team1_level}",
-                        defender_points=defender_points,
-                    )
-                )
+            completed_round = round_tracker.observe(state)
+            if completed_round is not None:
+                rounds.append(completed_round)
                 recorder.event(
                     "round",
-                    f"{last_team0_level}->{team0_level},"
-                    f"{last_team1_level}->{team1_level}",
+                    (
+                        f"{completed_round.team0_before}->"
+                        f"{completed_round.team0_after},"
+                        f"{completed_round.team1_before}->"
+                        f"{completed_round.team1_after}"
+                    ),
+                    completed_round.to_json(),
                 )
-                last_team0_level = team0_level
-                last_team1_level = team1_level
 
             if phase != last_phase:
                 recorder.event(
@@ -1561,7 +1490,7 @@ def run_playthrough(config: Config) -> None:
                     last_action = action
                     action_count += 1
 
-            time.sleep(0.25)
+            time.sleep(0.05)
 
         recorder.event(
             "summary",
@@ -1656,14 +1585,21 @@ def write_reports(
             [
                 "## Rounds",
                 "",
-                "| Round | Team 0 | Team 1 | Defender points |",
-                "| --- | --- | --- | --- |",
+                "| Round | Team 0 | Team 1 | Winner |"
+                " Defender points | Bottom bonus |"
+                " Total defender points |",
+                "| --- | --- | --- | --- | --- | --- | --- |",
             ]
         )
         for entry in rounds:
             markdown_lines.append(
-                f"| {entry.index} | {entry.team0} | {entry.team1} |"
-                f"{entry.defender_points} |"
+                f"| {entry.index} |"
+                f" {entry.team0_before}->{entry.team0_after} |"
+                f" {entry.team1_before}->{entry.team1_after} |"
+                f" Team {entry.round_winning_team} |"
+                f" {entry.defender_points} |"
+                f" {entry.bottom_card_bonus} |"
+                f" {entry.total_defender_points} |"
             )
         markdown_lines.append("")
 
@@ -1833,7 +1769,365 @@ def test_plan_action_free_leads_when_play_has_no_hints() -> None:
     assert action == UiAction(kind="play", card_ids=("D1-clubs-3",))
 
 
+def _round_review_state(
+    *,
+    team0_level: str,
+    team1_level: str,
+    defender_points: int,
+    bottom_card_bonus: int,
+    round_winning_team: int,
+    winning_team: int | None = None,
+) -> JsonObject:
+    return {
+        "phase": "WAITING",
+        "team0_level": team0_level,
+        "team1_level": team1_level,
+        "defender_points": defender_points,
+        "scoring": {
+            "round_winning_team": round_winning_team,
+            "defender_points": defender_points,
+            "bottom_card_bonus": bottom_card_bonus,
+            "total_defender_points": (
+                defender_points + bottom_card_bonus
+            ),
+        },
+        "winning_team": winning_team,
+    }
+
+
+def test_round_tracker_records_one_entry_per_completed_round() -> None:
+    tracker = RoundTracker(team0_level="2", team1_level="2")
+    review = _round_review_state(
+        team0_level="2",
+        team1_level="3",
+        defender_points=70,
+        bottom_card_bonus=20,
+        round_winning_team=1,
+    )
+
+    entry = tracker.observe(review)
+
+    assert entry == RoundEntry(
+        index=1,
+        team0_before="2",
+        team0_after="2",
+        team1_before="2",
+        team1_after="3",
+        round_winning_team=1,
+        defender_points=70,
+        bottom_card_bonus=20,
+        total_defender_points=90,
+    )
+    assert tracker.observe(review) is None
+
+
+def test_round_tracker_records_zero_level_gain() -> None:
+    tracker = RoundTracker(team0_level="6", team1_level="8")
+    review = _round_review_state(
+        team0_level="6",
+        team1_level="8",
+        defender_points=80,
+        bottom_card_bonus=0,
+        round_winning_team=0,
+    )
+
+    entry = tracker.observe(review)
+
+    assert entry is not None
+    assert entry.team0_before == "6"
+    assert entry.team0_after == "6"
+    assert entry.team1_before == "8"
+    assert entry.team1_after == "8"
+
+
+def test_round_tracker_records_terminal_progress_as_win() -> None:
+    tracker = RoundTracker(team0_level="Q", team1_level="A")
+    review = _round_review_state(
+        team0_level="Q",
+        team1_level="A",
+        defender_points=70,
+        bottom_card_bonus=0,
+        round_winning_team=1,
+        winning_team=1,
+    )
+
+    entry = tracker.observe(review)
+
+    assert entry is not None
+    assert entry.team0_after == "Q"
+    assert entry.team1_after == "WIN"
+
+
+def test_round_tracker_rearms_after_review_phase_ends() -> None:
+    tracker = RoundTracker(team0_level="2", team1_level="2")
+    first = _round_review_state(
+        team0_level="3",
+        team1_level="2",
+        defender_points=40,
+        bottom_card_bonus=0,
+        round_winning_team=0,
+    )
+    second = _round_review_state(
+        team0_level="3",
+        team1_level="3",
+        defender_points=120,
+        bottom_card_bonus=0,
+        round_winning_team=1,
+    )
+
+    assert tracker.observe(first) is not None
+    active: JsonObject = {"phase": "DEAL_BID", "scoring": None}
+    assert tracker.observe(active) is None
+    entry = tracker.observe(second)
+
+    assert entry is not None
+    assert entry.index == 2
+    assert entry.team0_before == "3"
+    assert entry.team1_before == "2"
+
+
+def test_write_reports_exposes_terminal_round_as_win(
+    tmp_path: Path,
+) -> None:
+    terminal = RoundEntry(
+        index=31,
+        team0_before="Q",
+        team0_after="Q",
+        team1_before="A",
+        team1_after="WIN",
+        round_winning_team=1,
+        defender_points=70,
+        bottom_card_bonus=0,
+        total_defender_points=70,
+    )
+    config = Config(
+        project_root=tmp_path,
+        output_dir=tmp_path,
+        server_url="http://127.0.0.1:8787",
+        port=8787,
+        max_seconds=1,
+        browser_executable=None,
+        cdp_url=None,
+        start_server=False,
+        build_frontend=False,
+        keep_open=False,
+    )
+
+    write_reports(
+        config=config,
+        recorder=Recorder(output_dir=tmp_path),
+        rounds=(terminal,),
+        final_state=None,
+        game_completed=True,
+        duration_seconds=1.0,
+        browser_event_log=(),
+    )
+
+    markdown = (tmp_path / "playthrough.md").read_text(encoding="utf-8")
+    report = _load_report(tmp_path / "playthrough.json")
+    rows = list_field(report, "rounds")
+    assert "| 31 | Q->Q | A->WIN | Team 1 | 70 | 0 | 70 |" in markdown
+    assert rows == [terminal.to_json()]
+
+
+class _SetupPage:
+    def evaluate(self, expression: str) -> object:
+        return expression
+
+    def screenshot(self, *, path: str, full_page: bool) -> None:
+        del path, full_page
+
+    def goto(
+        self, url: str, *, wait_until: str | None = None
+    ) -> object:
+        return (url, wait_until)
+
+    def on(
+        self, event: str, callback: Callable[[object], None]
+    ) -> None:
+        del event, callback
+
+    def close(self) -> None:
+        return
+
+
+class _SetupContext:
+    def __init__(self) -> None:
+        self.scripts: list[str] = []
+        self.page = _SetupPage()
+
+    def add_init_script(self, *, script: str) -> None:
+        self.scripts.append(script)
+
+    def new_page(self) -> PageLike:
+        return self.page
+
+    def close(self) -> None:
+        return
+
+
+class _SetupBrowser:
+    def __init__(self, *, with_existing_context: bool = False) -> None:
+        self.context = _SetupContext()
+        self.native_viewport_requests: list[bool] = []
+        self._contexts: list[BrowserContextLike] = (
+            [self.context] if with_existing_context else []
+        )
+
+    @property
+    def contexts(self) -> list[BrowserContextLike]:
+        return self._contexts
+
+    def new_context(self, *, no_viewport: bool) -> BrowserContextLike:
+        self.native_viewport_requests.append(no_viewport)
+        return self.context
+
+    def close(self) -> None:
+        return
+
+
+class _SetupBrowserType:
+    def __init__(self, browser: _SetupBrowser) -> None:
+        self.browser = browser
+        self.launch_args: list[str] | None = None
+        self.connected_endpoint: str | None = None
+
+    def launch(
+        self,
+        *,
+        headless: bool,
+        executable_path: str | None,
+        args: list[str],
+    ) -> BrowserLike:
+        assert headless is False
+        assert executable_path == "/usr/bin/chromium"
+        self.launch_args = args
+        return self.browser
+
+    def connect_over_cdp(
+        self,
+        endpoint_url: str,
+        *,
+        timeout: float | None = None,
+    ) -> BrowserLike:
+        assert timeout == 10_000
+        self.connected_endpoint = endpoint_url
+        return self.browser
+
+
+class _SetupPlaywright:
+    def __init__(self, browser_type: _SetupBrowserType) -> None:
+        self._browser_type = browser_type
+
+    @property
+    def chromium(self) -> BrowserTypeLike:
+        return self._browser_type
+
+    def stop(self) -> None:
+        return
+
+
+class _SetupPlaywrightStarter:
+    def __init__(self, playwright: _SetupPlaywright) -> None:
+        self.playwright = playwright
+
+    def start(self) -> PlaywrightLike:
+        return self.playwright
+
+
+class _SetupPlaywrightModule:
+    def __init__(self, playwright: _SetupPlaywright) -> None:
+        self.playwright = playwright
+
+    def sync_playwright(self) -> PlaywrightStarterLike:
+        return _SetupPlaywrightStarter(self.playwright)
+
+
+def _setup_browser_config(
+    tmp_path: Path, *, cdp_url: str | None
+) -> Config:
+    return Config(
+        project_root=tmp_path,
+        output_dir=tmp_path,
+        server_url="http://127.0.0.1:8787",
+        port=8787,
+        max_seconds=1,
+        browser_executable=None,
+        cdp_url=cdp_url,
+        start_server=False,
+        build_frontend=False,
+        keep_open=False,
+    )
+
+
+def test_setup_browser_uses_native_viewport_for_isolated_window(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    browser = _SetupBrowser()
+    browser_type = _SetupBrowserType(browser)
+    playwright_module = _SetupPlaywrightModule(
+        _SetupPlaywright(browser_type)
+    )
+
+    def load_module() -> PlaywrightModuleLike:
+        return playwright_module
+
+    def chromium_path(value: str | None) -> str | None:
+        assert value is None
+        return "/usr/bin/chromium"
+
+    monkeypatch.setattr(
+        f"{__name__}.load_playwright_module",
+        load_module,
+    )
+    monkeypatch.setattr(f"{__name__}.find_chromium", chromium_path)
+
+    setup_browser(
+        _setup_browser_config(tmp_path, cdp_url=None),
+        Recorder(output_dir=tmp_path),
+    )
+
+    assert browser.native_viewport_requests == [True]
+    assert browser_type.launch_args == [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--start-maximized",
+    ]
+
+
+def test_setup_browser_uses_native_viewport_for_new_cdp_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    browser = _SetupBrowser()
+    browser_type = _SetupBrowserType(browser)
+    playwright_module = _SetupPlaywrightModule(
+        _SetupPlaywright(browser_type)
+    )
+
+    def load_module() -> PlaywrightModuleLike:
+        return playwright_module
+
+    monkeypatch.setattr(
+        f"{__name__}.load_playwright_module",
+        load_module,
+    )
+
+    setup_browser(
+        _setup_browser_config(
+            tmp_path,
+            cdp_url="http://127.0.0.1:9222",
+        ),
+        Recorder(output_dir=tmp_path),
+    )
+
+    assert browser_type.connected_endpoint == "http://127.0.0.1:9222"
+    assert browser.native_viewport_requests == [True]
+
+
 @pytest.mark.playthrough
+@pytest.mark.timeout(900)
 def test_visible_playwright_full_game_playthrough() -> None:
     if not _should_run_playthrough():
         pytest.skip(
@@ -1859,9 +2153,6 @@ def test_visible_playwright_full_game_playthrough() -> None:
             "TRACTOR_PLAYTHROUGH_BROWSER"
         ),
         cdp_url=os.environ.get("TRACTOR_PLAYTHROUGH_CDP_URL"),
-        prefer_existing_browser=not _env_bool(
-            "TRACTOR_PLAYTHROUGH_NEW_BROWSER"
-        ),
         start_server=True,
         build_frontend=not _env_bool("TRACTOR_PLAYTHROUGH_NO_BUILD"),
         keep_open=_env_bool("TRACTOR_PLAYTHROUGH_KEEP_OPEN"),

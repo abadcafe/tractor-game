@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from server.foundation.result import Ok, Rejected
-from server.game.players.test_helpers import card, make_snapshot
-from server.game.protocol import TrickSlotSnapshot, TrickSnapshot
-from server.game.rules.card_faces import CardFace, FaceCount
+from server.game import Seat, commands
+from server.game.rules.cards.faces import CardFace, FaceCount
+from server.game.snapshots.tricks import (
+    TrickSlotSnapshot,
+    TrickSnapshot,
+)
 from server.training.semantic_actions import (
     ActionChoice,
     ActionPrefix,
@@ -20,6 +23,8 @@ from server.training.semantic_actions.choices import (
     action_choice_id,
     action_choice_name,
 )
+from tests.support import card
+from tests.support import snapshot as make_snapshot
 
 
 def test_bind_generated_action_binds_face_to_current_hand_ids() -> None:
@@ -49,10 +54,8 @@ def test_bind_generated_action_binds_face_to_current_hand_ids() -> None:
     bound = bind_generated_action(action, [spade_ace, heart_five])
 
     assert isinstance(bound, Ok)
-    assert bound.value.raw == {
-        "type": "play",
-        "cards": [heart_five.id],
-    }
+    assert isinstance(bound.value, commands.Play)
+    assert tuple(map(str, bound.value.card_ids)) == (heart_five.id,)
 
 
 def test_bind_generated_action_binds_pair_face_count_to_two_cards() -> (
@@ -74,10 +77,11 @@ def test_bind_generated_action_binds_pair_face_count_to_two_cards() -> (
     )
 
     assert isinstance(bound, Ok)
-    assert bound.value.raw == {
-        "type": "play",
-        "cards": [first_heart_five.id, second_heart_five.id],
-    }
+    assert isinstance(bound.value, commands.Play)
+    assert tuple(map(str, bound.value.card_ids)) == (
+        first_heart_five.id,
+        second_heart_five.id,
+    )
 
 
 def test_bind_generated_action_rejects_duplicate_face_counts() -> None:
@@ -161,14 +165,14 @@ def test_action_query_requires_current_trick_width_when_following() -> (
     hand_first = card("spades", "K", 1)
     hand_second = card("clubs", "K", 1)
     trick = TrickSnapshot(
-        lead_player=1,
-        current_player=2,
-        slots=[
-            TrickSlotSnapshot(player=0, cards=[]),
-            TrickSlotSnapshot(player=1, cards=[lead]),
-            TrickSlotSnapshot(player=2, cards=[]),
-            TrickSlotSnapshot(player=3, cards=[]),
-        ],
+        lead_player=Seat.WEST,
+        current_player=Seat.SOUTH,
+        slots=(
+            TrickSlotSnapshot(player=Seat.NORTH, cards=()),
+            TrickSlotSnapshot(player=Seat.WEST, cards=(lead,)),
+            TrickSlotSnapshot(player=Seat.SOUTH, cards=()),
+            TrickSlotSnapshot(player=Seat.EAST, cards=()),
+        ),
     )
     query = build_action_query(
         player_index=2,

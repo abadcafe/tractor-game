@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from server.game.rules.card_faces import (
+from server.game.rules.cards import Rank, Suit
+from server.game.rules.cards.faces import (
     CardFace,
     FaceCount,
     canonical_face_counts,
 )
-from server.game.rules.cards import Rank, Suit
 from server.training.legal_actions.complete_trace import (
     CompleteTraceLegalActionIndex,
 )
@@ -93,34 +93,35 @@ def compile_legal_action_spec(
         )
     if isinstance(legal_action, FollowPlayLegalActionIndex):
         query = legal_action.query
-        analysis = legal_action.space.analysis
-        pair_planner = analysis.pair_planner
+        constraints = legal_action.space.selection_plan()
         lead_effective_suit = _effective_suit_code_from_value(
-            analysis.lead_effective_suit
+            constraints.lead_effective_suit
         )
         return CompiledActionSpec(
             kind="follow_play",
             trace_set=None,
             selection=CompiledSelectionConstraints(
                 min_select=query.min_select,
-                max_select=analysis.lead_count,
-                exact_select=analysis.lead_count,
-                required_same_suit_count=analysis.required_same_suit_count,
+                max_select=constraints.lead_count,
+                exact_select=constraints.lead_count,
+                required_same_suit_count=(
+                    constraints.required_same_suit_count
+                ),
                 lead_effective_suit=lead_effective_suit,
                 face_plan=_face_plan_from_hand(
-                    canonical_face_counts(analysis.hand_cards),
-                    trump_suit=analysis.trump_suit,
-                    trump_rank=analysis.trump_rank,
+                    canonical_face_counts(constraints.hand_cards),
+                    trump_suit=constraints.trump_suit,
+                    trump_rank=constraints.trump_rank,
                     lead_effective_suit=lead_effective_suit,
-                    pair_faces=tuple(pair_planner.pair_faces),
+                    pair_faces=constraints.pair_faces,
                 ),
                 pair_plan=PairPlanConstraints(
                     pair_plan_masks=tuple(
                         _face_mask(tuple(plan))
-                        for plan in pair_planner.pair_plans
+                        for plan in constraints.pair_plans
                     ),
-                    has_tractor=pair_planner.has_tractor_segment(),
-                    pair_floor=pair_planner.pair_floor,
+                    has_tractor=constraints.has_tractor,
+                    pair_floor=constraints.pair_floor,
                 ),
             ),
         )

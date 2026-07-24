@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from server.game.protocol import StateSnapshot
-from server.game.rules import bid as bid_rules
+from server.game.rules import bidding
+from server.game.snapshots import PlayerSnapshot
 from server.training.legal_actions.complete_trace import (
     CompleteTraceLegalActionIndex,
     pass_action,
@@ -16,7 +16,7 @@ from server.training.semantic_actions.values import GeneratedAction
 def build_bid_index(
     *,
     player_index: int,
-    snapshot: StateSnapshot,
+    snapshot: PlayerSnapshot,
     query: ActionQuery,
 ) -> CompleteTraceLegalActionIndex:
     """Build legal semantic traces for a bid decision."""
@@ -24,15 +24,15 @@ def build_bid_index(
     if snapshot.bid_winner is None or (
         snapshot.bid_winner.player != player_index
     ):
-        current_cards = (
+        current = (
             None
             if snapshot.bid_winner is None
-            else snapshot.bid_winner.cards
+            else bidding.Declaration(snapshot.bid_winner.cards)
         )
-        for cards in bid_rules.legal_bid_hints(
+        for declaration in bidding.legal_reveals(
             snapshot.player_hand,
             snapshot.trump_rank,
-            current_cards,
+            current,
         ):
-            actions.append(selection_action("bid", cards))
+            actions.append(selection_action("bid", declaration.cards))
     return CompleteTraceLegalActionIndex(query, tuple(actions))

@@ -5,13 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from server.game.protocol import StateSnapshot
-from server.game.rules.card_faces import (
+from server.game.rules.cards import Rank, Suit
+from server.game.rules.cards.faces import (
     FaceCount,
     canonical_face_counts,
     face_count_width,
 )
-from server.game.rules.cards import Rank, Suit
+from server.game.snapshots import PlayerSnapshot
 from server.training.relative_state import RelativeActor
 from server.training.relative_state.relations import relative_actor
 
@@ -42,7 +42,7 @@ class ActionQuery:
 def build_action_query(
     *,
     player_index: int,
-    snapshot: StateSnapshot,
+    snapshot: PlayerSnapshot,
 ) -> ActionQuery:
     """Build the structured player-visible decision request."""
     kind = _decision_kind(snapshot)
@@ -77,7 +77,7 @@ def build_action_query(
     )
 
 
-def _decision_kind(snapshot: StateSnapshot) -> DecisionKind | None:
+def _decision_kind(snapshot: PlayerSnapshot) -> DecisionKind | None:
     if snapshot.awaiting_action == "bid":
         return "bid"
     if snapshot.awaiting_action == "stir":
@@ -96,7 +96,7 @@ def _selection_shape(
     *,
     kind: DecisionKind | None,
     hand_size: int,
-    snapshot: StateSnapshot,
+    snapshot: PlayerSnapshot,
 ) -> tuple[int, int, int | None]:
     if kind is None:
         return 0, 0, None
@@ -113,14 +113,14 @@ def _selection_shape(
     return (1 if hand_size > 0 else 0), hand_size, None
 
 
-def _discard_count(snapshot: StateSnapshot) -> int:
+def _discard_count(snapshot: PlayerSnapshot) -> int:
     stir = snapshot.stirring_state
     if stir is not None and stir.exchange_count is not None:
         return stir.exchange_count
     return 8
 
 
-def _current_trick_width(snapshot: StateSnapshot) -> int | None:
+def _current_trick_width(snapshot: PlayerSnapshot) -> int | None:
     trick = snapshot.trick
     if trick is None:
         return None
@@ -130,7 +130,7 @@ def _current_trick_width(snapshot: StateSnapshot) -> int | None:
     return None
 
 
-def _action_play_order(snapshot: StateSnapshot) -> int | None:
+def _action_play_order(snapshot: PlayerSnapshot) -> int | None:
     trick = snapshot.trick
     if snapshot.awaiting_action != "play" or trick is None:
         return None
@@ -140,7 +140,7 @@ def _action_play_order(snapshot: StateSnapshot) -> int | None:
 
 
 def _lead_actor(
-    player_index: int, snapshot: StateSnapshot
+    player_index: int, snapshot: PlayerSnapshot
 ) -> RelativeActor | None:
     trick = snapshot.trick
     if snapshot.awaiting_action != "play" or trick is None:
@@ -149,7 +149,7 @@ def _lead_actor(
 
 
 def _current_best_bid_role(
-    player_index: int, snapshot: StateSnapshot
+    player_index: int, snapshot: PlayerSnapshot
 ) -> RelativeActor | None:
     winner = snapshot.bid_winner
     if winner is None:

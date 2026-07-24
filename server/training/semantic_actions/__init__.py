@@ -22,14 +22,12 @@ from server.training.semantic_actions.query import (
     build_action_query,
 )
 from server.training.semantic_actions.values import (
-    BoundAction,
     GeneratedAction,
     PlayerActionKind,
 )
 
 __all__ = (
     "ActionQuery",
-    "BoundAction",
     "DecisionKind",
     "GeneratedAction",
     "InvalidActionRejected",

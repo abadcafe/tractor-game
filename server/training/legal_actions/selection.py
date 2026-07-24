@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from server.foundation.result import Ok, Rejected
-from server.game.rules.card_faces import FaceCount
 from server.game.rules.cards import Card
+from server.game.rules.cards.faces import FaceCount
 from server.training.semantic_actions.choices import (
     ActionTrace,
     InvalidActionRejected,

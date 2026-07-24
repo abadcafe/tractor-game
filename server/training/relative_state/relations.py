@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from enum import Enum
 
 from server.game.rules.cards import Suit
-from server.game.state_machine.constants import PLAYER_COUNT
+
+_PLAYER_COUNT = 4
 
 
 class RelativeActor(str, Enum):
@@ -52,9 +53,9 @@ class TrumpState:
 
 def relative_actor(viewer: int, actor: int) -> RelativeActor:
     """Convert one absolute actor at the sole absolute-position edge."""
-    assert 0 <= viewer < PLAYER_COUNT
-    assert 0 <= actor < PLAYER_COUNT
-    offset = (actor - viewer) % PLAYER_COUNT
+    assert 0 <= viewer < _PLAYER_COUNT
+    assert 0 <= actor < _PLAYER_COUNT
+    offset = (actor - viewer) % _PLAYER_COUNT
     if offset == 0:
         return RelativeActor.SELF
     if offset == 1:
@@ -66,9 +67,9 @@ def relative_actor(viewer: int, actor: int) -> RelativeActor:
 
 def trick_position(*, lead_player: int, actor: int) -> TrickPosition:
     """Return chronological trick position from the game topology."""
-    assert 0 <= lead_player < PLAYER_COUNT
-    assert 0 <= actor < PLAYER_COUNT
-    offset = (actor - lead_player) % PLAYER_COUNT
+    assert 0 <= lead_player < _PLAYER_COUNT
+    assert 0 <= actor < _PLAYER_COUNT
+    offset = (actor - lead_player) % _PLAYER_COUNT
     return (
         TrickPosition.LEAD,
         TrickPosition.FOLLOW_1,

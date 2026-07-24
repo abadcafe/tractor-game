@@ -7,8 +7,7 @@ import torch
 from torch import Tensor
 
 from server.foundation.result import Ok, Rejected
-from server.game.players.test_helpers import card, make_snapshot
-from server.game.rules.card_faces import FaceCount, card_face
+from server.game.rules.cards.faces import FaceCount, card_face
 from server.training.legal_actions import (
     LegalActionIndex,
     build_legal_action_index,
@@ -39,6 +38,8 @@ from server.training.semantic_actions.choices import (
 from server.training.tensorize import ObservationTensorBatch
 from server.training.torch_policy import TorchTrainingPolicy
 from server.training.torch_sampler import sample_policy_batch
+from tests.support import card
+from tests.support import snapshot as make_snapshot
 
 
 def test_batch_sampling_scores_the_fixed_legal_choice_mask() -> None:

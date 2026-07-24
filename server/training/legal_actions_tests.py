@@ -7,16 +7,18 @@ from dataclasses import dataclass
 import torch
 
 from server.foundation.result import Ok, Rejected
-from server.game.players.test_helpers import card, make_snapshot
-from server.game.protocol import (
+from server.game import Seat
+from server.game.rules.cards import Card
+from server.game.rules.cards.faces import CardFace, FaceCount
+from server.game.snapshots.events import (
     BidEventSnapshot,
     StirDeclarationEventSnapshot,
     StirringStateSnapshot,
+)
+from server.game.snapshots.tricks import (
     TrickSlotSnapshot,
     TrickSnapshot,
 )
-from server.game.rules.card_faces import CardFace, FaceCount
-from server.game.rules.cards import Card
 from server.training.legal_actions import (
     LegalActionIndex,
     build_legal_action_index,
@@ -36,6 +38,8 @@ from server.training.semantic_actions.choices import (
     ACTION_CHOICE_COUNT,
     action_choice_id,
 )
+from tests.support import card
+from tests.support import snapshot as make_snapshot
 
 
 @dataclass(slots=True)
@@ -70,7 +74,6 @@ def test_build_legal_action_index_ignores_action_hints_for_follow() -> (
         phase="PLAYING",
         awaiting_action="play",
         player_hand=[heart, spade],
-        action_hints=[],
         trick=_trick(
             lead_player=1,
             current_player=2,
@@ -166,9 +169,9 @@ def test_discard_auto_completes_at_exact_count_without_stop() -> None:
         stirring_state=StirringStateSnapshot(
             phase="EXCHANGING",
             trump_suit=None,
-            current_player=0,
-            declarer_player=0,
-            exchanging_player=0,
+            current_player=Seat.NORTH,
+            declarer_player=Seat.NORTH,
+            exchanging_player=Seat.NORTH,
             exchange_count=2,
         ),
     )
@@ -197,12 +200,13 @@ def test_bid_current_winner_can_only_pass() -> None:
         trump_rank="2",
         player_hand=[first, second],
         bid_winner=BidEventSnapshot(
-            player=0,
-            cards=[first],
+            player=Seat.NORTH,
+            cards=(first,),
             kind="trump_rank",
             suit=first.suit,
             joker_type=None,
             count=1,
+            deal_ordinal=1,
         ),
     )
 
@@ -241,18 +245,19 @@ def test_stir_mask_uses_current_priority() -> None:
             diamond_second,
         ],
         bid_winner=BidEventSnapshot(
-            player=1,
-            cards=[heart_first, heart_second],
+            player=Seat.WEST,
+            cards=(heart_first, heart_second),
             kind="trump_rank",
             suit=heart_first.suit,
             joker_type=None,
             count=2,
+            deal_ordinal=1,
         ),
         stirring_state=StirringStateSnapshot(
             phase="WAITING",
             trump_suit=heart_first.suit,
-            current_player=0,
-            declarer_player=1,
+            current_player=Seat.NORTH,
+            declarer_player=Seat.WEST,
             exchanging_player=None,
             exchange_count=None,
         ),
@@ -306,18 +311,19 @@ def test_stir_mask_uses_stir_event_priority_over_bid_winner() -> None:
             small_joker_second,
         ],
         bid_winner=BidEventSnapshot(
-            player=0,
-            cards=[diamond_first, diamond_second],
+            player=Seat.NORTH,
+            cards=(diamond_first, diamond_second),
             kind="trump_rank",
             suit=diamond_first.suit,
             joker_type=None,
             count=2,
+            deal_ordinal=1,
         ),
         stir_events=[
             StirDeclarationEventSnapshot(
-                player=1,
+                player=Seat.WEST,
                 kind="stir",
-                cards=[spade_first, spade_second],
+                cards=(spade_first, spade_second),
                 new_suit=spade_first.suit,
                 priority=203,
                 own_bottom_exchange=None,
@@ -326,8 +332,8 @@ def test_stir_mask_uses_stir_event_priority_over_bid_winner() -> None:
         stirring_state=StirringStateSnapshot(
             phase="WAITING",
             trump_suit=spade_first.suit,
-            current_player=2,
-            declarer_player=0,
+            current_player=Seat.SOUTH,
+            declarer_player=Seat.NORTH,
             exchanging_player=None,
             exchange_count=None,
         ),
@@ -367,17 +373,17 @@ def _trick(
     lead_cards: list[Card],
 ) -> TrickSnapshot:
     return TrickSnapshot(
-        lead_player=lead_player,
-        current_player=current_player,
-        slots=[
-            TrickSlotSnapshot(player=0, cards=[]),
+        lead_player=Seat(lead_player),
+        current_player=Seat(current_player),
+        slots=(
+            TrickSlotSnapshot(player=Seat.NORTH, cards=()),
             TrickSlotSnapshot(
-                player=lead_player,
-                cards=list(lead_cards),
+                player=Seat(lead_player),
+                cards=tuple(lead_cards),
             ),
-            TrickSlotSnapshot(player=2, cards=[]),
-            TrickSlotSnapshot(player=3, cards=[]),
-        ],
+            TrickSlotSnapshot(player=Seat.SOUTH, cards=()),
+            TrickSlotSnapshot(player=Seat.EAST, cards=()),
+        ),
     )
 
 

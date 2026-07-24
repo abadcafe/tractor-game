@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from server.game.rules.card_faces import FaceCount
 from server.game.rules.cards import Rank
-from server.game.rules.required_progress import ProgressTarget
+from server.game.rules.cards.faces import FaceCount
+from server.game.rules.progression import ProgressTarget
 from server.training.observation_structure import (
     RoundEventOrdinal,
     TrickRecency,

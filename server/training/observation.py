@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from server.foundation.result import Ok
-from server.game.protocol import StateSnapshot
-from server.game.rules.card_faces import FaceCount
+from server.game.rules.cards.faces import FaceCount
+from server.game.snapshots import PlayerSnapshot
 from server.training.observation_memory import ObservationMemoryView
 from server.training.relative_state import project_relative_observation
 from server.training.relative_state.contexts import RoundContext
@@ -39,7 +39,7 @@ class Observation:
 def build_observation(
     *,
     viewer: int,
-    snapshot: StateSnapshot,
+    snapshot: PlayerSnapshot,
     memory: ObservationMemoryView,
 ) -> Observation:
     """Build an observation from state and explicit memory."""

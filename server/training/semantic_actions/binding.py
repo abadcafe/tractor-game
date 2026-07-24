@@ -3,58 +3,57 @@
 from __future__ import annotations
 
 from server.foundation.result import Ok, Rejected
-from server.game.rules.card_faces import (
+from server.game import commands
+from server.game.rules.cards import Card, CardId
+from server.game.rules.cards.faces import (
     CardFace,
     FaceCount,
     bind_face_counts,
 )
-from server.game.rules.cards import Card
 from server.training.semantic_actions.choices import (
     InvalidActionRejected,
 )
-from server.training.semantic_actions.values import (
-    BoundAction,
-    GeneratedAction,
-)
+from server.training.semantic_actions.values import GeneratedAction
 
 
 def bind_generated_action(
     action: GeneratedAction,
     hand_cards: list[Card] | tuple[Card, ...],
-) -> Ok[BoundAction] | Rejected:
-    """Bind a semantic action to current physical card ids."""
+) -> Ok[commands.Command] | Rejected:
+    """Bind a semantic action to one typed game command."""
     if action.is_pass:
-        return Ok(
-            value=BoundAction(
-                raw={"type": action.message_type, "pass": True},
-            )
-        )
+        assert action.action_kind == "pass"
+        if action.message_type == "bid":
+            return Ok(value=commands.PassBid())
+        assert action.message_type == "stir"
+        return Ok(value=commands.PassStir())
     card_ids_result = _card_ids_for_face_counts(
         action.face_counts, hand_cards
     )
     if isinstance(card_ids_result, Rejected):
         return card_ids_result
-    return Ok(
-        value=BoundAction(
-            raw={
-                "type": action.message_type,
-                "cards": list(card_ids_result.value),
-            },
-        )
-    )
+    card_ids = card_ids_result.value
+    if action.message_type == "bid":
+        return Ok(value=commands.RevealBid(card_ids))
+    if action.message_type == "stir":
+        return Ok(value=commands.Stir(card_ids))
+    if action.message_type == "discard":
+        return Ok(value=commands.Bury(card_ids))
+    assert action.message_type == "play"
+    return Ok(value=commands.Play(card_ids))
 
 
 def _card_ids_for_face_counts(
     face_counts: tuple[FaceCount, ...],
     hand_cards: list[Card] | tuple[Card, ...],
-) -> Ok[tuple[str, ...]] | Rejected:
+) -> Ok[tuple[CardId, ...]] | Rejected:
     unique_check = _validate_unique_faces(face_counts)
     if isinstance(unique_check, Rejected):
         return unique_check
     bound = bind_face_counts(face_counts, hand_cards)
     if isinstance(bound, Rejected):
         return InvalidActionRejected(bound.reason)
-    return Ok(value=tuple(card.id for card in bound.value))
+    return Ok(value=tuple(CardId(card.id) for card in bound.value))
 
 
 def _validate_unique_faces(

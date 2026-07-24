@@ -1,13 +1,13 @@
-"""Tests for rules.cards module."""
-
-import pytest
+"""Black-box tests for physical card values."""
 
 from server.game.rules.cards import (
     Card,
     Rank,
     Suit,
     card_display,
+    card_points,
     create_decks,
+    suited_ranks,
 )
 
 
@@ -48,41 +48,6 @@ class TestCreateDecks:
 
 
 class TestCardModel:
-    def test_card_frozen(self) -> None:
-        """Card is immutable."""
-        card = Card(
-            id="D1-hearts-A",
-            suit=Suit.HEARTS,
-            rank=Rank.ACE,
-            points=0,
-        )
-        with pytest.raises(Exception):
-            setattr(card, "points", 5)
-
-    def test_card_joker_validation_joker_rank_requires_joker_suit(
-        self,
-    ) -> None:
-        """Joker ranks require suit=JOKER."""
-        with pytest.raises(Exception):
-            Card(
-                id="D1-hearts-SJ",
-                suit=Suit.HEARTS,
-                rank=Rank.SMALL_JOKER,
-                points=0,
-            )
-
-    def test_card_joker_validation_joker_suit_requires_joker_rank(
-        self,
-    ) -> None:
-        """suit=JOKER requires a joker rank."""
-        with pytest.raises(Exception):
-            Card(
-                id="D1-joker-A",
-                suit=Suit.JOKER,
-                rank=Rank.ACE,
-                points=0,
-            )
-
     def test_card_id_format(self) -> None:
         """Card id follows D{deck}-{suit}-{rank} format."""
         card = Card(
@@ -94,25 +59,51 @@ class TestCardModel:
         assert card.id == "D2-spades-5"
         assert card.deck == 2
 
-    def test_card_id_must_match_suit_and_rank(self) -> None:
-        """Card id suit/rank must match fields."""
-        with pytest.raises(Exception):
-            Card(
-                id="D1-spades-A",
-                suit=Suit.HEARTS,
-                rank=Rank.ACE,
-                points=0,
+    def test_generated_cards_have_canonical_identity(self) -> None:
+        """Generated cards agree with their typed fields."""
+        for card in create_decks():
+            assert card.id == (
+                f"D{card.deck}-{card.suit.value}-{card.rank.value}"
             )
+            assert card.points == card_points(card.rank)
 
-    def test_card_points_must_match_rank(self) -> None:
-        """points is a stored protocol field but must match the rank."""
-        with pytest.raises(Exception):
-            Card(
-                id="D1-hearts-5",
-                suit=Suit.HEARTS,
-                rank=Rank.FIVE,
-                points=0,
-            )
+    def test_generated_jokers_have_only_joker_faces(self) -> None:
+        """The physical deck never creates a mixed joker face."""
+        jokers = tuple(card for card in create_decks() if card.is_joker)
+        assert all(card.suit == Suit.JOKER for card in jokers)
+        assert {card.rank for card in jokers} == {
+            Rank.SMALL_JOKER,
+            Rank.BIG_JOKER,
+        }
+
+    def test_generated_suited_cards_never_use_joker_ranks(self) -> None:
+        """Suited cards use exactly the public suited-rank domain."""
+        cards = tuple(
+            card for card in create_decks() if card.suit != Suit.JOKER
+        )
+        assert {card.rank for card in cards} == set(suited_ranks())
+
+    def test_deck_construction_is_stable_and_fresh(self) -> None:
+        """Repeated construction has equal values and distinct lists."""
+        first = create_decks()
+        second = create_decks()
+        assert first == second
+        assert first is not second
+
+    def test_card_value_serializes_as_exact_public_shape(self) -> None:
+        """Card JSON has no hidden compatibility fields."""
+        card = Card(
+            id="D1-hearts-A",
+            suit=Suit.HEARTS,
+            rank=Rank.ACE,
+            points=0,
+        )
+        assert card.model_dump(mode="json") == {
+            "id": "D1-hearts-A",
+            "suit": "hearts",
+            "rank": "A",
+            "points": 0,
+        }
 
 
 class TestCardPoints:

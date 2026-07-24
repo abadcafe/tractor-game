@@ -5,7 +5,6 @@ from __future__ import annotations
 import torch
 
 from server.foundation.result import Ok, Rejected
-from server.game.players.test_helpers import card, make_snapshot
 from server.game.rules.cards import Card
 from server.training.legal_actions import build_legal_action_index
 from server.training.observation import Observation, build_observation
@@ -26,6 +25,8 @@ from server.training.policy_inference_batch.types import (
 from server.training.sampling import PolicyDecisionKey
 from server.training.semantic_actions.choices import CARD_CHOICE_COUNT
 from server.training.tokenization.encoding_schema import CATEGORY_COUNT
+from tests.support import card
+from tests.support import snapshot as make_snapshot
 
 
 def test_request_round_trip_preserves_typed_observation_columns() -> (
