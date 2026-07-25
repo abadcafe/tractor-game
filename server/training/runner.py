@@ -12,30 +12,31 @@ from server.game import (
     GameConfig,
     GameSeed,
     GameState,
+    Partnership,
     Seat,
+    SeatMap,
     apply,
     commands,
     create,
     observe,
+    partnership_of,
+    seats,
 )
 from server.game.rules.progression import TerminalProgress
 from server.game.snapshots import PlayerSnapshot
-from server.training.player import TrainingDecision, TrainingPlayer
 from server.training.policy import TrainingPolicy
 from server.training.progress import (
+    PartnershipProgress,
     RoundScore,
-    TeamProgress,
     zero_sum_rewards,
 )
 from server.training.returns import ReturnCommit, terminal_return_commit
+from server.training.self_play_actor import (
+    SelfPlayActor,
+    TrainingDecision,
+)
 from server.training.trajectory import TrajectoryRecorder
 
-_SEATS: tuple[Seat, Seat, Seat, Seat] = (
-    Seat.NORTH,
-    Seat.WEST,
-    Seat.SOUTH,
-    Seat.EAST,
-)
 _MODEL_ACTIONS = frozenset(("bid", "stir", "discard", "play"))
 
 
@@ -44,8 +45,8 @@ class TrainingRoundResult:
     """One completed self-play round."""
 
     returns: ReturnCommit
-    team0_reward: float
-    team1_reward: float
+    first_partnership_reward: float
+    second_partnership_reward: float
     generated_action_count: int
     accepted_action_count: int
     action_choice_count: int
@@ -59,13 +60,19 @@ class SelfPlaySession:
 
     def __init__(self, *, policy: TrainingPolicy) -> None:
         self._recorder = TrajectoryRecorder()
-        self._players = tuple(
-            TrainingPlayer(
-                index=int(seat),
-                policy=policy,
-                recorder=self._recorder,
-            )
-            for seat in _SEATS
+        self._actors = SeatMap(
+            a=SelfPlayActor(
+                Seat.A, policy=policy, recorder=self._recorder
+            ),
+            b=SelfPlayActor(
+                Seat.B, policy=policy, recorder=self._recorder
+            ),
+            c=SelfPlayActor(
+                Seat.C, policy=policy, recorder=self._recorder
+            ),
+            d=SelfPlayActor(
+                Seat.D, policy=policy, recorder=self._recorder
+            ),
         )
         self._state: GameState | None = None
         self._seed: int | None = None
@@ -88,11 +95,11 @@ class SelfPlaySession:
         assert max_seconds > 0.0
         self._initialize_game(base_seed)
         state = self._required_state()
-        assert observe(state, Seat.NORTH).winning_team is None
+        assert observe(state, Seat.A).winning_partnership is None
 
         self._recorder.clear()
-        for player in self._players:
-            player.reset_round_tracking(
+        for actor in self._actors.values():
+            actor.reset_round_tracking(
                 base_seed=base_seed,
                 policy_version=policy_version,
                 rollout_id=rollout_id,
@@ -106,7 +113,7 @@ class SelfPlaySession:
         confirmed = self._confirm_round()
         if isinstance(confirmed, _result.Rejected):
             return confirmed
-        before = observe(self._required_state(), Seat.NORTH)
+        before = observe(self._required_state(), Seat.A)
 
         final_result = await self._play_until_scoring(
             start=start,
@@ -115,7 +122,7 @@ class SelfPlaySession:
         if isinstance(final_result, _result.Rejected):
             return final_result
         final_snapshot = final_result.value
-        reward0, reward1 = round_rewards(
+        first_reward, second_reward = round_rewards(
             before=before,
             after=final_snapshot,
         )
@@ -123,26 +130,26 @@ class SelfPlaySession:
             policy_version=policy_version,
             episode_id=episode_id,
             steps=self._recorder.steps(),
-            team0_reward=reward0,
-            team1_reward=reward1,
+            first_partnership_reward=first_reward,
+            second_partnership_reward=second_reward,
         )
         generated_count = sum(
-            player.stats().generated_action_count
-            for player in self._players
+            actor.stats().generated_action_count
+            for actor in self._actors.values()
         )
         accepted_count = sum(
-            player.stats().accepted_action_count
-            for player in self._players
+            actor.stats().accepted_action_count
+            for actor in self._actors.values()
         )
         choice_count = sum(
-            player.stats().action_choice_count
-            for player in self._players
+            actor.stats().action_choice_count
+            for actor in self._actors.values()
         )
         return _result.Ok(
             value=TrainingRoundResult(
                 returns=returns,
-                team0_reward=reward0,
-                team1_reward=reward1,
+                first_partnership_reward=first_reward,
+                second_partnership_reward=second_reward,
                 generated_action_count=generated_count,
                 accepted_action_count=accepted_count,
                 action_choice_count=choice_count,
@@ -155,7 +162,8 @@ class SelfPlaySession:
                     time.monotonic() - start,
                     0.000001,
                 ),
-                game_over=final_snapshot.winning_team is not None,
+                game_over=final_snapshot.winning_partnership
+                is not None,
             )
         )
 
@@ -178,7 +186,7 @@ class SelfPlaySession:
         return state
 
     def _confirm_round(self) -> _result.Ok[None] | _result.Rejected:
-        for seat in _SEATS:
+        for seat in seats():
             snapshot = observe(self._required_state(), seat)
             assert snapshot.awaiting_action == "next_round"
             accepted = self._apply(
@@ -196,7 +204,7 @@ class SelfPlaySession:
         max_seconds: float,
     ) -> _result.Ok[PlayerSnapshot] | _result.Rejected:
         while True:
-            snapshot = observe(self._required_state(), Seat.NORTH)
+            snapshot = observe(self._required_state(), Seat.A)
             if (
                 snapshot.phase == "WAITING"
                 and snapshot.scoring is not None
@@ -206,9 +214,9 @@ class SelfPlaySession:
             if remaining <= 0.0:
                 return _timed_out(max_seconds)
             actor = self._awaited_actor()
-            player = self._players[int(actor)]
+            self_play_actor = self._actors.at(actor)
             decision_result = await _decide_before(
-                player=player,
+                actor=self_play_actor,
                 seq=self._seq,
                 snapshot=observe(self._required_state(), actor),
                 seconds=remaining,
@@ -223,16 +231,16 @@ class SelfPlaySession:
             if isinstance(accepted, _result.Rejected):
                 raise AssertionError(
                     "training legal action was rejected: "
-                    f"player={int(actor)}, seq={self._seq}, "
+                    f"seat={actor.value}, seq={self._seq}, "
                     f"error={accepted.reason}, "
                     f"action={decision.step.action!r}"
                 )
-            player.accept(decision)
+            self_play_actor.accept(decision)
 
     def _awaited_actor(self) -> Seat:
         awaited = [
             seat
-            for seat in _SEATS
+            for seat in seats()
             if observe(
                 self._required_state(),
                 seat,
@@ -257,8 +265,8 @@ class SelfPlaySession:
 
     def _broadcast(self) -> _result.Ok[None] | _result.Rejected:
         state = self._required_state()
-        for seat in _SEATS:
-            result = self._players[int(seat)].observe(
+        for seat in seats():
+            result = self._actors.at(seat).observe(
                 seq=self._seq,
                 snapshot=observe(state, seat),
             )
@@ -269,14 +277,12 @@ class SelfPlaySession:
 
 async def _decide_before(
     *,
-    player: TrainingPlayer,
+    actor: SelfPlayActor,
     seq: int,
     snapshot: PlayerSnapshot,
     seconds: float,
 ) -> _result.Ok[TrainingDecision] | _result.Rejected:
-    task = asyncio.create_task(
-        player.decide(seq=seq, snapshot=snapshot)
-    )
+    task = asyncio.create_task(actor.decide(seq=seq, snapshot=snapshot))
     done, _ = await asyncio.wait((task,), timeout=seconds)
     if done:
         return task.result()
@@ -322,47 +328,51 @@ def round_rewards(
     """Return zero-sum team rewards for one completed round."""
     scoring = after.scoring
     assert scoring is not None
-    round_winning_team = scoring.round_winning_team
-    round_declarer_team = after.declarer_team
-    assert round_declarer_team is not None
-    if before.declarer_team is not None:
-        assert before.declarer_team == round_declarer_team
-    team0_before = TeamProgress(
-        level=before.team0_level,
-        is_declarer=round_declarer_team == 0,
+    winning_partnership = scoring.winning_partnership
+    declarer = after.declarer
+    assert declarer is not None
+    declarer_partnership = partnership_of(declarer)
+    if before.declarer is not None:
+        assert partnership_of(before.declarer) == declarer_partnership
+    first_before = PartnershipProgress(
+        level=before.partnership_levels.at(Partnership.FIRST),
+        is_declarer=declarer_partnership == Partnership.FIRST,
     )
-    team1_before = TeamProgress(
-        level=before.team1_level,
-        is_declarer=round_declarer_team == 1,
+    second_before = PartnershipProgress(
+        level=before.partnership_levels.at(Partnership.SECOND),
+        is_declarer=declarer_partnership == Partnership.SECOND,
     )
-    team0_after = TeamProgress(
+    first_after = PartnershipProgress(
         level=(
             TerminalProgress.WIN
-            if after.winning_team == 0
-            else after.team0_level
+            if after.winning_partnership == Partnership.FIRST
+            else after.partnership_levels.at(Partnership.FIRST)
         ),
-        is_declarer=round_winning_team == 0,
+        is_declarer=winning_partnership == Partnership.FIRST,
     )
-    team1_after = TeamProgress(
+    second_after = PartnershipProgress(
         level=(
             TerminalProgress.WIN
-            if after.winning_team == 1
-            else after.team1_level
+            if after.winning_partnership == Partnership.SECOND
+            else after.partnership_levels.at(Partnership.SECOND)
         ),
-        is_declarer=round_winning_team == 1,
+        is_declarer=winning_partnership == Partnership.SECOND,
     )
     reward = zero_sum_rewards(
-        team0_before=team0_before,
-        team1_before=team1_before,
-        team0_after=team0_after,
-        team1_after=team1_after,
+        first_before=first_before,
+        second_before=second_before,
+        first_after=first_after,
+        second_after=second_after,
         score=RoundScore(
-            declarer_team=round_declarer_team,
+            declarer_partnership=declarer_partnership,
             total_defender_points=scoring.total_defender_points,
             mandatory_levels=before.mandatory_levels,
         ),
     )
-    return reward.team0, reward.team1
+    return (
+        reward.first_partnership,
+        reward.second_partnership,
+    )
 
 
 __all__ = (

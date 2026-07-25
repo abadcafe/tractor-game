@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from server.game import Seat
 from server.game.snapshots import PlayerSnapshot
 from server.training.legal_actions.bid import build_bid_index
 from server.training.legal_actions.contract import (
@@ -22,13 +23,13 @@ from server.training.semantic_actions.query import (
 
 def build_legal_action_index(
     *,
-    player_index: int,
+    viewer: Seat,
     snapshot: PlayerSnapshot,
     query: ActionQuery | None = None,
 ) -> LegalActionIndex:
     """Build the rule-complete action index for a snapshot."""
     action_query = (
-        build_action_query(player_index=player_index, snapshot=snapshot)
+        build_action_query(viewer=viewer, snapshot=snapshot)
         if query is None
         else query
     )
@@ -36,13 +37,13 @@ def build_legal_action_index(
         return EmptyLegalActionIndex(action_query)
     if action_query.kind == "bid":
         return build_bid_index(
-            player_index=player_index,
+            viewer=viewer,
             snapshot=snapshot,
             query=action_query,
         )
     if action_query.kind == "stir":
         return build_stir_index(
-            player_index=player_index,
+            viewer=viewer,
             snapshot=snapshot,
             query=action_query,
         )
@@ -50,7 +51,7 @@ def build_legal_action_index(
         return DiscardLegalActionIndex(action_query)
     if action_query.kind == "lead_play":
         return LeadPlayLegalActionIndex(
-            action_query, tuple(snapshot.player_hand)
+            action_query, tuple(snapshot.hand)
         )
     if action_query.kind == "follow_play":
         return build_follow_index(snapshot=snapshot, query=action_query)

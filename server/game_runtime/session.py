@@ -17,6 +17,7 @@ from server.game import (
     commands,
     create,
     observe,
+    seats,
     snapshots,
 )
 
@@ -77,14 +78,6 @@ class AgentSubmission(Protocol):
         decoder: CommandDecoder,
     ) -> None:
         """Submit a command guarded by the observed sequence."""
-
-
-_SEATS: tuple[Seat, Seat, Seat, Seat] = (
-    Seat.NORTH,
-    Seat.WEST,
-    Seat.SOUTH,
-    Seat.EAST,
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,7 +174,7 @@ class Session:
             )
 
     async def _broadcast(self) -> None:
-        for seat in _SEATS:
+        for seat in seats():
             if seat in self._connections:
                 await self._send(seat, error=None)
 

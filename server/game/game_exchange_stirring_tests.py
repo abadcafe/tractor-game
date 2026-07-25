@@ -5,6 +5,7 @@ from server.game import (
     Seat,
     apply,
     commands,
+    next_seat,
     observe,
 )
 from server.game.rules import bidding
@@ -26,7 +27,7 @@ def test_bottom_is_visible_only_to_current_exchange_owner() -> None:
     )
 
     assert len(current.bottom_cards) == 8
-    assert len(current.player_hand) == 33
+    assert len(current.hand) == 33
     for seat in GAME_SEATS:
         if seat != actor:
             assert observe(state, seat).bottom_cards == ()
@@ -40,7 +41,7 @@ def test_bury_requires_exact_distinct_owned_cards() -> None:
         started_game(seed=37),
         "discard",
     )
-    one = CardId(current.player_hand[0].id)
+    one = CardId(current.hand[0].id)
     too_few = apply(state, actor, commands.Bury((one,)))
     repeated = apply(
         state,
@@ -66,7 +67,7 @@ def test_initial_exchange_is_private_and_reconnect_safe() -> None:
     )
     buried = tuple(
         CardId(card.id)
-        for card in current.player_hand[: len(current.bottom_cards)]
+        for card in current.hand[: len(current.bottom_cards)]
     )
     state = accepted_game_command(
         state,
@@ -75,11 +76,11 @@ def test_initial_exchange_is_private_and_reconnect_safe() -> None:
     )
 
     owner = observe(state, actor)
-    opponent = observe(state, Seat((int(actor) + 1) % 4))
+    opponent = observe(state, next_seat(actor))
     assert owner.own_initial_bottom_exchange is not None
     assert (
         owner.own_initial_bottom_exchange.discarded_bottom_cards
-        == tuple(current.player_hand[:8])
+        == tuple(current.hand[:8])
     )
     assert opponent.own_initial_bottom_exchange is None
     assert opponent.bottom_cards == ()
@@ -96,7 +97,7 @@ def test_stir_passes_advance_once_and_begin_play_after_full_cycle() -> (
         state,
         owner,
         commands.Bury(
-            tuple(CardId(card.id) for card in exchange.player_hand[:8])
+            tuple(CardId(card.id) for card in exchange.hand[:8])
         ),
     )
 
@@ -131,14 +132,14 @@ def test_stir_rejects_single_and_non_owned_cards() -> None:
         state,
         owner,
         commands.Bury(
-            tuple(CardId(card.id) for card in exchange.player_hand[:8])
+            tuple(CardId(card.id) for card in exchange.hand[:8])
         ),
     )
     actor, current = game_decision(state)
     single = apply(
         state,
         actor,
-        commands.Stir((CardId(current.player_hand[0].id),)),
+        commands.Stir((CardId(current.hand[0].id),)),
     )
     unknown = apply(
         state,
@@ -157,7 +158,7 @@ def test_big_joker_pair_skips_redundant_stir_waiting() -> None:
     )
     buried = tuple(
         CardId(card.id)
-        for card in exchange.player_hand
+        for card in exchange.hand
         if card.rank != Rank.BIG_JOKER
     )[:8]
     state = accepted_game_command(
@@ -168,7 +169,7 @@ def test_big_joker_pair_skips_redundant_stir_waiting() -> None:
     stirrer, stirring = game_decision(state)
     big_jokers = tuple(
         CardId(card.id)
-        for card in stirring.player_hand
+        for card in stirring.hand
         if card.rank == Rank.BIG_JOKER
     )
     assert len(big_jokers) == 2
@@ -183,8 +184,7 @@ def test_big_joker_pair_skips_redundant_stir_waiting() -> None:
         stirrer,
         commands.Bury(
             tuple(
-                CardId(card.id)
-                for card in exchange_after_stir.player_hand[:8]
+                CardId(card.id) for card in exchange_after_stir.hand[:8]
             )
         ),
     )
@@ -198,7 +198,7 @@ def test_big_joker_pair_skips_redundant_stir_waiting() -> None:
     declaration = bidding.Declaration(
         cards=tuple(
             card
-            for card in exchange_after_stir.player_hand
+            for card in exchange_after_stir.hand
             if card.rank == Rank.BIG_JOKER
         )
     )

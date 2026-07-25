@@ -112,7 +112,7 @@ async def test_training_metrics_events_send_complete_snapshot(
     assert response.events[0].name == "metrics"
     snapshot = response.events[0].json()
     assert _is_dict(snapshot)
-    assert snapshot["schema_version"] == 2
+    assert snapshot["schema_version"] == 3
     assert snapshot["store_id"] is None
     assert snapshot["through_sequence"] == 0
     assert _is_dict(snapshot["datasets"])

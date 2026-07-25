@@ -43,21 +43,21 @@ def _receive_ws_dict(
     return message
 
 
-def _player_ws_path(
-    game_id: str, *, player: int = 2, user_id: str = "user-2"
+def _seat_ws_path(
+    game_id: str, *, seat: str = "c", user_id: str = "user-2"
 ) -> str:
-    return f"/game/{game_id}/player/{player}?user_id={user_id}"
+    return f"/game/{game_id}/seat/{seat}?user_id={user_id}"
 
 
 def _prepare_ws_game(
     sync_client: SyncServerClient,
     game_id: str,
     *,
-    player: int = 2,
+    seat: str = "c",
     user_id: str = "user-2",
 ) -> None:
     attach_response = sync_client.post(
-        f"/api/game/{game_id}/player/{player}?user_id={user_id}"
+        f"/api/game/{game_id}/seat/{seat}?user_id={user_id}"
     )
     assert attach_response.status_code == 200
     fill_response = sync_client.post(
@@ -66,11 +66,11 @@ def _prepare_ws_game(
     assert fill_response.status_code == 200
 
 
-def _listed_player(
+def _listed_seat(
     sync_client: SyncServerClient,
     game_id: str,
     *,
-    player: int,
+    seat: str,
     user_id: str,
 ) -> dict[str, object]:
     response = sync_client.get(f"/api/game?user_id={user_id}")
@@ -81,9 +81,11 @@ def _listed_player(
     assert _is_list_of_dict(games)
     matching = [game for game in games if game["game_id"] == game_id]
     assert len(matching) == 1
-    players = matching[0]["players"]
-    assert _is_list_of_dict(players)
-    return players[player]
+    seats = matching[0]["seats"]
+    assert _is_list_of_dict(seats)
+    matching_seats = [item for item in seats if item["seat"] == seat]
+    assert len(matching_seats) == 1
+    return matching_seats[0]
 
 
 def test_delete_game_after_ws_connection(
@@ -96,7 +98,7 @@ def test_delete_game_after_ws_connection(
     game_id = _game_id_from(create_resp)
     _prepare_ws_game(sync_client, game_id)
 
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws:
         # Get initial state via seq=0 (no auto-push on connect)
         ws.send_json({"seq": 0})
         initial = _receive_ws_dict(ws)
@@ -124,9 +126,9 @@ def test_user_player_can_connect_to_requested_player(
     create_resp = sync_client.post("/api/game")
     assert create_resp.status_code == 201
     game_id = _game_id_from(create_resp)
-    _prepare_ws_game(sync_client, game_id, player=0, user_id="user-0")
+    _prepare_ws_game(sync_client, game_id, seat="a", user_id="user-0")
     with sync_client.websocket_connect(
-        _player_ws_path(game_id, player=0, user_id="user-0")
+        _seat_ws_path(game_id, seat="a", user_id="user-0")
     ) as ws:
         ws.send_json({"seq": 0})
         data = _receive_ws_dict(ws)
@@ -150,7 +152,7 @@ def test_ws_seq_zero_after_connect_receives_state(
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     _prepare_ws_game(sync_client, game_id)
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws:
         # Client must send seq=0 to get initial state (no auto-push on
         # connect)
         ws.send_json({"seq": 0})
@@ -165,7 +167,7 @@ def test_ws_connect_nonexistent_rejected(
     """Connecting to a nonexistent game should be rejected."""
     with pytest.raises(_WS_ERRORS):
         with sync_client.websocket_connect(
-            _player_ws_path("nonexistent999")
+            _seat_ws_path("nonexistent999")
         ) as ws:
             _receive_ws_dict(ws)
 
@@ -178,7 +180,7 @@ def test_ws_connect_missing_user_id_rejected(
 
     with pytest.raises(WebSocketDisconnect) as exc_info:
         with sync_client.websocket_connect(
-            f"/game/{game_id}/player/1"
+            f"/game/{game_id}/seat/b"
         ) as ws:
             _receive_ws_dict(ws)
 
@@ -193,7 +195,7 @@ def test_ws_connect_invalid_player_rejected(
 
     with pytest.raises(WebSocketDisconnect) as exc_info:
         with sync_client.websocket_connect(
-            f"/game/{game_id}/player/4?user_id=user-4"
+            f"/game/{game_id}/seat/4?user_id=user-4"
         ) as ws:
             _receive_ws_dict(ws)
 
@@ -205,10 +207,10 @@ def test_ws_connect_rejects_player_stealing(
 ) -> None:
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
-    _prepare_ws_game(sync_client, game_id, player=1, user_id="user-1")
+    _prepare_ws_game(sync_client, game_id, seat="b", user_id="user-1")
 
     with sync_client.websocket_connect(
-        _player_ws_path(game_id, player=1, user_id="user-1")
+        _seat_ws_path(game_id, seat="b", user_id="user-1")
     ) as ws1:
         ws1.send_json({"seq": 0})
         data1 = _receive_ws_dict(ws1)
@@ -217,7 +219,7 @@ def test_ws_connect_rejects_player_stealing(
 
         with pytest.raises(WebSocketDisconnect) as exc_info:
             with sync_client.websocket_connect(
-                _player_ws_path(game_id, player=1, user_id="user-other")
+                _seat_ws_path(game_id, seat="b", user_id="user-other")
             ) as ws2:
                 _receive_ws_dict(ws2)
 
@@ -229,10 +231,10 @@ def test_ws_connect_allows_same_user_to_reenter_player(
 ) -> None:
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
-    _prepare_ws_game(sync_client, game_id, player=3, user_id="user-3")
+    _prepare_ws_game(sync_client, game_id, seat="d", user_id="user-3")
 
     with sync_client.websocket_connect(
-        _player_ws_path(game_id, player=3, user_id="user-3")
+        _seat_ws_path(game_id, seat="d", user_id="user-3")
     ) as ws1:
         ws1.send_json({"seq": 0})
         data1 = _receive_ws_dict(ws1)
@@ -240,7 +242,7 @@ def test_ws_connect_allows_same_user_to_reenter_player(
         assert data1["type"] == "state"
 
         with sync_client.websocket_connect(
-            _player_ws_path(game_id, player=3, user_id="user-3")
+            _seat_ws_path(game_id, seat="d", user_id="user-3")
         ) as ws2:
             ws2.send_json({"seq": 0})
             data2 = _receive_ws_dict(ws2)
@@ -260,33 +262,33 @@ def test_ws_connect_takeover_closes_old_connection(
     game_id = _game_id_from(create_resp)
     _prepare_ws_game(sync_client, game_id)
 
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws1:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws1:
         ws1.send_json({"seq": 0})
         data1 = _receive_ws_dict(ws1)
         assert _is_dict(data1)
         assert data1["type"] == "state"
-        first_player = _listed_player(
+        first_seat = _listed_seat(
             sync_client,
             game_id,
-            player=2,
+            seat="c",
             user_id="user-2",
         )
-        assert first_player["connected"] is True
+        assert first_seat["connected"] is True
 
         with sync_client.websocket_connect(
-            _player_ws_path(game_id)
+            _seat_ws_path(game_id)
         ) as ws2:
             ws2.send_json({"seq": 0})
             data2 = _receive_ws_dict(ws2)
             assert _is_dict(data2)
             assert data2["type"] == "state"
-            replacement_player = _listed_player(
+            replacement_seat = _listed_seat(
                 sync_client,
                 game_id,
-                player=2,
+                seat="c",
                 user_id="user-2",
             )
-            assert replacement_player["connected"] is True
+            assert replacement_seat["connected"] is True
             with pytest.raises(_WS_ERRORS):
                 _receive_ws_dict(ws1)
 
@@ -308,7 +310,7 @@ def test_ws_bid_action_receives_response(
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     _prepare_ws_game(sync_client, game_id)
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         initial = _receive_ws_dict(ws)
         assert _is_dict(initial)
@@ -326,7 +328,7 @@ def test_ws_play_action_receives_response(
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     _prepare_ws_game(sync_client, game_id)
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         initial = _receive_ws_dict(ws)
         assert _is_dict(initial)
@@ -344,7 +346,7 @@ def test_ws_next_round_action_receives_response(
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     _prepare_ws_game(sync_client, game_id)
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         initial = _receive_ws_dict(ws)
         assert _is_dict(initial)
@@ -362,7 +364,7 @@ def test_ws_stir_action_receives_response(
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     _prepare_ws_game(sync_client, game_id)
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         initial = _receive_ws_dict(ws)
         assert _is_dict(initial)
@@ -382,7 +384,7 @@ def test_ws_discard_action_receives_response(
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     _prepare_ws_game(sync_client, game_id)
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         initial = _receive_ws_dict(ws)
         assert _is_dict(initial)
@@ -409,7 +411,7 @@ def test_ws_invalid_action_returns_error(
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     _prepare_ws_game(sync_client, game_id)
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws:
         # Get initial state first
         ws.send_json({"seq": 0})
         initial = _receive_ws_dict(ws)
@@ -434,12 +436,12 @@ def test_reconnect_replaces_ws(sync_client: SyncServerClient) -> None:
     game_id = _game_id_from(create_resp)
     _prepare_ws_game(sync_client, game_id)
     # First connection
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         data = _receive_ws_dict(ws)
         assert _is_dict(data)
     # Second connection (reconnect)
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         raw = _receive_ws_dict(ws)
         assert _is_dict(raw)
@@ -454,7 +456,7 @@ def test_seq_in_state_message(sync_client: SyncServerClient) -> None:
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     _prepare_ws_game(sync_client, game_id)
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws:
         # Send action with seq=0 to get initial state
         ws.send_json({"seq": 0})
         data = _receive_ws_dict(ws)
@@ -475,7 +477,7 @@ def test_seq_mismatch_returns_state_without_error(
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     _prepare_ws_game(sync_client, game_id)
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws:
         # Get initial state through the explicit seq=0 state request.
         ws.send_json({"seq": 0})
         data = _receive_ws_dict(ws)
@@ -508,7 +510,7 @@ def test_error_merged_into_state(sync_client: SyncServerClient) -> None:
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     _prepare_ws_game(sync_client, game_id)
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws:
         # Get initial state
         ws.send_json({"seq": 0})
         data = _receive_ws_dict(ws)
@@ -548,7 +550,7 @@ def test_bid_pass_parsed_correctly(
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     _prepare_ws_game(sync_client, game_id)
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws:
         # Get initial state
         ws.send_json({"seq": 0})
         data = _receive_ws_dict(ws)

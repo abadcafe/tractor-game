@@ -1,6 +1,7 @@
 """Project internal contracts into explicit player-visible states."""
 
 from server.game.rules.cards import Rank
+from server.game.seating import Partnership, partnership_of
 from server.game.snapshots.contract import (
     NoTrump,
     SuitedTrump,
@@ -22,5 +23,9 @@ def contract_snapshot(contract: Contract) -> TrumpSnapshot:
 
 def deal_trump_rank(phase: phases.DealBid) -> Rank:
     declarer = phase.fixed_declarer
-    team = 0 if declarer is None else int(declarer) % 2
-    return phase.levels[team]
+    partnership = (
+        Partnership.FIRST
+        if declarer is None
+        else partnership_of(declarer)
+    )
+    return phase.levels.at(partnership)

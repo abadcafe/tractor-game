@@ -1,8 +1,8 @@
 """Physical card ownership operations for immutable hands."""
 
 from server.foundation.result import Ok, Rejected
-from server.game.config import Seat
 from server.game.rules.cards import Card, CardId
+from server.game.seating import Seat
 
 from .round_values import Hands
 
@@ -31,6 +31,4 @@ def replace_hand(
     seat: Seat,
     hand: tuple[Card, ...],
 ) -> Hands:
-    values = list(hands)
-    values[int(seat)] = hand
-    return (values[0], values[1], values[2], values[3])
+    return hands.replace(seat, hand)

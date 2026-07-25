@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from server.game import Partnership, partnership_of
 from server.training.policy_sampling.records import DecisionHandle
 from server.training.trajectory import DecisionStep
 
@@ -44,29 +45,32 @@ def terminal_return_commit(
     policy_version: int,
     episode_id: int,
     steps: tuple[DecisionStep, ...],
-    team0_reward: float,
-    team1_reward: float,
+    first_partnership_reward: float,
+    second_partnership_reward: float,
 ) -> ReturnCommit:
     """Build per-decision returns for one completed round."""
     assert policy_version >= 0
     assert episode_id >= 0
-    assert math.isfinite(team0_reward)
-    assert math.isfinite(team1_reward)
-    assert team0_reward + team1_reward == 0.0
+    assert math.isfinite(first_partnership_reward)
+    assert math.isfinite(second_partnership_reward)
+    assert first_partnership_reward + second_partnership_reward == 0.0
     builder = _ReturnCommitBuilder(
         policy_version=policy_version,
         first_episode_id=episode_id,
         episode_count=1,
     )
-    for team_index, reward in ((0, team0_reward), (1, team1_reward)):
-        team_steps = tuple(
+    for partnership, reward in (
+        (Partnership.FIRST, first_partnership_reward),
+        (Partnership.SECOND, second_partnership_reward),
+    ):
+        partnership_steps = tuple(
             step
             for step in steps
-            if step.player_index % 2 == team_index
+            if partnership_of(step.seat) == partnership
         )
-        if team_steps:
+        if partnership_steps:
             builder.append_terminal_trajectory(
-                steps=team_steps,
+                steps=partnership_steps,
                 terminal_reward=reward,
             )
     return builder.build()

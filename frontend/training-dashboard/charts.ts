@@ -131,8 +131,16 @@ const SPECS: readonly ChartSpec[] = [
     dataset: "rewards",
     unit: "reward",
     series: [
-      { key: "team0_reward", label: "Team 0", color: "#1769aa" },
-      { key: "team1_reward", label: "Team 1", color: "#c26718" },
+      {
+        key: "first_partnership_reward",
+        label: "First partnership",
+        color: "#1769aa",
+      },
+      {
+        key: "second_partnership_reward",
+        label: "Second partnership",
+        color: "#c26718",
+      },
     ],
   },
   {

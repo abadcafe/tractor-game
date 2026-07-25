@@ -5,18 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from server.game import Seat, next_seat, partner_seat, previous_seat
 from server.game.rules.cards import Suit
-
-_PLAYER_COUNT = 4
 
 
 class RelativeActor(str, Enum):
     """One player expressed relative to the policy viewer."""
 
     SELF = "self"
+    NEXT_OPPONENT = "next_opponent"
     PARTNER = "partner"
-    LEFT_ENEMY = "left_enemy"
-    RIGHT_ENEMY = "right_enemy"
+    PREVIOUS_OPPONENT = "previous_opponent"
 
 
 class TrickPosition(str, Enum):
@@ -51,31 +50,28 @@ class TrumpState:
             assert self.suit != Suit.JOKER
 
 
-def relative_actor(viewer: int, actor: int) -> RelativeActor:
+def relative_actor(viewer: Seat, actor: Seat) -> RelativeActor:
     """Convert one absolute actor at the sole absolute-position edge."""
-    assert 0 <= viewer < _PLAYER_COUNT
-    assert 0 <= actor < _PLAYER_COUNT
-    offset = (actor - viewer) % _PLAYER_COUNT
-    if offset == 0:
+    if actor == viewer:
         return RelativeActor.SELF
-    if offset == 1:
-        return RelativeActor.LEFT_ENEMY
-    if offset == 2:
+    if actor == next_seat(viewer):
+        return RelativeActor.NEXT_OPPONENT
+    if actor == partner_seat(viewer):
         return RelativeActor.PARTNER
-    return RelativeActor.RIGHT_ENEMY
+    assert actor == previous_seat(viewer)
+    return RelativeActor.PREVIOUS_OPPONENT
 
 
-def trick_position(*, lead_player: int, actor: int) -> TrickPosition:
+def trick_position(*, lead_actor: Seat, actor: Seat) -> TrickPosition:
     """Return chronological trick position from the game topology."""
-    assert 0 <= lead_player < _PLAYER_COUNT
-    assert 0 <= actor < _PLAYER_COUNT
-    offset = (actor - lead_player) % _PLAYER_COUNT
-    return (
-        TrickPosition.LEAD,
-        TrickPosition.FOLLOW_1,
-        TrickPosition.FOLLOW_2,
-        TrickPosition.FOLLOW_3,
-    )[offset]
+    if actor == lead_actor:
+        return TrickPosition.LEAD
+    if actor == next_seat(lead_actor):
+        return TrickPosition.FOLLOW_1
+    if actor == partner_seat(lead_actor):
+        return TrickPosition.FOLLOW_2
+    assert actor == previous_seat(lead_actor)
+    return TrickPosition.FOLLOW_3
 
 
 __all__ = (

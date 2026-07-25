@@ -75,7 +75,7 @@ def build_follow_index(
     lead_cards = _lead_cards(snapshot.trick)
     assert lead_cards
     space_result = play.build_follow_action_space(
-        hand=list(snapshot.player_hand),
+        hand=list(snapshot.hand),
         lead_cards=list(lead_cards),
         trump_suit=query.trump_suit,
         trump_rank=query.level_rank,
@@ -88,6 +88,6 @@ def _lead_cards(trick: TrickSnapshot | None) -> tuple[Card, ...]:
     if trick is None:
         return ()
     for slot in trick.slots:
-        if slot.player == trick.lead_player:
+        if slot.actor == trick.lead_actor:
             return slot.cards
     return ()

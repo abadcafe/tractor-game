@@ -18,21 +18,20 @@ function makeSnapshot(
 ): StateSnapshot {
   return {
     phase: "PLAYING",
-    player_hand: [],
+    round_number: 1,
+    hand: [],
     bottom_cards: [],
-    trump_rank: "2",
-    trump_suit: null,
-    declarer_team: null,
-    declarer_player: null,
+    trump: { kind: "no_trump", rank: "2" },
+    declarer: null,
     defender_points: 0,
     action_hints: [],
     trick: {
-      lead_player: 0,
+      lead_actor: "a",
       slots: [{
-        player: 0,
+        actor: "a",
         cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }],
       }],
-      current_player: 1,
+      current_actor: "b",
       failed_throw: null,
     },
     last_completed_trick: null,
@@ -44,10 +43,10 @@ function makeSnapshot(
     awaiting_action: null,
     stirring_state: null,
     scoring: null,
-    winning_team: null,
-    team0_level: "2",
-    team1_level: "2",
-    player_hand_counts: [13, 13, 13, 13],
+    winning_partnership: null,
+    partnership_levels: { first: "2", second: "2" },
+    remaining_cards: { a: 13, b: 13, c: 13, d: 13 },
+    mandatory_levels: ["A"],
     next_round_confirmed: [],
     ...overrides,
   };
@@ -61,7 +60,7 @@ function renderedRanks(el: Element, selector: string): string[] {
 
 Deno.test("test_renderTrickView_shows_played_cards", () => {
   const snap = makeSnapshot();
-  const el = renderTrickView(snap);
+  const el = renderTrickView(snap, "c");
   const trickCards = el.querySelectorAll(".trick-card");
   assertEquals(trickCards.length, 1);
   assertEquals(el.querySelectorAll(".trick-lead-marker").length, 1);
@@ -73,7 +72,7 @@ Deno.test("test_renderTrickView_shows_played_cards", () => {
 
 Deno.test("test_renderTrickView_empty_trick", () => {
   const snap = makeSnapshot({ trick: null });
-  const el = renderTrickView(snap);
+  const el = renderTrickView(snap, "c");
   const trickCards = el.querySelectorAll(".trick-card");
   assertEquals(trickCards.length, 0);
 });
@@ -83,38 +82,38 @@ Deno.test("test_renderTrickView_waiting_scoring_keeps_last_trick", () => {
     phase: "WAITING",
     trick: null,
     last_completed_trick: {
-      lead_player: 1,
-      winner: 3,
+      lead_actor: "b",
+      winner: "d",
       points: 20,
       failed_throw: null,
       slots: [
         {
-          player: 0,
+          actor: "a",
           cards: [{ id: "D1-clubs-5", suit: "clubs", rank: "5" }],
         },
         {
-          player: 1,
+          actor: "b",
           cards: [{ id: "D1-hearts-10", suit: "hearts", rank: "10" }],
         },
         {
-          player: 2,
+          actor: "c",
           cards: [{ id: "D1-spades-K", suit: "spades", rank: "K" }],
         },
         {
-          player: 3,
+          actor: "d",
           cards: [{ id: "D1-diamonds-A", suit: "diamonds", rank: "A" }],
         },
       ],
     },
     scoring: {
-      round_winning_team: 0,
+      winning_partnership: "first",
       defender_points: 80,
       total_defender_points: 100,
       bottom_card_bonus: 20,
       bottom_cards: [],
     },
   });
-  const el = renderTrickView(snap);
+  const el = renderTrickView(snap, "c");
 
   assertEquals(el.classList.contains("showing-previous"), true);
   assertEquals(el.querySelectorAll(".trick-card").length, 4);
@@ -128,26 +127,26 @@ Deno.test("test_renderTrickView_waiting_scoring_keeps_last_trick", () => {
 
 Deno.test("test_renderTrickView_previous_trick_preview_shows_four_players", () => {
   const snap = makeSnapshot();
-  const el = renderTrickView(snap, {
-    lead_player: 0,
-    winner: 2,
+  const el = renderTrickView(snap, "c", {
+    lead_actor: "a",
+    winner: "c",
     points: 15,
     failed_throw: null,
     slots: [
       {
-        player: 0,
+        actor: "a",
         cards: [{ id: "D1-clubs-5", suit: "clubs", rank: "5" }],
       },
       {
-        player: 1,
+        actor: "b",
         cards: [{ id: "D1-hearts-9", suit: "hearts", rank: "9" }],
       },
       {
-        player: 2,
+        actor: "c",
         cards: [{ id: "D1-spades-K", suit: "spades", rank: "K" }],
       },
       {
-        player: 3,
+        actor: "d",
         cards: [{ id: "D1-diamonds-A", suit: "diamonds", rank: "A" }],
       },
     ],
@@ -168,24 +167,26 @@ Deno.test("test_renderTrickView_previous_trick_preview_shows_four_players", () =
 });
 
 Deno.test("test_renderTrickView_failed_throw_preview_shows_attempted_and_forced_cards", () => {
-  const snap = makeSnapshot({ trump_suit: "spades", trump_rank: "2" });
+  const snap = makeSnapshot({
+    trump: { kind: "suited", rank: "2", suit: "spades" },
+  });
   const previousTrick: CompletedTrick = {
-    lead_player: 0,
-    winner: 0,
+    lead_actor: "a",
+    winner: "a",
     points: 0,
     failed_throw: null,
     slots: [
       {
-        player: 0,
+        actor: "a",
         cards: [{ id: "D1-clubs-5", suit: "clubs", rank: "5" }],
       },
-      { player: 1, cards: [] },
-      { player: 2, cards: [] },
-      { player: 3, cards: [] },
+      { actor: "b", cards: [] },
+      { actor: "c", cards: [] },
+      { actor: "d", cards: [] },
     ],
   };
-  const el = renderTrickView(snap, previousTrick, {
-    player: 0,
+  const el = renderTrickView(snap, "c", previousTrick, {
+    actor: "a",
     attempted_cards: [
       { id: "D1-spades-Q", suit: "spades", rank: "Q" },
       { id: "D1-joker-SJ", suit: "joker", rank: "SJ" },
@@ -200,7 +201,7 @@ Deno.test("test_renderTrickView_failed_throw_preview_shows_attempted_and_forced_
 
   const text = el.textContent ?? "";
   assertEquals(text.includes("甩牌失败，捡小"), false);
-  assertEquals(text.includes("玩家 0甩牌失败"), true);
+  assertEquals(text.includes("座位 a甩牌失败"), true);
   assertEquals(text.includes("暴露"), true);
   assertEquals(text.includes("捡小"), true);
   assertEquals(text.includes("上一墩"), false);
@@ -232,7 +233,7 @@ Deno.test("test_renderTrickView_failed_throw_preview_shows_attempted_and_forced_
 
 Deno.test("test_renderTrickView_player_labels", () => {
   const snap = makeSnapshot();
-  const el = renderTrickView(snap);
+  const el = renderTrickView(snap, "c");
   const labels = el.querySelectorAll(".trick-player-label");
   assertEquals(labels.length, 1);
 });
@@ -240,26 +241,26 @@ Deno.test("test_renderTrickView_player_labels", () => {
 Deno.test("test_renderTrickView_multiple_slots", () => {
   const snap = makeSnapshot({
     trick: {
-      lead_player: 0,
+      lead_actor: "a",
       slots: [
         {
-          player: 0,
+          actor: "a",
           cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }],
         },
         {
-          player: 1,
+          actor: "b",
           cards: [{ id: "D2-hearts-9", suit: "hearts", rank: "9" }],
         },
         {
-          player: 2,
+          actor: "c",
           cards: [{ id: "D3-spades-J", suit: "spades", rank: "J" }],
         },
       ],
-      current_player: 3,
+      current_actor: "d",
       failed_throw: null,
     },
   });
-  const el = renderTrickView(snap);
+  const el = renderTrickView(snap, "c");
   const slots = el.querySelectorAll(".trick-slot");
   assertEquals(slots.length, 3);
   const trickCards = el.querySelectorAll(".trick-card");
@@ -270,13 +271,12 @@ Deno.test("test_renderTrickView_multiple_slots", () => {
 
 Deno.test("test_renderTrickView_sorts_current_trick_cards_like_hand", () => {
   const snap = makeSnapshot({
-    trump_rank: "4",
-    trump_suit: null,
+    trump: { kind: "no_trump", rank: "4" },
     trick: {
-      lead_player: 3,
+      lead_actor: "d",
       slots: [
         {
-          player: 0,
+          actor: "a",
           cards: [
             { id: "D1-diamonds-6", suit: "diamonds", rank: "6" },
             { id: "D1-diamonds-3", suit: "diamonds", rank: "3" },
@@ -284,7 +284,7 @@ Deno.test("test_renderTrickView_sorts_current_trick_cards_like_hand", () => {
           ],
         },
         {
-          player: 1,
+          actor: "b",
           cards: [
             { id: "D1-diamonds-7", suit: "diamonds", rank: "7" },
             { id: "D1-diamonds-5", suit: "diamonds", rank: "5" },
@@ -292,7 +292,7 @@ Deno.test("test_renderTrickView_sorts_current_trick_cards_like_hand", () => {
           ],
         },
         {
-          player: 2,
+          actor: "c",
           cards: [
             { id: "D1-diamonds-2", suit: "diamonds", rank: "2" },
             { id: "D2-diamonds-2", suit: "diamonds", rank: "2" },
@@ -300,7 +300,7 @@ Deno.test("test_renderTrickView_sorts_current_trick_cards_like_hand", () => {
           ],
         },
         {
-          player: 3,
+          actor: "d",
           cards: [
             { id: "D1-diamonds-K", suit: "diamonds", rank: "K" },
             { id: "D1-diamonds-A", suit: "diamonds", rank: "A" },
@@ -308,44 +308,43 @@ Deno.test("test_renderTrickView_sorts_current_trick_cards_like_hand", () => {
           ],
         },
       ],
-      current_player: 1,
+      current_actor: "b",
       failed_throw: null,
     },
   });
 
-  const el = renderTrickView(snap);
+  const el = renderTrickView(snap, "c");
 
   assertEquals(
-    renderedRanks(el, ".trick-slot-south .trick-card"),
+    renderedRanks(el, ".trick-slot-bottom .trick-card"),
     ["6", "2", "2"],
   );
   assertEquals(
-    renderedRanks(el, ".trick-slot-north .trick-card"),
+    renderedRanks(el, ".trick-slot-top .trick-card"),
     ["10", "6", "3"],
   );
   assertEquals(
-    renderedRanks(el, ".trick-slot-west .trick-card"),
+    renderedRanks(el, ".trick-slot-left .trick-card"),
     ["7", "5", "3"],
   );
   assertEquals(
-    renderedRanks(el, ".trick-slot-east .trick-card"),
+    renderedRanks(el, ".trick-slot-right .trick-card"),
     ["A", "A", "K"],
   );
 });
 
 Deno.test("test_renderTrickView_sorts_previous_trick_cards_like_hand", () => {
   const snap = makeSnapshot({
-    trump_rank: "4",
-    trump_suit: null,
+    trump: { kind: "no_trump", rank: "4" },
   });
-  const el = renderTrickView(snap, {
-    lead_player: 3,
-    winner: 3,
+  const el = renderTrickView(snap, "c", {
+    lead_actor: "d",
+    winner: "d",
     points: 25,
     failed_throw: null,
     slots: [
       {
-        player: 0,
+        actor: "a",
         cards: [
           { id: "D1-diamonds-6", suit: "diamonds", rank: "6" },
           { id: "D1-diamonds-3", suit: "diamonds", rank: "3" },
@@ -353,7 +352,7 @@ Deno.test("test_renderTrickView_sorts_previous_trick_cards_like_hand", () => {
         ],
       },
       {
-        player: 1,
+        actor: "b",
         cards: [
           { id: "D1-diamonds-7", suit: "diamonds", rank: "7" },
           { id: "D1-diamonds-5", suit: "diamonds", rank: "5" },
@@ -361,7 +360,7 @@ Deno.test("test_renderTrickView_sorts_previous_trick_cards_like_hand", () => {
         ],
       },
       {
-        player: 2,
+        actor: "c",
         cards: [
           { id: "D1-diamonds-2", suit: "diamonds", rank: "2" },
           { id: "D2-diamonds-2", suit: "diamonds", rank: "2" },
@@ -369,7 +368,7 @@ Deno.test("test_renderTrickView_sorts_previous_trick_cards_like_hand", () => {
         ],
       },
       {
-        player: 3,
+        actor: "d",
         cards: [
           { id: "D1-diamonds-K", suit: "diamonds", rank: "K" },
           { id: "D1-diamonds-A", suit: "diamonds", rank: "A" },
@@ -380,19 +379,19 @@ Deno.test("test_renderTrickView_sorts_previous_trick_cards_like_hand", () => {
   });
 
   assertEquals(
-    renderedRanks(el, ".trick-slot-north .trick-card"),
+    renderedRanks(el, ".trick-slot-top .trick-card"),
     ["10", "6", "3"],
   );
   assertEquals(
-    renderedRanks(el, ".trick-slot-west .trick-card"),
+    renderedRanks(el, ".trick-slot-left .trick-card"),
     ["7", "5", "3"],
   );
   assertEquals(
-    renderedRanks(el, ".trick-slot-east .trick-card"),
+    renderedRanks(el, ".trick-slot-right .trick-card"),
     ["A", "A", "K"],
   );
   assertEquals(
-    renderedRanks(el, ".trick-slot-south .trick-card"),
+    renderedRanks(el, ".trick-slot-bottom .trick-card"),
     ["6", "2", "2"],
   );
 });
@@ -400,15 +399,15 @@ Deno.test("test_renderTrickView_sorts_previous_trick_cards_like_hand", () => {
 Deno.test("test_renderTrickView_slot_with_empty_cards", () => {
   const snap = makeSnapshot({
     trick: {
-      lead_player: 0,
+      lead_actor: "a",
       slots: [
-        { player: 0, cards: [] },
+        { actor: "a", cards: [] },
       ],
-      current_player: 0,
+      current_actor: "a",
       failed_throw: null,
     },
   });
-  const el = renderTrickView(snap);
+  const el = renderTrickView(snap, "c");
   const slots = el.querySelectorAll(".trick-slot");
   assertEquals(slots.length, 1);
   const trickCards = el.querySelectorAll(".trick-card");
@@ -418,25 +417,25 @@ Deno.test("test_renderTrickView_slot_with_empty_cards", () => {
   assertEquals(el.querySelectorAll(".trick-lead-marker").length, 0);
 });
 
-Deno.test("test_renderTrickView_current_player_highlight", () => {
+Deno.test("test_renderTrickView_current_actor_highlight", () => {
   const snap = makeSnapshot({
     trick: {
-      lead_player: 0,
+      lead_actor: "a",
       slots: [
         {
-          player: 0,
+          actor: "a",
           cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }],
         },
         {
-          player: 1,
+          actor: "b",
           cards: [{ id: "D2-hearts-9", suit: "hearts", rank: "9" }],
         },
       ],
-      current_player: 1,
+      current_actor: "b",
       failed_throw: null,
     },
   });
-  const el = renderTrickView(snap);
+  const el = renderTrickView(snap, "c");
   const slots = el.querySelectorAll(".trick-slot");
   assertEquals(slots.length, 2);
   // Slot for player 0 should NOT have 'current' class

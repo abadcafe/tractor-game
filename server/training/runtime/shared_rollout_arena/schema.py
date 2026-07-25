@@ -26,8 +26,8 @@ class RolloutArenaHeader:
     cancelled_env_count: int
     total_step_count: int
     max_step_count: int
-    team0_reward_sum: float
-    team1_reward_sum: float
+    first_partnership_reward_sum: float
+    second_partnership_reward_sum: float
     elapsed_seconds_max: float
 
     def __post_init__(self) -> None:
@@ -177,8 +177,8 @@ def pack_header(
         header.cancelled_env_count,
         header.total_step_count,
         header.max_step_count,
-        header.team0_reward_sum,
-        header.team1_reward_sum,
+        header.first_partnership_reward_sum,
+        header.second_partnership_reward_sum,
         header.elapsed_seconds_max,
     )
 
@@ -199,8 +199,8 @@ def unpack_header(buffer: memoryview) -> RolloutArenaHeader:
         cancelled_env_count=values[9],
         total_step_count=values[10],
         max_step_count=values[11],
-        team0_reward_sum=values[12],
-        team1_reward_sum=values[13],
+        first_partnership_reward_sum=values[12],
+        second_partnership_reward_sum=values[13],
         elapsed_seconds_max=values[14],
     )
 
@@ -222,8 +222,8 @@ def empty_header(
         cancelled_env_count=0,
         total_step_count=0,
         max_step_count=0,
-        team0_reward_sum=0.0,
-        team1_reward_sum=0.0,
+        first_partnership_reward_sum=0.0,
+        second_partnership_reward_sum=0.0,
         elapsed_seconds_max=0.0,
     )
 

@@ -119,8 +119,8 @@ class SharedRolloutArenaWriter:
                 cancelled_env_count=header.cancelled_env_count + count,
                 total_step_count=header.total_step_count,
                 max_step_count=header.max_step_count,
-                team0_reward_sum=header.team0_reward_sum,
-                team1_reward_sum=header.team1_reward_sum,
+                first_partnership_reward_sum=header.first_partnership_reward_sum,
+                second_partnership_reward_sum=header.second_partnership_reward_sum,
                 elapsed_seconds_max=header.elapsed_seconds_max,
             )
             pack_header(buffer, header=updated)
@@ -227,13 +227,21 @@ def _advance_header(
             header.total_step_count + accepted_total_steps
         ),
         max_step_count=max(header.max_step_count, accepted_max_steps),
-        team0_reward_sum=(
-            header.team0_reward_sum
-            + (metrics.team0_reward if accepted_round else 0.0)
+        first_partnership_reward_sum=(
+            header.first_partnership_reward_sum
+            + (
+                metrics.first_partnership_reward
+                if accepted_round
+                else 0.0
+            )
         ),
-        team1_reward_sum=(
-            header.team1_reward_sum
-            + (metrics.team1_reward if accepted_round else 0.0)
+        second_partnership_reward_sum=(
+            header.second_partnership_reward_sum
+            + (
+                metrics.second_partnership_reward
+                if accepted_round
+                else 0.0
+            )
         ),
         elapsed_seconds_max=max(
             header.elapsed_seconds_max,
@@ -259,7 +267,7 @@ def _add_dropped_samples(
         cancelled_env_count=header.cancelled_env_count,
         total_step_count=header.total_step_count,
         max_step_count=header.max_step_count,
-        team0_reward_sum=header.team0_reward_sum,
-        team1_reward_sum=header.team1_reward_sum,
+        first_partnership_reward_sum=header.first_partnership_reward_sum,
+        second_partnership_reward_sum=header.second_partnership_reward_sum,
         elapsed_seconds_max=header.elapsed_seconds_max,
     )

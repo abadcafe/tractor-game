@@ -5,13 +5,14 @@ import type {
   RoundPhase,
   StateSnapshot,
 } from "../../core/types.ts";
+import { trumpRank, trumpSuit } from "../../core/types.ts";
 import { el } from "../dom.ts";
 import {
-  PLAYER_INDEXES,
-  type PlayerIndex,
-  playerIndexFromNumber,
+  type PartnershipId,
+  SEAT_IDS,
+  type SeatId,
 } from "../../config.ts";
-import { playerView } from "../player-view.ts";
+import { seatView } from "../seat-view.ts";
 import { renderTrickView } from "./trick-view.ts";
 import { suitSymbol } from "../../core/card.ts";
 
@@ -19,26 +20,26 @@ import { suitSymbol } from "../../core/card.ts";
  * Determine which player is currently active based on awaiting_action
  * and phase-specific state.
  */
-function getCurrentPlayer(snapshot: StateSnapshot): number | null {
+function getCurrentSeat(snapshot: StateSnapshot): SeatId | null {
   if (snapshot.awaiting_action === "play" && snapshot.trick) {
-    return snapshot.trick.current_player;
+    return snapshot.trick.current_actor;
   }
   if (snapshot.awaiting_action === "stir" && snapshot.stirring_state) {
-    return snapshot.stirring_state.current_player;
+    return snapshot.stirring_state.current_actor;
   }
   if (
     snapshot.awaiting_action === "discard" && snapshot.stirring_state
   ) {
-    return snapshot.stirring_state.exchanging_player;
+    return snapshot.stirring_state.exchanging_actor;
   }
   return null;
 }
 
 function actionText(
   snapshot: StateSnapshot,
-  viewerPlayer?: PlayerIndex | null,
+  viewerSeat: SeatId,
 ): string {
-  if (snapshot.winning_team !== null) return "游戏结束";
+  if (snapshot.winning_partnership !== null) return "游戏结束";
 
   switch (snapshot.awaiting_action) {
     case "bid":
@@ -57,23 +58,17 @@ function actionText(
 
   if (snapshot.phase === "DEAL_BID") return "发牌与抢主进行中";
   if (snapshot.phase === "STIRRING" && snapshot.stirring_state) {
-    const player = snapshot.stirring_state.phase === "EXCHANGING"
-      ? snapshot.stirring_state.exchanging_player
-      : snapshot.stirring_state.current_player;
-    const playerIndex = player !== null && player !== undefined
-      ? playerIndexFromNumber(player)
-      : null;
-    return playerIndex !== null
-      ? `等待${playerView(playerIndex, viewerPlayer).label}`
+    const seat = snapshot.stirring_state.phase === "EXCHANGING"
+      ? snapshot.stirring_state.exchanging_actor
+      : snapshot.stirring_state.current_actor;
+    return seat !== null
+      ? `等待${seatView(seat, viewerSeat).label}`
       : "等待反主";
   }
   if (snapshot.phase === "PLAYING" && snapshot.trick) {
-    const playerIndex = playerIndexFromNumber(
-      snapshot.trick.current_player,
-    );
-    return playerIndex !== null
-      ? `等待${playerView(playerIndex, viewerPlayer).label}出牌`
-      : "等待出牌";
+    return `等待${
+      seatView(snapshot.trick.current_actor, viewerSeat).label
+    }出牌`;
   }
   if (snapshot.phase === "WAITING") return "等待确认下一轮";
   return "观察牌局";
@@ -84,7 +79,6 @@ const PHASE_LABELS: Record<RoundPhase, string> = {
   DEAL_BID: "抢主阶段",
   STIRRING: "反主阶段",
   PLAYING: "出牌阶段",
-  SCORING: "结算中",
   WAITING: "结算中",
 };
 
@@ -93,23 +87,23 @@ const PHASE_LABELS: Record<RoundPhase, string> = {
  */
 export function renderGameTable(
   snapshot: StateSnapshot,
+  viewerSeat: SeatId,
   previousTrickPreview?: CompletedTrick | null,
   failedThrowPreview?: FailedThrow | null,
   gameId?: string | null,
-  viewerPlayer?: PlayerIndex | null,
 ): HTMLElement {
   const table = el("div", { class: "game-table" });
-  const currentPlayer = getCurrentPlayer(snapshot);
+  const currentSeat = getCurrentSeat(snapshot);
 
-  for (const playerIndex of PLAYER_INDEXES) {
-    const view = playerView(playerIndex, viewerPlayer);
+  for (const seatId of SEAT_IDS) {
+    const view = seatView(seatId, viewerSeat);
     const attrs: Record<string, string> = {
       class: "player-area",
-      "data-position": view.position,
-      "data-player": String(playerIndex),
+      "data-position": view.slot,
+      "data-seat": seatId,
     };
 
-    if (currentPlayer === playerIndex) {
+    if (currentSeat === seatId) {
       attrs.class += " current";
     }
 
@@ -118,23 +112,23 @@ export function renderGameTable(
     const header = el("div", { class: "player-area__header" });
     header.appendChild(
       renderDebugAvatar(
-        playerIndex,
-        view.team,
+        seatId,
+        view.partnership,
         view.avatarText,
         gameId,
       ),
     );
-    const labelClass = `player-label team${view.team}`;
+    const labelClass = `player-label partnership-${view.partnership}`;
     header.appendChild(el("span", { class: labelClass }, view.label));
     const teamRow = el("span", { class: "player-area__team-row" });
     teamRow.appendChild(
       el(
         "span",
-        { class: `team-chip team${view.team}` },
-        view.teamLabel,
+        { class: `team-chip partnership-${view.partnership}` },
+        view.partnershipLabel,
       ),
     );
-    const declarerBadge = renderDeclarerBadge(snapshot, playerIndex);
+    const declarerBadge = renderDeclarerBadge(snapshot, seatId);
     if (declarerBadge !== null) {
       teamRow.appendChild(declarerBadge);
     }
@@ -143,16 +137,16 @@ export function renderGameTable(
 
     const badges = el("div", { class: "player-badges" });
 
-    const bidMarker = renderBidMarker(snapshot.bid_winner, playerIndex);
+    const bidMarker = renderBidMarker(snapshot.bid_winner, seatId);
     if (bidMarker !== null) {
       badges.appendChild(bidMarker);
     }
 
-    badges.appendChild(renderStatusBadge(snapshot, playerIndex));
+    badges.appendChild(renderStatusBadge(snapshot, seatId));
 
     if (snapshot.phase === "WAITING") {
       const isReady = snapshot.next_round_confirmed.includes(
-        playerIndex,
+        seatId,
       );
       const status = badges.querySelector(".player-status-badge");
       status?.appendChild(
@@ -178,7 +172,7 @@ export function renderGameTable(
       snapshot,
       previousTrickPreview,
       failedThrowPreview,
-      viewerPlayer,
+      viewerSeat,
     ),
   );
 
@@ -186,9 +180,9 @@ export function renderGameTable(
   table.appendChild(
     renderTrickView(
       snapshot,
+      viewerSeat,
       previousTrickPreview,
       failedThrowPreview,
-      viewerPlayer,
     ),
   );
 
@@ -196,13 +190,14 @@ export function renderGameTable(
 }
 
 function renderDebugAvatar(
-  player: PlayerIndex,
-  team: number,
+  seat: SeatId,
+  partnership: PartnershipId,
   avatarText: string,
   gameId?: string | null,
 ): HTMLElement {
   const attrs: Record<string, string> = {
-    class: `player-avatar player-avatar--debug team${team}`,
+    class:
+      `player-avatar player-avatar--debug partnership-${partnership}`,
   };
   if (gameId === null || gameId === undefined || gameId.length === 0) {
     return el("span", attrs, avatarText);
@@ -211,10 +206,10 @@ function renderDebugAvatar(
     "a",
     {
       ...attrs,
-      href: `/debug/ai/${encodeURIComponent(gameId)}?player=${player}`,
+      href: `/debug/ai/${encodeURIComponent(gameId)}?seat=${seat}`,
       target: "_blank",
       rel: "noreferrer",
-      title: `AI transcript player ${player}`,
+      title: `AI transcript seat ${seat}`,
     },
     avatarText,
   );
@@ -222,9 +217,9 @@ function renderDebugAvatar(
 
 function renderStatusBadge(
   snapshot: StateSnapshot,
-  player: number,
+  seat: SeatId,
 ): HTMLElement {
-  const count = snapshot.player_hand_counts?.[player] ?? 0;
+  const count = snapshot.remaining_cards[seat];
   const badge = el("div", { class: "player-status-badge" });
   badge.appendChild(el("span", { class: "card-count" }, `${count}张`));
   return badge;
@@ -232,9 +227,9 @@ function renderStatusBadge(
 
 function renderDeclarerBadge(
   snapshot: StateSnapshot,
-  player: number,
+  seat: SeatId,
 ): HTMLElement | null {
-  if (snapshot.declarer_player === player) {
+  if (snapshot.declarer === seat) {
     return el("span", { class: "declarer-text" }, "庄");
   }
   return null;
@@ -242,9 +237,9 @@ function renderDeclarerBadge(
 
 function renderBidMarker(
   bidWinner: BidEvent | null,
-  player: number,
+  seat: SeatId,
 ): HTMLElement | null {
-  if (bidWinner === null || bidWinner.player !== player) {
+  if (bidWinner === null || bidWinner.actor !== seat) {
     return null;
   }
   const className = bidWinner.suit === null
@@ -297,11 +292,12 @@ export function renderInfoBar(snapshot: StateSnapshot): HTMLElement {
   const trumpDiv = el("div", { class: "info-bar__trump" });
   trumpDiv.appendChild(el("span", {}, "主:"));
 
-  if (snapshot.trump_suit) {
+  const suit = trumpSuit(snapshot);
+  if (suit !== null) {
     const suitSpan = el("span", {
-      class: `trump-suit suit-${snapshot.trump_suit}`,
+      class: `trump-suit suit-${suit}`,
     });
-    suitSpan.textContent = suitSymbol(snapshot.trump_suit);
+    suitSpan.textContent = suitSymbol(suit);
     trumpDiv.appendChild(suitSpan);
   } else if (
     snapshot.phase === "DEAL_BID" || snapshot.phase === "STIRRING"
@@ -311,11 +307,11 @@ export function renderInfoBar(snapshot: StateSnapshot): HTMLElement {
     trumpDiv.appendChild(el("span", {}, "无主"));
   }
 
-  trumpDiv.appendChild(el("span", {}, `级牌 ${snapshot.trump_rank}`));
+  trumpDiv.appendChild(el("span", {}, `级牌 ${trumpRank(snapshot)}`));
   bar.appendChild(trumpDiv);
 
   // Phase display
-  const phaseLabel = snapshot.winning_team !== null
+  const phaseLabel = snapshot.winning_partnership !== null
     ? "游戏结束"
     : PHASE_LABELS[snapshot.phase] ?? snapshot.phase;
   bar.appendChild(el("div", { class: "info-bar__phase" }, phaseLabel));
@@ -325,9 +321,9 @@ export function renderInfoBar(snapshot: StateSnapshot): HTMLElement {
 
 function renderTableNotice(
   snapshot: StateSnapshot,
-  previousTrickPreview?: CompletedTrick | null,
-  failedThrowPreview?: FailedThrow | null,
-  viewerPlayer?: PlayerIndex | null,
+  previousTrickPreview: CompletedTrick | null | undefined,
+  failedThrowPreview: FailedThrow | null | undefined,
+  viewerSeat: SeatId,
 ): HTMLElement {
   const notice = el("div", { class: "table-notice" });
   const primary = failedThrowPreview !== null &&
@@ -336,7 +332,7 @@ function renderTableNotice(
     : previousTrickPreview !== null &&
         previousTrickPreview !== undefined
     ? `上一墩 ${previousTrickPreview.points} 分`
-    : actionText(snapshot, viewerPlayer);
+    : actionText(snapshot, viewerSeat);
 
   notice.appendChild(
     el("div", { class: "table-notice__primary" }, primary),

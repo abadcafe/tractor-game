@@ -334,8 +334,8 @@ def _actor_id(actor: RelativeActor) -> int:
     return (
         RelativeActor.SELF,
         RelativeActor.PARTNER,
-        RelativeActor.LEFT_ENEMY,
-        RelativeActor.RIGHT_ENEMY,
+        RelativeActor.NEXT_OPPONENT,
+        RelativeActor.PREVIOUS_OPPONENT,
     ).index(actor) + 1
 
 

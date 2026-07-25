@@ -63,7 +63,7 @@ def test_event_sink_batches_typed_json_and_preserves_context(
         "context",
         "fields",
     }
-    assert event["schema_version"] == 2
+    assert event["schema_version"] == 3
     assert event["event"] == "round"
     context = event["context"]
     assert isinstance(context, dict)

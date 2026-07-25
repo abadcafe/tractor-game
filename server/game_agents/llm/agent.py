@@ -146,7 +146,7 @@ class LLMAgent:
         if isinstance(decision, Rejected):
             api = _api_from_rejection(decision)
             self._transcript.add_record(
-                player_index=int(self._seat),
+                seat=self._seat,
                 seq=delivery.seq,
                 attempt=attempt,
                 api_request=api.request,
@@ -158,7 +158,7 @@ class LLMAgent:
         command = _command(decision.value, snapshot)
         if isinstance(command, CommandRejected):
             self._transcript.add_record(
-                player_index=int(self._seat),
+                seat=self._seat,
                 seq=delivery.seq,
                 attempt=attempt,
                 api_request=decision.value.api.request,
@@ -180,7 +180,7 @@ class LLMAgent:
                 )
             return
         record = self._transcript.add_record(
-            player_index=int(self._seat),
+            seat=self._seat,
             seq=delivery.seq,
             attempt=attempt,
             api_request=decision.value.api.request,
@@ -211,7 +211,7 @@ def _local_command(
     if action == "bid":
         reveals = _legal_reveals(snapshot)
         if (
-            len(snapshot.player_hand) not in _BID_DECISION_COUNTS
+            len(snapshot.hand) not in _BID_DECISION_COUNTS
             or not reveals
         ):
             return commands.PassBid()
@@ -226,7 +226,7 @@ def _prompt(
 ) -> DecisionPrompt:
     hand = "\n".join(
         f"- {card.id}: {card.suit.value} {card.rank.value}"
-        for card in snapshot.player_hand
+        for card in snapshot.hand
     )
     groups = _legal_groups(snapshot)
     group_text = "\n".join(
@@ -268,7 +268,7 @@ def _tool(snapshot: snapshots.PlayerSnapshot) -> ToolSpec:
         "play": "play_cards",
         "next_round": "confirm_round",
     }[action]
-    ids: list[JSONValue] = [card.id for card in snapshot.player_hand]
+    ids: list[JSONValue] = [card.id for card in snapshot.hand]
     card_ids: JSONObject = {
         "type": "array",
         "items": {"type": "string", "enum": ids},
@@ -305,7 +305,7 @@ def _command(
     if not isinstance(raw, list):
         return CommandRejected("card_ids 必须是数组")
     ids: list[CardId] = []
-    hand_ids = {card.id for card in snapshot.player_hand}
+    hand_ids = {card.id for card in snapshot.hand}
     for value in raw:
         if not isinstance(value, str):
             return CommandRejected("card_ids 只能包含字符串")
@@ -362,7 +362,7 @@ def _legal_reveals(
     snapshot: snapshots.PlayerSnapshot,
 ) -> tuple[bidding.Declaration, ...]:
     return bidding.legal_reveals(
-        snapshot.player_hand,
+        snapshot.hand,
         snapshot.trump_rank,
         _current_declaration(snapshot),
     )
@@ -385,7 +385,7 @@ def _legal_play_groups(
     if snapshot.trick is not None and snapshot.trick.slots:
         lead = snapshot.trick.slots[0].cards
     return play.closed_hints(
-        snapshot.player_hand,
+        snapshot.hand,
         lead,
         snapshot.trump_suit,
         snapshot.trump_rank,

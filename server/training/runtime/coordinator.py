@@ -607,8 +607,12 @@ def _record_update_completed(
                 else snapshot.sample_count
                 / snapshot.elapsed_seconds_max
             ),
-            "team0_reward": snapshot.average_team0_reward(),
-            "team1_reward": snapshot.average_team1_reward(),
+            "first_partnership_reward": (
+                snapshot.average_first_partnership_reward()
+            ),
+            "second_partnership_reward": (
+                snapshot.average_second_partnership_reward()
+            ),
             "generated_action_count": snapshot.generated_action_count,
             "accepted_action_count": snapshot.accepted_action_count,
             "decision_count": snapshot.sample_count,
@@ -675,7 +679,11 @@ def _rollout_fields(snapshot: RolloutArenaSnapshot) -> JsonObject:
         "game_over_count": snapshot.game_over_count,
         "dropped_sample_count": snapshot.dropped_sample_count,
         "cancelled_env_count": snapshot.cancelled_env_count,
-        "team0_reward": snapshot.average_team0_reward(),
-        "team1_reward": snapshot.average_team1_reward(),
+        "first_partnership_reward": (
+            snapshot.average_first_partnership_reward()
+        ),
+        "second_partnership_reward": (
+            snapshot.average_second_partnership_reward()
+        ),
         "elapsed_seconds": snapshot.elapsed_seconds_max,
     }

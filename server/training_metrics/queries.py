@@ -61,7 +61,7 @@ class TrainingMetrics(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3] = 3
     store_id: str | None
     through_sequence: int = Field(ge=0)
     complete: bool

@@ -10,26 +10,26 @@ import type {
   ConnectionStatus,
   RenderContext,
 } from "./ui/types.ts";
-import type { PlayerIndex } from "./config.ts";
+import type { SeatId } from "./config.ts";
 import {
   type BotFillMode,
   createGame,
   deleteGame,
-  fillBotPlayers,
-  joinPlayer,
-  leavePlayer,
+  fillBotSeats,
   type ListedGame,
   listGames,
+  occupySeat,
+  vacateSeat,
 } from "./net/rest-client.ts";
 import { WsClient } from "./net/ws-client.ts";
 import {
-  gamePlayerHref,
-  type GamePlayerRoute,
-  parseGamePlayerRoute,
+  gameSeatHref,
+  type GameSeatRoute,
+  parseGameSeatRoute,
 } from "./routing.ts";
 import {
   resolveLobbySelectedGameId,
-  selectedGameHasEmptyPlayer,
+  selectedGameHasEmptySeat,
 } from "./lobby-selection.ts";
 import { GameLoop } from "./engine/game-loop.ts";
 import { StatePlaybackQueue } from "./engine/state-playback-queue.ts";
@@ -86,14 +86,14 @@ function main() {
   let lobbyGames: ListedGame[] = [];
   let lobbyLoading = false;
   let lobbyCreating = false;
-  let lobbyPendingPlayerGameId: string | null = null;
-  let lobbyPendingPlayerIndex: PlayerIndex | null = null;
+  let lobbyPendingSeatGameId: string | null = null;
+  let lobbyPendingSeatId: SeatId | null = null;
   let lobbyDeletingGameId: string | null = null;
   let lobbySelectedGameId: string | null = localStorage.getItem(
     GAME_ID_STORAGE_KEY,
   );
   let lobbyBotFillMode: BotFillMode = "none";
-  let currentPlayerIndex: PlayerIndex | null = null;
+  let currentSeatId: SeatId | null = null;
   let lobbyErrorMessage: string | null = null;
   let lobbyStatusMessage: string | null = null;
   const trickPreviewController = new TrickPreviewController(
@@ -103,12 +103,7 @@ function main() {
   );
   const pendingBidController = new PendingBidController();
 
-  // Shared render context
-  const renderCtx: RenderContext = {
-    selectedCardIds,
-    legalCardIds: new Set(),
-    connectionStatus,
-  };
+  let renderCtx: RenderContext | null = null;
 
   function resetGameSession(): void {
     selectedCardIds.clear();
@@ -120,10 +115,9 @@ function main() {
     trickPreviewController.reset();
     stateManager.reset();
     currentGameId = null;
-    currentPlayerIndex = null;
-    renderCtx.viewerPlayer = null;
+    currentSeatId = null;
+    renderCtx = null;
     connectionStatus = "connecting";
-    renderCtx.connectionStatus = connectionStatus;
   }
 
   function updateConnectionStatus(status: ConnectionStatus): void {
@@ -131,7 +125,9 @@ function main() {
       return;
     }
     connectionStatus = status;
-    renderCtx.connectionStatus = status;
+    if (renderCtx !== null) {
+      renderCtx.connectionStatus = status;
+    }
     reRender();
   }
 
@@ -140,8 +136,8 @@ function main() {
       games: lobbyGames,
       loading: lobbyLoading,
       creating: lobbyCreating,
-      pendingPlayerGameId: lobbyPendingPlayerGameId,
-      pendingPlayerIndex: lobbyPendingPlayerIndex,
+      pendingSeatGameId: lobbyPendingSeatGameId,
+      pendingSeatId: lobbyPendingSeatId,
       deletingGameId: lobbyDeletingGameId,
       selectedGameId: lobbySelectedGameId,
       botFillMode: lobbyBotFillMode,
@@ -163,14 +159,14 @@ function main() {
     onDeleteGame(gameId: string) {
       void handleDeleteGame(gameId);
     },
-    onTogglePlayer(gameId, playerIndex) {
-      void handleTogglePlayer(gameId, playerIndex);
+    onToggleSeat(gameId, seatId) {
+      void handleToggleSeat(gameId, seatId);
     },
-    onEnterPlayer(gameId, playerIndex) {
-      void handleEnterPlayer(gameId, playerIndex);
+    onEnterSeat(gameId, seatId) {
+      void handleEnterSeat(gameId, seatId);
     },
-    enterPlayerHref(gameId, playerIndex) {
-      return gamePlayerHref(gameId, playerIndex, ensureUserId());
+    enterSeatHref(gameId, seatId) {
+      return gameSeatHref(gameId, seatId, ensureUserId());
     },
     onChangeBotFillMode(mode) {
       void handleChangeBotFillMode(mode);
@@ -189,7 +185,7 @@ function main() {
 
   function renderConnectingScreen(
     gameId: string,
-    playerIndex: PlayerIndex,
+    seatId: SeatId,
   ): void {
     container.classList.remove(
       "lobby-shell",
@@ -210,7 +206,7 @@ function main() {
         status.className = "boot-screen__status";
         status.textContent = `牌局 ${
           gameId.slice(0, 8)
-        } · 玩家 ${playerIndex}`;
+        } · 玩家 ${seatId}`;
 
         screen.append(title, status);
         return screen;
@@ -220,7 +216,9 @@ function main() {
 
   /** Pre-compute all UI state and render. */
   function precomputeAndRender(snap: ReturnType<StateManager["get"]>) {
-    if (!snap) return;
+    if (snap === null || renderCtx === null || currentSeatId === null) {
+      return;
+    }
     const effectiveInteractionMode = interactionBlocked()
       ? null
       : currentInteractionMode;
@@ -240,7 +238,6 @@ function main() {
     );
     renderCtx.compactHand = compactHand;
     renderCtx.gameId = currentGameId;
-    renderCtx.viewerPlayer = currentPlayerIndex;
     renderCtx.connectionStatus = connectionStatus;
     renderCtx.previousTrickPreview =
       trickPreviewController.previousTrickPreview;
@@ -427,8 +424,6 @@ function main() {
       void handleCreateGame();
     },
   };
-  renderCtx.callbacks = callbacks;
-
   // GameLoop with renderFn that injects callbacks + selectedCardIds
   const gameLoop = new GameLoop(
     stateManager,
@@ -504,17 +499,22 @@ function main() {
     return `${protocol}//${globalThis.location.host}`;
   }
 
-  async function connectToGame(route: GamePlayerRoute): Promise<void> {
+  async function connectToGame(route: GameSeatRoute): Promise<void> {
     currentGameId = route.gameId;
-    currentPlayerIndex = route.playerIndex;
-    renderCtx.viewerPlayer = route.playerIndex;
+    currentSeatId = route.seatId;
     connectionStatus = "connecting";
-    renderCtx.connectionStatus = connectionStatus;
+    renderCtx = {
+      selectedCardIds,
+      legalCardIds: new Set(),
+      connectionStatus,
+      viewerSeat: route.seatId,
+      callbacks,
+    };
     localStorage.setItem(GAME_ID_STORAGE_KEY, route.gameId);
     await wsClient.connect(
       {
         gameId: route.gameId,
-        playerIndex: route.playerIndex,
+        seatId: route.seatId,
         userId: route.userId,
       },
       currentWsHost(),
@@ -522,10 +522,10 @@ function main() {
   }
 
   async function connectFromRoute(
-    route: GamePlayerRoute,
+    route: GameSeatRoute,
   ): Promise<void> {
     resetGameSession();
-    renderConnectingScreen(route.gameId, route.playerIndex);
+    renderConnectingScreen(route.gameId, route.seatId);
     try {
       await connectToGame(route);
     } catch (error: unknown) {
@@ -563,7 +563,7 @@ function main() {
 
   async function handleCreateGame(): Promise<void> {
     if (
-      lobbyCreating || lobbyPendingPlayerGameId !== null ||
+      lobbyCreating || lobbyPendingSeatGameId !== null ||
       lobbyDeletingGameId !== null
     ) {
       return;
@@ -586,17 +586,17 @@ function main() {
     }
   }
 
-  async function handleTogglePlayer(
+  async function handleToggleSeat(
     gameId: string,
-    playerIndex: PlayerIndex,
+    seatId: SeatId,
   ): Promise<void> {
     if (
-      lobbyPendingPlayerGameId !== null || lobbyDeletingGameId !== null
+      lobbyPendingSeatGameId !== null || lobbyDeletingGameId !== null
     ) {
       return;
     }
-    lobbyPendingPlayerGameId = gameId;
-    lobbyPendingPlayerIndex = playerIndex;
+    lobbyPendingSeatGameId = gameId;
+    lobbyPendingSeatId = seatId;
     lobbySelectedGameId = gameId;
     lobbyErrorMessage = null;
     lobbyStatusMessage = null;
@@ -606,45 +606,43 @@ function main() {
     const selectedGame =
       lobbyGames.find((game) => game.gameId === gameId) ??
         null;
-    const selectedPlayer = selectedGame?.players.find(
-      (player) => player.index === playerIndex,
+    const selectedSeat = selectedGame?.seats.find(
+      (player) => player.seat === seatId,
     ) ?? null;
-    const leavingPlayer = selectedPlayer?.mine === true;
+    const leavingSeat = selectedSeat?.mine === true;
     try {
-      if (leavingPlayer) {
-        await leavePlayer(gameId, playerIndex, userId);
-        lobbyStatusMessage = `已离开玩家 ${playerIndex}`;
+      if (leavingSeat) {
+        await vacateSeat(gameId, seatId, userId);
+        lobbyStatusMessage = `已离开玩家 ${seatId}`;
       } else {
-        await joinPlayer(gameId, playerIndex, userId);
-        lobbyStatusMessage = `已入座玩家 ${playerIndex}`;
+        await occupySeat(gameId, seatId, userId);
+        lobbyStatusMessage = `已入座玩家 ${seatId}`;
       }
       await refreshLobbyGames();
     } catch (error: unknown) {
       console.error("Failed to update player:", error);
-      lobbyErrorMessage = leavingPlayer
-        ? "无法离开玩家"
-        : "无法控制玩家";
+      lobbyErrorMessage = leavingSeat ? "无法离开玩家" : "无法控制玩家";
     } finally {
-      lobbyPendingPlayerGameId = null;
-      lobbyPendingPlayerIndex = null;
+      lobbyPendingSeatGameId = null;
+      lobbyPendingSeatId = null;
       renderLobbyScreen();
     }
   }
 
-  function handleEnterPlayer(
+  function handleEnterSeat(
     gameId: string,
-    playerIndex: PlayerIndex,
+    seatId: SeatId,
   ): void {
     lobbySelectedGameId = gameId;
     lobbyErrorMessage = null;
-    markEnteredPlayer(playerIndex);
+    markEnteredSeat(seatId);
   }
 
   async function handleChangeBotFillMode(
     mode: BotFillMode,
   ): Promise<void> {
     if (
-      lobbyPendingPlayerGameId !== null || lobbyDeletingGameId !== null
+      lobbyPendingSeatGameId !== null || lobbyDeletingGameId !== null
     ) {
       return;
     }
@@ -662,35 +660,35 @@ function main() {
         null;
     if (
       selectedGame === null ||
-      !selectedGame.players.some((player) => player.mine) ||
-      !selectedGameHasEmptyPlayer(lobbyGames, selectedGame.gameId)
+      !selectedGame.seats.some((player) => player.mine) ||
+      !selectedGameHasEmptySeat(lobbyGames, selectedGame.gameId)
     ) {
       renderLobbyScreen();
       return;
     }
 
-    lobbyPendingPlayerGameId = selectedGame.gameId;
-    lobbyPendingPlayerIndex = null;
+    lobbyPendingSeatGameId = selectedGame.gameId;
+    lobbyPendingSeatId = null;
     lobbyStatusMessage = "正在填充 bot";
     renderLobbyScreen();
 
     try {
-      await fillBotPlayers(selectedGame.gameId, mode, ensureUserId());
+      await fillBotSeats(selectedGame.gameId, mode, ensureUserId());
       lobbyStatusMessage = "已填充 bot";
       await refreshLobbyGames();
     } catch (error: unknown) {
-      console.error("Failed to fill bot players:", error);
+      console.error("Failed to fill bot seats:", error);
       lobbyErrorMessage = "无法填充 bot";
       lobbyStatusMessage = null;
     } finally {
-      lobbyPendingPlayerGameId = null;
+      lobbyPendingSeatGameId = null;
       renderLobbyScreen();
     }
   }
 
   async function handleDeleteGame(gameId: string): Promise<void> {
     if (
-      lobbyPendingPlayerGameId !== null ||
+      lobbyPendingSeatGameId !== null ||
       lobbyDeletingGameId !== null ||
       lobbyCreating
     ) {
@@ -721,8 +719,8 @@ function main() {
     }
   }
 
-  function markEnteredPlayer(playerIndex: PlayerIndex): void {
-    lobbyStatusMessage = `已打开玩家 ${playerIndex} 的牌桌页面`;
+  function markEnteredSeat(seatId: SeatId): void {
+    lobbyStatusMessage = `已打开玩家 ${seatId} 的牌桌页面`;
     globalThis.setTimeout(renderLobbyScreen, 0);
   }
 
@@ -736,7 +734,7 @@ function main() {
     return generated;
   }
 
-  const route = parseGamePlayerRoute(
+  const route = parseGameSeatRoute(
     globalThis.location.pathname,
     globalThis.location.search,
   );

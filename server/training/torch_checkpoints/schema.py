@@ -10,7 +10,7 @@ from server.foundation import result as _result
 from server.training.config import TrainConfig
 from server.training.model import ModelConfig
 
-CHECKPOINT_SCHEMA_VERSION = 22
+CHECKPOINT_SCHEMA_VERSION = 23
 CHECKPOINT_OBJECTS_DIR = "objects"
 CHECKPOINT_STATE_FILENAME = "state.pt"
 

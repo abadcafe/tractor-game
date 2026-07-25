@@ -19,13 +19,13 @@ export function resolveLobbySelectedGameId(
   return games[0].gameId;
 }
 
-export function selectedGameHasEmptyPlayer(
+export function selectedGameHasEmptySeat(
   games: readonly ListedGame[],
   selectedGameId: string,
 ): boolean {
   const selectedGame = games.find((game) =>
     game.gameId === selectedGameId
   );
-  return selectedGame?.players.some((player) => !player.occupied) ??
+  return selectedGame?.seats.some((player) => !player.occupied) ??
     false;
 }

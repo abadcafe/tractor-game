@@ -6,9 +6,10 @@ from dataclasses import replace
 
 from server.foundation.result import Ok, Rejected
 from server.game import commands
-from server.game.config import GameConfig, GameSeed, Seat
+from server.game.config import GameConfig, GameSeed
 from server.game.rejections import CommandRejected
 from server.game.rules.cards import Rank
+from server.game.seating import PartnershipMap, Seat, seats
 
 from . import deal, phases, playing, stirring
 from .state import (
@@ -17,7 +18,6 @@ from .state import (
     phase_of,
     replace_phase,
 )
-from .topology import SEATS
 
 
 def create_game(config: GameConfig, seed: GameSeed) -> GameState:
@@ -26,7 +26,10 @@ def create_game(config: GameConfig, seed: GameSeed) -> GameState:
         config,
         seed,
         phases.AwaitingStart(
-            levels=(Rank.TWO, Rank.TWO),
+            levels=PartnershipMap(
+                first=Rank.TWO,
+                second=Rank.TWO,
+            ),
             confirmed=frozenset(),
         ),
     )
@@ -88,7 +91,7 @@ def _confirm(
         if actor in phase.confirmed:
             return Rejected("不能重复确认开始")
         confirmed = phase.confirmed | {actor}
-        if len(confirmed) < len(SEATS):
+        if len(confirmed) < len(seats()):
             return Ok(
                 replace_phase(
                     state,
@@ -107,7 +110,7 @@ def _confirm(
         if actor in phase.confirmed:
             return Rejected("不能重复确认下一局")
         confirmed = phase.confirmed | {actor}
-        if len(confirmed) < len(SEATS):
+        if len(confirmed) < len(seats()):
             return Ok(
                 replace_phase(
                     state,

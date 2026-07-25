@@ -1,4 +1,8 @@
-import type { StateSnapshot } from "../../core/types.ts";
+import {
+  type StateSnapshot,
+  trumpRank,
+  trumpSuit,
+} from "../../core/types.ts";
 import type {
   BidOption,
   GameAction,
@@ -48,9 +52,9 @@ export function renderHandView(
   const actionHints = snapshot.action_hints ?? [];
   const selectedCount = selectedCardIds?.size ?? 0;
   const sortedHand = sortHand(
-    snapshot.player_hand,
-    snapshot.trump_suit,
-    snapshot.trump_rank,
+    snapshot.hand,
+    trumpSuit(snapshot),
+    trumpRank(snapshot),
   );
   const selectedStirCardIds = sortedHand
     .filter((card) => selectedCardIds?.has(card.id) ?? false)
@@ -148,8 +152,8 @@ export function renderHandView(
     const cardSpan = el("span", {
       class: handCardClass(
         card,
-        snapshot.trump_suit,
-        snapshot.trump_rank,
+        trumpSuit(snapshot),
+        trumpRank(snapshot),
       ),
       "data-card-id": card.id,
       "data-rank": card.rank,
@@ -163,7 +167,7 @@ export function renderHandView(
     }
 
     // Highlight trump cards
-    if (isTrumpCard(card, snapshot.trump_suit, snapshot.trump_rank)) {
+    if (isTrumpCard(card, trumpSuit(snapshot), trumpRank(snapshot))) {
       cardSpan.classList.add("trump-card");
     }
 

@@ -73,10 +73,10 @@ async def test_receive_zero_and_stale_return_current_state_lazily() -> (
     session = Session(GameConfig(), GameSeed(3))
     sink = _Sink()
     decoder = _Decoder(commands.ConfirmRound())
-    await session.attach(Seat.NORTH, sink)
+    await session.attach(Seat.A, sink)
 
-    await session.receive(Seat.NORTH, 0, decoder)
-    await session.receive(Seat.NORTH, 99, decoder)
+    await session.receive(Seat.A, 0, decoder)
+    await session.receive(Seat.A, 99, decoder)
 
     assert decoder.decode_count == 0
     assert [item.seq for item in sink.deliveries] == [1, 1]
@@ -92,17 +92,17 @@ async def test_receive_accepted_advances_sequence_exactly_once() -> (
 ):
     session = Session(GameConfig(), GameSeed(5))
     sink = _Sink()
-    await session.attach(Seat.NORTH, sink)
+    await session.attach(Seat.A, sink)
     accepted = _Decoder(commands.ConfirmRound())
 
-    await session.receive(Seat.NORTH, 1, accepted)
+    await session.receive(Seat.A, 1, accepted)
 
     assert accepted.decode_count == 1
     assert len(sink.deliveries) == 1
     assert sink.deliveries[0].seq == 2
     assert sink.deliveries[0].error is None
     assert sink.deliveries[0].snapshot.awaiting_action is None
-    assert session.snapshot(Seat.NORTH).seq == 2
+    assert session.snapshot(Seat.A).seq == 2
 
 
 async def test_receive_decode_rejection_keeps_sequence_and_state() -> (
@@ -110,10 +110,10 @@ async def test_receive_decode_rejection_keeps_sequence_and_state() -> (
 ):
     session = Session(GameConfig(), GameSeed(7))
     sink = _Sink()
-    await session.attach(Seat.NORTH, sink)
+    await session.attach(Seat.A, sink)
     decoder = _RejectingDecoder()
 
-    await session.receive(Seat.NORTH, 1, decoder)
+    await session.receive(Seat.A, 1, decoder)
 
     assert decoder.decode_count == 1
     assert sink.deliveries[0].seq == 1
@@ -124,10 +124,10 @@ async def test_receive_decode_rejection_keeps_sequence_and_state() -> (
 async def test_receive_game_rejection_keeps_sequence() -> None:
     session = Session(GameConfig(), GameSeed(9))
     sink = _Sink()
-    await session.attach(Seat.NORTH, sink)
+    await session.attach(Seat.A, sink)
 
     await session.receive(
-        Seat.NORTH,
+        Seat.A,
         1,
         _Decoder(commands.PassBid()),
     )
@@ -139,22 +139,29 @@ async def test_receive_game_rejection_keeps_sequence() -> None:
 
 async def test_receive_broadcasts_personalized_observations() -> None:
     session = Session(GameConfig(), GameSeed(11))
-    north = _Sink()
-    west = _Sink()
-    await session.attach(Seat.NORTH, north)
-    await session.attach(Seat.WEST, west)
+    seat_a_sink = _Sink()
+    seat_b_sink = _Sink()
+    await session.attach(Seat.A, seat_a_sink)
+    await session.attach(Seat.B, seat_b_sink)
 
     await session.receive(
-        Seat.NORTH,
+        Seat.A,
         1,
         _Decoder(commands.ConfirmRound()),
     )
 
-    assert len(north.deliveries) == 1
-    assert len(west.deliveries) == 1
-    assert north.deliveries[0].seq == west.deliveries[0].seq == 2
-    assert north.deliveries[0].snapshot.awaiting_action is None
-    assert west.deliveries[0].snapshot.awaiting_action == "next_round"
+    assert len(seat_a_sink.deliveries) == 1
+    assert len(seat_b_sink.deliveries) == 1
+    assert (
+        seat_a_sink.deliveries[0].seq
+        == seat_b_sink.deliveries[0].seq
+        == 2
+    )
+    assert seat_a_sink.deliveries[0].snapshot.awaiting_action is None
+    assert (
+        seat_b_sink.deliveries[0].snapshot.awaiting_action
+        == "next_round"
+    )
 
 
 async def test_attach_replaces_only_the_same_seat_owner() -> None:
@@ -162,42 +169,42 @@ async def test_attach_replaces_only_the_same_seat_owner() -> None:
     first = _Sink()
     replacement = _Sink()
     other = _Sink()
-    await session.attach(Seat.NORTH, first)
-    await session.attach(Seat.WEST, other)
+    await session.attach(Seat.A, first)
+    await session.attach(Seat.B, other)
 
-    await session.attach(Seat.NORTH, replacement)
+    await session.attach(Seat.A, replacement)
 
     assert first.disconnects == [DisconnectReason.REPLACED]
     assert replacement.disconnects == []
     assert other.disconnects == []
-    assert session.owns(Seat.NORTH, replacement)
-    assert not session.owns(Seat.NORTH, first)
+    assert session.owns(Seat.A, replacement)
+    assert not session.owns(Seat.A, first)
 
 
 async def test_detach_ignores_stale_sink() -> None:
     session = Session(GameConfig(), GameSeed(15))
     stale = _Sink()
     current = _Sink()
-    await session.attach(Seat.NORTH, stale)
-    await session.attach(Seat.NORTH, current)
+    await session.attach(Seat.A, stale)
+    await session.attach(Seat.A, current)
 
-    session.detach(Seat.NORTH, stale)
+    session.detach(Seat.A, stale)
 
-    assert session.connected(Seat.NORTH)
-    assert session.owns(Seat.NORTH, current)
+    assert session.connected(Seat.A)
+    assert session.owns(Seat.A, current)
 
 
 async def test_close_disconnects_all_current_sinks_once() -> None:
     session = Session(GameConfig(), GameSeed(17))
-    north = _Sink()
-    west = _Sink()
-    await session.attach(Seat.NORTH, north)
-    await session.attach(Seat.WEST, west)
+    seat_a_sink = _Sink()
+    seat_b_sink = _Sink()
+    await session.attach(Seat.A, seat_a_sink)
+    await session.attach(Seat.B, seat_b_sink)
 
     await session.close()
     await session.close()
 
-    assert north.disconnects == [DisconnectReason.SESSION_CLOSED]
-    assert west.disconnects == [DisconnectReason.SESSION_CLOSED]
-    assert not session.connected(Seat.NORTH)
-    assert not session.connected(Seat.WEST)
+    assert seat_a_sink.disconnects == [DisconnectReason.SESSION_CLOSED]
+    assert seat_b_sink.disconnects == [DisconnectReason.SESSION_CLOSED]
+    assert not session.connected(Seat.A)
+    assert not session.connected(Seat.B)

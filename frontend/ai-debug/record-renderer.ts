@@ -55,7 +55,7 @@ function renderRecord(record: TranscriptRecord): HTMLElement {
   });
   head.append(
     toggle,
-    textSpan(`player ${record.player_index}`),
+    textSpan(`seat ${record.seat}`),
     textSpan(`seq ${record.seq}`),
     textSpan(`attempt ${record.attempt}`),
     textSpan(record.created_at),

@@ -16,12 +16,11 @@ function makeSnapshot(
 ): StateSnapshot {
   return {
     phase: "PLAYING",
-    player_hand: [],
+    round_number: 1,
+    hand: [],
     bottom_cards: [],
-    trump_rank: "2",
-    trump_suit: null,
-    declarer_team: null,
-    declarer_player: null,
+    trump: { kind: "no_trump", rank: "2" },
+    declarer: null,
     defender_points: 15,
     action_hints: [],
     trick: null,
@@ -34,10 +33,10 @@ function makeSnapshot(
     awaiting_action: null,
     stirring_state: null,
     scoring: null,
-    winning_team: null,
-    team0_level: "3",
-    team1_level: "5",
-    player_hand_counts: [13, 13, 13, 13],
+    winning_partnership: null,
+    partnership_levels: { first: "3", second: "5" },
+    remaining_cards: { a: 13, b: 13, c: 13, d: 13 },
+    mandatory_levels: ["A"],
     next_round_confirmed: [],
     ...overrides,
   };
@@ -45,7 +44,7 @@ function makeSnapshot(
 
 Deno.test("test_renderScoreboard_shows_levels", () => {
   const snap = makeSnapshot();
-  const el = renderScoreboard(snap);
+  const el = renderScoreboard(snap, "c");
   const text = el.textContent ?? "";
   assertEquals(text.includes("3"), true);
   assertEquals(text.includes("5"), true);
@@ -53,7 +52,7 @@ Deno.test("test_renderScoreboard_shows_levels", () => {
 
 Deno.test("test_renderScoreboard_has_chat_box_placeholder", () => {
   const snap = makeSnapshot();
-  const el = renderScoreboard(snap);
+  const el = renderScoreboard(snap, "c");
   const input = el.querySelector(".scoreboard__chat-input");
   assertEquals(input !== null, true);
   assertEquals(input?.getAttribute("disabled"), "true");
@@ -63,15 +62,16 @@ Deno.test("test_renderScoreboard_has_no_operation_tabs_or_duplicate_table_info",
   const snap = makeSnapshot({
     defender_points: 25,
     bid_events: [{
-      player: 1,
+      actor: "b",
       cards: [{ id: "D1-hearts-2", suit: "hearts", rank: "2" }],
       kind: "trump_rank",
       suit: "hearts",
       joker_type: null,
       count: 1,
+      deal_ordinal: 1,
     }],
   });
-  const el = renderScoreboard(snap);
+  const el = renderScoreboard(snap, "c");
   const buttons = el.querySelectorAll("button");
   const text = el.textContent ?? "";
   assertEquals(buttons.length, 0);
@@ -93,7 +93,7 @@ Deno.test("test_renderScoreboard_connection_status_in_top_title_right", () => {
   ];
 
   for (const [status, label] of cases) {
-    const el = renderScoreboard(snap, null, status);
+    const el = renderScoreboard(snap, "c", status);
     const title = el.querySelector(".scoreboard > .scoreboard__title");
     const statusEl = title?.querySelector(".scoreboard__connection");
     const playerSection = Array.from(
@@ -122,13 +122,13 @@ Deno.test("test_renderScoreboard_stirring_status_uses_stirring_phase", () => {
     stirring_state: {
       phase: "EXCHANGING",
       trump_suit: "spades",
-      current_player: 1,
-      declarer_player: 0,
-      exchanging_player: 1,
+      current_actor: "b",
+      declarer: "a",
+      exchanging_actor: "b",
       exchange_count: 8,
     },
   });
-  const exchangingEl = renderScoreboard(exchangingSnap);
+  const exchangingEl = renderScoreboard(exchangingSnap, "c");
   const exchangingText = exchangingEl.textContent ?? "";
   assertEquals(exchangingText.includes("换底牌"), true);
   assertEquals(exchangingText.includes("待反主"), false);
@@ -139,13 +139,13 @@ Deno.test("test_renderScoreboard_stirring_status_uses_stirring_phase", () => {
     stirring_state: {
       phase: "WAITING",
       trump_suit: "spades",
-      current_player: 2,
-      declarer_player: 0,
-      exchanging_player: null,
+      current_actor: "c",
+      declarer: "a",
+      exchanging_actor: null,
       exchange_count: null,
     },
   });
-  const waitingEl = renderScoreboard(waitingSnap);
+  const waitingEl = renderScoreboard(waitingSnap, "c");
   const waitingText = waitingEl.textContent ?? "";
   assertEquals(waitingText.includes("待反主"), true);
   assertEquals(waitingText.includes("换底牌"), false);

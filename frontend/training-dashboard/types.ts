@@ -126,7 +126,7 @@ export interface StoreReplacement {
 }
 
 export interface TrainingEvent {
-  readonly schema_version: 2;
+  readonly schema_version: 3;
   readonly event: TrainingEventName;
   readonly recorded_at_ms: number;
   readonly process: EventProcess;
@@ -154,7 +154,7 @@ export interface EventContext {
   readonly model_rank_index?: number;
   readonly game_env_index?: number;
   readonly episode_id?: number;
-  readonly player_index?: number;
+  readonly seat?: "a" | "b" | "c" | "d";
   readonly decision_index?: number;
   readonly request_id?: number;
   readonly batch_id?: number;
@@ -250,12 +250,12 @@ export function parseCheckpointCatalog(
 
 export function parseMetrics(value: unknown): TrainingMetrics {
   const record = requiredRecord(value, "training metrics");
-  if (record.schema_version !== 2) {
+  if (record.schema_version !== 3) {
     throw new Error("Unsupported training metrics schema");
   }
   const datasets = requiredRecord(record.datasets, "metric datasets");
   return {
-    schema_version: 2,
+    schema_version: 3,
     store_id: nullableStoreId(record.store_id),
     through_sequence: nonNegativeInteger(
       record.through_sequence,
@@ -509,7 +509,7 @@ function parseEvent(value: unknown): TrainingEvent {
     ],
     "training event",
   );
-  if (record.schema_version !== 2) {
+  if (record.schema_version !== 3) {
     throw new Error("Unsupported training event schema");
   }
   const error = record.error === undefined
@@ -520,7 +520,7 @@ function parseEvent(value: unknown): TrainingEvent {
     throw new Error(`Unknown training event: ${event}`);
   }
   return {
-    schema_version: 2,
+    schema_version: 3,
     event,
     recorded_at_ms: nonNegativeInteger(
       record.recorded_at_ms,
@@ -553,14 +553,13 @@ function parseEventContext(value: unknown): EventContext {
     "model_rank_index",
     "game_env_index",
     "episode_id",
-    "player_index",
     "decision_index",
     "request_id",
     "batch_id",
   ] as const;
   rejectUnknownKeys(
     record,
-    [...numberKeys, "rollout_id"],
+    [...numberKeys, "rollout_id", "seat"],
     "event context",
   );
   const result: Record<string, number | string> = {};
@@ -574,6 +573,13 @@ function parseEventContext(value: unknown): EventContext {
       record.rollout_id,
       "context.rollout_id",
     );
+  }
+  if (record.seat !== undefined) {
+    const seat = requiredString(record.seat, "context.seat");
+    if (seat !== "a" && seat !== "b" && seat !== "c" && seat !== "d") {
+      throw new Error("Invalid context.seat");
+    }
+    result.seat = seat;
   }
   return result;
 }

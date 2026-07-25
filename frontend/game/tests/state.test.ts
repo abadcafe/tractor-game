@@ -8,12 +8,11 @@ import type { RoundPhase, StateSnapshot } from "../core/types.ts";
 function makeSnapshot(phase: RoundPhase): StateSnapshot {
   return {
     phase,
-    player_hand: [],
+    round_number: 1,
+    hand: [],
     bottom_cards: [],
-    trump_rank: "2",
-    trump_suit: null,
-    declarer_team: null,
-    declarer_player: null,
+    trump: { kind: "no_trump", rank: "2" },
+    declarer: null,
     defender_points: 0,
     action_hints: [],
     trick: null,
@@ -26,10 +25,10 @@ function makeSnapshot(phase: RoundPhase): StateSnapshot {
     awaiting_action: null,
     stirring_state: null,
     scoring: null,
-    winning_team: null,
-    team0_level: "2",
-    team1_level: "2",
-    player_hand_counts: [13, 13, 13, 13],
+    winning_partnership: null,
+    partnership_levels: { first: "2", second: "2" },
+    remaining_cards: { a: 13, b: 13, c: 13, d: 13 },
+    mandatory_levels: ["A"],
     next_round_confirmed: [],
   };
 }

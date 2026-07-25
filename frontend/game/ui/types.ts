@@ -1,5 +1,5 @@
 import type { CompletedTrick, FailedThrow } from "../core/types.ts";
-import type { PlayerIndex } from "../config.ts";
+import type { SeatId } from "../config.ts";
 import type {
   BidOption,
   GameAction,
@@ -40,8 +40,8 @@ export interface RenderContext {
   callbacks?: ActionCallbacks;
   /** Current game id, used for debug links that are outside the game protocol. */
   gameId?: string | null;
-  /** Current user player; every table view orients this player at south. */
-  viewerPlayer?: PlayerIndex | null;
+  /** Current user's seat; every table view orients this seat at the bottom. */
+  viewerSeat: SeatId;
   /** Current WebSocket connection state for the active table page. */
   connectionStatus?: ConnectionStatus;
   selectedCardIds: Set<string>;

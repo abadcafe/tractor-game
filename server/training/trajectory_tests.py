@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from server.game import Seat
 from server.training.policy_sampling import DecisionHandle
 from server.training.semantic_actions import (
     ActionChoice,
@@ -36,7 +37,7 @@ def test_trajectory_recorder_appends_and_clears_steps() -> None:
 def _decision_step(*, choice: ActionChoice) -> DecisionStep:
     trace = ActionTrace(choices=(choice,))
     return DecisionStep(
-        player_index=0,
+        seat=Seat.A,
         seq=1,
         action=GeneratedAction(
             action_kind="pass" if choice.kind == "pass" else "bid",

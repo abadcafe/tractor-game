@@ -10,6 +10,8 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
+from server.game import Seat, seat_id
+
 _U53_SCALE = 1.0 / float(1 << 53)
 
 
@@ -21,7 +23,7 @@ class PolicyDecisionKey:
     policy_version: int
     rollout_id: str
     episode_id: int
-    player_index: int
+    seat: Seat
     decision_index: int
 
     def __post_init__(self) -> None:
@@ -29,7 +31,6 @@ class PolicyDecisionKey:
         assert self.policy_version >= 0
         assert self.rollout_id
         assert self.episode_id >= 0
-        assert self.player_index in (0, 1, 2, 3)
         assert self.decision_index >= 0
 
 
@@ -60,7 +61,7 @@ def policy_choice_threshold(
             key.base_seed,
             key.policy_version,
             key.episode_id,
-            key.player_index,
+            seat_id(key.seat),
             key.decision_index,
             step_index,
         )

@@ -135,10 +135,10 @@ function completedTrickKey(
     return null;
   }
   const slotParts = trick.slots.map((slot) =>
-    `${slot.player}:${slot.cards.map((card) => card.id).join(",")}`
+    `${slot.actor}:${slot.cards.map((card) => card.id).join(",")}`
   );
   return [
-    trick.lead_player,
+    trick.lead_actor,
     trick.winner,
     trick.points,
     failedThrowKeyPart(trick.failed_throw),
@@ -157,7 +157,7 @@ function failedThrowKey(
   );
   return [
     completedTrickKey(snapshot.last_completed_trick) ?? "none",
-    event.player,
+    event.actor,
     attemptedIds,
     forcedIds,
   ].join("|");
@@ -170,5 +170,5 @@ function failedThrowKeyPart(event: FailedThrow | null): string {
   const attemptedIds = event.attempted_cards.map((card) => card.id)
     .join(",");
   const forcedIds = event.forced_cards.map((card) => card.id).join(",");
-  return [event.player, attemptedIds, forcedIds].join(":");
+  return [event.actor, attemptedIds, forcedIds].join(":");
 }

@@ -668,7 +668,7 @@ def test_torch_checkpoint_state_payload_is_weights_only_safe(
     )
 
     assert isinstance(loaded, dict)
-    assert loaded["schema_version"] == 22
+    assert loaded["schema_version"] == 23
     assert isinstance(loaded["checkpoint_id"], str)
     assert "model_config" not in loaded
     assert "train_config" not in loaded

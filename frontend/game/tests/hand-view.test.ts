@@ -19,15 +19,14 @@ function makeSnapshot(
 ): StateSnapshot {
   return {
     phase: "PLAYING",
-    player_hand: [
+    round_number: 1,
+    hand: [
       { id: "D1-hearts-5", suit: "hearts", rank: "5" },
       { id: "D1-spades-2", suit: "spades", rank: "2" },
     ],
     bottom_cards: [],
-    trump_rank: "2",
-    trump_suit: "hearts",
-    declarer_team: 0,
-    declarer_player: 2,
+    trump: { kind: "suited", rank: "2", suit: "hearts" },
+    declarer: "c",
     defender_points: 0,
     action_hints: [[{ id: "D1-hearts-5", suit: "hearts", rank: "5" }]],
     trick: null,
@@ -40,10 +39,10 @@ function makeSnapshot(
     awaiting_action: "play",
     stirring_state: null,
     scoring: null,
-    winning_team: null,
-    team0_level: "2",
-    team1_level: "2",
-    player_hand_counts: [13, 13, 13, 13],
+    winning_partnership: null,
+    partnership_levels: { first: "2", second: "2" },
+    remaining_cards: { a: 13, b: 13, c: 13, d: 13 },
+    mandatory_levels: ["A"],
     next_round_confirmed: [],
     ...overrides,
   };
@@ -98,25 +97,25 @@ Deno.test("test_renderHandView_play_button", () => {
 Deno.test("test_renderHandView_previous_trick_button_above_hand", () => {
   const snap = makeSnapshot({
     last_completed_trick: {
-      lead_player: 0,
-      winner: 3,
+      lead_actor: "a",
+      winner: "d",
       points: 10,
       failed_throw: null,
       slots: [
         {
-          player: 0,
+          actor: "a",
           cards: [{ id: "D1-diamonds-3", suit: "diamonds", rank: "3" }],
         },
         {
-          player: 1,
+          actor: "b",
           cards: [{ id: "D1-diamonds-4", suit: "diamonds", rank: "4" }],
         },
         {
-          player: 2,
+          actor: "c",
           cards: [{ id: "D2-diamonds-K", suit: "diamonds", rank: "K" }],
         },
         {
-          player: 3,
+          actor: "d",
           cards: [{ id: "D1-diamonds-K", suit: "diamonds", rank: "K" }],
         },
       ],
@@ -273,9 +272,9 @@ Deno.test("test_renderHandView_discard_button", () => {
     stirring_state: {
       phase: "WAITING",
       trump_suit: null,
-      current_player: 2,
-      declarer_player: 0,
-      exchanging_player: 2,
+      current_actor: "c",
+      declarer: "a",
+      exchanging_actor: "c",
       exchange_count: 8,
     },
   });
@@ -297,16 +296,16 @@ Deno.test("test_renderHandView_stir_buttons_are_above_hand", () => {
   const snap = makeSnapshot({
     phase: "STIRRING",
     awaiting_action: "stir",
-    player_hand: [
+    hand: [
       { id: "D1-spades-2", suit: "spades", rank: "2" },
       { id: "D2-spades-2", suit: "spades", rank: "2" },
     ],
     stirring_state: {
       phase: "WAITING",
       trump_suit: null,
-      current_player: 2,
-      declarer_player: 0,
-      exchanging_player: null,
+      current_actor: "c",
+      declarer: "a",
+      exchanging_actor: null,
       exchange_count: null,
     },
   });
@@ -358,7 +357,7 @@ Deno.test("test_renderHandView_bid_options_are_above_hand", () => {
     phase: "DEAL_BID",
     awaiting_action: "bid",
     action_hints: [],
-    trump_suit: null,
+    trump: { kind: "pending", rank: "2" },
   });
   const bidOptions: BidOption[] = [
     {
@@ -420,7 +419,7 @@ Deno.test("test_renderHandView_bid_options_disabled_when_pending", () => {
     phase: "DEAL_BID",
     awaiting_action: "bid",
     action_hints: [],
-    trump_suit: null,
+    trump: { kind: "pending", rank: "2" },
   });
   const bidOptions: BidOption[] = [
     {
@@ -476,7 +475,7 @@ Deno.test("test_renderHandView_bid_option_colors_match_suits_and_jokers", () => 
     phase: "DEAL_BID",
     awaiting_action: "bid",
     action_hints: [],
-    trump_suit: null,
+    trump: { kind: "pending", rank: "2" },
   });
   const bidOptions: BidOption[] = [
     {
@@ -597,7 +596,7 @@ Deno.test("test_renderHandView_card_click_callback", () => {
 
 Deno.test("test_renderHandView_drag_selects_displayed_card_range", () => {
   const snap = makeSnapshot({
-    player_hand: [
+    hand: [
       { id: "D1-hearts-5", suit: "hearts", rank: "5" },
       { id: "D1-spades-2", suit: "spades", rank: "2" },
       { id: "D1-clubs-A", suit: "clubs", rank: "A" },

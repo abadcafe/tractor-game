@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from server.game import Seat
 from server.game.rules import bidding
 from server.game.snapshots import PlayerSnapshot
 from server.training.legal_actions.complete_trace import (
@@ -15,14 +16,14 @@ from server.training.semantic_actions.values import GeneratedAction
 
 def build_bid_index(
     *,
-    player_index: int,
+    viewer: Seat,
     snapshot: PlayerSnapshot,
     query: ActionQuery,
 ) -> CompleteTraceLegalActionIndex:
     """Build legal semantic traces for a bid decision."""
     actions: list[GeneratedAction] = [pass_action("bid")]
     if snapshot.bid_winner is None or (
-        snapshot.bid_winner.player != player_index
+        snapshot.bid_winner.actor != viewer
     ):
         current = (
             None
@@ -30,7 +31,7 @@ def build_bid_index(
             else bidding.Declaration(snapshot.bid_winner.cards)
         )
         for declaration in bidding.legal_reveals(
-            snapshot.player_hand,
+            snapshot.hand,
             snapshot.trump_rank,
             current,
         ):

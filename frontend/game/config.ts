@@ -1,53 +1,89 @@
-export type PlayerIndex = 0 | 1 | 2 | 3;
-export type TeamIndex = 0 | 1;
+export type SeatId = "a" | "b" | "c" | "d";
+export type PartnershipId = "first" | "second";
 
-export const PLAYER_INDEXES: readonly [
-  PlayerIndex,
-  PlayerIndex,
-  PlayerIndex,
-  PlayerIndex,
-] = [0, 1, 2, 3];
+export const SEAT_IDS: readonly [SeatId, SeatId, SeatId, SeatId] = [
+  "a",
+  "b",
+  "c",
+  "d",
+];
 
-export const DEFAULT_VIEWER_PLAYER: PlayerIndex = 2;
-
-export function playerIndexFromNumber(
-  value: number,
-): PlayerIndex | null {
+export function seatIdFromString(value: string): SeatId | null {
   switch (value) {
-    case 0:
-      return 0;
-    case 1:
-      return 1;
-    case 2:
-      return 2;
-    case 3:
-      return 3;
+    case "a":
+    case "b":
+    case "c":
+    case "d":
+      return value;
     default:
       return null;
   }
 }
 
-export function WS_PATH(
-  gameId: string,
-  playerIndex: PlayerIndex,
-  userId: string,
-): string {
-  return GAME_PLAYER_PATH(gameId, playerIndex, userId);
+export function nextSeat(seat: SeatId): SeatId {
+  switch (seat) {
+    case "a":
+      return "b";
+    case "b":
+      return "c";
+    case "c":
+      return "d";
+    case "d":
+      return "a";
+  }
 }
 
-export function GAME_PLAYER_PATH(
+export function previousSeat(seat: SeatId): SeatId {
+  switch (seat) {
+    case "a":
+      return "d";
+    case "b":
+      return "a";
+    case "c":
+      return "b";
+    case "d":
+      return "c";
+  }
+}
+
+export function partnerSeat(seat: SeatId): SeatId {
+  switch (seat) {
+    case "a":
+      return "c";
+    case "b":
+      return "d";
+    case "c":
+      return "a";
+    case "d":
+      return "b";
+  }
+}
+
+export function partnershipOf(seat: SeatId): PartnershipId {
+  return seat === "a" || seat === "c" ? "first" : "second";
+}
+
+export function WS_PATH(
   gameId: string,
-  playerIndex: PlayerIndex,
+  seatId: SeatId,
   userId: string,
 ): string {
-  return `/game/${encodeURIComponent(gameId)}/player/${playerIndex}` +
+  return GAME_SEAT_PATH(gameId, seatId, userId);
+}
+
+export function GAME_SEAT_PATH(
+  gameId: string,
+  seatId: SeatId,
+  userId: string,
+): string {
+  return `/game/${encodeURIComponent(gameId)}/seat/${seatId}` +
     `?user_id=${encodeURIComponent(userId)}`;
 }
 
 export const API_BASE = "/api/game";
-export const PLAYER_LEFT_WS_CLOSE_CODE = 4408;
+export const SEAT_VACATED_WS_CLOSE_CODE = 4408;
 
-export const TEAM_LABELS: Record<TeamIndex, string> = {
-  0: "队伍 0",
-  1: "队伍 1",
+export const PARTNERSHIP_LABELS: Record<PartnershipId, string> = {
+  first: "搭档方 A",
+  second: "搭档方 B",
 };

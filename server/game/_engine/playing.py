@@ -6,10 +6,16 @@ from dataclasses import replace
 
 from server.foundation.result import Ok, Rejected
 from server.game import commands
-from server.game.config import Seat
 from server.game.rules import play
 from server.game.rules.cards import CardId
+from server.game.seating import (
+    Seat,
+    next_seat,
+    partnership_of,
+    seats,
+)
 
+from ..rejections import wrong_turn
 from . import phases
 from .completion import finish_round
 from .hands import replace_hand, resolve_cards
@@ -21,7 +27,6 @@ from .round_values import (
     OpenTrick,
 )
 from .state import GameState, phase_of, replace_phase
-from .topology import SEATS, next_seat, team, wrong_turn
 
 
 def play_cards(
@@ -33,7 +38,7 @@ def play_cards(
     if actor != phase.current_trick.current_actor:
         return wrong_turn(phase.current_trick.current_actor)
     match resolve_cards(
-        phase.hands[int(actor)],
+        phase.hands.at(actor),
         command.card_ids,
     ):
         case Ok(value=attempted):
@@ -46,10 +51,10 @@ def play_cards(
     failed = phase.current_trick.failed_throw
     if not phase.current_trick.slots:
         other_hands = tuple(
-            phase.hands[int(seat)] for seat in SEATS if seat != actor
+            phase.hands.at(seat) for seat in seats() if seat != actor
         )
         match play.resolve_lead(
-            phase.hands[int(actor)],
+            phase.hands.at(actor),
             attempted,
             phase.contract.trump_suit,
             phase.contract.trump_rank,
@@ -70,7 +75,7 @@ def play_cards(
     else:
         lead = phase.current_trick.slots[0].cards
         match play.validate_follow(
-            phase.hands[int(actor)],
+            phase.hands.at(actor),
             attempted,
             lead,
             phase.contract.trump_suit,
@@ -84,14 +89,14 @@ def play_cards(
     actual_ids = {card.id for card in actual}
     hand = tuple(
         card
-        for card in phase.hands[int(actor)]
+        for card in phase.hands.at(actor)
         if card.id not in actual_ids
     )
     slots = phase.current_trick.slots + (
         InternalTrickSlot(actor=actor, cards=actual),
     )
     hands = replace_hand(phase.hands, actor, hand)
-    if len(slots) == len(SEATS):
+    if len(slots) == len(seats()):
         return Ok(_complete_trick(state, phase, hands, slots, failed))
 
     next_phase = replace(
@@ -140,7 +145,9 @@ def _complete_trick(
         failed_throw=failed,
     )
     point_cards = phase.defender_point_cards
-    if team(winner_slot.actor) != team(phase.contract.declarer):
+    if partnership_of(winner_slot.actor) != partnership_of(
+        phase.contract.declarer
+    ):
         point_cards = point_cards + tuple(
             card
             for slot in slots
@@ -159,7 +166,7 @@ def _complete_trick(
         ),
         previous_trick=completed,
     )
-    if all(not hand for hand in hands):
+    if all(not hand for hand in hands.values()):
         return finish_round(state, next_phase, completed)
     return replace_phase(state, next_phase)
 
@@ -169,11 +176,11 @@ def _should_auto_complete(phase: phases.Playing) -> bool:
     if len(slots) != 1:
         return False
     lead_count = len(slots[0].cards)
-    if phase.hands[int(slots[0].actor)]:
+    if phase.hands.at(slots[0].actor):
         return False
     return all(
-        len(phase.hands[int(seat)]) == lead_count
-        for seat in SEATS
+        len(phase.hands.at(seat)) == lead_count
+        for seat in seats()
         if seat != slots[0].actor
     )
 
@@ -184,10 +191,10 @@ def _auto_complete(
 ) -> GameState:
     next_state = state
     next_phase = phase
-    while len(next_phase.current_trick.slots) < len(SEATS):
+    while len(next_phase.current_trick.slots) < len(seats()):
         actor = next_phase.current_trick.current_actor
         ids = tuple(
-            CardId(card.id) for card in next_phase.hands[int(actor)]
+            CardId(card.id) for card in next_phase.hands.at(actor)
         )
         result = play_cards(
             next_state,

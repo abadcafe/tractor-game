@@ -4,7 +4,7 @@ import {
   type WsConnectionIdentity,
 } from "../net/ws-client.ts";
 import type { ClientAction, ServerMessage } from "../core/protocol.ts";
-import { PLAYER_LEFT_WS_CLOSE_CODE } from "../config.ts";
+import { SEAT_VACATED_WS_CLOSE_CODE } from "../config.ts";
 
 function makeStateMessage(): ServerMessage {
   return {
@@ -12,12 +12,11 @@ function makeStateMessage(): ServerMessage {
     seq: 1,
     state: {
       phase: "DEAL_BID",
-      player_hand: [],
+      round_number: 1,
+      hand: [],
       bottom_cards: [],
-      trump_rank: "2",
-      trump_suit: null,
-      declarer_team: null,
-      declarer_player: null,
+      trump: { kind: "no_trump", rank: "2" },
+      declarer: null,
       defender_points: 0,
       action_hints: [],
       trick: null,
@@ -30,10 +29,10 @@ function makeStateMessage(): ServerMessage {
       awaiting_action: null,
       stirring_state: null,
       scoring: null,
-      winning_team: null,
-      team0_level: "2",
-      team1_level: "2",
-      player_hand_counts: [13, 13, 13, 13],
+      winning_partnership: null,
+      partnership_levels: { first: "2", second: "2" },
+      remaining_cards: { a: 13, b: 13, c: 13, d: 13 },
+      mandatory_levels: ["A"],
       next_round_confirmed: [],
     },
   };
@@ -67,10 +66,10 @@ async function waitFor(
 
 function playerTarget(
   gameId: string,
-  playerIndex: WsConnectionIdentity["playerIndex"] = 2,
+  seatId: WsConnectionIdentity["seatId"] = "c",
   userId: string = "user-2",
 ): WsConnectionIdentity {
-  return { gameId, playerIndex, userId };
+  return { gameId, seatId, userId };
 }
 
 Deno.test("test_connect_success", async () => {
@@ -239,7 +238,7 @@ Deno.test("stale socket close does not clear the current connection", async () =
   assertEquals(client.send(action), true);
 
   await waitFor(() =>
-    (receivedByPath.get("/game/new-game/player/2") ?? []).some((raw) =>
+    (receivedByPath.get("/game/new-game/seat/c") ?? []).some((raw) =>
       raw === JSON.stringify(action)
     )
   );
@@ -375,7 +374,7 @@ Deno.test("test_onDisconnect_called", async () => {
   await server.shutdown();
 });
 
-Deno.test("test_connect_constructs_ws_url_from_default_player_identity", async () => {
+Deno.test("test_connect_constructs_ws_url_from_seat_identity", async () => {
   let requestedPath = "";
   const server = Deno.serve(
     { hostname: "127.0.0.1", port: 0 },
@@ -406,13 +405,13 @@ Deno.test("test_connect_constructs_ws_url_from_default_player_identity", async (
   );
   await waitFor(() => requestedPath !== "");
 
-  assertEquals(requestedPath, "/game/my-game-42/player/2");
+  assertEquals(requestedPath, "/game/my-game-42/seat/c");
 
   await server.shutdown();
   client.disconnect();
 });
 
-Deno.test("test_connect_constructs_ws_url_escapes_player_identity", async () => {
+Deno.test("test_connect_constructs_ws_url_escapes_seat_identity", async () => {
   const requestedUrls: URL[] = [];
   const server = Deno.serve(
     { hostname: "127.0.0.1", port: 0 },
@@ -438,7 +437,7 @@ Deno.test("test_connect_constructs_ws_url_escapes_player_identity", async () => 
   client.onMessage(() => {});
 
   await client.connect(
-    { gameId: "my-game-42", playerIndex: 1, userId: "user 1" },
+    { gameId: "my-game-42", seatId: "b", userId: "user 1" },
     `ws://127.0.0.1:${port}`,
   );
   await waitFor(() => requestedUrls.length > 0);
@@ -447,7 +446,7 @@ Deno.test("test_connect_constructs_ws_url_escapes_player_identity", async () => 
   if (requestedUrl === undefined) {
     throw new Error("expected websocket request URL");
   }
-  assertEquals(requestedUrl.pathname, "/game/my-game-42/player/1");
+  assertEquals(requestedUrl.pathname, "/game/my-game-42/seat/b");
   assertEquals(requestedUrl.search, "?user_id=user%201");
 
   await server.shutdown();
@@ -527,7 +526,7 @@ Deno.test("player left close does not reconnect", async () => {
               setTimeout(
                 () =>
                   socket.close(
-                    PLAYER_LEFT_WS_CLOSE_CODE,
+                    SEAT_VACATED_WS_CLOSE_CODE,
                     "player left",
                   ),
                 50,

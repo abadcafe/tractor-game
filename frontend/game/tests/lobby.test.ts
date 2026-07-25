@@ -9,14 +9,15 @@ import {
   type LobbyState,
   renderLobby,
 } from "../ui/lobby.ts";
+import type { SeatId } from "../config.ts";
 
 function makeState(overrides: Partial<LobbyState> = {}): LobbyState {
   return {
     games: [],
     loading: false,
     creating: false,
-    pendingPlayerGameId: null,
-    pendingPlayerIndex: null,
+    pendingSeatGameId: null,
+    pendingSeatId: null,
     deletingGameId: null,
     selectedGameId: null,
     botFillMode: "none",
@@ -33,10 +34,10 @@ function callbacksStub(
     onCreateGame: () => {},
     onSelectGame: () => {},
     onDeleteGame: () => {},
-    onTogglePlayer: () => {},
-    onEnterPlayer: () => {},
-    enterPlayerHref: (gameId, playerIndex) =>
-      `/game/${gameId}/player/${playerIndex}?user_id=test`,
+    onToggleSeat: () => {},
+    onEnterSeat: () => {},
+    enterSeatHref: (gameId, seatId) =>
+      `/game/${gameId}/seat/${seatId}?user_id=test`,
     onChangeBotFillMode: () => {},
     onRefreshGames: () => {},
     ...overrides,
@@ -80,10 +81,10 @@ Deno.test("test_renderLobby_shows_game_counts", () => {
           gameId: "abcdef123456",
           userCount: 2,
           capacity: 4,
-          userPlayers: [1, 3],
-          players: [
+          userSeats: ["b", "d"],
+          seats: [
             {
-              index: 0,
+              seat: "a",
               occupied: true,
               connected: false,
               kind: "auto",
@@ -91,21 +92,21 @@ Deno.test("test_renderLobby_shows_game_counts", () => {
               ready: false,
             },
             {
-              index: 1,
+              seat: "b",
               occupied: true,
               connected: true,
               mine: false,
               ready: false,
             },
             {
-              index: 2,
+              seat: "c",
               occupied: false,
               connected: false,
               mine: false,
               ready: false,
             },
             {
-              index: 3,
+              seat: "d",
               occupied: true,
               connected: false,
               mine: false,
@@ -136,7 +137,7 @@ Deno.test("test_renderLobby_callbacks", () => {
   let refreshed = false;
   let selectedGameId: string | null = null;
   let toggledGameId: string | null = null;
-  let toggledPlayerIndex: number | null = null;
+  let toggledSeatId: SeatId | null = null;
   root.appendChild(
     renderLobby(
       makeState({
@@ -144,10 +145,10 @@ Deno.test("test_renderLobby_callbacks", () => {
           gameId: "game-to-join",
           userCount: 1,
           capacity: 4,
-          userPlayers: [2],
-          players: [
+          userSeats: ["c"],
+          seats: [
             {
-              index: 0,
+              seat: "a",
               occupied: true,
               connected: false,
               kind: "auto",
@@ -155,21 +156,21 @@ Deno.test("test_renderLobby_callbacks", () => {
               ready: false,
             },
             {
-              index: 1,
+              seat: "b",
               occupied: false,
               connected: false,
               mine: false,
               ready: false,
             },
             {
-              index: 2,
+              seat: "c",
               occupied: true,
               connected: true,
               mine: false,
               ready: false,
             },
             {
-              index: 3,
+              seat: "d",
               occupied: false,
               connected: false,
               mine: false,
@@ -189,9 +190,9 @@ Deno.test("test_renderLobby_callbacks", () => {
         onSelectGame: (gameId: string) => {
           selectedGameId = gameId;
         },
-        onTogglePlayer: (gameId, playerIndex) => {
+        onToggleSeat: (gameId, seatId) => {
           toggledGameId = gameId;
-          toggledPlayerIndex = playerIndex;
+          toggledSeatId = seatId;
         },
       }),
     ),
@@ -205,13 +206,13 @@ Deno.test("test_renderLobby_callbacks", () => {
     button.textContent === "刷新"
   );
   const gameButton = root.querySelector(".lobby-game-row");
-  const playerThreeButton = Array.from(
+  const seatDButton = Array.from(
     root.querySelectorAll(".lobby-preview-player"),
-  ).find((button) => button.getAttribute("data-player-index") === "3");
+  ).find((button) => button.getAttribute("data-seat") === "d");
   assert(createButton !== undefined);
   assert(refreshButton !== undefined);
   assert(gameButton !== null);
-  assert(playerThreeButton !== undefined);
+  assert(seatDButton !== undefined);
   assertEquals(
     buttons.some((button) => button.textContent === "加入"),
     false,
@@ -220,7 +221,7 @@ Deno.test("test_renderLobby_callbacks", () => {
   createButton.dispatchEvent(new Event("click", { bubbles: true }));
   refreshButton.dispatchEvent(new Event("click", { bubbles: true }));
   gameButton.dispatchEvent(new Event("click", { bubbles: true }));
-  playerThreeButton.dispatchEvent(
+  seatDButton.dispatchEvent(
     new Event("click", { bubbles: true }),
   );
 
@@ -228,7 +229,7 @@ Deno.test("test_renderLobby_callbacks", () => {
   assertEquals(refreshed, true);
   assertEquals(selectedGameId, "game-to-join");
   assertEquals(toggledGameId, "game-to-join");
-  assertEquals(toggledPlayerIndex, 3);
+  assertEquals(toggledSeatId, "d");
 });
 
 Deno.test("test_renderLobby_delete_button_deletes_without_selecting", () => {
@@ -242,10 +243,10 @@ Deno.test("test_renderLobby_delete_button_deletes_without_selecting", () => {
           gameId: "delete-game",
           userCount: 0,
           capacity: 4,
-          userPlayers: [],
-          players: [
+          userSeats: [],
+          seats: [
             {
-              index: 0,
+              seat: "a",
               occupied: true,
               connected: false,
               kind: "auto",
@@ -253,14 +254,14 @@ Deno.test("test_renderLobby_delete_button_deletes_without_selecting", () => {
               ready: false,
             },
             {
-              index: 1,
+              seat: "b",
               occupied: false,
               connected: false,
               mine: false,
               ready: false,
             },
             {
-              index: 2,
+              seat: "c",
               occupied: true,
               connected: false,
               kind: "auto",
@@ -268,7 +269,7 @@ Deno.test("test_renderLobby_delete_button_deletes_without_selecting", () => {
               ready: false,
             },
             {
-              index: 3,
+              seat: "d",
               occupied: true,
               connected: false,
               kind: "auto",
@@ -301,9 +302,9 @@ Deno.test("test_renderLobby_delete_button_deletes_without_selecting", () => {
 
 Deno.test("test_renderLobby_my_player_toggles_and_center_enters", () => {
   const root = freshRoot();
-  let toggledPlayerIndex: number | null = null;
+  let toggledSeatId: SeatId | null = null;
   let enteredGameId: string | null = null;
-  let enteredPlayerIndex: number | null = null;
+  let enteredSeatId: SeatId | null = null;
   root.appendChild(
     renderLobby(
       makeState({
@@ -311,10 +312,10 @@ Deno.test("test_renderLobby_my_player_toggles_and_center_enters", () => {
           gameId: "mine-game",
           userCount: 1,
           capacity: 4,
-          userPlayers: [1],
-          players: [
+          userSeats: ["b"],
+          seats: [
             {
-              index: 0,
+              seat: "a",
               occupied: true,
               connected: false,
               kind: "auto",
@@ -322,14 +323,14 @@ Deno.test("test_renderLobby_my_player_toggles_and_center_enters", () => {
               ready: false,
             },
             {
-              index: 1,
+              seat: "b",
               occupied: true,
               connected: true,
               mine: true,
               ready: false,
             },
             {
-              index: 2,
+              seat: "c",
               occupied: true,
               connected: false,
               kind: "auto",
@@ -337,7 +338,7 @@ Deno.test("test_renderLobby_my_player_toggles_and_center_enters", () => {
               ready: false,
             },
             {
-              index: 3,
+              seat: "d",
               occupied: true,
               connected: false,
               kind: "auto",
@@ -349,48 +350,48 @@ Deno.test("test_renderLobby_my_player_toggles_and_center_enters", () => {
         selectedGameId: "mine-game",
       }),
       callbacksStub({
-        onTogglePlayer: (_gameId, playerIndex) => {
-          toggledPlayerIndex = playerIndex;
+        onToggleSeat: (_gameId, seatId) => {
+          toggledSeatId = seatId;
         },
-        onEnterPlayer: (gameId, playerIndex) => {
+        onEnterSeat: (gameId, seatId) => {
           enteredGameId = gameId;
-          enteredPlayerIndex = playerIndex;
+          enteredSeatId = seatId;
         },
       }),
     ),
   );
 
-  const myPlayerButton = Array.from(
+  const mySeatButton = Array.from(
     root.querySelectorAll(".lobby-preview-player"),
-  ).find((button) => button.getAttribute("data-player-index") === "1");
+  ).find((button) => button.getAttribute("data-seat") === "b");
   const enterButton = root.querySelector("[data-enter-table='true']");
-  assert(myPlayerButton !== undefined);
+  assert(mySeatButton !== undefined);
   assert(enterButton !== null);
-  assertEquals(myPlayerButton.hasAttribute("disabled"), false);
+  assertEquals(mySeatButton.hasAttribute("disabled"), false);
   assertEquals(enterButton.hasAttribute("disabled"), false);
   assertEquals(enterButton.textContent, "进入牌桌");
   assertEquals(enterButton.getAttribute("target"), "_blank");
   assertEquals(
     enterButton.getAttribute("href"),
-    "/game/mine-game/player/1?user_id=test",
+    "/game/mine-game/seat/b?user_id=test",
   );
   assertEquals(
-    myPlayerButton.getAttribute("class")?.includes(
+    mySeatButton.getAttribute("class")?.includes(
       "lobby-preview-player--mine",
     ),
     true,
   );
   assertEquals(
     root.querySelector(".lobby-preview__summary")?.textContent,
-    "4/4 人 · 玩家 1",
+    "4/4 人 · 玩家 b",
   );
 
-  myPlayerButton.dispatchEvent(new Event("click", { bubbles: true }));
+  mySeatButton.dispatchEvent(new Event("click", { bubbles: true }));
   enterButton.dispatchEvent(new Event("click", { bubbles: true }));
 
-  assertEquals(toggledPlayerIndex, 1);
+  assertEquals(toggledSeatId, "b");
   assertEquals(enteredGameId, "mine-game");
-  assertEquals(enteredPlayerIndex, 1);
+  assertEquals(enteredSeatId, "b");
 });
 
 Deno.test("test_renderLobby_center_disabled_before_controlling_player", () => {
@@ -403,31 +404,31 @@ Deno.test("test_renderLobby_center_disabled_before_controlling_player", () => {
           gameId: "empty-game",
           userCount: 0,
           capacity: 4,
-          userPlayers: [],
-          players: [
+          userSeats: [],
+          seats: [
             {
-              index: 0,
+              seat: "a",
               occupied: false,
               connected: false,
               mine: false,
               ready: false,
             },
             {
-              index: 1,
+              seat: "b",
               occupied: false,
               connected: false,
               mine: false,
               ready: false,
             },
             {
-              index: 2,
+              seat: "c",
               occupied: false,
               connected: false,
               mine: false,
               ready: false,
             },
             {
-              index: 3,
+              seat: "d",
               occupied: false,
               connected: false,
               mine: false,
@@ -438,7 +439,7 @@ Deno.test("test_renderLobby_center_disabled_before_controlling_player", () => {
         selectedGameId: "empty-game",
       }),
       callbacksStub({
-        onEnterPlayer: () => {
+        onEnterSeat: () => {
           entered = true;
         },
       }),
@@ -474,31 +475,31 @@ Deno.test("test_renderLobby_bot_fill_control_in_player_header", () => {
           gameId: "bot-game",
           userCount: 1,
           capacity: 4,
-          userPlayers: [2],
-          players: [
+          userSeats: ["c"],
+          seats: [
             {
-              index: 0,
+              seat: "a",
               occupied: false,
               connected: false,
               mine: false,
               ready: false,
             },
             {
-              index: 1,
+              seat: "b",
               occupied: false,
               connected: false,
               mine: false,
               ready: false,
             },
             {
-              index: 2,
+              seat: "c",
               occupied: true,
               connected: true,
               mine: true,
               ready: false,
             },
             {
-              index: 3,
+              seat: "d",
               occupied: false,
               connected: false,
               mine: false,
@@ -557,10 +558,10 @@ Deno.test("test_renderLobby_bot_filled_players_show_kind_labels", () => {
           gameId: "bot-filled-game",
           userCount: 1,
           capacity: 4,
-          userPlayers: [2],
-          players: [
+          userSeats: ["c"],
+          seats: [
             {
-              index: 0,
+              seat: "a",
               occupied: true,
               connected: false,
               kind: "ai",
@@ -568,7 +569,7 @@ Deno.test("test_renderLobby_bot_filled_players_show_kind_labels", () => {
               ready: true,
             },
             {
-              index: 1,
+              seat: "b",
               occupied: true,
               connected: false,
               kind: "auto",
@@ -576,7 +577,7 @@ Deno.test("test_renderLobby_bot_filled_players_show_kind_labels", () => {
               ready: true,
             },
             {
-              index: 2,
+              seat: "c",
               occupied: true,
               connected: true,
               kind: "user",
@@ -584,7 +585,7 @@ Deno.test("test_renderLobby_bot_filled_players_show_kind_labels", () => {
               ready: false,
             },
             {
-              index: 3,
+              seat: "d",
               occupied: false,
               connected: false,
               kind: "empty",
@@ -599,18 +600,18 @@ Deno.test("test_renderLobby_bot_filled_players_show_kind_labels", () => {
     ),
   );
 
-  const playerZero = root.querySelector("[data-player-index='0']");
-  const playerOne = root.querySelector("[data-player-index='1']");
-  assert(playerZero !== null);
-  assert(playerOne !== null);
-  assertEquals(playerZero.textContent, "0AI");
-  assertEquals(playerOne.textContent, "1AUTO");
+  const seatA = root.querySelector("[data-seat='a']");
+  const seatB = root.querySelector("[data-seat='b']");
+  assert(seatA !== null);
+  assert(seatB !== null);
+  assertEquals(seatA.textContent, "AAI");
+  assertEquals(seatB.textContent, "BAUTO");
   assertEquals(
     root.querySelectorAll(".lobby-player-dot--filled").length,
     3,
   );
   assertEquals(
-    playerZero.getAttribute("class")?.includes(
+    seatA.getAttribute("class")?.includes(
       "lobby-preview-player--bot",
     ),
     true,
@@ -628,10 +629,10 @@ Deno.test("test_renderLobby_disables_bot_fill_when_no_empty_players", () => {
           gameId: "filled-game",
           userCount: 1,
           capacity: 4,
-          userPlayers: [1],
-          players: [
+          userSeats: ["b"],
+          seats: [
             {
-              index: 0,
+              seat: "a",
               occupied: true,
               connected: false,
               kind: "auto",
@@ -639,7 +640,7 @@ Deno.test("test_renderLobby_disables_bot_fill_when_no_empty_players", () => {
               ready: true,
             },
             {
-              index: 1,
+              seat: "b",
               occupied: true,
               connected: false,
               kind: "user",
@@ -647,7 +648,7 @@ Deno.test("test_renderLobby_disables_bot_fill_when_no_empty_players", () => {
               ready: false,
             },
             {
-              index: 2,
+              seat: "c",
               occupied: true,
               connected: false,
               kind: "auto",
@@ -655,7 +656,7 @@ Deno.test("test_renderLobby_disables_bot_fill_when_no_empty_players", () => {
               ready: true,
             },
             {
-              index: 3,
+              seat: "d",
               occupied: true,
               connected: false,
               kind: "auto",

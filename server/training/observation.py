@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from server.foundation.result import Ok
+from server.game import Seat
 from server.game.rules.cards.faces import FaceCount
 from server.game.snapshots import PlayerSnapshot
 from server.training.observation_memory import ObservationMemoryView
@@ -38,7 +39,7 @@ class Observation:
 
 def build_observation(
     *,
-    viewer: int,
+    viewer: Seat,
     snapshot: PlayerSnapshot,
     memory: ObservationMemoryView,
 ) -> Observation:
@@ -55,7 +56,7 @@ def build_observation(
         round_context=state.round_context,
         hand_faces=state.hand,
         action_query=build_action_query(
-            player_index=viewer,
+            viewer=viewer,
             snapshot=snapshot,
         ),
     )

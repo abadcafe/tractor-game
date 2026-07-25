@@ -1,9 +1,9 @@
-import { PLAYER_INDEXES, type PlayerIndex } from "../config.ts";
+import { SEAT_IDS, type SeatId } from "../config.ts";
 import type {
   BotFillMode,
   ListedGame,
-  ListedPlayer,
-  PlayerKind,
+  ListedSeat,
+  OccupantKind,
 } from "../net/rest-client.ts";
 import { el } from "./dom.ts";
 
@@ -11,8 +11,8 @@ export interface LobbyState {
   games: readonly ListedGame[];
   loading: boolean;
   creating: boolean;
-  pendingPlayerGameId: string | null;
-  pendingPlayerIndex: PlayerIndex | null;
+  pendingSeatGameId: string | null;
+  pendingSeatId: SeatId | null;
   deletingGameId: string | null;
   selectedGameId: string | null;
   botFillMode: BotFillMode;
@@ -24,9 +24,9 @@ export interface LobbyCallbacks {
   onCreateGame: () => void;
   onSelectGame: (gameId: string) => void;
   onDeleteGame: (gameId: string) => void;
-  onTogglePlayer: (gameId: string, playerIndex: PlayerIndex) => void;
-  onEnterPlayer: (gameId: string, playerIndex: PlayerIndex) => void;
-  enterPlayerHref: (gameId: string, playerIndex: PlayerIndex) => string;
+  onToggleSeat: (gameId: string, seatId: SeatId) => void;
+  onEnterSeat: (gameId: string, seatId: SeatId) => void;
+  enterSeatHref: (gameId: string, seatId: SeatId) => string;
   onChangeBotFillMode: (mode: BotFillMode) => void;
   onRefreshGames: () => void;
 }
@@ -40,15 +40,15 @@ const BOT_FILL_MODES: readonly {
   { mode: "ai", label: "AI" },
   { mode: "auto", label: "AUTO" },
 ];
-const LOBBY_PLAYERS: readonly {
-  index: PlayerIndex;
+const LOBBY_SEATS: readonly {
+  seat: SeatId;
   label: string;
   area: string;
 }[] = [
-  { index: 0, label: "0", area: "north" },
-  { index: 1, label: "1", area: "west" },
-  { index: 2, label: "2", area: "south" },
-  { index: 3, label: "3", area: "east" },
+  { seat: "a", label: "A", area: "top" },
+  { seat: "b", label: "B", area: "right" },
+  { seat: "c", label: "C", area: "bottom" },
+  { seat: "d", label: "D", area: "left" },
 ];
 
 export function renderLobby(
@@ -70,7 +70,7 @@ function renderLobbyHeader(
     type: "button",
   }, state.creating ? "创建中" : "创建牌局");
   createButton.disabled = state.loading || state.creating ||
-    state.pendingPlayerGameId !== null || state.deletingGameId !== null;
+    state.pendingSeatGameId !== null || state.deletingGameId !== null;
   createButton.addEventListener("click", callbacks.onCreateGame);
 
   const refreshButton = el("button", {
@@ -78,7 +78,7 @@ function renderLobbyHeader(
     type: "button",
   }, state.loading ? "刷新中" : "刷新");
   refreshButton.disabled = state.loading ||
-    state.pendingPlayerGameId !== null || state.deletingGameId !== null;
+    state.pendingSeatGameId !== null || state.deletingGameId !== null;
   refreshButton.addEventListener("click", callbacks.onRefreshGames);
 
   return el(
@@ -192,7 +192,7 @@ function renderGameRow(
   callbacks: LobbyCallbacks,
 ): HTMLElement {
   const isSelected = state.selectedGameId === game.gameId;
-  const busy = state.pendingPlayerGameId !== null ||
+  const busy = state.pendingSeatGameId !== null ||
     state.deletingGameId !== null;
   const deleting = state.deletingGameId === game.gameId;
   const rowClass = isSelected
@@ -255,8 +255,8 @@ function renderGameRow(
 
 function renderPlayerDots(game: ListedGame): HTMLElement {
   const players = el("div", { class: "lobby-player-dots" });
-  for (const playerIndex of PLAYER_INDEXES) {
-    const status = playerStatus(game, playerIndex);
+  for (const seatId of SEAT_IDS) {
+    const status = playerStatus(game, seatId);
     const className = status?.occupied === true
       ? "lobby-player-dot lobby-player-dot--filled"
       : "lobby-player-dot";
@@ -280,29 +280,29 @@ function renderTablePreview(
     highlightedGame,
   );
   const allPlayersOccupied =
-    highlightedGame?.players.every((player) => player.occupied) ??
+    highlightedGame?.seats.every((player) => player.occupied) ??
       false;
   const hasEmptyPlayer =
-    highlightedGame?.players.some((player) => !player.occupied) ??
+    highlightedGame?.seats.some((player) => !player.occupied) ??
       false;
   const pendingSelectedGame = highlightedGame !== null &&
-    state.pendingPlayerGameId === highlightedGame.gameId;
-  const busy = state.pendingPlayerGameId !== null ||
+    state.pendingSeatGameId === highlightedGame.gameId;
+  const busy = state.pendingSeatGameId !== null ||
     state.deletingGameId !== null;
   const onPlayerClick = highlightedGame === null ||
       busy
     ? null
-    : (playerIndex: PlayerIndex) =>
-      callbacks.onTogglePlayer(highlightedGame.gameId, playerIndex);
+    : (seatId: SeatId) =>
+      callbacks.onToggleSeat(highlightedGame.gameId, seatId);
   const onEnterClick = highlightedGame === null || myPlayer === null ||
       !allPlayersOccupied || busy
     ? null
     : () =>
-      callbacks.onEnterPlayer(highlightedGame.gameId, myPlayer.index);
+      callbacks.onEnterSeat(highlightedGame.gameId, myPlayer.seat);
   const enterHref = highlightedGame === null || myPlayer === null ||
       !allPlayersOccupied || busy
     ? null
-    : callbacks.enterPlayerHref(highlightedGame.gameId, myPlayer.index);
+    : callbacks.enterSeatHref(highlightedGame.gameId, myPlayer.seat);
   return el(
     "div",
     { class: "lobby-preview" },
@@ -320,11 +320,11 @@ function renderTablePreview(
     el(
       "div",
       { class: "lobby-table-preview" },
-      ...LOBBY_PLAYERS.map((player) =>
+      ...LOBBY_SEATS.map((seat) =>
         renderPreviewPlayer(
-          player,
+          seat,
           highlightedGame,
-          pendingSelectedGame ? state.pendingPlayerIndex : null,
+          pendingSelectedGame ? state.pendingSeatId : null,
           onPlayerClick,
         )
       ),
@@ -337,7 +337,7 @@ function renderTablePreview(
         ? "未选择牌局"
         : myPlayer === null
         ? `${occupiedCount}/${capacity} 人`
-        : `${occupiedCount}/${capacity} 人 · 玩家 ${myPlayer.index}`,
+        : `${occupiedCount}/${capacity} 人 · 玩家 ${myPlayer.seat}`,
     ),
   );
 }
@@ -376,18 +376,16 @@ function renderEnterTableButton(
 }
 
 function renderPreviewPlayer(
-  player: { index: PlayerIndex; label: string; area: string },
+  seat: { seat: SeatId; label: string; area: string },
   game: ListedGame | null,
-  joiningPlayerIndex: PlayerIndex | null,
-  onPlayerClick: ((playerIndex: PlayerIndex) => void) | null,
+  joiningSeatId: SeatId | null,
+  onPlayerClick: ((seatId: SeatId) => void) | null,
 ): HTMLButtonElement {
-  const status = game === null
-    ? null
-    : playerStatus(game, player.index);
+  const status = game === null ? null : playerStatus(game, seat.seat);
   const occupied = status?.occupied === true;
   const mine = status?.mine === true;
   const kind = playerKind(status);
-  const pending = joiningPlayerIndex === player.index;
+  const pending = joiningSeatId === seat.seat;
   const selected = pending || occupied;
   const className = previewPlayerClassName(
     selected,
@@ -399,14 +397,14 @@ function renderPreviewPlayer(
     "button",
     {
       class: className,
-      "data-player-index": String(player.index),
-      "data-player-area": player.area,
+      "data-seat": seat.seat,
+      "data-seat-area": seat.area,
       type: "button",
     },
     el(
       "span",
       { class: "lobby-preview-player__label" },
-      player.label,
+      seat.label,
     ),
   );
   const statusText = previewPlayerStatusText(kind, mine, pending);
@@ -422,7 +420,7 @@ function renderPreviewPlayer(
   if (onPlayerClick !== null) {
     playerButton.addEventListener(
       "click",
-      () => onPlayerClick(player.index),
+      () => onPlayerClick(seat.seat),
     );
   }
   return playerButton;
@@ -432,7 +430,7 @@ function previewPlayerClassName(
   selected: boolean,
   mine: boolean,
   pending: boolean,
-  kind: PlayerKind,
+  kind: OccupantKind,
 ): string {
   const classes = ["lobby-preview-player"];
   if (selected) {
@@ -486,7 +484,7 @@ function renderBotFillControl(
   return group;
 }
 
-function playerKind(status: ListedPlayer | null): PlayerKind {
+function playerKind(status: ListedSeat | null): OccupantKind {
   if (status === null) {
     return "empty";
   }
@@ -494,7 +492,7 @@ function playerKind(status: ListedPlayer | null): PlayerKind {
 }
 
 function previewPlayerStatusText(
-  kind: PlayerKind,
+  kind: OccupantKind,
   mine: boolean,
   pending: boolean,
 ): string | null {
@@ -527,19 +525,19 @@ function boundedUserCount(game: ListedGame): number {
 }
 
 function occupiedPlayerCount(game: ListedGame): number {
-  return game.players.filter((player) => player.occupied).length;
+  return game.seats.filter((player) => player.occupied).length;
 }
 
 function playerStatus(
   game: ListedGame,
-  playerIndex: PlayerIndex,
-): ListedPlayer | null {
-  return game.players.find((player) => player.index === playerIndex) ??
+  seatId: SeatId,
+): ListedSeat | null {
+  return game.seats.find((player) => player.seat === seatId) ??
     null;
 }
 
-function currentMinePlayer(game: ListedGame): ListedPlayer | null {
-  return game.players.find((player) => player.mine) ?? null;
+function currentMinePlayer(game: ListedGame): ListedSeat | null {
+  return game.seats.find((player) => player.mine) ?? null;
 }
 
 function shortGameId(gameId: string): string {

@@ -18,12 +18,11 @@ function makeSnapshot(
 ): StateSnapshot {
   return {
     phase: "WAITING",
-    player_hand: [],
+    round_number: 1,
+    hand: [],
     bottom_cards: [],
-    trump_rank: "2",
-    trump_suit: null,
-    declarer_team: null,
-    declarer_player: null,
+    trump: { kind: "no_trump", rank: "2" },
+    declarer: null,
     defender_points: 0,
     action_hints: [],
     trick: null,
@@ -36,36 +35,36 @@ function makeSnapshot(
     awaiting_action: null,
     stirring_state: null,
     scoring: null,
-    winning_team: 0,
-    team0_level: "A",
-    team1_level: "5",
-    player_hand_counts: [13, 13, 13, 13],
+    winning_partnership: "first",
+    partnership_levels: { first: "A", second: "5" },
+    remaining_cards: { a: 13, b: 13, c: 13, d: 13 },
+    mandatory_levels: ["A"],
     next_round_confirmed: [],
     ...overrides,
   };
 }
 
 Deno.test("test_renderGameOverOverlay_shows_winner", () => {
-  const snap = makeSnapshot({ winning_team: 0 });
-  const el = renderGameOverOverlay(snap);
+  const snap = makeSnapshot({ winning_partnership: "first" });
+  const el = renderGameOverOverlay(snap, "c");
   const winnerEl = el.querySelector(".winner-text");
   assertNotEquals(winnerEl, null);
   const text = winnerEl?.textContent ?? "";
   assertEquals(text.includes("我们赢了！"), true);
 });
 
-Deno.test("test_renderGameOverOverlay_team1_wins", () => {
-  const snap = makeSnapshot({ winning_team: 1 });
-  const el = renderGameOverOverlay(snap);
+Deno.test("test_renderGameOverOverlay_other_partnership_wins", () => {
+  const snap = makeSnapshot({ winning_partnership: "second" });
+  const el = renderGameOverOverlay(snap, "c");
   const winnerEl = el.querySelector(".winner-text");
   assertNotEquals(winnerEl, null);
   const text = winnerEl?.textContent ?? "";
   assertEquals(text.includes("对方获胜"), true);
 });
 
-Deno.test("test_renderGameOverOverlay_null_winning_team", () => {
-  const snap = makeSnapshot({ winning_team: null });
-  const el = renderGameOverOverlay(snap);
+Deno.test("test_renderGameOverOverlay_null_winning_partnership", () => {
+  const snap = makeSnapshot({ winning_partnership: null });
+  const el = renderGameOverOverlay(snap, "c");
   const winnerEl = el.querySelector(".winner-text");
   assertNotEquals(winnerEl, null);
   const text = winnerEl?.textContent ?? "";
@@ -74,7 +73,7 @@ Deno.test("test_renderGameOverOverlay_null_winning_team", () => {
 
 Deno.test("test_renderGameOverOverlay_new_game_button", () => {
   const snap = makeSnapshot();
-  const el = renderGameOverOverlay(snap, null, () => {});
+  const el = renderGameOverOverlay(snap, "c", () => {});
   const buttons = el.querySelectorAll("button");
   const buttonTexts = Array.from(buttons).map((b) => b.textContent);
   assertEquals(buttonTexts.includes("新游戏"), true);
@@ -82,7 +81,7 @@ Deno.test("test_renderGameOverOverlay_new_game_button", () => {
 
 Deno.test("test_renderGameOverOverlay_no_button_without_callback", () => {
   const snap = makeSnapshot();
-  const el = renderGameOverOverlay(snap);
+  const el = renderGameOverOverlay(snap, "c");
   const buttons = el.querySelectorAll("button");
   assertEquals(buttons.length, 0);
 });
@@ -93,7 +92,7 @@ Deno.test("test_renderGameOverOverlay_new_game_callback", () => {
   const onNewGame = () => {
     newGameCalled = true;
   };
-  const el = renderGameOverOverlay(snap, null, onNewGame);
+  const el = renderGameOverOverlay(snap, "c", onNewGame);
   const buttons = el.querySelectorAll("button");
   const newGameButton = Array.from(buttons).find((b) =>
     b.textContent === "新游戏"
@@ -104,8 +103,8 @@ Deno.test("test_renderGameOverOverlay_new_game_callback", () => {
 });
 
 Deno.test("test_renderGameOverOverlay_uses_viewer_team", () => {
-  const snap = makeSnapshot({ winning_team: 1 });
-  const el = renderGameOverOverlay(snap, 1);
+  const snap = makeSnapshot({ winning_partnership: "second" });
+  const el = renderGameOverOverlay(snap, "b");
   const text = el.querySelector(".winner-text")?.textContent ?? "";
   assertEquals(text.includes("我们赢了！"), true);
 });

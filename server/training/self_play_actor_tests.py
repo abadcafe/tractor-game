@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from server.foundation.result import Ok, Rejected
-from server.game import commands
+from server.game import Seat, commands
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
-from server.training.player import TrainingPlayer
 from server.training.policy import PolicyDecision, RandomTrainingPolicy
 from server.training.sampling import PolicyDecisionKey
-from tests.support import card, snapshot
+from server.training.self_play_actor import SelfPlayActor
+from tests.support import card, seat_values, snapshot
 
 
 class _RejectingPolicy:
@@ -25,8 +25,8 @@ class _RejectingPolicy:
 
 
 async def test_player_records_only_accepted_typed_decisions() -> None:
-    player = TrainingPlayer(
-        index=0,
+    player = SelfPlayActor(
+        seat=Seat.A,
         policy=RandomTrainingPolicy(),
     )
     player.reset_round_tracking(
@@ -38,8 +38,8 @@ async def test_player_records_only_accepted_typed_decisions() -> None:
     current = snapshot(
         phase="DEAL_BID",
         awaiting_action="bid",
-        player_hand=[card("hearts", "2")],
-        player_hand_counts=[1, 0, 0, 0],
+        hand=[card("hearts", "2")],
+        remaining_cards=seat_values(1, 0, 0, 0),
         trump_rank="2",
     )
     observed = player.observe(seq=4, snapshot=current)
@@ -62,8 +62,8 @@ async def test_player_records_only_accepted_typed_decisions() -> None:
 
 
 def test_player_rejects_non_contiguous_observation_history() -> None:
-    player = TrainingPlayer(
-        index=0,
+    player = SelfPlayActor(
+        seat=Seat.A,
         policy=RandomTrainingPolicy(),
     )
     player.reset_round_tracking(
@@ -75,8 +75,8 @@ def test_player_rejects_non_contiguous_observation_history() -> None:
     initial = snapshot(
         phase="DEAL_BID",
         awaiting_action="bid",
-        player_hand=[card("hearts", "2")],
-        player_hand_counts=[1, 0, 0, 0],
+        hand=[card("hearts", "2")],
+        remaining_cards=seat_values(1, 0, 0, 0),
     )
     assert isinstance(player.observe(seq=8, snapshot=initial), Ok)
 
@@ -87,7 +87,7 @@ def test_player_rejects_non_contiguous_observation_history() -> None:
 
 
 async def test_decide_propagates_policy_rejection() -> None:
-    player = TrainingPlayer(index=0, policy=_RejectingPolicy())
+    player = SelfPlayActor(seat=Seat.A, policy=_RejectingPolicy())
     player.reset_round_tracking(
         base_seed=5,
         policy_version=2,
@@ -97,8 +97,8 @@ async def test_decide_propagates_policy_rejection() -> None:
     current = snapshot(
         phase="DEAL_BID",
         awaiting_action="bid",
-        player_hand=[card("hearts", "2")],
-        player_hand_counts=[1, 0, 0, 0],
+        hand=[card("hearts", "2")],
+        remaining_cards=seat_values(1, 0, 0, 0),
     )
     assert isinstance(player.observe(seq=1, snapshot=current), Ok)
 
@@ -112,15 +112,15 @@ async def test_decide_propagates_policy_rejection() -> None:
 
 
 def test_player_reset_forgets_previous_observation_sequence() -> None:
-    player = TrainingPlayer(
-        index=0,
+    player = SelfPlayActor(
+        seat=Seat.A,
         policy=RandomTrainingPolicy(),
     )
     initial = snapshot(
         phase="DEAL_BID",
         awaiting_action="bid",
-        player_hand=[card("hearts", "2")],
-        player_hand_counts=[1, 0, 0, 0],
+        hand=[card("hearts", "2")],
+        remaining_cards=seat_values(1, 0, 0, 0),
     )
     player.reset_round_tracking(
         base_seed=1,

@@ -23,7 +23,7 @@ type EventName = Literal[
 type ProcessKind = Literal[
     "initializer", "coordinator", "worker", "model_rank"
 ]
-
+type EventSeat = Literal["a", "b", "c", "d"]
 EVENT_NAMES: tuple[EventName, ...] = (
     "initialize",
     "training",
@@ -69,7 +69,7 @@ class EventContext:
     model_rank_index: int | None = None
     game_env_index: int | None = None
     episode_id: int | None = None
-    player_index: int | None = None
+    seat: EventSeat | None = None
     decision_index: int | None = None
     request_id: int | None = None
     batch_id: int | None = None
@@ -85,9 +85,9 @@ class EventContext:
             self.model_rank_index,
             self.game_env_index,
             self.episode_id,
-            self.player_index,
             self.decision_index,
             self.request_id,
             self.batch_id,
         ):
             assert value is None or value >= 0
+        assert self.seat is None or self.seat in ("a", "b", "c", "d")

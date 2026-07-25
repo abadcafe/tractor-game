@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 
 from server.foundation.result import Ok, Rejected
+from server.game import Seat
 from server.game.rules.cards.faces import CardFace, FaceCount
 from server.training.legal_actions import build_legal_action_index
 from server.training.policy_inference_batch import (
@@ -92,8 +93,8 @@ def test_completed_response_batch_keeps_fixed_choice_ids() -> None:
 
 def test_worker_decodes_card_then_finish_through_legal_rules() -> None:
     ace = card("spades", "A", 1)
-    snapshot = make_snapshot(player_hand=[ace])
-    legal = build_legal_action_index(player_index=0, snapshot=snapshot)
+    snapshot = make_snapshot(hand=[ace])
+    legal = build_legal_action_index(viewer=Seat.A, snapshot=snapshot)
     card_choice_id = action_choice_id(
         ActionChoice(
             "card",

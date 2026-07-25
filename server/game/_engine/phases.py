@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from server.game.config import Seat
 from server.game.rules.cards import Card
+from server.game.seating import Partnership, Seat
 
 from .round_values import (
     BottomExchangeCause,
@@ -36,7 +36,7 @@ class DealBid:
     round_number: int
     levels: TeamLevels
     fixed_declarer: Seat | None
-    start_player: Seat
+    start_actor: Seat
     deck: tuple[Card, ...]
     bottom_cards: tuple[Card, ...]
     hands: Hands
@@ -114,7 +114,7 @@ class Finished:
     """The game has a winner and accepts no further commands."""
 
     completed: CompletedRound
-    winning_team: int
+    winning_partnership: Partnership
 
 
 type GamePhase = (

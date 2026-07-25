@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from server.foundation.result import Ok, Rejected
+from server.game import Seat
 from server.game.rules.cards import Card
 from server.game.snapshots import PlayerSnapshot
 from server.game.snapshots.tricks import CompletedTrickSnapshot
@@ -13,11 +14,11 @@ from server.training.observation_structure import RoundEventOrdinal
 
 type BidDisposition = Literal["pass", "reveal"]
 type CompletedTrickKey = tuple[
-    int,
-    int,
-    tuple[tuple[int, tuple[str, ...]], ...],
+    Seat,
+    Seat,
+    tuple[tuple[Seat, tuple[str, ...]], ...],
 ]
-type PendingBid = tuple[int, RoundEventOrdinal]
+type PendingBid = tuple[Seat, RoundEventOrdinal]
 
 
 class _ObservationMemoryRejected(Rejected):
@@ -31,7 +32,7 @@ class _ObservationMemoryRejected(Rejected):
 class ObservedBidAction:
     """One public bid decision at a precise deal ordinal."""
 
-    actor: int
+    actor: Seat
     disposition: BidDisposition
     revealed_cards: tuple[Card, ...]
     deal_ordinal: RoundEventOrdinal
@@ -147,7 +148,7 @@ class ObservationMemory:
             pass
         elif snapshot.phase == "DEAL_BID":
             if (
-                sum(snapshot.player_hand_counts) > 1
+                sum(snapshot.remaining_cards.values()) > 1
                 or snapshot.bid_events
             ):
                 return _ObservationMemoryRejected(
@@ -189,7 +190,7 @@ class ObservationMemory:
             )
         else:
             event = snapshot.bid_events[-1]
-            if event.player != actor:
+            if event.actor != actor:
                 return _ObservationMemoryRejected(
                     "bid event actor does not match observed bidder"
                 )
@@ -225,12 +226,12 @@ def _initial_pending_bid(
 ) -> PendingBid | None:
     if snapshot.phase != "DEAL_BID":
         return None
-    dealt = sum(snapshot.player_hand_counts)
+    dealt = sum(snapshot.remaining_cards.values())
     if dealt == 0:
         return None
     actors = [
-        player
-        for player, count in enumerate(snapshot.player_hand_counts)
+        seat
+        for seat, count in snapshot.remaining_cards.items()
         if count == 1
     ]
     if len(actors) != 1:
@@ -243,19 +244,18 @@ def _pending_bid(
 ) -> PendingBid | None:
     if current.phase != "DEAL_BID":
         return None
-    previous_counts = previous.player_hand_counts
-    current_counts = current.player_hand_counts
+    previous_counts = previous.remaining_cards
+    current_counts = current.remaining_cards
     increased = [
-        player
-        for player, count in enumerate(current_counts)
-        if player < len(previous_counts)
-        and count == previous_counts[player] + 1
+        seat
+        for seat, count in current_counts.items()
+        if count == previous_counts.at(seat) + 1
     ]
     if len(increased) != 1:
         return None
     return (
         increased[0],
-        RoundEventOrdinal(sum(current_counts)),
+        RoundEventOrdinal(sum(current_counts.values())),
     )
 
 
@@ -263,10 +263,10 @@ def _completed_trick_key(
     trick: CompletedTrickSnapshot,
 ) -> CompletedTrickKey:
     return (
-        trick.lead_player,
+        trick.lead_actor,
         trick.winner,
         tuple(
-            (slot.player, tuple(card.id for card in slot.cards))
+            (slot.actor, tuple(card.id for card in slot.cards))
             for slot in trick.slots
         ),
     )

@@ -7,10 +7,11 @@ from dataclasses import replace
 
 from server.foundation.result import Ok, Rejected
 from server.game import commands
-from server.game.config import Seat
 from server.game.rules import bidding
 from server.game.rules.cards import Card, create_decks
+from server.game.seating import Seat, SeatMap, next_seat, seats
 
+from ..rejections import wrong_turn
 from . import phases
 from .contracts import declaration_suit, rule_declaration, trump_rank
 from .hands import replace_hand, resolve_cards
@@ -21,7 +22,6 @@ from .round_values import (
     TeamLevels,
 )
 from .state import GameState, replace_phase, seed_of
-from .topology import next_seat, wrong_turn
 
 _BOTTOM_COUNT = 8
 
@@ -40,16 +40,22 @@ def start_round(
     random_source.shuffle(cards)
     bottom = tuple(cards[:_BOTTOM_COUNT])
     deck = tuple(cards[_BOTTOM_COUNT:])
-    start = Seat.NORTH if fixed_declarer is None else fixed_declarer
+    start = (
+        random.Random(
+            f"{seed_of(state).value}:{round_number}:opening-seat"
+        ).choice(seats())
+        if fixed_declarer is None
+        else fixed_declarer
+    )
     empty: tuple[Card, ...] = ()
     phase = phases.DealBid(
         round_number=round_number,
         levels=levels,
         fixed_declarer=fixed_declarer,
-        start_player=start,
+        start_actor=start,
         deck=deck,
         bottom_cards=bottom,
-        hands=(empty, empty, empty, empty),
+        hands=SeatMap(a=empty, b=empty, c=empty, d=empty),
         deal_cursor=0,
         current_actor=start,
         declaration=None,
@@ -82,7 +88,7 @@ def reveal_bid(
     ):
         return Rejected("当前亮牌领先者不能连续抬高自己的亮牌")
     match resolve_cards(
-        phase.hands[int(actor)],
+        phase.hands.at(actor),
         command.card_ids,
     ):
         case Ok(value=cards):
@@ -126,7 +132,7 @@ def _deal_one(
 ) -> phases.DealBid:
     assert phase.deal_cursor < len(phase.deck)
     card = phase.deck[phase.deal_cursor]
-    hand = phase.hands[int(target)] + (card,)
+    hand = phase.hands.at(target) + (card,)
     return replace(
         phase,
         hands=replace_hand(phase.hands, target, hand),
@@ -142,7 +148,7 @@ def _finish_deal(
     if declarer is None and phase.declaration is not None:
         declarer = phase.declaration.actor
     if declarer is None:
-        declarer = phase.start_player
+        declarer = phase.start_actor
     rank = trump_rank(phase.levels, declarer)
     contract = Contract(
         declarer=declarer,
@@ -158,7 +164,7 @@ def _finish_deal(
         bottom_cards=phase.bottom_cards,
         current_actor=declarer,
         hand_after_pickup=(
-            phase.hands[int(declarer)] + phase.bottom_cards
+            phase.hands.at(declarer) + phase.bottom_cards
         ),
         cause=BottomExchangeCause.INITIAL,
         bid_reveals=phase.bid_reveals,

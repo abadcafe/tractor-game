@@ -55,7 +55,7 @@ async def test_create_game_starts_with_empty_players_by_default(
     matching = [game for game in games if game["game_id"] == game_id]
     assert len(matching) == 1
     game = matching[0]
-    players = game["players"]
+    players = game["seats"]
     assert _is_list_of_dict(players)
     assert [player["kind"] for player in players] == [
         "empty",
@@ -64,35 +64,6 @@ async def test_create_game_starts_with_empty_players_by_default(
         "empty",
     ]
     assert all(player["occupied"] is False for player in players)
-    assert "phase" not in game
-
-
-@pytest.mark.asyncio
-async def test_create_auto_game_can_use_ai_bot_players(
-    client: AsyncRestClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("TRACTOR_BOT_PLAYER", "ai")
-
-    response = await client.post("/api/game/auto")
-    game_id = _game_id_from(response)
-    listed = await client.get("/api/game")
-
-    document = listed.json()
-    assert _is_dict(document)
-    games = document["games"]
-    assert _is_list_of_dict(games)
-    matching = [game for game in games if game["game_id"] == game_id]
-    assert len(matching) == 1
-    game = matching[0]
-    players = game["players"]
-    assert _is_list_of_dict(players)
-    assert [players[index]["kind"] for index in (0, 1, 3)] == [
-        "ai",
-        "ai",
-        "ai",
-    ]
-    assert players[2]["kind"] == "empty"
     assert "phase" not in game
 
 
@@ -125,8 +96,8 @@ async def test_list_games_with_games(client: AsyncRestClient) -> None:
     assert "game_id" in first_game
     assert first_game["user_count"] == 0
     assert first_game["capacity"] == 4
-    assert first_game["user_players"] == []
-    players_raw = first_game["players"]
+    assert first_game["user_seats"] == []
+    players_raw = first_game["seats"]
     assert _is_list_of_dict(players_raw)
     assert len(players_raw) == 4
     for player_raw in players_raw:
@@ -140,7 +111,7 @@ def test_list_games_counts_attached_user_player(
     create_resp = sync_client.post("/api/game")
     game_id = _game_id_from(create_resp)
     attach_resp = sync_client.post(
-        f"/api/game/{game_id}/player/1?user_id=user-1"
+        f"/api/game/{game_id}/seat/b?user_id=user-1"
     )
     assert attach_resp.status_code == 200
 
@@ -156,11 +127,11 @@ def test_list_games_counts_attached_user_player(
     assert len(matching) == 1
     assert matching[0]["user_count"] == 1
     assert matching[0]["capacity"] == 4
-    assert matching[0]["user_players"] == [1]
-    players_raw = matching[0]["players"]
+    assert matching[0]["user_seats"] == ["b"]
+    players_raw = matching[0]["seats"]
     assert _is_list_of_dict(players_raw)
     player_one = players_raw[1]
-    assert player_one["index"] == 1
+    assert player_one["seat"] == "b"
     assert player_one["occupied"] is True
     assert player_one["connected"] is False
     assert player_one["mine"] is True
@@ -178,7 +149,7 @@ async def test_attach_player_rest_attaches_lobby_player(
     game_id = _game_id_from(create_resp)
 
     attach_resp = await client.post(
-        f"/api/game/{game_id}/player/2?user_id=user-2"
+        f"/api/game/{game_id}/seat/c?user_id=user-2"
     )
     response = await client.get("/api/game?user_id=user-2")
 
@@ -195,8 +166,8 @@ async def test_attach_player_rest_attaches_lobby_player(
     ]
     assert len(matching) == 1
     assert matching[0]["user_count"] == 1
-    assert matching[0]["user_players"] == [2]
-    players_raw = matching[0]["players"]
+    assert matching[0]["user_seats"] == ["c"]
+    players_raw = matching[0]["seats"]
     assert _is_list_of_dict(players_raw)
     player_two = players_raw[2]
     assert player_two["occupied"] is True
@@ -212,10 +183,10 @@ async def test_attach_player_rest_switches_user_player(
     game_id = _game_id_from(create_resp)
 
     first_resp = await client.post(
-        f"/api/game/{game_id}/player/0?user_id=user-0"
+        f"/api/game/{game_id}/seat/a?user_id=user-0"
     )
     second_resp = await client.post(
-        f"/api/game/{game_id}/player/3?user_id=user-0"
+        f"/api/game/{game_id}/seat/d?user_id=user-0"
     )
     response = await client.get("/api/game?user_id=user-0")
 
@@ -229,8 +200,8 @@ async def test_attach_player_rest_switches_user_player(
         game for game in games_raw if game["game_id"] == game_id
     ]
     assert len(matching) == 1
-    assert matching[0]["user_players"] == [3]
-    players_raw = matching[0]["players"]
+    assert matching[0]["user_seats"] == ["d"]
+    players_raw = matching[0]["seats"]
     assert _is_list_of_dict(players_raw)
     assert players_raw[0]["occupied"] is False
     assert players_raw[3]["occupied"] is True
@@ -244,11 +215,11 @@ async def test_detach_player_rest_detaches_lobby_player(
     create_resp = await client.post("/api/game")
     game_id = _game_id_from(create_resp)
     attach_resp = await client.post(
-        f"/api/game/{game_id}/player/1?user_id=user-1"
+        f"/api/game/{game_id}/seat/b?user_id=user-1"
     )
 
     detach_resp = await client.delete(
-        f"/api/game/{game_id}/player/1?user_id=user-1"
+        f"/api/game/{game_id}/seat/b?user_id=user-1"
     )
     response = await client.get("/api/game?user_id=user-1")
 
@@ -263,8 +234,8 @@ async def test_detach_player_rest_detaches_lobby_player(
     ]
     assert len(matching) == 1
     assert matching[0]["user_count"] == 0
-    assert matching[0]["user_players"] == []
-    players_raw = matching[0]["players"]
+    assert matching[0]["user_seats"] == []
+    players_raw = matching[0]["seats"]
     assert _is_list_of_dict(players_raw)
     assert players_raw[1]["occupied"] is False
     assert players_raw[1]["mine"] is False
@@ -277,11 +248,11 @@ async def test_attach_player_rest_rejects_occupied_player(
     create_resp = await client.post("/api/game")
     game_id = _game_id_from(create_resp)
     first_resp = await client.post(
-        f"/api/game/{game_id}/player/1?user_id=user-1"
+        f"/api/game/{game_id}/seat/b?user_id=user-1"
     )
 
     second_resp = await client.post(
-        f"/api/game/{game_id}/player/1?user_id=user-other"
+        f"/api/game/{game_id}/seat/b?user_id=user-other"
     )
 
     assert first_resp.status_code == 200
@@ -289,7 +260,7 @@ async def test_attach_player_rest_rejects_occupied_player(
     data = second_resp.json()
     assert _is_dict(data)
     assert data["ok"] is False
-    assert data["error"] == "player occupied"
+    assert data["error"] == "seat occupied"
 
 
 @pytest.mark.asyncio
@@ -299,7 +270,7 @@ async def test_fill_bot_players_rest_fills_remaining_with_auto(
     create_resp = await client.post("/api/game")
     game_id = _game_id_from(create_resp)
     attach_resp = await client.post(
-        f"/api/game/{game_id}/player/2?user_id=user-2"
+        f"/api/game/{game_id}/seat/c?user_id=user-2"
     )
 
     fill_resp = await client.post(
@@ -321,8 +292,8 @@ async def test_fill_bot_players_rest_fills_remaining_with_auto(
     ]
     assert len(matching) == 1
     assert matching[0]["user_count"] == 1
-    assert matching[0]["user_players"] == [2]
-    players_raw = matching[0]["players"]
+    assert matching[0]["user_seats"] == ["c"]
+    players_raw = matching[0]["seats"]
     assert _is_list_of_dict(players_raw)
     assert [player["kind"] for player in players_raw] == [
         "auto",
@@ -349,7 +320,7 @@ async def test_fill_bot_players_rest_requires_attached_user(
     data = fill_resp.json()
     assert _is_dict(data)
     assert data["ok"] is False
-    assert data["error"] == "user is not attached to a player"
+    assert data["error"] == "user does not occupy a seat"
 
 
 @pytest.mark.asyncio

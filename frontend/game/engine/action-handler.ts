@@ -1,4 +1,8 @@
-import type { Card, StateSnapshot } from "../core/types.ts";
+import {
+  type Card,
+  type StateSnapshot,
+  trumpRank,
+} from "../core/types.ts";
 import type { ClientAction } from "../core/protocol.ts";
 import {
   validateBidCards,
@@ -72,9 +76,7 @@ export function handleBidAction(
   cardIds: string[],
   seq: number,
 ): ActionResult {
-  const selectedCards = snap.player_hand.filter((c) =>
-    cardIds.includes(c.id)
-  );
+  const selectedCards = snap.hand.filter((c) => cardIds.includes(c.id));
   const hints = snap.action_hints ?? [];
   const matchedCards = hints.length > 0
     ? validatePlay(selectedCards, hints)
@@ -82,7 +84,7 @@ export function handleBidAction(
   if (
     matchedCards ||
     (hints.length === 0 &&
-      validateBidCards(selectedCards, snap.trump_rank))
+      validateBidCards(selectedCards, trumpRank(snap)))
   ) {
     return {
       success: true,
@@ -103,9 +105,7 @@ export function handleStirAction(
   cardIds: string[],
   seq: number,
 ): ActionResult {
-  const selectedCards = snap.player_hand.filter((c) =>
-    cardIds.includes(c.id)
-  );
+  const selectedCards = snap.hand.filter((c) => cardIds.includes(c.id));
   const hints = snap.action_hints ?? [];
   const matchedCards = validatePlay(selectedCards, hints);
   if (matchedCards) {
@@ -114,7 +114,7 @@ export function handleStirAction(
       action: { type: "stir", seq, cards: cardIds },
     };
   }
-  if (!validateStirCards(selectedCards, snap.trump_rank)) {
+  if (!validateStirCards(selectedCards, trumpRank(snap))) {
     return { success: false, error: "反主必须出对子" };
   }
   return { success: false, error: "优先级不足，不能反主" };
@@ -130,7 +130,7 @@ function selectedCardsInSelectionOrder(
   selectedCardIds: Set<string>,
 ): Card[] {
   const cardsById = new Map(
-    snap.player_hand.map((card) => [card.id, card]),
+    snap.hand.map((card) => [card.id, card]),
   );
   const selectedCards: Card[] = [];
   for (const cardId of selectedCardIds) {

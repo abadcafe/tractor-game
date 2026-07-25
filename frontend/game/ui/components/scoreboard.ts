@@ -1,11 +1,11 @@
 import type { StateSnapshot } from "../../core/types.ts";
 import { el } from "../dom.ts";
 import {
-  PLAYER_INDEXES,
-  type PlayerIndex,
-  type TeamIndex,
+  type PartnershipId,
+  SEAT_IDS,
+  type SeatId,
 } from "../../config.ts";
-import { playerView, teamLabelForViewer } from "../player-view.ts";
+import { partnershipLabelForViewer, seatView } from "../seat-view.ts";
 import type { ConnectionStatus } from "../types.ts";
 
 const CONNECTION_LABELS: Record<ConnectionStatus, string> = {
@@ -19,7 +19,7 @@ const CONNECTION_LABELS: Record<ConnectionStatus, string> = {
  */
 export function renderScoreboard(
   snapshot: StateSnapshot,
-  viewerPlayer?: PlayerIndex | null,
+  viewerSeat: SeatId,
   connectionStatus?: ConnectionStatus,
 ): HTMLElement {
   const scoreboard = el("div", { class: "scoreboard" });
@@ -28,48 +28,60 @@ export function renderScoreboard(
 
   const levelGrid = el("div", { class: "scoreboard__level-grid" });
   levelGrid.appendChild(
-    renderTeamLevel(0, snapshot.team0_level, viewerPlayer),
+    renderPartnershipLevel(
+      "first",
+      snapshot.partnership_levels.first,
+      viewerSeat,
+    ),
   );
   levelGrid.appendChild(
-    renderTeamLevel(1, snapshot.team1_level, viewerPlayer),
+    renderPartnershipLevel(
+      "second",
+      snapshot.partnership_levels.second,
+      viewerSeat,
+    ),
   );
   scoreboard.appendChild(levelGrid);
 
-  scoreboard.appendChild(renderPlayerStatus(snapshot, viewerPlayer));
+  scoreboard.appendChild(renderPlayerStatus(snapshot, viewerSeat));
   scoreboard.appendChild(renderChatBox());
 
   return scoreboard;
 }
 
-function renderTeamLevel(
-  team: TeamIndex,
+function renderPartnershipLevel(
+  partnership: PartnershipId,
   level: string,
-  viewerPlayer?: PlayerIndex | null,
+  viewerSeat: SeatId,
 ): HTMLElement {
-  const teamEl = el("div", { class: `scoreboard__team team${team}` });
-  teamEl.appendChild(
+  const partnershipEl = el("div", {
+    class: `scoreboard__team partnership-${partnership}`,
+  });
+  partnershipEl.appendChild(
     el(
       "span",
-      { class: `scoreboard__team-label team${team}` },
-      teamLabelForViewer(team, viewerPlayer),
+      {
+        class: `scoreboard__team-label partnership-${partnership}`,
+      },
+      partnershipLabelForViewer(partnership, viewerSeat),
     ),
   );
-  teamEl.appendChild(
+  partnershipEl.appendChild(
     el("span", { class: "scoreboard__team-level" }, level),
   );
-  return teamEl;
+  return partnershipEl;
 }
 
 function renderPlayerStatus(
   snapshot: StateSnapshot,
-  viewerPlayer?: PlayerIndex | null,
+  viewerSeat: SeatId,
 ): HTMLElement {
   const players = el("div", { class: "scoreboard__section" });
   const playerList = el("div", { class: "scoreboard__player-list" });
-  for (const playerIndex of PLAYER_INDEXES) {
-    const view = playerView(playerIndex, viewerPlayer);
+  for (const seatId of SEAT_IDS) {
+    const view = seatView(seatId, viewerSeat);
     const row = el("div", {
-      class: `scoreboard__player-row team${view.team}`,
+      class: `scoreboard__player-row partnership-${view.partnership}`,
     });
     row.appendChild(
       el("span", { class: "scoreboard__player-name" }, view.label),
@@ -78,14 +90,14 @@ function renderPlayerStatus(
       el(
         "span",
         { class: "scoreboard__player-team" },
-        view.teamLabel,
+        view.partnershipLabel,
       ),
     );
     row.appendChild(
       el(
         "span",
         { class: "scoreboard__player-status" },
-        playerStatus(snapshot, playerIndex),
+        playerStatus(snapshot, seatId),
       ),
     );
     playerList.appendChild(row);
@@ -141,31 +153,34 @@ function renderChatBox(): HTMLElement {
   return wrap;
 }
 
-function playerStatus(snapshot: StateSnapshot, player: number): string {
+function playerStatus(
+  snapshot: StateSnapshot,
+  seat: SeatId,
+): string {
   const labels: string[] = [];
-  if (snapshot.declarer_player === player) {
+  if (snapshot.declarer === seat) {
     labels.push("庄");
   }
   if (snapshot.phase === "WAITING") {
     labels.push(
-      snapshot.next_round_confirmed.includes(player)
+      snapshot.next_round_confirmed.includes(seat)
         ? "已确认"
         : "等待确认",
     );
   } else if (
     snapshot.phase === "PLAYING" &&
-    snapshot.trick?.current_player === player
+    snapshot.trick?.current_actor === seat
   ) {
     labels.push("待出牌");
   } else if (snapshot.phase === "STIRRING" && snapshot.stirring_state) {
     if (
       snapshot.stirring_state.phase === "EXCHANGING" &&
-      snapshot.stirring_state.exchanging_player === player
+      snapshot.stirring_state.exchanging_actor === seat
     ) {
       labels.push("换底牌");
     } else if (
       snapshot.stirring_state.phase === "WAITING" &&
-      snapshot.stirring_state.current_player === player
+      snapshot.stirring_state.current_actor === seat
     ) {
       labels.push("待反主");
     }

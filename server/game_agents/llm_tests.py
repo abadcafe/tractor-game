@@ -20,7 +20,7 @@ from server.game_agents.llm import (
     TranscriptRecordDict,
 )
 from server.game_runtime.session import CommandDecoder, Delivery
-from tests.support import card, snapshot
+from tests.support import card, seat_values, snapshot
 
 
 def _config(*, decision_retries: int = 1) -> LLMConfig:
@@ -116,7 +116,7 @@ async def _start(
     decision_retries: int = 1,
 ) -> LLMAgent:
     agent = LLMAgent(
-        Seat.NORTH,
+        Seat.A,
         target,
         config=_config(decision_retries=decision_retries),
         client=client,
@@ -125,7 +125,7 @@ async def _start(
     await asyncio.sleep(0)
     await agent.offer(
         Delivery(
-            viewer=Seat.NORTH,
+            viewer=Seat.A,
             seq=1,
             snapshot=snapshot(awaiting_action=None),
             error=None,
@@ -156,7 +156,7 @@ async def test_agent_handles_next_round_without_llm() -> None:
 
     await agent.offer(
         Delivery(
-            viewer=Seat.NORTH,
+            viewer=Seat.A,
             seq=2,
             snapshot=snapshot(
                 phase="WAITING",
@@ -180,13 +180,13 @@ async def test_agent_passes_bid_locally_without_legal_reveal() -> None:
 
     await agent.offer(
         Delivery(
-            viewer=Seat.NORTH,
+            viewer=Seat.A,
             seq=3,
             snapshot=snapshot(
                 phase="DEAL_BID",
                 awaiting_action="bid",
-                player_hand=(card("spades", "3"),),
-                player_hand_counts=(1, 0, 0, 0),
+                hand=(card("spades", "3"),),
+                remaining_cards=seat_values(1, 0, 0, 0),
             ),
             error=None,
         )
@@ -213,13 +213,13 @@ async def test_agent_asks_llm_at_bid_decision_count() -> None:
 
     await agent.offer(
         Delivery(
-            viewer=Seat.NORTH,
+            viewer=Seat.A,
             seq=4,
             snapshot=snapshot(
                 phase="DEAL_BID",
                 awaiting_action="bid",
-                player_hand=hand,
-                player_hand_counts=(5, 4, 4, 4),
+                hand=hand,
+                remaining_cards=seat_values(5, 4, 4, 4),
             ),
             error=None,
         )
@@ -245,12 +245,12 @@ async def test_agent_tool_schema_uses_only_current_hand_ids() -> None:
 
     await agent.offer(
         Delivery(
-            viewer=Seat.NORTH,
+            viewer=Seat.A,
             seq=5,
             snapshot=snapshot(
                 awaiting_action="play",
-                player_hand=hand,
-                player_hand_counts=(2, 2, 2, 2),
+                hand=hand,
+                remaining_cards=seat_values(2, 2, 2, 2),
             ),
             error=None,
         )
@@ -281,12 +281,12 @@ async def test_agent_rejects_wrong_tool_and_records_result() -> None:
 
     await agent.offer(
         Delivery(
-            viewer=Seat.NORTH,
+            viewer=Seat.A,
             seq=6,
             snapshot=snapshot(
                 awaiting_action="play",
-                player_hand=hand,
-                player_hand_counts=(1, 1, 1, 1),
+                hand=hand,
+                remaining_cards=seat_values(1, 1, 1, 1),
             ),
             error=None,
         )
@@ -313,12 +313,12 @@ async def test_agent_repairs_invalid_card_id_once() -> None:
 
     await agent.offer(
         Delivery(
-            viewer=Seat.NORTH,
+            viewer=Seat.A,
             seq=7,
             snapshot=snapshot(
                 awaiting_action="play",
-                player_hand=hand,
-                player_hand_counts=(1, 1, 1, 1),
+                hand=hand,
+                remaining_cards=seat_values(1, 1, 1, 1),
             ),
             error=None,
         )
@@ -350,12 +350,12 @@ async def test_agent_records_client_rejection_without_submission() -> (
 
     await agent.offer(
         Delivery(
-            viewer=Seat.NORTH,
+            viewer=Seat.A,
             seq=8,
             snapshot=snapshot(
                 awaiting_action="play",
-                player_hand=(card("spades", "A"),),
-                player_hand_counts=(1, 1, 1, 1),
+                hand=(card("spades", "A"),),
+                remaining_cards=seat_values(1, 1, 1, 1),
             ),
             error=None,
         )
@@ -382,14 +382,14 @@ async def test_agent_marks_server_rejection_and_retries_same_seq() -> (
     agent = await _start(client, target)
     live = snapshot(
         awaiting_action="play",
-        player_hand=hand,
-        player_hand_counts=(1, 1, 1, 1),
+        hand=hand,
+        remaining_cards=seat_values(1, 1, 1, 1),
     )
     updates = agent.subscribe_transcript()
 
     await agent.offer(
         Delivery(
-            viewer=Seat.NORTH,
+            viewer=Seat.A,
             seq=9,
             snapshot=live,
             error=None,
@@ -398,7 +398,7 @@ async def test_agent_marks_server_rejection_and_retries_same_seq() -> (
     await asyncio.sleep(0)
     await agent.offer(
         Delivery(
-            viewer=Seat.NORTH,
+            viewer=Seat.A,
             seq=9,
             snapshot=live,
             error="follow rejected",

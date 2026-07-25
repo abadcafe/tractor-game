@@ -34,7 +34,7 @@ def test_initialize_database_creates_strict_schema(
         ).fetchall()
     assert application_id == (APPLICATION_ID,)
     assert user_version == (SCHEMA_VERSION,)
-    assert SCHEMA_VERSION == 3
+    assert SCHEMA_VERSION == 4
     assert tables == [
         ("sqlite_sequence",),
         ("training_log_store",),
@@ -69,7 +69,7 @@ def test_schema_rejects_incomplete_event_envelopes(
     result = initialize_database(tmp_path)
     assert isinstance(result, Ok)
     base: JsonObject = {
-        "schema_version": 2,
+        "schema_version": 3,
         "event": "update",
         "recorded_at_ms": 1,
         "process": {"kind": "coordinator", "pid": 1},

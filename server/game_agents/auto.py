@@ -92,7 +92,7 @@ def automatic_command(
             else bidding.Declaration(cards=snapshot.bid_winner.cards)
         )
         reveals = bidding.legal_reveals(
-            snapshot.player_hand,
+            snapshot.hand,
             snapshot.trump_rank,
             current,
         )
@@ -104,7 +104,7 @@ def automatic_command(
         return commands.PassBid()
     if action == "discard":
         selected = random_source.sample(
-            list(snapshot.player_hand),
+            list(snapshot.hand),
             len(snapshot.bottom_cards),
         )
         return commands.Bury(
@@ -119,7 +119,7 @@ def automatic_command(
         reveals = tuple(
             reveal
             for reveal in bidding.legal_reveals(
-                snapshot.player_hand,
+                snapshot.hand,
                 snapshot.trump_rank,
                 current,
             )
@@ -136,7 +136,7 @@ def automatic_command(
     if snapshot.trick is not None and snapshot.trick.slots:
         lead = snapshot.trick.slots[0].cards
     selected = play.choose_legal_play(
-        snapshot.player_hand,
+        snapshot.hand,
         lead,
         snapshot.trump_suit,
         snapshot.trump_rank,

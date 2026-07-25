@@ -1,6 +1,6 @@
 """Project durable round events and trick facts."""
 
-from server.game.config import Seat
+from server.game.seating import Seat
 from server.game.snapshots.events import (
     BidEventSnapshot,
     BottomExchangeSnapshot,
@@ -28,7 +28,7 @@ def bid_event(event: Declaration) -> BidEventSnapshot:
     first = event.cards[0]
     is_joker = first.is_joker
     return BidEventSnapshot(
-        player=event.actor,
+        actor=event.actor,
         cards=event.cards,
         kind="joker" if is_joker else "trump_rank",
         suit=None if is_joker else first.suit,
@@ -82,7 +82,7 @@ def stir_events(
         first = event.cards[0] if is_stir else None
         result.append(
             StirDeclarationEventSnapshot(
-                player=event.actor,
+                actor=event.actor,
                 kind="stir" if is_stir else "pass",
                 cards=event.cards,
                 new_suit=(
@@ -100,15 +100,15 @@ def stir_events(
 def current_trick(phase: phases.Playing) -> TrickSnapshot:
     trick = phase.current_trick
     return TrickSnapshot(
-        lead_player=trick.lead_actor,
+        lead_actor=trick.lead_actor,
         slots=tuple(
             TrickSlotSnapshot(
-                player=slot.actor,
+                actor=slot.actor,
                 cards=slot.cards,
             )
             for slot in trick.slots
         ),
-        current_player=trick.current_actor,
+        current_actor=trick.current_actor,
         failed_throw=_failed_throw(trick.failed_throw),
     )
 
@@ -117,10 +117,10 @@ def completed_trick(
     trick: InternalCompletedTrick,
 ) -> CompletedTrickSnapshot:
     return CompletedTrickSnapshot(
-        lead_player=trick.lead_actor,
+        lead_actor=trick.lead_actor,
         slots=tuple(
             TrickSlotSnapshot(
-                player=slot.actor,
+                actor=slot.actor,
                 cards=slot.cards,
             )
             for slot in trick.slots
@@ -143,7 +143,7 @@ def _exchange_snapshot(
     event: BottomExchangeEvent,
 ) -> BottomExchangeSnapshot:
     return BottomExchangeSnapshot(
-        player=event.actor,
+        actor=event.actor,
         trigger=(
             "initial"
             if event.cause == BottomExchangeCause.INITIAL
@@ -162,7 +162,7 @@ def _failed_throw(
     if failed is None:
         return None
     return FailedThrowSnapshot(
-        player=failed.actor,
+        actor=failed.actor,
         attempted_cards=failed.attempted_cards,
         forced_cards=failed.forced_cards,
     )

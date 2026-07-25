@@ -1,4 +1,8 @@
-import type { Card, StateSnapshot } from "../core/types.ts";
+import {
+  type Card,
+  type StateSnapshot,
+  trumpRank,
+} from "../core/types.ts";
 import type {
   InteractionMode,
   LevelChangeInfo,
@@ -14,7 +18,7 @@ export function computeStirButtonState(
 ): StirButtonState {
   const selectedIds = [...selectedCardIds];
   const selectedCards = selectedIds
-    .map((id) => snap.player_hand.find((c) => c.id === id))
+    .map((id) => snap.hand.find((c) => c.id === id))
     .filter((c): c is Card => c !== undefined);
 
   if (selectedCards.length === 0) {
@@ -25,7 +29,7 @@ export function computeStirButtonState(
     return { disabled: true, title: "反主必须选择2张牌" };
   }
 
-  const priority = computeBidPriority(selectedCards, snap.trump_rank);
+  const priority = computeBidPriority(selectedCards, trumpRank(snap));
   if (priority < 200) {
     return { disabled: true, title: "反主必须用对子" };
   }
@@ -105,7 +109,7 @@ export function isSelectionStillLegal(
 ): boolean {
   if (selectedCardIds.size === 0) return true;
 
-  const handIds = new Set(snap.player_hand.map((c) => c.id));
+  const handIds = new Set(snap.hand.map((c) => c.id));
   const allInHand = [...selectedCardIds].every((id) => handIds.has(id));
   if (!allInHand) return false;
 

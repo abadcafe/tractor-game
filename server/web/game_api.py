@@ -7,22 +7,21 @@ from typing import TypedDict
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import JSONResponse
 
-from server.foundation.result import Ok, Rejected
-from server.game import Seat
-from server.game_runtime.room import BotKind, GameRoom, RoomPlayer
+from server.foundation.result import Rejected
+from server.game import SeatId, seat_from_id, seat_id
+from server.game_runtime.room import BotKind, GameRoom, RoomSeat
 from server.web.game_composition import (
-    bot_kind_from_env,
     bot_kind_from_str,
     create_game_room,
 )
 from server.web.game_connection import handle_game_connection
 from server.web.state import ServerState
 
-_PLAYER_CAPACITY = 4
+_SEAT_CAPACITY = 4
 
 
-class PlayerResponse(TypedDict):
-    index: int
+class SeatResponse(TypedDict):
+    seat: SeatId
     occupied: bool
     connected: bool
     kind: str
@@ -34,11 +33,11 @@ class ListedGameResponse(TypedDict):
     game_id: str
     user_count: int
     capacity: int
-    user_players: list[int]
-    players: list[PlayerResponse]
+    user_seats: list[SeatId]
+    seats: list[SeatResponse]
 
 
-class PlayerOperationResponse(TypedDict):
+class SeatOperationResponse(TypedDict):
     ok: bool
 
 
@@ -48,16 +47,6 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
 
     async def create_game() -> dict[str, str]:
         game_id = state.registry.create(create_game_room())
-        return {"game_id": game_id}
-
-    async def create_auto_game() -> dict[str, str]:
-        room = create_game_room()
-        result = room.fill_empty_bots(
-            kind=bot_kind_from_env(),
-            preserve={Seat.SOUTH},
-        )
-        assert isinstance(result, Ok)
-        game_id = state.registry.create(room)
         return {"game_id": game_id}
 
     async def list_games(
@@ -76,70 +65,76 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
             await room.close()
         return {"ok": True}
 
-    async def attach_player(
+    async def occupy_seat(
         game_id: str,
-        player: int,
+        seat_id: str,
         user_id: str | None = None,
     ) -> JSONResponse:
         room = state.registry.get(game_id)
         if room is None:
-            return _player_error_response("game not found")
+            return _seat_error_response("game not found")
+        seat = seat_from_id(seat_id)
+        if seat is None:
+            return _seat_error_response("invalid seat")
         if user_id is None:
-            return _player_error_response("missing user id")
-        result = await room.attach_player(
-            player=player, user_id=user_id
-        )
+            return _seat_error_response("missing user id")
+        result = await room.occupy_seat(seat=seat, user_id=user_id)
         if isinstance(result, Rejected):
-            return _player_error_response(result.reason)
-        return _player_ok_response()
+            return _seat_error_response(result.reason)
+        return _seat_ok_response()
 
-    async def detach_player(
+    async def vacate_seat(
         game_id: str,
-        player: int,
+        seat_id: str,
         user_id: str | None = None,
     ) -> JSONResponse:
         room = state.registry.get(game_id)
         if room is None:
-            return _player_error_response("game not found")
+            return _seat_error_response("game not found")
+        seat = seat_from_id(seat_id)
+        if seat is None:
+            return _seat_error_response("invalid seat")
         if user_id is None:
-            return _player_error_response("missing user id")
-        result = await room.detach_player(
-            player=player, user_id=user_id
-        )
+            return _seat_error_response("missing user id")
+        result = await room.vacate_seat(seat=seat, user_id=user_id)
         if isinstance(result, Rejected):
-            return _player_error_response(result.reason)
-        return _player_ok_response()
+            return _seat_error_response(result.reason)
+        return _seat_ok_response()
 
-    async def fill_bot_players(
+    async def fill_bot_seats(
         game_id: str,
         kind: str | None = None,
         user_id: str | None = None,
     ) -> JSONResponse:
         room = state.registry.get(game_id)
         if room is None:
-            return _player_error_response("game not found")
+            return _seat_error_response("game not found")
         bot_kind = _bot_kind_response(kind)
         if isinstance(bot_kind, JSONResponse):
             return bot_kind
         if user_id is None:
-            return _player_error_response("missing user id")
+            return _seat_error_response("missing user id")
         result = await room.fill_bots(
             kind=bot_kind,
             user_id=user_id,
         )
         if isinstance(result, Rejected):
-            return _player_error_response(result.reason)
-        return _player_ok_response()
+            return _seat_error_response(result.reason)
+        return _seat_ok_response()
 
     async def websocket_game(
         websocket: WebSocket,
         game_id: str,
-        player: int,
+        seat_id: str,
         user_id: str | None = None,
     ) -> None:
         room = state.registry.get(game_id)
         if room is None:
             await websocket.close(code=4404, reason="game not found")
+            return
+        seat = seat_from_id(seat_id)
+        if seat is None:
+            await websocket.close(code=4410, reason="invalid seat")
             return
         if user_id is None:
             await websocket.close(code=4410, reason="missing user id")
@@ -148,7 +143,7 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
         await handle_game_connection(
             websocket,
             room,
-            player=player,
+            seat=seat,
             user_id=user_id,
         )
 
@@ -156,33 +151,27 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
     app.add_api_route(
         "/api/game", create_game, methods=["POST"], status_code=201
     )
-    app.add_api_route(
-        "/api/game/auto",
-        create_auto_game,
-        methods=["POST"],
-        status_code=201,
-    )
     app.add_api_route("/api/game", list_games, methods=["GET"])
     app.add_api_route(
         "/api/game/{game_id}", delete_game, methods=["DELETE"]
     )
     app.add_api_route(
-        "/api/game/{game_id}/player/{player}",
-        attach_player,
+        "/api/game/{game_id}/seat/{seat_id}",
+        occupy_seat,
         methods=["POST"],
     )
     app.add_api_route(
-        "/api/game/{game_id}/player/{player}",
-        detach_player,
+        "/api/game/{game_id}/seat/{seat_id}",
+        vacate_seat,
         methods=["DELETE"],
     )
     app.add_api_route(
         "/api/game/{game_id}/bots",
-        fill_bot_players,
+        fill_bot_seats,
         methods=["POST"],
     )
     app.add_api_websocket_route(
-        "/game/{game_id}/player/{player}", websocket_game
+        "/game/{game_id}/seat/{seat_id}", websocket_game
     )
 
 
@@ -190,60 +179,57 @@ def _listed_game_response(
     state: ServerState, game_id: str, user_id: str | None
 ) -> ListedGameResponse:
     room = state.registry.get(game_id)
-    players = _room_players(room, user_id)
-    user_players = [
-        player["index"]
-        for player in players
-        if player["kind"] == "user"
+    room_seats = _room_seats(room, user_id)
+    user_seats: list[SeatId] = [
+        seat["seat"] for seat in room_seats if seat["kind"] == "user"
     ]
     return {
         "game_id": game_id,
-        "user_count": len(user_players),
-        "capacity": _PLAYER_CAPACITY,
-        "user_players": user_players,
-        "players": players,
+        "user_count": len(user_seats),
+        "capacity": _SEAT_CAPACITY,
+        "user_seats": user_seats,
+        "seats": room_seats,
     }
 
 
-def _room_players(
+def _room_seats(
     room: GameRoom | None, user_id: str | None
-) -> list[PlayerResponse]:
+) -> list[SeatResponse]:
     if room is None:
         return []
     return [
-        _player_response(player)
-        for player in room.players(user_id=user_id)
+        _seat_response(seat) for seat in room.seats(user_id=user_id)
     ]
 
 
-def _player_response(player: RoomPlayer) -> PlayerResponse:
+def _seat_response(seat: RoomSeat) -> SeatResponse:
     return {
-        "index": player.index,
-        "occupied": player.occupied,
-        "connected": player.connected,
-        "kind": player.kind,
-        "mine": player.mine,
-        "ready": player.ready,
+        "seat": seat_id(seat.seat),
+        "occupied": seat.occupied,
+        "connected": seat.connected,
+        "kind": seat.kind,
+        "mine": seat.mine,
+        "ready": seat.ready,
     }
 
 
-def _player_ok_response() -> JSONResponse:
-    content: PlayerOperationResponse = {"ok": True}
+def _seat_ok_response() -> JSONResponse:
+    content: SeatOperationResponse = {"ok": True}
     return JSONResponse(content)
 
 
-def _player_error_response(reason: str) -> JSONResponse:
+def _seat_error_response(reason: str) -> JSONResponse:
     return JSONResponse(
         {"ok": False, "error": reason},
-        status_code=_player_error_status(reason),
+        status_code=_seat_error_status(reason),
     )
 
 
-def _player_error_status(reason: str) -> int:
+def _seat_error_status(reason: str) -> int:
     match reason:
         case "game not found":
             return 404
-        case "invalid player" | "missing user id" | "invalid bot kind":
+        case "invalid seat" | "missing user id" | "invalid bot kind":
             return 400
         case _:
             return 409
@@ -252,5 +238,5 @@ def _player_error_status(reason: str) -> int:
 def _bot_kind_response(kind: str | None) -> BotKind | JSONResponse:
     bot_kind = bot_kind_from_str(kind)
     if bot_kind is None:
-        return _player_error_response("invalid bot kind")
+        return _seat_error_response("invalid bot kind")
     return bot_kind

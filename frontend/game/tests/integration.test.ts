@@ -16,7 +16,7 @@ import type {
   InteractionMode,
 } from "../engine/types.ts";
 import type { ActionCallbacks, RenderContext } from "../ui/types.ts";
-const HUMAN_PLAYER_INDEX = 2;
+const HUMAN_SEAT = "c";
 
 // deno-dom's Element is not structurally compatible with the DOM Element type
 // expected by render() and GameLoop. Use this helper to create a properly-typed container.
@@ -35,16 +35,15 @@ function makeSnapshot(
 ): StateSnapshot {
   return {
     phase: "PLAYING",
-    player_hand: [
+    round_number: 1,
+    hand: [
       { id: "D1-hearts-5", suit: "hearts", rank: "5" },
       { id: "D1-spades-2", suit: "spades", rank: "2" },
       { id: "D1-clubs-3", suit: "clubs", rank: "3" },
     ],
     bottom_cards: [],
-    trump_rank: "2",
-    trump_suit: "hearts",
-    declarer_team: 0,
-    declarer_player: 2,
+    trump: { kind: "suited", rank: "2", suit: "hearts" },
+    declarer: "c",
     defender_points: 15,
     action_hints: [[{ id: "D1-hearts-5", suit: "hearts", rank: "5" }]],
     trick: null,
@@ -57,10 +56,10 @@ function makeSnapshot(
     awaiting_action: "play",
     stirring_state: null,
     scoring: null,
-    winning_team: null,
-    team0_level: "2",
-    team1_level: "2",
-    player_hand_counts: [13, 13, 13, 13],
+    winning_partnership: null,
+    partnership_levels: { first: "2", second: "2" },
+    remaining_cards: { a: 13, b: 13, c: 13, d: 13 },
+    mandatory_levels: ["A"],
     next_round_confirmed: [],
     ...overrides,
   };
@@ -69,12 +68,20 @@ function makeSnapshot(
 // Track rendered state
 let lastRenderedMode: InteractionMode = null;
 let lastRenderedSnapshot: StateSnapshot | null = null;
-let lastRenderedCtx: RenderContext | undefined = undefined;
+let lastRenderedCtx: RenderContext = {
+  viewerSeat: HUMAN_SEAT,
+  selectedCardIds: new Set(),
+  legalCardIds: new Set(),
+};
 
 function resetTrackingState(): void {
   lastRenderedMode = null;
   lastRenderedSnapshot = null;
-  lastRenderedCtx = undefined;
+  lastRenderedCtx = {
+    viewerSeat: HUMAN_SEAT,
+    selectedCardIds: new Set(),
+    legalCardIds: new Set(),
+  };
 }
 
 function trackingRender(
@@ -109,6 +116,7 @@ Deno.test("test_integration_ws_to_render", () => {
     onNewGame: () => {},
   };
   lastRenderedCtx = {
+    viewerSeat: HUMAN_SEAT,
     callbacks,
     selectedCardIds: new Set(),
     legalCardIds: new Set(),
@@ -165,6 +173,7 @@ Deno.test("test_integration_play_action", () => {
 
   render(snap, container, "play", {
     callbacks,
+    viewerSeat: HUMAN_SEAT,
     selectedCardIds,
     legalCardIds: new Set(),
   });
@@ -201,7 +210,7 @@ Deno.test("test_integration_bid_action", () => {
   const snap = makeSnapshot({
     phase: "DEAL_BID",
     awaiting_action: null,
-    player_hand: [
+    hand: [
       { id: "D1-spades-2", suit: "spades", rank: "2" },
       { id: "D1-hearts-5", suit: "hearts", rank: "5" },
     ],
@@ -231,6 +240,7 @@ Deno.test("test_integration_bid_action", () => {
 
   render(snap, container, "bid", {
     callbacks,
+    viewerSeat: "c",
     selectedCardIds: new Set(),
     legalCardIds: new Set(),
     bidOptions,
@@ -261,12 +271,12 @@ Deno.test("test_integration_stir_action", () => {
     stirring_state: {
       phase: "WAITING",
       trump_suit: null,
-      current_player: HUMAN_PLAYER_INDEX,
-      declarer_player: 0,
-      exchanging_player: null,
+      current_actor: HUMAN_SEAT,
+      declarer: "a",
+      exchanging_actor: null,
       exchange_count: null,
     },
-    player_hand: [
+    hand: [
       { id: "D1-spades-2", suit: "spades", rank: "2" },
       { id: "D2-spades-2", suit: "spades", rank: "2" },
       { id: "D1-hearts-5", suit: "hearts", rank: "5" },
@@ -286,9 +296,10 @@ Deno.test("test_integration_stir_action", () => {
     onNewGame: () => {},
   };
 
-  const selectedCards = snap.player_hand.filter((c) => c.rank === "2");
+  const selectedCards = snap.hand.filter((c) => c.rank === "2");
   render(snap, container, "stir", {
     callbacks,
+    viewerSeat: "c",
     selectedCardIds: new Set(selectedCards.map((card) => card.id)),
     legalCardIds: new Set(selectedCards.map((card) => card.id)),
     stirButtonState: { disabled: false },
@@ -303,7 +314,7 @@ Deno.test("test_integration_stir_action", () => {
   assertNotEquals(stirButton, undefined);
 
   // Step 3: Validate
-  const valid = validateBidCards(selectedCards, snap.trump_rank);
+  const valid = validateBidCards(selectedCards, snap.trump.rank);
   assertEquals(valid, true);
 
   // Step 4: Click the hand-level stir button.
@@ -376,9 +387,9 @@ Deno.test("test_integration_stir_not_human_ignored", () => {
       stirring_state: {
         phase: "WAITING",
         trump_suit: null,
-        current_player: 1,
-        declarer_player: 0,
-        exchanging_player: null,
+        current_actor: "b",
+        declarer: "a",
+        exchanging_actor: null,
         exchange_count: null,
       },
     }),
@@ -389,7 +400,7 @@ Deno.test("test_integration_stir_not_human_ignored", () => {
   assertEquals(lastRenderedMode, null);
 
   // Verify: no interactive buttons in the rendered output
-  render(stateManager.get()!, container, null, undefined);
+  render(stateManager.get()!, container, null, lastRenderedCtx);
   // In spectator mode, the action-panel should have no buttons
   const handEl = container.querySelector(".hand-view");
   if (handEl) {
@@ -418,6 +429,7 @@ Deno.test("test_integration_card_selection_persists_across_renders", () => {
   // First render -- no cards selected
   render(snap, container, "play", {
     callbacks,
+    viewerSeat: HUMAN_SEAT,
     selectedCardIds,
     legalCardIds: new Set(),
   });
@@ -435,6 +447,7 @@ Deno.test("test_integration_card_selection_persists_across_renders", () => {
   // Re-render with same selectedCardIds -- selection should persist
   render(snap, container, "play", {
     callbacks,
+    viewerSeat: HUMAN_SEAT,
     selectedCardIds,
     legalCardIds: new Set(),
   });
@@ -458,7 +471,7 @@ Deno.test("test_integration_callback_triggers_send", () => {
     awaiting_action: "next_round",
     trick: null,
     scoring: {
-      round_winning_team: 0,
+      winning_partnership: "first",
       defender_points: 30,
       total_defender_points: 30,
       bottom_card_bonus: 0,
@@ -486,6 +499,7 @@ Deno.test("test_integration_callback_triggers_send", () => {
 
   render(snap, container, "next_round", {
     callbacks,
+    viewerSeat: "c",
     selectedCardIds: new Set(),
     legalCardIds: new Set(),
   });

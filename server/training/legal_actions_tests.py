@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import torch
 
 from server.foundation.result import Ok, Rejected
-from server.game import Seat
+from server.game import Seat, seats
 from server.game.rules.cards import Card
 from server.game.rules.cards.faces import CardFace, FaceCount
 from server.game.snapshots.events import (
@@ -73,16 +73,16 @@ def test_build_legal_action_index_ignores_action_hints_for_follow() -> (
     snapshot = make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
-        player_hand=[heart, spade],
+        hand=[heart, spade],
         trick=_trick(
-            lead_player=1,
-            current_player=2,
+            lead_actor=Seat.B,
+            current_actor=Seat.C,
             lead_cards=[lead],
         ),
     )
 
     legal_actions = build_legal_action_index(
-        player_index=2,
+        viewer=Seat.C,
         snapshot=snapshot,
     )
 
@@ -104,15 +104,15 @@ def test_follow_decode_accepts_only_full_rule_legal_play() -> None:
     snapshot = make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
-        player_hand=[heart, spade],
+        hand=[heart, spade],
         trick=_trick(
-            lead_player=1,
-            current_player=2,
+            lead_actor=Seat.B,
+            current_actor=Seat.C,
             lead_cards=[lead],
         ),
     )
     legal_actions = build_legal_action_index(
-        player_index=2,
+        viewer=Seat.C,
         snapshot=snapshot,
     )
 
@@ -133,10 +133,10 @@ def test_lead_mask_keeps_selected_cards_in_one_effective_suit() -> None:
     snapshot = make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
-        player_hand=[heart, spade],
+        hand=[heart, spade],
     )
     legal_actions = build_legal_action_index(
-        player_index=0,
+        viewer=Seat.A,
         snapshot=snapshot,
     )
 
@@ -165,18 +165,18 @@ def test_discard_auto_completes_at_exact_count_without_stop() -> None:
     snapshot = make_snapshot(
         phase="STIRRING",
         awaiting_action="discard",
-        player_hand=[first, second],
+        hand=[first, second],
         stirring_state=StirringStateSnapshot(
             phase="EXCHANGING",
             trump_suit=None,
-            current_player=Seat.NORTH,
-            declarer_player=Seat.NORTH,
-            exchanging_player=Seat.NORTH,
+            current_actor=Seat.A,
+            declarer=Seat.A,
+            exchanging_actor=Seat.A,
             exchange_count=2,
         ),
     )
     legal_actions = build_legal_action_index(
-        player_index=0,
+        viewer=Seat.A,
         snapshot=snapshot,
     )
 
@@ -198,9 +198,9 @@ def test_bid_current_winner_can_only_pass() -> None:
         phase="DEAL_BID",
         awaiting_action="bid",
         trump_rank="2",
-        player_hand=[first, second],
+        hand=[first, second],
         bid_winner=BidEventSnapshot(
-            player=Seat.NORTH,
+            actor=Seat.A,
             cards=(first,),
             kind="trump_rank",
             suit=first.suit,
@@ -211,7 +211,7 @@ def test_bid_current_winner_can_only_pass() -> None:
     )
 
     legal_actions = build_legal_action_index(
-        player_index=0,
+        viewer=Seat.A,
         snapshot=snapshot,
     )
 
@@ -238,14 +238,14 @@ def test_stir_mask_uses_current_priority() -> None:
         awaiting_action="stir",
         trump_rank="2",
         trump_suit="hearts",
-        player_hand=[
+        hand=[
             spade_first,
             spade_second,
             diamond_first,
             diamond_second,
         ],
         bid_winner=BidEventSnapshot(
-            player=Seat.WEST,
+            actor=Seat.B,
             cards=(heart_first, heart_second),
             kind="trump_rank",
             suit=heart_first.suit,
@@ -256,15 +256,15 @@ def test_stir_mask_uses_current_priority() -> None:
         stirring_state=StirringStateSnapshot(
             phase="WAITING",
             trump_suit=heart_first.suit,
-            current_player=Seat.NORTH,
-            declarer_player=Seat.WEST,
-            exchanging_player=None,
+            current_actor=Seat.A,
+            declarer=Seat.B,
+            exchanging_actor=None,
             exchange_count=None,
         ),
     )
 
     legal_actions = build_legal_action_index(
-        player_index=0,
+        viewer=Seat.A,
         snapshot=snapshot,
     )
     pass_result = legal_actions.decode(
@@ -304,14 +304,14 @@ def test_stir_mask_uses_stir_event_priority_over_bid_winner() -> None:
         awaiting_action="stir",
         trump_rank="2",
         trump_suit="spades",
-        player_hand=[
+        hand=[
             heart_first,
             heart_second,
             small_joker_first,
             small_joker_second,
         ],
         bid_winner=BidEventSnapshot(
-            player=Seat.NORTH,
+            actor=Seat.A,
             cards=(diamond_first, diamond_second),
             kind="trump_rank",
             suit=diamond_first.suit,
@@ -321,7 +321,7 @@ def test_stir_mask_uses_stir_event_priority_over_bid_winner() -> None:
         ),
         stir_events=[
             StirDeclarationEventSnapshot(
-                player=Seat.WEST,
+                actor=Seat.B,
                 kind="stir",
                 cards=(spade_first, spade_second),
                 new_suit=spade_first.suit,
@@ -332,15 +332,15 @@ def test_stir_mask_uses_stir_event_priority_over_bid_winner() -> None:
         stirring_state=StirringStateSnapshot(
             phase="WAITING",
             trump_suit=spade_first.suit,
-            current_player=Seat.SOUTH,
-            declarer_player=Seat.NORTH,
-            exchanging_player=None,
+            current_actor=Seat.C,
+            declarer=Seat.A,
+            exchanging_actor=None,
             exchange_count=None,
         ),
     )
 
     legal_actions = build_legal_action_index(
-        player_index=2,
+        viewer=Seat.C,
         snapshot=snapshot,
     )
     pass_result = legal_actions.decode(
@@ -368,21 +368,19 @@ def test_stir_mask_uses_stir_event_priority_over_bid_winner() -> None:
 
 def _trick(
     *,
-    lead_player: int,
-    current_player: int,
+    lead_actor: Seat,
+    current_actor: Seat,
     lead_cards: list[Card],
 ) -> TrickSnapshot:
     return TrickSnapshot(
-        lead_player=Seat(lead_player),
-        current_player=Seat(current_player),
-        slots=(
-            TrickSlotSnapshot(player=Seat.NORTH, cards=()),
+        lead_actor=lead_actor,
+        current_actor=current_actor,
+        slots=tuple(
             TrickSlotSnapshot(
-                player=Seat(lead_player),
-                cards=tuple(lead_cards),
-            ),
-            TrickSlotSnapshot(player=Seat.SOUTH, cards=()),
-            TrickSlotSnapshot(player=Seat.EAST, cards=()),
+                actor=seat,
+                cards=tuple(lead_cards) if seat == lead_actor else (),
+            )
+            for seat in seats()
         ),
     )
 

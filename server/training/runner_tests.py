@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass, field
 
 from server.foundation.result import Ok, Rejected
+from server.game import Partnership, Seat
 from server.game.snapshots.review import ScoringSnapshot
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
@@ -16,7 +17,7 @@ from server.training.policy import (
 from server.training.runner import SelfPlaySession, round_rewards
 from server.training.sampling import PolicyDecisionKey
 from server.training.tokenization import ActionToken
-from tests.support import snapshot
+from tests.support import partnership_levels, snapshot
 
 
 def _observations() -> list[Observation]:
@@ -105,54 +106,50 @@ async def test_session_plays_consecutive_rounds_without_runtime() -> (
 
 def test_round_rewards_use_completed_round_facts() -> None:
     before = snapshot(
-        declarer_team=0,
-        team0_level="10",
-        team1_level="10",
+        declarer=Seat.A,
+        partnership_levels=partnership_levels("10", "10"),
     )
     after = snapshot(
         phase="WAITING",
         awaiting_action="next_round",
-        declarer_team=0,
+        declarer=Seat.A,
         scoring=ScoringSnapshot(
-            round_winning_team=1,
+            winning_partnership=Partnership.SECOND,
             defender_points=135,
             total_defender_points=135,
             bottom_card_bonus=0,
             bottom_cards=(),
         ),
-        team0_level="10",
-        team1_level="J",
+        partnership_levels=partnership_levels("10", "J"),
     )
 
-    team0_reward, team1_reward = round_rewards(
+    first_partnership_reward, second_partnership_reward = round_rewards(
         before=before,
         after=after,
     )
 
-    assert abs(team0_reward - -2.375) < 1e-9
-    assert abs(team1_reward - 2.375) < 1e-9
+    assert abs(first_partnership_reward - -2.375) < 1e-9
+    assert abs(second_partnership_reward - 2.375) < 1e-9
 
 
 def test_round_rewards_map_game_winner_to_terminal_progress() -> None:
     before = snapshot(
-        declarer_team=1,
-        team0_level="A",
-        team1_level="A",
+        declarer=Seat.B,
+        partnership_levels=partnership_levels("A", "A"),
     )
     after = snapshot(
         phase="WAITING",
         awaiting_action=None,
-        declarer_team=1,
+        declarer=Seat.B,
         scoring=ScoringSnapshot(
-            round_winning_team=1,
+            winning_partnership=Partnership.SECOND,
             defender_points=0,
             total_defender_points=0,
             bottom_card_bonus=0,
             bottom_cards=(),
         ),
-        winning_team=1,
-        team0_level="A",
-        team1_level="A",
+        winning_partnership=Partnership.SECOND,
+        partnership_levels=partnership_levels("A", "A"),
     )
 
     assert round_rewards(before=before, after=after) == (-1.0, 1.0)
@@ -173,25 +170,23 @@ async def test_session_rejects_policy_timeout() -> None:
     assert "training round timed out" in result.reason
 
 
-def test_round_rewards_use_scoring_winning_team_at_threshold() -> None:
+def test_round_rewards_use_scoring_winner_at_threshold() -> None:
     before = snapshot(
-        declarer_team=1,
-        team0_level="10",
-        team1_level="10",
+        declarer=Seat.B,
+        partnership_levels=partnership_levels("10", "10"),
     )
     after = snapshot(
         phase="WAITING",
         awaiting_action="next_round",
-        declarer_team=1,
+        declarer=Seat.B,
         scoring=ScoringSnapshot(
-            round_winning_team=0,
+            winning_partnership=Partnership.FIRST,
             defender_points=80,
             total_defender_points=80,
             bottom_card_bonus=0,
             bottom_cards=(),
         ),
-        team0_level="10",
-        team1_level="10",
+        partnership_levels=partnership_levels("10", "10"),
     )
 
     assert round_rewards(before=before, after=after) == (1.0, -1.0)
@@ -199,23 +194,21 @@ def test_round_rewards_use_scoring_winning_team_at_threshold() -> None:
 
 def test_round_rewards_count_defender_stage_progress() -> None:
     before = snapshot(
-        declarer_team=0,
-        team0_level="10",
-        team1_level="10",
+        declarer=Seat.A,
+        partnership_levels=partnership_levels("10", "10"),
     )
     after = snapshot(
         phase="WAITING",
         awaiting_action="next_round",
-        declarer_team=0,
+        declarer=Seat.A,
         scoring=ScoringSnapshot(
-            round_winning_team=1,
+            winning_partnership=Partnership.SECOND,
             defender_points=120,
             total_defender_points=120,
             bottom_card_bonus=0,
             bottom_cards=(),
         ),
-        team0_level="10",
-        team1_level="J",
+        partnership_levels=partnership_levels("10", "J"),
     )
 
     assert round_rewards(before=before, after=after) == (-2.0, 2.0)
@@ -227,50 +220,48 @@ def test_round_rewards_use_after_declarer_when_before_is_unset() -> (
     before = snapshot(
         phase="WAITING",
         awaiting_action="next_round",
-        declarer_team=None,
-        team0_level="10",
-        team1_level="10",
+        declarer=None,
+        partnership_levels=partnership_levels("10", "10"),
     )
     after = snapshot(
         phase="WAITING",
         awaiting_action="next_round",
-        declarer_team=0,
+        declarer=Seat.A,
         scoring=ScoringSnapshot(
-            round_winning_team=1,
+            winning_partnership=Partnership.SECOND,
             defender_points=135,
             total_defender_points=135,
             bottom_card_bonus=0,
             bottom_cards=(),
         ),
-        team0_level="10",
-        team1_level="J",
+        partnership_levels=partnership_levels("10", "J"),
     )
 
-    team0, team1 = round_rewards(before=before, after=after)
-    assert abs(team0 - -2.375) < 1e-9
-    assert abs(team1 - 2.375) < 1e-9
+    first_partnership, second_partnership = round_rewards(
+        before=before, after=after
+    )
+    assert abs(first_partnership - -2.375) < 1e-9
+    assert abs(second_partnership - 2.375) < 1e-9
 
 
-def test_round_rewards_map_team0_terminal_win() -> None:
+def test_round_rewards_map_first_partnership_terminal_win() -> None:
     before = snapshot(
-        declarer_team=0,
-        team0_level="A",
-        team1_level="A",
+        declarer=Seat.A,
+        partnership_levels=partnership_levels("A", "A"),
     )
     after = snapshot(
         phase="WAITING",
         awaiting_action=None,
-        declarer_team=0,
+        declarer=Seat.A,
         scoring=ScoringSnapshot(
-            round_winning_team=0,
+            winning_partnership=Partnership.FIRST,
             defender_points=0,
             total_defender_points=0,
             bottom_card_bonus=0,
             bottom_cards=(),
         ),
-        winning_team=0,
-        team0_level="A",
-        team1_level="A",
+        winning_partnership=Partnership.FIRST,
+        partnership_levels=partnership_levels("A", "A"),
     )
 
     assert round_rewards(before=before, after=after) == (1.0, -1.0)

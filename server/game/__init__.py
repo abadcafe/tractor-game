@@ -9,8 +9,24 @@ from ._engine.aggregate import apply_command, create_game
 from ._engine.observation import observe_game
 from ._engine.state import GameState
 from .commands import Command
-from .config import GameConfig, GameSeed, Seat
+from .config import GameConfig, GameSeed
 from .rejections import CommandRejected
+from .seating import (
+    Partnership,
+    PartnershipId,
+    PartnershipMap,
+    Seat,
+    SeatId,
+    SeatMap,
+    next_seat,
+    partner_seat,
+    partnership_id,
+    partnership_of,
+    previous_seat,
+    seat_from_id,
+    seat_id,
+    seats,
+)
 from .snapshots import PlayerSnapshot
 
 
@@ -38,10 +54,23 @@ __all__ = [
     "GameConfig",
     "GameSeed",
     "GameState",
+    "Partnership",
+    "PartnershipId",
+    "PartnershipMap",
     "Seat",
+    "SeatId",
+    "SeatMap",
+    "next_seat",
+    "partner_seat",
+    "partnership_id",
+    "partnership_of",
+    "previous_seat",
+    "seat_from_id",
+    "seat_id",
     "apply",
     "commands",
     "create",
     "observe",
+    "seats",
     "snapshots",
 ]

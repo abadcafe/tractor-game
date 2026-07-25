@@ -3,7 +3,14 @@
 from itertools import combinations
 
 from server.foundation.result import Ok
-from server.game import CommandRejected, Seat, apply, commands, observe
+from server.game import (
+    CommandRejected,
+    Seat,
+    apply,
+    commands,
+    next_seat,
+    observe,
+)
 from server.game.rules import play
 from server.game.rules.cards import Card, CardId
 from server.game.snapshots.tricks import CompletedTrickSnapshot
@@ -22,12 +29,12 @@ def test_play_rejects_wrong_turn_empty_and_unknown_cards() -> None:
         started_game(seed=53),
         "play",
     )
-    wrong_actor = Seat((int(actor) + 1) % 4)
+    wrong_actor = next_seat(actor)
 
     wrong_turn = apply(
         state,
         wrong_actor,
-        commands.Play((CardId(current.player_hand[0].id),)),
+        commands.Play((CardId(current.hand[0].id),)),
     )
     empty = apply(state, actor, commands.Play(()))
     unknown = apply(
@@ -49,7 +56,7 @@ def test_lead_records_public_slot_and_advances_counterclockwise() -> (
         started_game(seed=59),
         "play",
     )
-    card = current.player_hand[0]
+    card = current.hand[0]
 
     state = accepted_game_command(
         state,
@@ -58,13 +65,13 @@ def test_lead_records_public_slot_and_advances_counterclockwise() -> (
     )
 
     next_actor, next_view = game_decision(state)
-    assert next_actor == Seat((int(actor) + 1) % 4)
+    assert next_actor == next_seat(actor)
     assert next_view.trick is not None
-    assert next_view.trick.lead_player == actor
+    assert next_view.trick.lead_actor == actor
     assert len(next_view.trick.slots) == 1
-    assert next_view.trick.slots[0].player == actor
+    assert next_view.trick.slots[0].actor == actor
     assert next_view.trick.slots[0].cards == (card,)
-    assert card not in observe(state, actor).player_hand
+    assert card not in observe(state, actor).hand
 
 
 def test_completed_trick_is_public_and_next_winner_leads() -> None:
@@ -91,10 +98,11 @@ def test_completed_trick_is_public_and_next_winner_leads() -> None:
     assert all(
         item.last_completed_trick == completed for item in public
     )
-    assert public[int(completed.winner)].awaiting_action == "play"
+    winner_view = observe(state, completed.winner)
+    assert winner_view.awaiting_action == "play"
     assert public[0].trick is not None
     assert public[0].trick.slots == ()
-    assert public[0].trick.lead_player == completed.winner
+    assert public[0].trick.lead_actor == completed.winner
 
 
 def test_defender_points_equal_visible_collected_point_cards() -> None:
@@ -110,7 +118,7 @@ def test_defender_points_equal_visible_collected_point_cards() -> None:
             actor,
             automatic_game_command(current),
         )
-        snapshot = observe(state, Seat.NORTH)
+        snapshot = observe(state, Seat.A)
         if snapshot.defender_point_cards:
             assert snapshot.defender_points == sum(
                 card.points for card in snapshot.defender_point_cards
@@ -138,17 +146,15 @@ def test_only_latest_completed_trick_is_in_snapshot() -> None:
             actor,
             automatic_game_command(current),
         )
-        latest = observe(state, Seat.NORTH).last_completed_trick
+        latest = observe(state, Seat.A).last_completed_trick
         if latest is not None and (
             not completed or latest != completed[-1]
         ):
             completed.append(latest)
 
     assert completed[0] != completed[1]
-    assert (
-        observe(state, Seat.NORTH).last_completed_trick == completed[1]
-    )
-    assert not hasattr(observe(state, Seat.NORTH), "trick_history")
+    assert observe(state, Seat.A).last_completed_trick == completed[1]
+    assert not hasattr(observe(state, Seat.A), "trick_history")
 
 
 def test_failed_throw_exposes_attempt_and_forced_lead() -> None:
@@ -157,16 +163,16 @@ def test_failed_throw_exposes_attempt_and_forced_lead() -> None:
         "play",
     )
     other_hands = tuple(
-        observe(state, seat).player_hand
+        observe(state, seat).hand
         for seat in GAME_SEATS
         if seat != actor
     )
     failed_attempt: tuple[Card, ...] | None = None
     forced: tuple[Card, ...] | None = None
     for count in range(2, 6):
-        for attempted in combinations(current.player_hand, count):
+        for attempted in combinations(current.hand, count):
             result = play.resolve_lead(
-                current.player_hand,
+                current.hand,
                 attempted,
                 current.trump_suit,
                 current.trump_rank,
@@ -191,9 +197,9 @@ def test_failed_throw_exposes_attempt_and_forced_lead() -> None:
         ),
     )
 
-    trick = observe(state, Seat.WEST).trick
+    trick = observe(state, Seat.B).trick
     assert trick is not None
     assert trick.failed_throw is not None
-    assert trick.failed_throw.player == actor
+    assert trick.failed_throw.actor == actor
     assert trick.failed_throw.attempted_cards == failed_attempt
     assert trick.failed_throw.forced_cards == forced

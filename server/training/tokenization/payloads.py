@@ -85,8 +85,8 @@ class RoundToken:
         if self.field == RoundField.REMAINING_CARDS:
             assert self.actor in (
                 RelativeActor.PARTNER,
-                RelativeActor.LEFT_ENEMY,
-                RelativeActor.RIGHT_ENEMY,
+                RelativeActor.NEXT_OPPONENT,
+                RelativeActor.PREVIOUS_OPPONENT,
             )
         else:
             assert self.actor is None

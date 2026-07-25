@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 
 from server.foundation.result import Ok, Rejected
+from server.game import Seat
 from server.game.rules.cards import Card
 from server.training.legal_actions import build_legal_action_index
 from server.training.observation import Observation, build_observation
@@ -125,8 +126,8 @@ def test_request_wire_rejects_invalid_schema_magic() -> None:
 
 def _observation(hand: list[Card]) -> Observation:
     return build_observation(
-        viewer=0,
-        snapshot=make_snapshot(player_hand=hand),
+        viewer=Seat.A,
+        snapshot=make_snapshot(hand=hand),
         memory=ObservationMemoryView(
             bid_actions=(), completed_tricks=()
         ),
@@ -140,8 +141,8 @@ def _request(
         route=PolicyRequestRoute(worker_index=3, request_id=request_id),
         observation=observation,
         legal_actions=build_legal_action_index(
-            player_index=0,
-            snapshot=make_snapshot(player_hand=hand),
+            viewer=Seat.A,
+            snapshot=make_snapshot(hand=hand),
             query=observation.action_query,
         ),
         decision_key=PolicyDecisionKey(
@@ -149,7 +150,7 @@ def _request(
             policy_version=4,
             rollout_id="request-wire-test",
             episode_id=2,
-            player_index=0,
+            seat=Seat.A,
             decision_index=request_id,
         ),
     )

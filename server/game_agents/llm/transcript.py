@@ -7,12 +7,14 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TypedDict
 
+from server.game import Seat, SeatId, seat_id
+
 
 class TranscriptRecordDict(TypedDict):
     id: int
     event_id: int
     created_at: str
-    player_index: int
+    seat: SeatId
     seq: int
     attempt: int
     api_request: str | None
@@ -34,7 +36,7 @@ class TranscriptRecord:
     id: int
     event_id: int
     created_at: str
-    player_index: int
+    seat: Seat
     seq: int
     attempt: int
     api_request: str | None
@@ -47,7 +49,7 @@ class TranscriptRecord:
             "id": self.id,
             "event_id": self.event_id,
             "created_at": self.created_at,
-            "player_index": self.player_index,
+            "seat": seat_id(self.seat),
             "seq": self.seq,
             "attempt": self.attempt,
             "api_request": self.api_request,
@@ -71,7 +73,7 @@ class LLMTranscript:
     def add_record(
         self,
         *,
-        player_index: int,
+        seat: Seat,
         seq: int,
         attempt: int,
         api_request: str | None,
@@ -83,7 +85,7 @@ class LLMTranscript:
             id=self.next_record_id,
             event_id=0,
             created_at=datetime.now(UTC).isoformat(),
-            player_index=player_index,
+            seat=seat,
             seq=seq,
             attempt=attempt,
             api_request=api_request,

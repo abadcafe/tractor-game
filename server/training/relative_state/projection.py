@@ -5,6 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from server.foundation.result import Ok, Rejected
+from server.game import (
+    Seat,
+    next_seat,
+    partner_seat,
+    partnership_of,
+    previous_seat,
+)
 from server.game.rules.cards import Rank
 from server.game.rules.cards.faces import (
     FaceCount,
@@ -62,25 +69,16 @@ class RelativeProjectionRejected(Rejected):
         super().__init__(reason)
 
 
-_PLAYER_COUNT = 4
 _DEALT_CARD_COUNT = 100
 
 
 def project_relative_observation(
     *,
-    viewer: int,
+    viewer: Seat,
     snapshot: PlayerSnapshot,
     memory: ObservationMemoryView,
 ) -> Ok[RelativeObservation] | Rejected:
     """Build one complete viewer-relative observation."""
-    if viewer < 0 or viewer >= _PLAYER_COUNT:
-        return RelativeProjectionRejected(
-            "viewer is outside player topology"
-        )
-    if len(snapshot.player_hand_counts) != _PLAYER_COUNT:
-        return RelativeProjectionRejected(
-            "player hand counts do not match player topology"
-        )
     own_level, opponent_level = _relative_levels(viewer, snapshot)
     own_target = stage_target(own_level, snapshot.mandatory_levels)
     opponent_target = stage_target(
@@ -89,8 +87,8 @@ def project_relative_observation(
     )
     round_context = RoundContext(
         declarer_actor=None
-        if snapshot.declarer_player is None
-        else relative_actor(viewer, snapshot.declarer_player),
+        if snapshot.declarer is None
+        else relative_actor(viewer, snapshot.declarer),
         own_level=own_level,
         opponent_level=opponent_level,
         own_target=own_target,
@@ -104,13 +102,15 @@ def project_relative_observation(
         trump=_trump_state(snapshot),
         level_rank=snapshot.trump_rank,
         defender_points=snapshot.defender_points,
-        partner_remaining=snapshot.player_hand_counts[(viewer + 2) % 4],
-        left_enemy_remaining=snapshot.player_hand_counts[
-            (viewer + 1) % 4
-        ],
-        right_enemy_remaining=snapshot.player_hand_counts[
-            (viewer + 3) % 4
-        ],
+        partner_remaining=snapshot.remaining_cards.at(
+            partner_seat(viewer)
+        ),
+        next_opponent_remaining=snapshot.remaining_cards.at(
+            next_seat(viewer)
+        ),
+        previous_opponent_remaining=snapshot.remaining_cards.at(
+            previous_seat(viewer)
+        ),
     )
     timeline = _round_timeline(viewer, snapshot, memory)
     return Ok(
@@ -121,7 +121,7 @@ def project_relative_observation(
             round_context=round_context,
             round_actions=timeline.actions,
             tricks=_tricks(viewer, snapshot, memory),
-            hand=canonical_face_counts(snapshot.player_hand),
+            hand=canonical_face_counts(snapshot.hand),
             visible_bottom=canonical_face_counts(snapshot.bottom_cards),
             query=_query(snapshot, timeline.next_ordinal),
         )
@@ -129,11 +129,14 @@ def project_relative_observation(
 
 
 def _relative_levels(
-    viewer: int, snapshot: PlayerSnapshot
+    viewer: Seat, snapshot: PlayerSnapshot
 ) -> tuple[Rank, Rank]:
-    if viewer % 2 == 0:
-        return (snapshot.team0_level, snapshot.team1_level)
-    return (snapshot.team1_level, snapshot.team0_level)
+    own = partnership_of(viewer)
+    opponent = partnership_of(next_seat(viewer))
+    return (
+        snapshot.partnership_levels.at(own),
+        snapshot.partnership_levels.at(opponent),
+    )
 
 
 def _trump_state(snapshot: PlayerSnapshot) -> TrumpState:
@@ -155,7 +158,7 @@ class _RoundTimeline:
 
 
 def _round_timeline(
-    viewer: int,
+    viewer: Seat,
     snapshot: PlayerSnapshot,
     memory: ObservationMemoryView,
 ) -> _RoundTimeline:
@@ -188,7 +191,7 @@ def _round_timeline(
     for event in snapshot.stir_events:
         actions.append(
             RelativeStirAction(
-                actor=relative_actor(viewer, event.player),
+                actor=relative_actor(viewer, event.actor),
                 disposition="pass"
                 if event.kind == "pass"
                 else "reveal",
@@ -228,7 +231,7 @@ def _exchange_action(
 
 
 def _tricks(
-    viewer: int,
+    viewer: Seat,
     snapshot: PlayerSnapshot,
     memory: ObservationMemoryView,
 ) -> tuple[RelativeTrick, ...]:
@@ -248,7 +251,7 @@ def _tricks(
 
 
 def _completed_trick(
-    viewer: int,
+    viewer: Seat,
     trick: CompletedTrickSnapshot,
     *,
     recency: TrickRecency,
@@ -258,7 +261,7 @@ def _completed_trick(
         recency=recency,
         actions=_play_actions(
             viewer,
-            lead_player=trick.lead_player,
+            lead_actor=trick.lead_actor,
             slots=tuple(trick.slots),
             failed_throw=trick.failed_throw,
         ),
@@ -267,13 +270,13 @@ def _completed_trick(
     )
 
 
-def _open_trick(viewer: int, trick: TrickSnapshot) -> RelativeTrick:
+def _open_trick(viewer: Seat, trick: TrickSnapshot) -> RelativeTrick:
     return RelativeTrick(
         status="open",
         recency=TrickRecency(0),
         actions=_play_actions(
             viewer,
-            lead_player=trick.lead_player,
+            lead_actor=trick.lead_actor,
             slots=tuple(trick.slots),
             failed_throw=trick.failed_throw,
         ),
@@ -283,16 +286,16 @@ def _open_trick(viewer: int, trick: TrickSnapshot) -> RelativeTrick:
 
 
 def _play_actions(
-    viewer: int,
+    viewer: Seat,
     *,
-    lead_player: int,
+    lead_actor: Seat,
     slots: tuple[TrickSlotSnapshot, ...],
     failed_throw: FailedThrowSnapshot | None,
 ) -> tuple[RelativePlayAction, ...]:
     populated = [slot for slot in slots if slot.cards]
     populated.sort(
         key=lambda slot: _position_index(
-            lead_player=lead_player, actor=slot.player
+            lead_actor=lead_actor, actor=slot.actor
         )
     )
     actions: list[RelativePlayAction] = []
@@ -300,14 +303,14 @@ def _play_actions(
         extra: tuple[FaceCount, ...] = ()
         if (
             failed_throw is not None
-            and failed_throw.player == slot.player
+            and failed_throw.actor == slot.actor
         ):
             extra = _revealed_extra(failed_throw)
         actions.append(
             RelativePlayAction(
-                actor=relative_actor(viewer, slot.player),
+                actor=relative_actor(viewer, slot.actor),
                 trick_position=trick_position(
-                    lead_player=lead_player, actor=slot.player
+                    lead_actor=lead_actor, actor=slot.actor
                 ),
                 played=canonical_face_counts(slot.cards),
                 revealed_extra=extra,
@@ -316,8 +319,17 @@ def _play_actions(
     return tuple(actions)
 
 
-def _position_index(*, lead_player: int, actor: int) -> int:
-    return (actor - lead_player) % _PLAYER_COUNT
+def _position_index(*, lead_actor: Seat, actor: Seat) -> int:
+    position = trick_position(
+        lead_actor=lead_actor,
+        actor=actor,
+    )
+    return {
+        TrickPosition.LEAD: 0,
+        TrickPosition.FOLLOW_1: 1,
+        TrickPosition.FOLLOW_2: 2,
+        TrickPosition.FOLLOW_3: 3,
+    }[position]
 
 
 def _revealed_extra(
@@ -371,8 +383,8 @@ def _query(
             kind="play",
             round_event=None,
             trick_position=trick_position(
-                lead_player=trick.lead_player,
-                actor=trick.current_player,
+                lead_actor=trick.lead_actor,
+                actor=trick.current_actor,
             ),
         )
     return None

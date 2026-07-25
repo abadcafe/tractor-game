@@ -110,48 +110,51 @@ def _room(factory: _Factory | None = None) -> GameRoom:
     )
 
 
-async def test_players_always_reports_four_empty_seats() -> None:
+async def test_room_reports_four_empty_seats() -> None:
     room = _room()
 
-    players = room.players(user_id="user")
+    players = room.seats(user_id="user")
 
-    assert [player.index for player in players] == [0, 1, 2, 3]
+    assert [player.seat for player in players] == [
+        Seat.A,
+        Seat.B,
+        Seat.C,
+        Seat.D,
+    ]
     assert all(not player.occupied for player in players)
     assert all(not player.connected for player in players)
     assert all(player.kind == "empty" for player in players)
 
 
-async def test_attach_requires_valid_seat_and_nonblank_user() -> None:
+async def test_occupy_requires_nonblank_user() -> None:
     room = _room()
 
-    invalid = await room.attach_player(player=4, user_id="user")
-    blank = await room.attach_player(player=0, user_id=" ")
+    blank = await room.occupy_seat(seat=Seat.A, user_id=" ")
 
-    assert isinstance(invalid, Rejected)
     assert isinstance(blank, Rejected)
-    assert all(not player.occupied for player in room.players())
+    assert all(not player.occupied for player in room.seats())
 
 
 async def test_attach_same_owner_is_idempotent() -> None:
     room = _room()
-    first = await room.attach_player(player=0, user_id="owner")
-    repeated = await room.attach_player(player=0, user_id="owner")
-    occupied = await room.attach_player(player=0, user_id="other")
+    first = await room.occupy_seat(seat=Seat.A, user_id="owner")
+    repeated = await room.occupy_seat(seat=Seat.A, user_id="owner")
+    occupied = await room.occupy_seat(seat=Seat.A, user_id="other")
 
     assert isinstance(first, Ok)
     assert isinstance(repeated, Ok)
     assert isinstance(occupied, Rejected)
-    assert room.players(user_id="owner")[0].mine
+    assert room.seats(user_id="owner")[0].mine
 
 
 async def test_attach_moves_same_user_between_empty_seats() -> None:
     room = _room()
-    await room.attach_player(player=0, user_id="owner")
+    await room.occupy_seat(seat=Seat.A, user_id="owner")
 
-    moved = await room.attach_player(player=2, user_id="owner")
+    moved = await room.occupy_seat(seat=Seat.C, user_id="owner")
 
     assert isinstance(moved, Ok)
-    players = room.players(user_id="owner")
+    players = room.seats(user_id="owner")
     assert not players[0].occupied
     assert players[2].occupied
     assert players[2].mine
@@ -159,16 +162,16 @@ async def test_attach_moves_same_user_between_empty_seats() -> None:
 
 async def test_detach_requires_matching_owner() -> None:
     room = _room()
-    await room.attach_player(player=1, user_id="owner")
+    await room.occupy_seat(seat=Seat.B, user_id="owner")
 
-    other = await room.detach_player(player=1, user_id="other")
-    missing = await room.detach_player(player=2, user_id="owner")
-    detached = await room.detach_player(player=1, user_id="owner")
+    other = await room.vacate_seat(seat=Seat.B, user_id="other")
+    missing = await room.vacate_seat(seat=Seat.C, user_id="owner")
+    detached = await room.vacate_seat(seat=Seat.B, user_id="owner")
 
     assert isinstance(other, Rejected)
     assert isinstance(missing, Rejected)
     assert isinstance(detached, Ok)
-    assert not room.players()[1].occupied
+    assert not room.seats()[1].occupied
 
 
 async def test_fill_bots_preserves_attached_owner() -> None:
@@ -177,7 +180,7 @@ async def test_fill_bots_preserves_attached_owner() -> None:
         kind=BotKind.AUTO,
         user_id="owner",
     )
-    await room.attach_player(player=2, user_id="owner")
+    await room.occupy_seat(seat=Seat.C, user_id="owner")
 
     filled = await room.fill_bots(
         kind=BotKind.AI,
@@ -186,25 +189,27 @@ async def test_fill_bots_preserves_attached_owner() -> None:
 
     assert isinstance(missing, Rejected)
     assert isinstance(filled, Ok)
-    players = room.players(user_id="owner")
+    players = room.seats(user_id="owner")
     assert players[2].kind == "user"
     assert all(
-        player.kind == "ai" for player in players if player.index != 2
+        player.kind == "ai"
+        for player in players
+        if player.seat != Seat.C
     )
 
 
 async def test_connect_requires_attachment_and_full_occupancy() -> None:
     room = _room()
     sink = _Sink()
-    unattached = await room.connect_player(
-        player=0,
+    unattached = await room.connect_seat(
+        seat=Seat.A,
         user_id="owner",
         sink=sink,
     )
-    await room.attach_player(player=0, user_id="owner")
+    await room.occupy_seat(seat=Seat.A, user_id="owner")
 
-    incomplete = await room.connect_player(
-        player=0,
+    incomplete = await room.connect_seat(
+        seat=Seat.A,
         user_id="owner",
         sink=sink,
     )
@@ -217,15 +222,15 @@ async def test_connect_requires_attachment_and_full_occupancy() -> None:
 async def test_connect_starts_one_session_and_all_bot_agents() -> None:
     factory = _Factory()
     room = _room(factory)
-    await room.attach_player(player=2, user_id="owner")
+    await room.occupy_seat(seat=Seat.C, user_id="owner")
     await room.fill_bots(
         kind=BotKind.AUTO,
         user_id="owner",
     )
     sink = _Sink()
 
-    connected = await room.connect_player(
-        player=2,
+    connected = await room.connect_seat(
+        seat=Seat.C,
         user_id="owner",
         sink=sink,
     )
@@ -235,26 +240,26 @@ async def test_connect_starts_one_session_and_all_bot_agents() -> None:
     assert len(factory.agents) == 3
     assert all(agent.starts == 1 for agent in factory.agents)
     assert sink.deliveries == []
-    assert room.players(user_id="owner")[2].connected
+    assert room.seats(user_id="owner")[2].connected
 
 
 async def test_connect_takeover_disconnects_previous_sink() -> None:
     room = _room()
-    await room.attach_player(player=0, user_id="owner")
+    await room.occupy_seat(seat=Seat.A, user_id="owner")
     await room.fill_bots(
         kind=BotKind.AUTO,
         user_id="owner",
     )
     first = _Sink()
     second = _Sink()
-    await room.connect_player(
-        player=0,
+    await room.connect_seat(
+        seat=Seat.A,
         user_id="owner",
         sink=first,
     )
 
-    connected = await room.connect_player(
-        player=0,
+    connected = await room.connect_seat(
+        seat=Seat.A,
         user_id="owner",
         sink=second,
     )
@@ -266,28 +271,28 @@ async def test_connect_takeover_disconnects_previous_sink() -> None:
 
 async def test_receive_ignores_stale_connection_owner() -> None:
     room = _room()
-    await room.attach_player(player=0, user_id="owner")
+    await room.occupy_seat(seat=Seat.A, user_id="owner")
     await room.fill_bots(
         kind=BotKind.AUTO,
         user_id="owner",
     )
     stale = _Sink()
     current = _Sink()
-    connected = await room.connect_player(
-        player=0,
+    connected = await room.connect_seat(
+        seat=Seat.A,
         user_id="owner",
         sink=stale,
     )
     assert isinstance(connected, Ok)
-    await room.connect_player(
-        player=0,
+    await room.connect_seat(
+        seat=Seat.A,
         user_id="owner",
         sink=current,
     )
     decoder = _Decoder(commands.ConfirmRound())
 
-    await room.receive(Seat.NORTH, stale, 1, decoder)
-    await room.receive(Seat.NORTH, current, 0, decoder)
+    await room.receive(Seat.A, stale, 1, decoder)
+    await room.receive(Seat.A, current, 0, decoder)
 
     assert decoder.decode_count == 0
     assert stale.deliveries == []
@@ -296,39 +301,39 @@ async def test_receive_ignores_stale_connection_owner() -> None:
 
 async def test_detach_after_start_disconnects_current_sink() -> None:
     room = _room()
-    await room.attach_player(player=0, user_id="owner")
+    await room.occupy_seat(seat=Seat.A, user_id="owner")
     await room.fill_bots(
         kind=BotKind.AUTO,
         user_id="owner",
     )
     sink = _Sink()
-    await room.connect_player(
-        player=0,
+    await room.connect_seat(
+        seat=Seat.A,
         user_id="owner",
         sink=sink,
     )
 
-    detached = await room.detach_player(
-        player=0,
+    detached = await room.vacate_seat(
+        seat=Seat.A,
         user_id="owner",
     )
 
     assert isinstance(detached, Ok)
     assert sink.disconnects == [DisconnectReason.DETACHED]
-    assert not room.players()[0].occupied
+    assert not room.seats()[0].occupied
 
 
 async def test_close_stops_agents_and_disconnects_human() -> None:
     factory = _Factory()
     room = _room(factory)
-    await room.attach_player(player=0, user_id="owner")
+    await room.occupy_seat(seat=Seat.A, user_id="owner")
     await room.fill_bots(
         kind=BotKind.AUTO,
         user_id="owner",
     )
     sink = _Sink()
-    await room.connect_player(
-        player=0,
+    await room.connect_seat(
+        seat=Seat.A,
         user_id="owner",
         sink=sink,
     )

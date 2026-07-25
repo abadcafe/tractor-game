@@ -18,12 +18,11 @@ function makeSnapshot(
 ): StateSnapshot {
   return {
     phase: "WAITING",
-    player_hand: [],
+    round_number: 1,
+    hand: [],
     bottom_cards: [],
-    trump_rank: "2",
-    trump_suit: null,
-    declarer_team: 0,
-    declarer_player: 2,
+    trump: { kind: "no_trump", rank: "2" },
+    declarer: "c",
     defender_points: 30,
     action_hints: [],
     trick: null,
@@ -36,16 +35,16 @@ function makeSnapshot(
     awaiting_action: "next_round",
     stirring_state: null,
     scoring: {
-      round_winning_team: 0,
+      winning_partnership: "first",
       defender_points: 30,
       total_defender_points: 30,
       bottom_card_bonus: 0,
       bottom_cards: [],
     },
-    winning_team: null,
-    team0_level: "2",
-    team1_level: "2",
-    player_hand_counts: [13, 13, 13, 13],
+    winning_partnership: null,
+    partnership_levels: { first: "2", second: "2" },
+    remaining_cards: { a: 13, b: 13, c: 13, d: 13 },
+    mandatory_levels: ["A"],
     next_round_confirmed: [],
     ...overrides,
   };
@@ -53,14 +52,14 @@ function makeSnapshot(
 
 Deno.test("test_renderScoringOverlay_shows_scoring", () => {
   const snap = makeSnapshot();
-  const el = renderScoringOverlay(snap, "next_round");
+  const el = renderScoringOverlay(snap, "c", "next_round");
   const text = el.textContent ?? "";
   assertEquals(text.includes("30"), true);
 });
 
 Deno.test("test_renderScoringOverlay_next_round_button", () => {
   const snap = makeSnapshot();
-  const el = renderScoringOverlay(snap, "next_round");
+  const el = renderScoringOverlay(snap, "c", "next_round");
   const buttons = el.querySelectorAll("button");
   const actionButton = el.querySelector(
     ".scoring-overlay__actions .scoring-overlay__next-round",
@@ -73,7 +72,7 @@ Deno.test("test_renderScoringOverlay_next_round_button", () => {
 Deno.test("test_renderScoringOverlay_bottom_cards_are_prominent_cards", () => {
   const snap = makeSnapshot({
     scoring: {
-      round_winning_team: 0,
+      winning_partnership: "first",
       defender_points: 30,
       total_defender_points: 70,
       bottom_card_bonus: 40,
@@ -84,7 +83,7 @@ Deno.test("test_renderScoringOverlay_bottom_cards_are_prominent_cards", () => {
       ],
     },
   });
-  const el = renderScoringOverlay(snap, "next_round");
+  const el = renderScoringOverlay(snap, "c", "next_round");
   const bottom = el.querySelector(".scoring-overlay__bottom");
   const bottomCards = el.querySelectorAll(".scoring-bottom-card");
   const text = bottom?.textContent ?? "";
@@ -102,14 +101,14 @@ Deno.test("test_renderScoringOverlay_eight_bottom_cards_use_centered_layout", ()
   }));
   const snap = makeSnapshot({
     scoring: {
-      round_winning_team: 0,
+      winning_partnership: "first",
       defender_points: 120,
       total_defender_points: 240,
       bottom_card_bonus: 120,
       bottom_cards: bottomCards,
     },
   });
-  const el = renderScoringOverlay(snap, "next_round");
+  const el = renderScoringOverlay(snap, "c", "next_round");
   const cardsWrap = el.querySelector(".scoring-overlay__bottom-cards");
   const cards = el.querySelectorAll(".scoring-bottom-card");
 
@@ -123,15 +122,15 @@ Deno.test("test_renderScoringOverlay_eight_bottom_cards_use_centered_layout", ()
 });
 
 Deno.test("test_renderScoringOverlay_no_button_when_human_ready", () => {
-  const snap = makeSnapshot({ next_round_confirmed: [2] });
-  const el = renderScoringOverlay(snap, null);
+  const snap = makeSnapshot({ next_round_confirmed: ["c"] });
+  const el = renderScoringOverlay(snap, "c", null);
   const buttons = el.querySelectorAll("button");
   assertEquals(buttons.length, 0);
 });
 
 Deno.test("test_renderScoringOverlay_no_button_when_viewer_ready", () => {
-  const snap = makeSnapshot({ next_round_confirmed: [1] });
-  const el = renderScoringOverlay(snap, null, undefined, undefined, 1);
+  const snap = makeSnapshot({ next_round_confirmed: ["b"] });
+  const el = renderScoringOverlay(snap, "b", null);
   const buttons = el.querySelectorAll("button");
   assertEquals(buttons.length, 0);
 });
@@ -142,7 +141,7 @@ Deno.test("test_renderScoringOverlay_next_round_callback", () => {
   const onNextRound = () => {
     nextRoundCalled = true;
   };
-  const el = renderScoringOverlay(snap, "next_round", onNextRound);
+  const el = renderScoringOverlay(snap, "c", "next_round", onNextRound);
   const buttons = el.querySelectorAll("button");
   const nextButton = Array.from(buttons).find((b) =>
     b.textContent === "下一轮"
@@ -154,7 +153,7 @@ Deno.test("test_renderScoringOverlay_next_round_callback", () => {
 
 Deno.test("test_renderScoringOverlay_null_scoring", () => {
   const snap = makeSnapshot({ scoring: null });
-  const el = renderScoringOverlay(snap, "next_round");
+  const el = renderScoringOverlay(snap, "c", "next_round");
   // Should not throw; overlay rendered with no scoring details
   const text = el.textContent ?? "";
   assertEquals(text.includes("Defender Points"), false);
@@ -169,7 +168,7 @@ Deno.test("test_renderScoringOverlay_null_scoring", () => {
 Deno.test("test_renderScoringOverlay_next_round_button_no_callback", () => {
   const snap = makeSnapshot();
   // Provide "next_round" mode but no callback
-  const el = renderScoringOverlay(snap, "next_round");
+  const el = renderScoringOverlay(snap, "c", "next_round");
   const buttons = el.querySelectorAll("button");
   const nextButton = Array.from(buttons).find((b) =>
     b.textContent === "下一轮"

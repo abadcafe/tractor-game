@@ -13,15 +13,14 @@ function makeSnapshot(
 ): StateSnapshot {
   return {
     phase: "PLAYING",
-    player_hand: [
+    round_number: 1,
+    hand: [
       { id: "D1-spades-K", suit: "spades", rank: "K" },
       { id: "D1-spades-Q", suit: "spades", rank: "Q" },
     ],
     bottom_cards: [],
-    trump_rank: "2",
-    trump_suit: "hearts",
-    declarer_team: 0,
-    declarer_player: 2,
+    trump: { kind: "suited", rank: "2", suit: "hearts" },
+    declarer: "c",
     defender_points: 0,
     action_hints: [[{ id: "D1-spades-K", suit: "spades", rank: "K" }]],
     trick: null,
@@ -34,10 +33,10 @@ function makeSnapshot(
     awaiting_action: "play",
     stirring_state: null,
     scoring: null,
-    winning_team: null,
-    team0_level: "2",
-    team1_level: "2",
-    player_hand_counts: [13, 13, 13, 13],
+    winning_partnership: null,
+    partnership_levels: { first: "2", second: "2" },
+    remaining_cards: { a: 13, b: 13, c: 13, d: 13 },
+    mandatory_levels: ["A"],
     next_round_confirmed: [],
     ...overrides,
   };
@@ -67,8 +66,8 @@ Deno.test("handleStirAction accepts selected cards from hints", () => {
   const result = handleStirAction(
     makeSnapshot({
       phase: "STIRRING",
-      trump_rank: "5",
-      player_hand: pair,
+      trump: { kind: "no_trump", rank: "5" },
+      hand: pair,
       action_hints: [pair],
       awaiting_action: "stir",
     }),
@@ -93,8 +92,8 @@ Deno.test("handleStirAction rejects valid-looking pair outside hints", () => {
   const result = handleStirAction(
     makeSnapshot({
       phase: "STIRRING",
-      trump_rank: "5",
-      player_hand: pair,
+      trump: { kind: "no_trump", rank: "5" },
+      hand: pair,
       action_hints: [],
       awaiting_action: "stir",
     }),

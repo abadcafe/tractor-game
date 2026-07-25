@@ -4,15 +4,15 @@ from __future__ import annotations
 
 from pydantic import computed_field
 
-from server.game.config import Seat
 from server.game.rules.cards import Card, Rank, Suit
+from server.game.seating import Partnership, Seat
 
 from ._base import (
     AwaitingAction,
-    HandCounts,
+    PartnershipLevels,
+    RemainingCards,
     RoundPhase,
     SnapshotModel,
-    TeamLevels,
 )
 from .contract import TrumpSnapshot, trump_rank, trump_suit
 from .events import (
@@ -32,19 +32,19 @@ class PlayerSnapshot(SnapshotModel):
 
     phase: RoundPhase
     round_number: int
-    player_hand: tuple[Card, ...]
-    player_hand_counts: HandCounts
+    hand: tuple[Card, ...]
+    remaining_cards: RemainingCards
     bottom_cards: tuple[Card, ...]
     trump: TrumpSnapshot
-    declarer_player: Seat | None
+    declarer: Seat | None
     defender_points: int
     trick: TrickSnapshot | None
     last_completed_trick: CompletedTrickSnapshot | None
     defender_point_cards: tuple[Card, ...]
     awaiting_action: AwaitingAction | None
     scoring: ScoringSnapshot | None
-    winning_team: int | None
-    team_levels: TeamLevels
+    winning_partnership: Partnership | None
+    partnership_levels: PartnershipLevels
     mandatory_levels: tuple[Rank, ...]
     bid_events: tuple[BidEventSnapshot, ...]
     bid_winner: BidEventSnapshot | None
@@ -64,23 +64,3 @@ class PlayerSnapshot(SnapshotModel):
     def trump_suit(self) -> Suit | None:
         """Established suit; ``None`` also represents no-trump."""
         return trump_suit(self.trump)
-
-    @computed_field
-    @property
-    def declarer_team(self) -> int | None:
-        """Absolute partnership derived from the declarer seat."""
-        if self.declarer_player is None:
-            return None
-        return int(self.declarer_player) % 2
-
-    @computed_field
-    @property
-    def team0_level(self) -> Rank:
-        """Level of the even-seat partnership."""
-        return self.team_levels[0]
-
-    @computed_field
-    @property
-    def team1_level(self) -> Rank:
-        """Level of the odd-seat partnership."""
-        return self.team_levels[1]

@@ -6,31 +6,38 @@ import { DOMParser } from "jsr:@b-fuze/deno-dom@0.1.56";
 import { render } from "../ui/renderer.ts";
 import type { StateSnapshot } from "../core/types.ts";
 import type { BidOption, GameAction } from "../engine/types.ts";
-import type { ActionCallbacks } from "../ui/types.ts";
+import type { ActionCallbacks, RenderContext } from "../ui/types.ts";
+
+function testRenderContext(): RenderContext {
+  return {
+    viewerSeat: "c",
+    selectedCardIds: new Set(),
+    legalCardIds: new Set(),
+  };
+}
 
 function makeSnapshot(
   overrides: Partial<StateSnapshot> = {},
 ): StateSnapshot {
   return {
     phase: "PLAYING",
-    player_hand: [
+    round_number: 1,
+    hand: [
       { id: "D1-hearts-5", suit: "hearts", rank: "5" },
       { id: "D1-spades-2", suit: "spades", rank: "2" },
     ],
     bottom_cards: [],
-    trump_rank: "2",
-    trump_suit: "hearts",
-    declarer_team: 0,
-    declarer_player: 2,
+    trump: { kind: "suited", rank: "2", suit: "hearts" },
+    declarer: "c",
     defender_points: 15,
     action_hints: [[{ id: "D1-hearts-5", suit: "hearts", rank: "5" }]],
     trick: {
-      lead_player: 0,
+      lead_actor: "a",
       slots: [{
-        player: 0,
+        actor: "a",
         cards: [{ id: "D1-clubs-7", suit: "clubs", rank: "7" }],
       }],
-      current_player: 1,
+      current_actor: "b",
       failed_throw: null,
     },
     last_completed_trick: null,
@@ -42,10 +49,10 @@ function makeSnapshot(
     awaiting_action: "play",
     stirring_state: null,
     scoring: null,
-    winning_team: null,
-    team0_level: "3",
-    team1_level: "5",
-    player_hand_counts: [13, 13, 13, 13],
+    winning_partnership: null,
+    partnership_levels: { first: "3", second: "5" },
+    remaining_cards: { a: 13, b: 13, c: 13, d: 13 },
+    mandatory_levels: ["A"],
     next_round_confirmed: [],
     ...overrides,
   };
@@ -82,7 +89,7 @@ function countButtonsByText(container: Element, text: string): number {
 Deno.test("test_render_playing_phase", () => {
   const container = freshContainer();
   const snap = makeSnapshot();
-  render(snap, container, "play");
+  render(snap, container, "play", testRenderContext());
   const tableEl = container.querySelector(".game-table");
   assertNotEquals(tableEl, null);
   const handEl = container.querySelector(".hand-view");
@@ -99,7 +106,7 @@ Deno.test("test_render_deal_bid_phase", () => {
     phase: "DEAL_BID",
     awaiting_action: null,
   });
-  render(snap, container, "bid");
+  render(snap, container, "bid", testRenderContext());
   const bidEl = container.querySelector(".bidding-dialog");
   assertEquals(bidEl, null);
 });
@@ -112,14 +119,14 @@ Deno.test("test_render_stirring_phase", () => {
     stirring_state: {
       phase: "WAITING",
       trump_suit: null,
-      current_player: 2,
-      declarer_player: 0,
-      exchanging_player: null,
+      current_actor: "c",
+      declarer: "a",
+      exchanging_actor: null,
       exchange_count: null,
     },
     trick: null,
   });
-  render(snap, container, "stir");
+  render(snap, container, "stir", testRenderContext());
   const handEl = container.querySelector(".hand-view");
   assertNotEquals(handEl, null);
   const stirEl = container.querySelector(".bidding-dialog");
@@ -133,14 +140,14 @@ Deno.test("test_render_complete_phase", () => {
     awaiting_action: "next_round",
     trick: null,
     scoring: {
-      round_winning_team: 0,
+      winning_partnership: "first",
       defender_points: 30,
       total_defender_points: 30,
       bottom_card_bonus: 0,
       bottom_cards: [],
     },
   });
-  render(snap, container, "next_round");
+  render(snap, container, "next_round", testRenderContext());
   const overlayEl = container.querySelector(".scoring-overlay");
   assertNotEquals(overlayEl, null);
 });
@@ -152,38 +159,38 @@ Deno.test("test_render_complete_phase_keeps_last_trick_on_table", () => {
     awaiting_action: "next_round",
     trick: null,
     last_completed_trick: {
-      lead_player: 0,
-      winner: 1,
+      lead_actor: "a",
+      winner: "b",
       points: 25,
       failed_throw: null,
       slots: [
         {
-          player: 0,
+          actor: "a",
           cards: [{ id: "D1-clubs-5", suit: "clubs", rank: "5" }],
         },
         {
-          player: 1,
+          actor: "b",
           cards: [{ id: "D1-hearts-10", suit: "hearts", rank: "10" }],
         },
         {
-          player: 2,
+          actor: "c",
           cards: [{ id: "D1-spades-K", suit: "spades", rank: "K" }],
         },
         {
-          player: 3,
+          actor: "d",
           cards: [{ id: "D1-diamonds-A", suit: "diamonds", rank: "A" }],
         },
       ],
     },
     scoring: {
-      round_winning_team: 0,
+      winning_partnership: "first",
       defender_points: 75,
       total_defender_points: 100,
       bottom_card_bonus: 25,
       bottom_cards: [],
     },
   });
-  render(snap, container, "next_round");
+  render(snap, container, "next_round", testRenderContext());
 
   assertNotEquals(container.querySelector(".scoring-overlay"), null);
   assertEquals(
@@ -207,11 +214,11 @@ Deno.test("test_render_game_over_phase", () => {
   const container = freshContainer();
   const snap = makeSnapshot({
     phase: "WAITING",
-    winning_team: 0,
+    winning_partnership: "first",
     trick: null,
     awaiting_action: null,
   });
-  render(snap, container, null);
+  render(snap, container, null, testRenderContext());
   const overEl = container.querySelector(".game-over-overlay");
   assertNotEquals(overEl, null);
 });
@@ -224,14 +231,14 @@ Deno.test("test_render_exchange_phase", () => {
     stirring_state: {
       phase: "WAITING",
       trump_suit: null,
-      current_player: 2,
-      declarer_player: 0,
-      exchanging_player: 2,
+      current_actor: "c",
+      declarer: "a",
+      exchanging_actor: "c",
       exchange_count: 8,
     },
     trick: null,
   });
-  render(snap, container, "discard");
+  render(snap, container, "discard", testRenderContext());
   const handEl = container.querySelector(".hand-view");
   assertNotEquals(handEl, null);
 });
@@ -239,7 +246,7 @@ Deno.test("test_render_exchange_phase", () => {
 Deno.test("test_render_hand_displays_cards", () => {
   const container = freshContainer();
   const snap = makeSnapshot();
-  render(snap, container, "play");
+  render(snap, container, "play", testRenderContext());
   const cards = container.querySelectorAll(".card");
   assertEquals(cards.length, 2);
 });
@@ -247,7 +254,7 @@ Deno.test("test_render_hand_displays_cards", () => {
 Deno.test("test_render_scoreboard_shows_levels", () => {
   const container = freshContainer();
   const snap = makeSnapshot();
-  render(snap, container, null);
+  render(snap, container, null, testRenderContext());
   const scoreEl = container.querySelector(".scoreboard");
   assertNotEquals(scoreEl, null);
   const text = scoreEl!.textContent ?? "";
@@ -258,7 +265,7 @@ Deno.test("test_render_scoreboard_shows_levels", () => {
 Deno.test("test_render_game_table_shows_players", () => {
   const container = freshContainer();
   const snap = makeSnapshot();
-  render(snap, container, null);
+  render(snap, container, null, testRenderContext());
   const players = container.querySelectorAll(".player-area");
   assertEquals(players.length, 4);
 });
@@ -268,6 +275,7 @@ Deno.test("test_render_passes_connection_status_to_scoreboard_top_title", () => 
   const snap = makeSnapshot();
 
   render(snap, container, null, {
+    viewerSeat: "c",
     selectedCardIds: new Set(),
     legalCardIds: new Set(),
     connectionStatus: "failed",
@@ -297,7 +305,7 @@ Deno.test("test_render_passes_connection_status_to_scoreboard_top_title", () => 
 Deno.test("test_render_trick_shows_played_cards", () => {
   const container = freshContainer();
   const snap = makeSnapshot();
-  render(snap, container, null);
+  render(snap, container, null, testRenderContext());
   const trickCards = container.querySelectorAll(".trick-card");
   assertEquals(trickCards.length >= 1, true);
 });
@@ -321,6 +329,7 @@ Deno.test("test_render_hand_view_receives_callbacks", () => {
   };
   render(snap, container, "play", {
     callbacks,
+    viewerSeat: "c",
     selectedCardIds: new Set(),
     legalCardIds: new Set(),
   });
@@ -367,6 +376,7 @@ Deno.test("test_render_bid_options_above_hand_receives_callbacks", () => {
   };
   render(snap, container, "bid", {
     callbacks,
+    viewerSeat: "c",
     selectedCardIds: new Set(),
     legalCardIds: new Set(),
     bidOptions,
@@ -388,7 +398,7 @@ Deno.test("test_render_scoring_overlay_receives_callback", () => {
     awaiting_action: "next_round",
     trick: null,
     scoring: {
-      round_winning_team: 0,
+      winning_partnership: "first",
       defender_points: 30,
       total_defender_points: 30,
       bottom_card_bonus: 0,
@@ -408,6 +418,7 @@ Deno.test("test_render_scoring_overlay_receives_callback", () => {
   };
   render(snap, container, "next_round", {
     callbacks,
+    viewerSeat: "c",
     selectedCardIds: new Set(),
     legalCardIds: new Set(),
   });
@@ -427,7 +438,7 @@ Deno.test("test_render_waiting_has_single_next_round_button", () => {
     awaiting_action: "next_round",
     trick: null,
     scoring: {
-      round_winning_team: 0,
+      winning_partnership: "first",
       defender_points: 30,
       total_defender_points: 30,
       bottom_card_bonus: 0,
@@ -445,6 +456,7 @@ Deno.test("test_render_waiting_has_single_next_round_button", () => {
 
   render(snap, container, "next_round", {
     callbacks,
+    viewerSeat: "c",
     selectedCardIds: new Set(),
     legalCardIds: new Set(),
   });
@@ -471,6 +483,7 @@ Deno.test("test_render_primary_actions_are_not_duplicated", () => {
   const playContainer = freshContainer();
   render(makeSnapshot(), playContainer, "play", {
     callbacks,
+    viewerSeat: "c",
     selectedCardIds: new Set(["D1-hearts-5"]),
     legalCardIds: new Set(["D1-hearts-5"]),
   });
@@ -484,9 +497,9 @@ Deno.test("test_render_primary_actions_are_not_duplicated", () => {
       stirring_state: {
         phase: "EXCHANGING",
         trump_suit: "spades",
-        current_player: 2,
-        declarer_player: 2,
-        exchanging_player: 2,
+        current_actor: "c",
+        declarer: "c",
+        exchanging_actor: "c",
         exchange_count: 2,
       },
     }),
@@ -494,6 +507,7 @@ Deno.test("test_render_primary_actions_are_not_duplicated", () => {
     "discard",
     {
       callbacks,
+      viewerSeat: "c",
       selectedCardIds: new Set(["D1-hearts-5", "D1-spades-2"]),
       legalCardIds: new Set(["D1-hearts-5", "D1-spades-2"]),
     },
@@ -509,9 +523,9 @@ Deno.test("test_render_primary_actions_are_not_duplicated", () => {
       stirring_state: {
         phase: "WAITING",
         trump_suit: "spades",
-        current_player: 2,
-        declarer_player: 0,
-        exchanging_player: null,
+        current_actor: "c",
+        declarer: "a",
+        exchanging_actor: null,
         exchange_count: null,
       },
     }),
@@ -519,6 +533,7 @@ Deno.test("test_render_primary_actions_are_not_duplicated", () => {
     "stir",
     {
       callbacks,
+      viewerSeat: "c",
       selectedCardIds: new Set(["D1-spades-2"]),
       legalCardIds: new Set(["D1-spades-2"]),
       stirButtonState: { disabled: false },
@@ -534,7 +549,7 @@ Deno.test("test_render_primary_actions_are_not_duplicated", () => {
       awaiting_action: "next_round",
       trick: null,
       scoring: {
-        round_winning_team: 0,
+        winning_partnership: "first",
         defender_points: 30,
         total_defender_points: 30,
         bottom_card_bonus: 0,
@@ -545,6 +560,7 @@ Deno.test("test_render_primary_actions_are_not_duplicated", () => {
     "next_round",
     {
       callbacks,
+      viewerSeat: "c",
       selectedCardIds: new Set(),
       legalCardIds: new Set(),
     },
@@ -556,12 +572,13 @@ Deno.test("test_render_primary_actions_are_not_duplicated", () => {
     makeSnapshot({
       phase: "WAITING",
       awaiting_action: null,
-      winning_team: 0,
+      winning_partnership: "first",
     }),
     gameOverContainer,
     null,
     {
       callbacks,
+      viewerSeat: "c",
       selectedCardIds: new Set(),
       legalCardIds: new Set(),
     },
@@ -573,7 +590,7 @@ Deno.test("test_render_game_over_receives_callback", () => {
   const container = freshContainer();
   const snap = makeSnapshot({
     phase: "WAITING",
-    winning_team: 0,
+    winning_partnership: "first",
     trick: null,
     awaiting_action: null,
   });
@@ -590,6 +607,7 @@ Deno.test("test_render_game_over_receives_callback", () => {
   };
   render(snap, container, null, {
     callbacks,
+    viewerSeat: "c",
     selectedCardIds: new Set(),
     legalCardIds: new Set(),
   });
@@ -609,6 +627,7 @@ Deno.test("test_render_selected_cards_highlighted", () => {
   const snap = makeSnapshot();
   const selectedCardIds = new Set(["D1-hearts-5"]);
   render(snap, container, "play", {
+    viewerSeat: "c",
     selectedCardIds,
     legalCardIds: new Set(),
   });

@@ -1,11 +1,10 @@
 """Derive round contracts from declarations and team levels."""
 
-from server.game.config import Seat
 from server.game.rules import bidding
 from server.game.rules.cards import Rank, Suit
+from server.game.seating import Partnership, Seat, partnership_of
 
 from .round_values import Declaration, TeamLevels
-from .topology import team
 
 
 def rule_declaration(
@@ -30,5 +29,5 @@ def trump_rank(
     declarer: Seat | None,
 ) -> Rank:
     if declarer is None:
-        return levels[0]
-    return levels[team(declarer)]
+        return levels.at(Partnership.FIRST)
+    return levels.at(partnership_of(declarer))

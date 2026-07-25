@@ -252,7 +252,7 @@ def _writer_state(run_dir: Path) -> _WriterState:
 
 def _serialize_event(event: _PendingEvent) -> str:
     payload: JsonObject = {
-        "schema_version": 2,
+        "schema_version": 3,
         "event": event.event_type,
         "recorded_at_ms": event.recorded_at_ms,
         "process": {
@@ -281,7 +281,7 @@ def _context_json(context: EventContext) -> JsonObject:
         ("model_rank_index", context.model_rank_index),
         ("game_env_index", context.game_env_index),
         ("episode_id", context.episode_id),
-        ("player_index", context.player_index),
+        ("seat", context.seat),
         ("decision_index", context.decision_index),
         ("request_id", context.request_id),
         ("batch_id", context.batch_id),

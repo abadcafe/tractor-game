@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from server.game.rules.cards import Rank
+from server.game.seating import PartnershipMap, SeatMap
 
 type RoundPhase = Literal[
     "DEAL_BID",
@@ -21,8 +22,8 @@ type AwaitingAction = Literal[
     "play",
     "next_round",
 ]
-type HandCounts = tuple[int, int, int, int]
-type TeamLevels = tuple[Rank, Rank]
+type RemainingCards = SeatMap[int]
+type PartnershipLevels = PartnershipMap[Rank]
 
 
 class SnapshotModel(BaseModel):

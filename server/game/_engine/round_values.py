@@ -5,16 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from server.game.config import Seat
 from server.game.rules.cards import Card, Rank, Suit
+from server.game.seating import (
+    Partnership,
+    PartnershipMap,
+    Seat,
+    SeatMap,
+)
 
-type Hands = tuple[
-    tuple[Card, ...],
-    tuple[Card, ...],
-    tuple[Card, ...],
-    tuple[Card, ...],
-]
-type TeamLevels = tuple[Rank, Rank]
+type Hands = SeatMap[tuple[Card, ...]]
+type TeamLevels = PartnershipMap[Rank]
 
 
 class BottomExchangeCause(str, Enum):
@@ -107,7 +107,7 @@ class CompletedRound:
 
     round_number: int
     contract: Contract
-    winning_team: int
+    winning_partnership: Partnership
     next_declarer: Seat
     defender_points: int
     total_defender_points: int

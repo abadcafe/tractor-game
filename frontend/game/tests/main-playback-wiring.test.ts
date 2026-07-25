@@ -23,28 +23,28 @@ Deno.test("main wires server messages through phase-aware state playback queue",
   );
 });
 
-Deno.test("main opens entered lobby player in a new page", async () => {
+Deno.test("main opens entered lobby seat in a new page", async () => {
   const source = await Deno.readTextFile(
     new URL("../main.ts", import.meta.url),
   );
 
-  assert(/onTogglePlayer\(gameId, playerIndex\) \{/.test(source));
+  assert(/onToggleSeat\(gameId, seatId\) \{/.test(source));
   assert(
-    /void handleTogglePlayer\(gameId, playerIndex\);/.test(source),
+    /void handleToggleSeat\(gameId, seatId\);/.test(source),
   );
   assert(/onDeleteGame\(gameId: string\) \{/.test(source));
   assert(/void handleDeleteGame\(gameId\);/.test(source));
-  assert(/onEnterPlayer\(gameId, playerIndex\) \{/.test(source));
-  assert(/void handleEnterPlayer\(gameId, playerIndex\);/.test(source));
-  assert(/enterPlayerHref\(gameId, playerIndex\) \{/.test(source));
+  assert(/onEnterSeat\(gameId, seatId\) \{/.test(source));
+  assert(/void handleEnterSeat\(gameId, seatId\);/.test(source));
+  assert(/enterSeatHref\(gameId, seatId\) \{/.test(source));
   assert(
-    /await joinPlayer\(gameId, playerIndex, userId\);/.test(source),
+    /await occupySeat\(gameId, seatId, userId\);/.test(source),
   );
   assert(
-    /await leavePlayer\(gameId, playerIndex, userId\);/.test(source),
+    /await vacateSeat\(gameId, seatId, userId\);/.test(source),
   );
   assert(
-    /return gamePlayerHref\(gameId, playerIndex, ensureUserId\(\)\);/
+    /return gameSeatHref\(gameId, seatId, ensureUserId\(\)\);/
       .test(
         source,
       ),
@@ -53,7 +53,7 @@ Deno.test("main opens entered lobby player in a new page", async () => {
     /void handleChangeBotFillMode\(mode\);/.test(source),
   );
   assert(
-    /await fillBotPlayers\(selectedGame\.gameId, mode, ensureUserId\(\)\);/
+    /await fillBotSeats\(selectedGame\.gameId, mode, ensureUserId\(\)\);/
       .test(source),
   );
   assert(/await deleteGame\(gameId\);/.test(source));

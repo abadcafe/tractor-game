@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from server.game import Seat
 from server.game.rules.cards import Rank, Suit
 from server.game.rules.cards.faces import (
     FaceCount,
@@ -13,7 +14,11 @@ from server.game.rules.cards.faces import (
 )
 from server.game.snapshots import PlayerSnapshot
 from server.training.relative_state import RelativeActor
-from server.training.relative_state.relations import relative_actor
+from server.training.relative_state.relations import (
+    TrickPosition,
+    relative_actor,
+    trick_position,
+)
 
 type DecisionKind = Literal[
     "bid", "stir", "discard", "lead_play", "follow_play"
@@ -41,12 +46,12 @@ class ActionQuery:
 
 def build_action_query(
     *,
-    player_index: int,
+    viewer: Seat,
     snapshot: PlayerSnapshot,
 ) -> ActionQuery:
     """Build the structured player-visible decision request."""
     kind = _decision_kind(snapshot)
-    hand_faces = canonical_face_counts(snapshot.player_hand)
+    hand_faces = canonical_face_counts(snapshot.hand)
     hand_size = face_count_width(hand_faces)
     pass_allowed = kind in ("bid", "stir")
     min_select, max_select, exact_select = _selection_shape(
@@ -65,15 +70,13 @@ def build_action_query(
         exact_select=exact_select,
         action_play_order=action_play_order,
         current_trick_width=current_trick_width,
-        lead_actor=_lead_actor(player_index, snapshot),
+        lead_actor=_lead_actor(viewer, snapshot),
         discard_count=_discard_count(snapshot)
         if kind == "discard"
         else None,
         trump_suit=snapshot.trump_suit,
         level_rank=snapshot.trump_rank,
-        current_best_bid_role=_current_best_bid_role(
-            player_index, snapshot
-        ),
+        current_best_bid_role=_current_best_bid_role(viewer, snapshot),
     )
 
 
@@ -125,7 +128,7 @@ def _current_trick_width(snapshot: PlayerSnapshot) -> int | None:
     if trick is None:
         return None
     for slot in trick.slots:
-        if slot.player == trick.lead_player and slot.cards:
+        if slot.actor == trick.lead_actor and slot.cards:
             return len(slot.cards)
     return None
 
@@ -135,29 +138,36 @@ def _action_play_order(snapshot: PlayerSnapshot) -> int | None:
     if snapshot.awaiting_action != "play" or trick is None:
         return None
     return _play_order(
-        lead_player=trick.lead_player, player=trick.current_player
+        lead_actor=trick.lead_actor, actor=trick.current_actor
     )
 
 
 def _lead_actor(
-    player_index: int, snapshot: PlayerSnapshot
+    viewer: Seat, snapshot: PlayerSnapshot
 ) -> RelativeActor | None:
     trick = snapshot.trick
     if snapshot.awaiting_action != "play" or trick is None:
         return None
-    return relative_actor(player_index, trick.lead_player)
+    return relative_actor(viewer, trick.lead_actor)
 
 
 def _current_best_bid_role(
-    player_index: int, snapshot: PlayerSnapshot
+    viewer: Seat, snapshot: PlayerSnapshot
 ) -> RelativeActor | None:
     winner = snapshot.bid_winner
     if winner is None:
         return None
-    return relative_actor(player_index, winner.player)
+    return relative_actor(viewer, winner.actor)
 
 
-def _play_order(*, lead_player: int, player: int) -> int:
-    if player >= lead_player:
-        return player - lead_player
-    return 4 - lead_player + player
+def _play_order(*, lead_actor: Seat, actor: Seat) -> int:
+    position = trick_position(
+        lead_actor=lead_actor,
+        actor=actor,
+    )
+    return {
+        TrickPosition.LEAD: 0,
+        TrickPosition.FOLLOW_1: 1,
+        TrickPosition.FOLLOW_2: 2,
+        TrickPosition.FOLLOW_3: 3,
+    }[position]

@@ -3,18 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import IntEnum
 
 from server.game.rules.cards import Rank, suited_ranks
-
-
-class Seat(IntEnum):
-    """A fixed seat in counterclockwise play order."""
-
-    NORTH = 0
-    WEST = 1
-    SOUTH = 2
-    EAST = 3
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,53 +1,36 @@
-import { GAME_PLAYER_PATH, type PlayerIndex } from "./config.ts";
+import {
+  GAME_SEAT_PATH,
+  type SeatId,
+  seatIdFromString,
+} from "./config.ts";
 
-export interface GamePlayerRoute {
+export interface GameSeatRoute {
   gameId: string;
-  playerIndex: PlayerIndex;
+  seatId: SeatId;
   userId: string;
 }
 
-export function gamePlayerHref(
+export function gameSeatHref(
   gameId: string,
-  playerIndex: PlayerIndex,
+  seatId: SeatId,
   userId: string,
 ): string {
-  return GAME_PLAYER_PATH(gameId, playerIndex, userId);
+  return GAME_SEAT_PATH(gameId, seatId, userId);
 }
 
-export function parseGamePlayerRoute(
+export function parseGameSeatRoute(
   pathname: string,
   search: string,
-): GamePlayerRoute | null {
-  const match = /^\/game\/([^/]+)\/player\/([0-3])$/.exec(pathname);
+): GameSeatRoute | null {
+  const match = /^\/game\/([^/]+)\/seat\/([a-d])$/.exec(pathname);
   if (match === null) {
     return null;
   }
   const gameId = match[1];
-  const playerIndex = playerIndexFromString(match[2]);
+  const seatId = seatIdFromString(match[2]);
   const userId = new URLSearchParams(search).get("user_id");
-  if (
-    playerIndex === null || userId === null || userId.trim() === ""
-  ) {
+  if (seatId === null || userId === null || userId.trim() === "") {
     return null;
   }
-  return {
-    gameId,
-    playerIndex,
-    userId,
-  };
-}
-
-function playerIndexFromString(value: string): PlayerIndex | null {
-  switch (value) {
-    case "0":
-      return 0;
-    case "1":
-      return 1;
-    case "2":
-      return 2;
-    case "3":
-      return 3;
-    default:
-      return null;
-  }
+  return { gameId, seatId, userId };
 }

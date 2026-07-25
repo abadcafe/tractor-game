@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from server.game import Seat
 from server.training.policy_sampling.records import DecisionHandle
 from server.training.semantic_actions.values import GeneratedAction
 
@@ -12,14 +13,13 @@ from server.training.semantic_actions.values import GeneratedAction
 class DecisionStep:
     """One accepted player decision plus its replay handle."""
 
-    player_index: int
+    seat: Seat
     seq: int
     action: GeneratedAction
     decision_handle: DecisionHandle
     choice_count: int
 
     def __post_init__(self) -> None:
-        assert self.player_index in (0, 1, 2, 3)
         assert self.seq >= 0
         assert self.choice_count > 0
 

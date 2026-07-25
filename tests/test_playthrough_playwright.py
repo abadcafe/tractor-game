@@ -36,13 +36,15 @@ type JsonPrimitive = str | int | float | bool | None
 type JsonValue = JsonPrimitive | list[JsonValue] | dict[str, JsonValue]
 type JsonObject = dict[str, JsonValue]
 type Severity = Literal["critical", "high", "medium", "low"]
+type WireSeat = Literal["a", "b", "c", "d"]
+type WirePartnership = Literal["first", "second"]
 type UiActionKind = Literal[
     "bid", "next_round", "stir_pass", "discard", "play"
 ]
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "test-results" / "playthrough"
-HUMAN_PLAYER = 3
+HUMAN_SEAT: WireSeat = "d"
 THIS_FILE = Path(__file__).name
 CLEAR_SELECTION_BUTTON = "清牌"
 BID_ACTION_BUTTON_SELECTOR = ".hand-actions .action-panel--bid button"
@@ -231,8 +233,8 @@ INJECTED_SCRIPT = r"""
             seq: message.seq,
             awaiting: state.awaiting_action,
             phase: state.phase,
-            current_player: state.trick
-              ? state.trick.current_player
+            current_actor: state.trick
+              ? state.trick.current_actor
               : null
           });
         }
@@ -308,11 +310,11 @@ class BugEntry:
 @dataclass(frozen=True)
 class RoundEntry:
     index: int
-    team0_before: str
-    team0_after: str
-    team1_before: str
-    team1_after: str
-    round_winning_team: int
+    first_before: str
+    first_after: str
+    second_before: str
+    second_after: str
+    winning_partnership: WirePartnership
     defender_points: int
     bottom_card_bonus: int
     total_defender_points: int
@@ -320,11 +322,11 @@ class RoundEntry:
     def to_json(self) -> JsonObject:
         return {
             "index": self.index,
-            "team0_before": self.team0_before,
-            "team0_after": self.team0_after,
-            "team1_before": self.team1_before,
-            "team1_after": self.team1_after,
-            "round_winning_team": self.round_winning_team,
+            "first_before": self.first_before,
+            "first_after": self.first_after,
+            "second_before": self.second_before,
+            "second_after": self.second_after,
+            "winning_partnership": self.winning_partnership,
             "defender_points": self.defender_points,
             "bottom_card_bonus": self.bottom_card_bonus,
             "total_defender_points": self.total_defender_points,
@@ -335,8 +337,8 @@ class RoundEntry:
 class RoundTracker:
     """Record completed rounds from the public scoring lifecycle."""
 
-    team0_level: str
-    team1_level: str
+    first_partnership_level: str
+    second_partnership_level: str
     completed_count: int = 0
     _review_active: bool = False
 
@@ -349,37 +351,44 @@ class RoundTracker:
             return None
         self._review_active = True
 
-        team0_after = string_field(state, "team0_level")
-        team1_after = string_field(state, "team1_level")
-        round_winning_team = int_field(scoring, "round_winning_team")
+        first_after = partnership_level(state, "first")
+        second_after = partnership_level(state, "second")
+        winning_partnership = partnership_field(
+            scoring, "winning_partnership"
+        )
         defender_points = int_field(scoring, "defender_points")
         bottom_card_bonus = int_field(scoring, "bottom_card_bonus")
         total_defender_points = int_field(
             scoring, "total_defender_points"
         )
-        winning_team = int_field(state, "winning_team")
-        assert team0_after is not None
-        assert team1_after is not None
-        assert round_winning_team in (0, 1)
+        terminal_winner = partnership_field(
+            state, "winning_partnership"
+        )
+        assert first_after is not None
+        assert second_after is not None
+        assert winning_partnership is not None
         assert defender_points is not None
         assert bottom_card_bonus is not None
         assert total_defender_points is not None
-        assert winning_team in (None, 0, 1)
 
         self.completed_count += 1
         entry = RoundEntry(
             index=self.completed_count,
-            team0_before=self.team0_level,
-            team0_after="WIN" if winning_team == 0 else team0_after,
-            team1_before=self.team1_level,
-            team1_after="WIN" if winning_team == 1 else team1_after,
-            round_winning_team=round_winning_team,
+            first_before=self.first_partnership_level,
+            first_after=(
+                "WIN" if terminal_winner == "first" else first_after
+            ),
+            second_before=self.second_partnership_level,
+            second_after=(
+                "WIN" if terminal_winner == "second" else second_after
+            ),
+            winning_partnership=winning_partnership,
             defender_points=defender_points,
             bottom_card_bonus=bottom_card_bonus,
             total_defender_points=total_defender_points,
         )
-        self.team0_level = team0_after
-        self.team1_level = team1_after
+        self.first_partnership_level = first_after
+        self.second_partnership_level = second_after
         return entry
 
 
@@ -542,6 +551,38 @@ def string_field(data: JsonObject, key: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def partnership_field(
+    data: JsonObject, key: str
+) -> WirePartnership | None:
+    value = string_field(data, key)
+    if value == "first" or value == "second":
+        return value
+    return None
+
+
+def partnership_level(
+    state: JsonObject, partnership: WirePartnership
+) -> str | None:
+    levels = object_field(state, "partnership_levels")
+    if levels is None:
+        return None
+    return string_field(levels, partnership)
+
+
+def trump_rank(state: JsonObject) -> str | None:
+    trump = object_field(state, "trump")
+    if trump is None:
+        return None
+    return string_field(trump, "rank")
+
+
+def trump_suit(state: JsonObject) -> str | None:
+    trump = object_field(state, "trump")
+    if trump is None or string_field(trump, "kind") != "suited":
+        return None
+    return string_field(trump, "suit")
+
+
 def int_field(data: JsonObject, key: str) -> int | None:
     value = data.get(key)
     return (
@@ -611,7 +652,7 @@ def is_trump(
 
 
 def choose_discard_cards(state: JsonObject) -> tuple[str, ...]:
-    hand = card_list(state.get("player_hand"))
+    hand = card_list(state.get("hand"))
     stirring_state = object_field(state, "stirring_state")
     count = (
         int_field(stirring_state, "exchange_count")
@@ -620,12 +661,15 @@ def choose_discard_cards(state: JsonObject) -> tuple[str, ...]:
     )
     if count is None or count <= 0:
         count = 8
-    trump_suit = string_field(state, "trump_suit")
-    trump_rank = string_field(state, "trump_rank") or "2"
+    current_trump_suit = trump_suit(state)
+    current_trump_rank = trump_rank(state)
+    assert current_trump_rank is not None
 
     def discard_key(card: JsonObject) -> tuple[int, int, int]:
         trump_weight = (
-            1 if is_trump(card, trump_suit, trump_rank) else 0
+            1
+            if is_trump(card, current_trump_suit, current_trump_rank)
+            else 0
         )
         return (trump_weight, card_points(card), rank_value(card))
 
@@ -661,7 +705,7 @@ def choose_play_candidates(state: JsonObject) -> list[tuple[str, ...]]:
 def pick_free_play_candidates(
     state: JsonObject, limit: int = 80
 ) -> list[tuple[str, ...]]:
-    hand = card_list(state.get("player_hand"))
+    hand = card_list(state.get("hand"))
     if not hand:
         return []
 
@@ -669,29 +713,34 @@ def pick_free_play_candidates(
     lead_cards: list[JsonObject] = []
     trick = object_field(state, "trick")
     if trick is not None:
-        lead_player = int_field(trick, "lead_player")
+        lead_actor = string_field(trick, "lead_actor")
         slots = list_field(trick, "slots")
-        if lead_player is not None and 0 <= lead_player < len(slots):
-            lead_slot_raw = slots[lead_player]
-            if isinstance(lead_slot_raw, dict):
-                lead_cards = card_list(lead_slot_raw.get("cards"))
-                if lead_cards:
-                    lead_count = len(lead_cards)
+        for lead_slot_raw in slots:
+            if not isinstance(lead_slot_raw, dict):
+                continue
+            lead_slot = cast(JsonObject, lead_slot_raw)
+            if string_field(lead_slot, "actor") != lead_actor:
+                continue
+            lead_cards = card_list(lead_slot.get("cards"))
+            if lead_cards:
+                lead_count = len(lead_cards)
+            break
 
     if not lead_cards:
         return [
             (card_id(card),) for card in hand[:limit] if card_id(card)
         ]
 
-    trump_suit = string_field(state, "trump_suit")
-    trump_rank = string_field(state, "trump_rank") or "2"
+    current_trump_suit = trump_suit(state)
+    current_trump_rank = trump_rank(state)
+    assert current_trump_rank is not None
     lead_effective_suit = effective_suit(
-        lead_cards[0], trump_suit, trump_rank
+        lead_cards[0], current_trump_suit, current_trump_rank
     )
     same_suit_cards = [
         card
         for card in hand
-        if effective_suit(card, trump_suit, trump_rank)
+        if effective_suit(card, current_trump_suit, current_trump_rank)
         == lead_effective_suit
     ]
     other_cards = [card for card in hand if card not in same_suit_cards]
@@ -1055,15 +1104,15 @@ def prepare_playthrough_game(
     server_url: str,
     recorder: Recorder,
 ) -> str:
-    """Create the current lobby contract and return its player route."""
+    """Create the current lobby contract and return its seat route."""
     user_id = "playwright-human"
     created = post_json(f"{server_url}/api/game")
     game_id = string_field(created, "game_id")
     assert game_id is not None
 
     attached = post_json(
-        f"{server_url}/api/game/{quote(game_id)}/player/"
-        f"{HUMAN_PLAYER}?user_id={quote(user_id)}"
+        f"{server_url}/api/game/{quote(game_id)}/seat/"
+        f"{HUMAN_SEAT}?user_id={quote(user_id)}"
     )
     assert attached.get("ok") is True
     filled = post_json(
@@ -1073,12 +1122,12 @@ def prepare_playthrough_game(
     assert filled.get("ok") is True
 
     route = (
-        f"{server_url}/game/{quote(game_id)}/player/{HUMAN_PLAYER}"
+        f"{server_url}/game/{quote(game_id)}/seat/{HUMAN_SEAT}"
         f"?user_id={quote(user_id)}"
     )
     recorder.event(
         "game_setup",
-        f"created game {game_id} for player {HUMAN_PLAYER}",
+        f"created game {game_id} for seat {HUMAN_SEAT}",
     )
     return route
 
@@ -1306,13 +1355,16 @@ def run_playthrough(config: Config) -> None:
                 "critical",
             )
             return
-        initial_team0_level = string_field(
-            initial_payload, "team0_level"
+        initial_first_partnership_level = partnership_level(
+            initial_payload, "first"
         )
-        initial_team1_level = string_field(
-            initial_payload, "team1_level"
+        initial_second_partnership_level = partnership_level(
+            initial_payload, "second"
         )
-        if initial_team0_level is None or initial_team1_level is None:
+        if (
+            initial_first_partnership_level is None
+            or initial_second_partnership_level is None
+        ):
             recorder.bug(
                 "bad_initial_state",
                 "initial state message missing team levels",
@@ -1320,8 +1372,8 @@ def run_playthrough(config: Config) -> None:
             )
             return
         round_tracker = RoundTracker(
-            team0_level=initial_team0_level,
-            team1_level=initial_team1_level,
+            first_partnership_level=initial_first_partnership_level,
+            second_partnership_level=initial_second_partnership_level,
         )
 
         last_phase: str | None = None
@@ -1366,8 +1418,12 @@ def run_playthrough(config: Config) -> None:
 
             seq = int_field(state_message, "seq")
             phase = string_field(state, "phase") or "UNKNOWN"
-            team0_level = string_field(state, "team0_level") or "?"
-            team1_level = string_field(state, "team1_level") or "?"
+            first_partnership_level = (
+                partnership_level(state, "first") or "?"
+            )
+            second_partnership_level = (
+                partnership_level(state, "second") or "?"
+            )
             defender_points = int_from_state(
                 state, "defender_points", 0
             )
@@ -1412,10 +1468,10 @@ def run_playthrough(config: Config) -> None:
                 recorder.event(
                     "round",
                     (
-                        f"{completed_round.team0_before}->"
-                        f"{completed_round.team0_after},"
-                        f"{completed_round.team1_before}->"
-                        f"{completed_round.team1_after}"
+                        f"{completed_round.first_before}->"
+                        f"{completed_round.first_after},"
+                        f"{completed_round.second_before}->"
+                        f"{completed_round.second_after}"
                     ),
                     completed_round.to_json(),
                 )
@@ -1429,8 +1485,10 @@ def run_playthrough(config: Config) -> None:
                         "awaiting": string_field(
                             state, "awaiting_action"
                         ),
-                        "team0_level": team0_level,
-                        "team1_level": team1_level,
+                        "partnership_levels": {
+                            "first": first_partnership_level,
+                            "second": second_partnership_level,
+                        },
                         "defender_points": defender_points,
                     },
                 )
@@ -1467,7 +1525,7 @@ def run_playthrough(config: Config) -> None:
                 )
                 last_screenshot_time = time.monotonic()
 
-            if state.get("winning_team") is not None:
+            if state.get("winning_partnership") is not None:
                 game_completed = True
                 take_screenshot(
                     page, config.output_dir, "game_over", recorder
@@ -1476,9 +1534,13 @@ def run_playthrough(config: Config) -> None:
                     "result",
                     "game over",
                     {
-                        "winning_team": state.get("winning_team"),
-                        "team0_level": team0_level,
-                        "team1_level": team1_level,
+                        "winning_partnership": state.get(
+                            "winning_partnership"
+                        ),
+                        "partnership_levels": {
+                            "first": first_partnership_level,
+                            "second": second_partnership_level,
+                        },
                     },
                 )
                 break
@@ -1589,7 +1651,8 @@ def write_reports(
             [
                 "## Rounds",
                 "",
-                "| Round | Team 0 | Team 1 | Winner |"
+                "| Round | First partnership |"
+                " Second partnership | Winner |"
                 " Defender points | Bottom bonus |"
                 " Total defender points |",
                 "| --- | --- | --- | --- | --- | --- | --- |",
@@ -1598,9 +1661,9 @@ def write_reports(
         for entry in rounds:
             markdown_lines.append(
                 f"| {entry.index} |"
-                f" {entry.team0_before}->{entry.team0_after} |"
-                f" {entry.team1_before}->{entry.team1_after} |"
-                f" Team {entry.round_winning_team} |"
+                f" {entry.first_before}->{entry.first_after} |"
+                f" {entry.second_before}->{entry.second_after} |"
+                f" {entry.winning_partnership} |"
                 f" {entry.defender_points} |"
                 f" {entry.bottom_card_bonus} |"
                 f" {entry.total_defender_points} |"
@@ -1696,7 +1759,7 @@ def test_plan_action_bids_first_hint_candidate() -> None:
                 _card("D2-hearts-2", "hearts", "2"),
             ],
         ],
-        "player_hand": [
+        "hand": [
             _card("D1-spades-2", "spades", "2"),
             _card("D1-hearts-2", "hearts", "2"),
             _card("D2-hearts-2", "hearts", "2"),
@@ -1711,7 +1774,7 @@ def test_plan_action_bids_first_hint_candidate() -> None:
 def test_plan_action_waits_for_auto_pass_without_bid_hints() -> None:
     state: JsonObject = {
         "action_hints": [],
-        "player_hand": [_card("D1-spades-7", "spades", "7")],
+        "hand": [_card("D1-spades-7", "spades", "7")],
     }
 
     action = plan_action(_state_message("bid", state), set())
@@ -1725,7 +1788,7 @@ def test_plan_action_uses_first_play_hint_candidate() -> None:
             [_card("D1-diamonds-5", "diamonds", "5")],
             [_card("D1-diamonds-K", "diamonds", "K")],
         ],
-        "player_hand": [
+        "hand": [
             _card("D1-diamonds-5", "diamonds", "5"),
             _card("D1-diamonds-K", "diamonds", "K"),
         ],
@@ -1742,7 +1805,7 @@ def test_plan_action_skips_rejected_play_hint_candidate() -> None:
             [_card("D1-diamonds-5", "diamonds", "5")],
             [_card("D1-diamonds-K", "diamonds", "K")],
         ],
-        "player_hand": [
+        "hand": [
             _card("D1-diamonds-5", "diamonds", "5"),
             _card("D1-diamonds-K", "diamonds", "K"),
         ],
@@ -1758,13 +1821,13 @@ def test_plan_action_skips_rejected_play_hint_candidate() -> None:
 def test_plan_action_free_leads_when_play_has_no_hints() -> None:
     state: JsonObject = {
         "action_hints": [],
-        "player_hand": [
+        "hand": [
             _card("D1-clubs-3", "clubs", "3"),
             _card("D1-spades-A", "spades", "A"),
         ],
         "trick": {
-            "lead_player": 3,
-            "slots": [{}, {}, {}, {}],
+            "lead_actor": "d",
+            "slots": [],
         },
     }
 
@@ -1775,49 +1838,53 @@ def test_plan_action_free_leads_when_play_has_no_hints() -> None:
 
 def _round_review_state(
     *,
-    team0_level: str,
-    team1_level: str,
+    first_partnership_level: str,
+    second_partnership_level: str,
     defender_points: int,
     bottom_card_bonus: int,
-    round_winning_team: int,
-    winning_team: int | None = None,
+    round_winner: WirePartnership,
+    terminal_winner: WirePartnership | None = None,
 ) -> JsonObject:
     return {
         "phase": "WAITING",
-        "team0_level": team0_level,
-        "team1_level": team1_level,
+        "partnership_levels": {
+            "first": first_partnership_level,
+            "second": second_partnership_level,
+        },
         "defender_points": defender_points,
         "scoring": {
-            "round_winning_team": round_winning_team,
+            "winning_partnership": round_winner,
             "defender_points": defender_points,
             "bottom_card_bonus": bottom_card_bonus,
             "total_defender_points": (
                 defender_points + bottom_card_bonus
             ),
         },
-        "winning_team": winning_team,
+        "winning_partnership": terminal_winner,
     }
 
 
 def test_round_tracker_records_one_entry_per_completed_round() -> None:
-    tracker = RoundTracker(team0_level="2", team1_level="2")
+    tracker = RoundTracker(
+        first_partnership_level="2", second_partnership_level="2"
+    )
     review = _round_review_state(
-        team0_level="2",
-        team1_level="3",
+        first_partnership_level="2",
+        second_partnership_level="3",
         defender_points=70,
         bottom_card_bonus=20,
-        round_winning_team=1,
+        round_winner="second",
     )
 
     entry = tracker.observe(review)
 
     assert entry == RoundEntry(
         index=1,
-        team0_before="2",
-        team0_after="2",
-        team1_before="2",
-        team1_after="3",
-        round_winning_team=1,
+        first_before="2",
+        first_after="2",
+        second_before="2",
+        second_after="3",
+        winning_partnership="second",
         defender_points=70,
         bottom_card_bonus=20,
         total_defender_points=90,
@@ -1826,57 +1893,63 @@ def test_round_tracker_records_one_entry_per_completed_round() -> None:
 
 
 def test_round_tracker_records_zero_level_gain() -> None:
-    tracker = RoundTracker(team0_level="6", team1_level="8")
+    tracker = RoundTracker(
+        first_partnership_level="6", second_partnership_level="8"
+    )
     review = _round_review_state(
-        team0_level="6",
-        team1_level="8",
+        first_partnership_level="6",
+        second_partnership_level="8",
         defender_points=80,
         bottom_card_bonus=0,
-        round_winning_team=0,
+        round_winner="first",
     )
 
     entry = tracker.observe(review)
 
     assert entry is not None
-    assert entry.team0_before == "6"
-    assert entry.team0_after == "6"
-    assert entry.team1_before == "8"
-    assert entry.team1_after == "8"
+    assert entry.first_before == "6"
+    assert entry.first_after == "6"
+    assert entry.second_before == "8"
+    assert entry.second_after == "8"
 
 
 def test_round_tracker_records_terminal_progress_as_win() -> None:
-    tracker = RoundTracker(team0_level="Q", team1_level="A")
+    tracker = RoundTracker(
+        first_partnership_level="Q", second_partnership_level="A"
+    )
     review = _round_review_state(
-        team0_level="Q",
-        team1_level="A",
+        first_partnership_level="Q",
+        second_partnership_level="A",
         defender_points=70,
         bottom_card_bonus=0,
-        round_winning_team=1,
-        winning_team=1,
+        round_winner="second",
+        terminal_winner="second",
     )
 
     entry = tracker.observe(review)
 
     assert entry is not None
-    assert entry.team0_after == "Q"
-    assert entry.team1_after == "WIN"
+    assert entry.first_after == "Q"
+    assert entry.second_after == "WIN"
 
 
 def test_round_tracker_rearms_after_review_phase_ends() -> None:
-    tracker = RoundTracker(team0_level="2", team1_level="2")
+    tracker = RoundTracker(
+        first_partnership_level="2", second_partnership_level="2"
+    )
     first = _round_review_state(
-        team0_level="3",
-        team1_level="2",
+        first_partnership_level="3",
+        second_partnership_level="2",
         defender_points=40,
         bottom_card_bonus=0,
-        round_winning_team=0,
+        round_winner="first",
     )
     second = _round_review_state(
-        team0_level="3",
-        team1_level="3",
+        first_partnership_level="3",
+        second_partnership_level="3",
         defender_points=120,
         bottom_card_bonus=0,
-        round_winning_team=1,
+        round_winner="second",
     )
 
     assert tracker.observe(first) is not None
@@ -1886,8 +1959,8 @@ def test_round_tracker_rearms_after_review_phase_ends() -> None:
 
     assert entry is not None
     assert entry.index == 2
-    assert entry.team0_before == "3"
-    assert entry.team1_before == "2"
+    assert entry.first_before == "3"
+    assert entry.second_before == "2"
 
 
 def test_write_reports_exposes_terminal_round_as_win(
@@ -1895,11 +1968,11 @@ def test_write_reports_exposes_terminal_round_as_win(
 ) -> None:
     terminal = RoundEntry(
         index=31,
-        team0_before="Q",
-        team0_after="Q",
-        team1_before="A",
-        team1_after="WIN",
-        round_winning_team=1,
+        first_before="Q",
+        first_after="Q",
+        second_before="A",
+        second_after="WIN",
+        winning_partnership="second",
         defender_points=70,
         bottom_card_bonus=0,
         total_defender_points=70,
@@ -1930,7 +2003,7 @@ def test_write_reports_exposes_terminal_round_as_win(
     markdown = (tmp_path / "playthrough.md").read_text(encoding="utf-8")
     report = _load_report(tmp_path / "playthrough.json")
     rows = list_field(report, "rounds")
-    assert "| 31 | Q->Q | A->WIN | Team 1 | 70 | 0 | 70 |" in markdown
+    assert "| 31 | Q->Q | A->WIN | second | 70 | 0 | 70 |" in markdown
     assert rows == [terminal.to_json()]
 
 

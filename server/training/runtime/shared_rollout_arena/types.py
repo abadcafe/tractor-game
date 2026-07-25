@@ -42,8 +42,8 @@ class RolloutArenaHandle:
 class RolloutRoundMetrics:
     """Metrics for one completed self-play round."""
 
-    team0_reward: float
-    team1_reward: float
+    first_partnership_reward: float
+    second_partnership_reward: float
     generated_action_count: int
     accepted_action_count: int
     action_choice_count: int
@@ -88,8 +88,8 @@ class RolloutArenaSnapshot:
     cancelled_env_count: int
     total_step_count: int
     max_step_count: int
-    team0_reward_sum: float
-    team1_reward_sum: float
+    first_partnership_reward_sum: float
+    second_partnership_reward_sum: float
     elapsed_seconds_max: float
 
     def __post_init__(self) -> None:
@@ -107,14 +107,14 @@ class RolloutArenaSnapshot:
         assert self.max_step_count >= 0
         assert self.elapsed_seconds_max >= 0.0
 
-    def average_team0_reward(self) -> float:
-        """Return mean team0 reward for accepted rounds."""
+    def average_first_partnership_reward(self) -> float:
+        """Return mean first_partnership reward for accepted rounds."""
         if self.round_count == 0:
             return 0.0
-        return self.team0_reward_sum / self.round_count
+        return self.first_partnership_reward_sum / self.round_count
 
-    def average_team1_reward(self) -> float:
-        """Return mean team1 reward for accepted rounds."""
+    def average_second_partnership_reward(self) -> float:
+        """Return mean second_partnership reward for accepted rounds."""
         if self.round_count == 0:
             return 0.0
-        return self.team1_reward_sum / self.round_count
+        return self.second_partnership_reward_sum / self.round_count

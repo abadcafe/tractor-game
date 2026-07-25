@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from server.game import Partnership
 from server.game.rules.cards import Rank
 from server.game.rules.progression import (
     TerminalProgress,
@@ -15,8 +16,8 @@ type ProgressLevel = Rank | TerminalProgress
 
 
 @dataclass(frozen=True, slots=True)
-class TeamProgress:
-    """One team's public game progress at a round boundary."""
+class PartnershipProgress:
+    """One partnership's public progress at a round boundary."""
 
     level: ProgressLevel
     is_declarer: bool
@@ -26,27 +27,26 @@ class TeamProgress:
 class RoundScore:
     """Completed-round score context for continuous training rewards."""
 
-    declarer_team: int
+    declarer_partnership: Partnership
     total_defender_points: int
     mandatory_levels: tuple[Rank, ...]
 
     def __post_init__(self) -> None:
-        assert self.declarer_team in (0, 1)
         assert self.total_defender_points >= 0
         assert self.mandatory_levels
 
 
 @dataclass(frozen=True, slots=True)
-class TeamReward:
+class PartnershipReward:
     """Zero-sum reward pair for one completed round."""
 
-    team0: float
-    team1: float
+    first_partnership: float
+    second_partnership: float
 
 
 def progress_delta(
-    before: TeamProgress,
-    after: TeamProgress,
+    before: PartnershipProgress,
+    after: PartnershipProgress,
     mandatory_levels: tuple[Rank, ...],
 ) -> int:
     """
@@ -76,38 +76,45 @@ def progress_delta(
 
 def zero_sum_rewards(
     *,
-    team0_before: TeamProgress,
-    team1_before: TeamProgress,
-    team0_after: TeamProgress,
-    team1_after: TeamProgress,
+    first_before: PartnershipProgress,
+    second_before: PartnershipProgress,
+    first_after: PartnershipProgress,
+    second_after: PartnershipProgress,
     score: RoundScore,
-) -> TeamReward:
+) -> PartnershipReward:
     """Return zero-sum rewards from clipped continuous progress."""
-    assert team0_before.is_declarer != team1_before.is_declarer
-    assert team0_after.is_declarer != team1_after.is_declarer
-    assert team0_before.is_declarer == (score.declarer_team == 0)
-    assert team1_before.is_declarer == (score.declarer_team == 1)
-    team0_delta = continuous_progress_delta(
-        team=0,
-        before=team0_before,
-        after=team0_after,
+    assert first_before.is_declarer != second_before.is_declarer
+    assert first_after.is_declarer != second_after.is_declarer
+    assert first_before.is_declarer == (
+        score.declarer_partnership == Partnership.FIRST
+    )
+    assert second_before.is_declarer == (
+        score.declarer_partnership == Partnership.SECOND
+    )
+    first_delta = continuous_progress_delta(
+        partnership=Partnership.FIRST,
+        before=first_before,
+        after=first_after,
         score=score,
     )
-    team1_delta = continuous_progress_delta(
-        team=1,
-        before=team1_before,
-        after=team1_after,
+    second_delta = continuous_progress_delta(
+        partnership=Partnership.SECOND,
+        before=second_before,
+        after=second_after,
         score=score,
     )
-    reward = team0_delta - team1_delta
-    return TeamReward(team0=reward, team1=-reward)
+    reward = first_delta - second_delta
+    return PartnershipReward(
+        first_partnership=reward,
+        second_partnership=-reward,
+    )
 
 
 def continuous_progress_delta(
     *,
-    team: int,
-    before: TeamProgress,
-    after: TeamProgress,
+    partnership: Partnership,
+    before: PartnershipProgress,
+    after: PartnershipProgress,
     score: RoundScore,
 ) -> float:
     """
@@ -117,14 +124,15 @@ def continuous_progress_delta(
     required-level target. A non-declarer already at ACE can gain stage
     control, but cannot make progress toward WIN in the same round.
     """
-    assert team in (0, 1)
-    assert before.is_declarer == (score.declarer_team == team)
+    assert before.is_declarer == (
+        score.declarer_partnership == partnership
+    )
     if after.level == TerminalProgress.WIN:
         assert before.is_declarer
         assert after.is_declarer
     raw_gain = (
         _declarer_continuous_level_gain(score.total_defender_points)
-        if team == score.declarer_team
+        if partnership == score.declarer_partnership
         else _defender_continuous_level_gain(
             score.total_defender_points
         )
@@ -140,7 +148,7 @@ def continuous_progress_delta(
 
 
 def _level_gain_limit(
-    before: TeamProgress,
+    before: PartnershipProgress,
     mandatory_levels: tuple[Rank, ...],
 ) -> float:
     assert isinstance(before.level, Rank)

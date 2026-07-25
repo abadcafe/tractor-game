@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from server.game.rules.cards import Card
+from server.game.seating import Partnership
 
 from ._base import SnapshotModel
 
@@ -12,7 +13,7 @@ __all__ = ["ScoringSnapshot"]
 class ScoringSnapshot(SnapshotModel):
     """All public scoring facts for a completed round."""
 
-    round_winning_team: int
+    winning_partnership: Partnership
     defender_points: int
     total_defender_points: int
     bottom_card_bonus: int

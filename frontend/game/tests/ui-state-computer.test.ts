@@ -12,24 +12,23 @@ function makeSnapshot(
 ): StateSnapshot {
   return {
     phase: "PLAYING",
-    player_hand: [
+    round_number: 1,
+    hand: [
       { id: "D1-hearts-5", suit: "hearts", rank: "5" },
       { id: "D1-spades-4", suit: "spades", rank: "4" },
     ],
     bottom_cards: [],
-    trump_rank: "4",
-    trump_suit: null,
-    declarer_team: 0,
-    declarer_player: 2,
+    trump: { kind: "no_trump", rank: "4" },
+    declarer: "c",
     defender_points: 0,
     action_hints: [[{ id: "D1-spades-4", suit: "spades", rank: "4" }]],
     trick: {
-      lead_player: 0,
+      lead_actor: "a",
       slots: [{
-        player: 0,
+        actor: "a",
         cards: [{ id: "D1-diamonds-A", suit: "diamonds", rank: "A" }],
       }],
-      current_player: 2,
+      current_actor: "c",
       failed_throw: null,
     },
     last_completed_trick: null,
@@ -41,10 +40,10 @@ function makeSnapshot(
     awaiting_action: "play",
     stirring_state: null,
     scoring: null,
-    winning_team: null,
-    team0_level: "4",
-    team1_level: "2",
-    player_hand_counts: [10, 10, 10, 10],
+    winning_partnership: null,
+    partnership_levels: { first: "4", second: "2" },
+    remaining_cards: { a: 10, b: 10, c: 10, d: 10 },
+    mandatory_levels: ["A"],
     next_round_confirmed: [],
     ...overrides,
   };
@@ -80,8 +79,7 @@ Deno.test("chooseFirstActionHint preserves server hint order", () => {
     { id: "D1-diamonds-3", suit: "diamonds", rank: "3" },
   ];
   const snap = makeSnapshot({
-    trump_rank: "4",
-    trump_suit: "hearts",
+    trump: { kind: "suited", rank: "4", suit: "hearts" },
     action_hints: [firstHint, secondHint],
   });
 
@@ -97,8 +95,8 @@ Deno.test("computeStirButtonState enables selected legal hint", () => {
   ];
   const snap = makeSnapshot({
     phase: "STIRRING",
-    trump_rank: "5",
-    player_hand: pair,
+    trump: { kind: "no_trump", rank: "5" },
+    hand: pair,
     action_hints: [pair],
     awaiting_action: "stir",
   });
@@ -118,8 +116,8 @@ Deno.test("computeStirButtonState disables pair outside legal hints", () => {
   ];
   const snap = makeSnapshot({
     phase: "STIRRING",
-    trump_rank: "5",
-    player_hand: pair,
+    trump: { kind: "no_trump", rank: "5" },
+    hand: pair,
     action_hints: [],
     awaiting_action: "stir",
   });

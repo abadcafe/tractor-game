@@ -1,24 +1,33 @@
 import type { StateSnapshot } from "../../core/types.ts";
 import { el } from "../dom.ts";
-import type { PlayerIndex } from "../../config.ts";
-import { teamLabelForViewer, viewerTeam } from "../player-view.ts";
+import type { SeatId } from "../../config.ts";
+import {
+  partnershipLabelForViewer,
+  viewerPartnership,
+} from "../seat-view.ts";
 
 /**
  * Render a game-over overlay showing the winning team, final levels, and a "新游戏" button.
  */
 export function renderGameOverOverlay(
   snapshot: StateSnapshot,
-  viewerPlayer?: PlayerIndex | null,
+  viewerSeat: SeatId,
   onNewGame?: () => void,
 ): HTMLElement {
   const overlay = el("div", { class: "game-over-overlay" });
 
-  const viewerWon = snapshot.winning_team === viewerTeam(viewerPlayer);
+  const viewerWon = snapshot.winning_partnership ===
+    viewerPartnership(viewerSeat);
 
   const winnerText = viewerWon
     ? "我们赢了！"
-    : snapshot.winning_team !== null
-    ? `${teamLabelForViewer(snapshot.winning_team, viewerPlayer)}获胜`
+    : snapshot.winning_partnership !== null
+    ? `${
+      partnershipLabelForViewer(
+        snapshot.winning_partnership,
+        viewerSeat,
+      )
+    }获胜`
     : "游戏结束";
 
   overlay.appendChild(
@@ -31,11 +40,11 @@ export function renderGameOverOverlay(
       "div",
       { class: "game-over-overlay__levels" },
       `${
-        teamLabelForViewer(0, viewerPlayer)
-      }: ${snapshot.team0_level}` +
+        partnershipLabelForViewer("first", viewerSeat)
+      }: ${snapshot.partnership_levels.first}` +
         `    ${
-          teamLabelForViewer(1, viewerPlayer)
-        }: ${snapshot.team1_level}`,
+          partnershipLabelForViewer("second", viewerSeat)
+        }: ${snapshot.partnership_levels.second}`,
     ),
   );
 

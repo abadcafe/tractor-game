@@ -1,7 +1,7 @@
 """Project one completed round for review or terminal display."""
 
-from server.game.config import Seat
 from server.game.rules.cards import Rank
+from server.game.seating import Partnership, Seat, SeatMap
 from server.game.snapshots import PlayerSnapshot
 from server.game.snapshots.review import ScoringSnapshot
 
@@ -22,34 +22,34 @@ def completed_round_snapshot(
     confirmed: frozenset[Seat],
     mandatory_levels: tuple[Rank, ...],
     *,
-    winning_team: int | None,
+    winning_partnership: Partnership | None,
 ) -> PlayerSnapshot:
     return PlayerSnapshot(
         phase="WAITING",
         round_number=completed.round_number,
-        player_hand=(),
-        player_hand_counts=(0, 0, 0, 0),
+        hand=(),
+        remaining_cards=SeatMap(a=0, b=0, c=0, d=0),
         bottom_cards=completed.bottom_cards,
         trump=contract_snapshot(completed.contract),
-        declarer_player=completed.contract.declarer,
+        declarer=completed.contract.declarer,
         defender_points=completed.defender_points,
         trick=None,
         last_completed_trick=completed_trick(completed.last_trick),
         defender_point_cards=completed.defender_point_cards,
         awaiting_action=(
             "next_round"
-            if winning_team is None and viewer not in confirmed
+            if winning_partnership is None and viewer not in confirmed
             else None
         ),
         scoring=ScoringSnapshot(
-            round_winning_team=completed.winning_team,
+            winning_partnership=completed.winning_partnership,
             defender_points=completed.defender_points,
             total_defender_points=completed.total_defender_points,
             bottom_card_bonus=completed.bottom_card_bonus,
             bottom_cards=completed.bottom_cards,
         ),
-        winning_team=winning_team,
-        team_levels=completed.levels_after,
+        winning_partnership=winning_partnership,
+        partnership_levels=completed.levels_after,
         mandatory_levels=mandatory_levels,
         bid_events=tuple(
             bid_event(event) for event in completed.bid_reveals

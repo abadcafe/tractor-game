@@ -7,6 +7,7 @@ import torch
 from torch import Tensor
 
 from server.foundation.result import Ok, Rejected
+from server.game import Seat
 from server.game.rules.cards.faces import FaceCount, card_face
 from server.training.legal_actions import (
     LegalActionIndex,
@@ -38,7 +39,7 @@ from server.training.semantic_actions.choices import (
 from server.training.tensorize import ObservationTensorBatch
 from server.training.torch_policy import TorchTrainingPolicy
 from server.training.torch_sampler import sample_policy_batch
-from tests.support import card
+from tests.support import card, seat_values
 from tests.support import snapshot as make_snapshot
 
 
@@ -222,19 +223,19 @@ def _bid_fixture() -> tuple[Observation, LegalActionIndex, int]:
     snapshot = make_snapshot(
         phase="DEAL_BID",
         awaiting_action="bid",
-        player_hand=[revealed],
-        player_hand_counts=[1, 0, 0, 0],
+        hand=[revealed],
+        remaining_cards=seat_values(1, 0, 0, 0),
         trump_rank="2",
     )
     observation = build_observation(
-        viewer=0,
+        viewer=Seat.A,
         snapshot=snapshot,
         memory=ObservationMemoryView(
             bid_actions=(), completed_tricks=()
         ),
     )
     legal = build_legal_action_index(
-        player_index=0,
+        viewer=Seat.A,
         snapshot=snapshot,
         query=observation.action_query,
     )
@@ -253,7 +254,7 @@ def _decision_key(*, decision_index: int = 0) -> PolicyDecisionKey:
         policy_version=0,
         rollout_id="torch-policy-test",
         episode_id=0,
-        player_index=0,
+        seat=Seat.A,
         decision_index=decision_index,
     )
 

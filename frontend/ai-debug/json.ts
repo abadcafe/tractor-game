@@ -1,4 +1,8 @@
-import type { JsonParseResult, TranscriptRecord } from "./types.ts";
+import type {
+  JsonParseResult,
+  SeatId,
+  TranscriptRecord,
+} from "./types.ts";
 import { recordValue } from "../browser/json.ts";
 
 export { recordValue } from "../browser/json.ts";
@@ -55,12 +59,12 @@ export function transcriptRecord(
   const id = record.id;
   const eventId = record.event_id;
   const createdAt = record.created_at;
-  const playerIndex = record.player_index;
+  const seat = record.seat;
   const seq = record.seq;
   const attempt = record.attempt;
   if (
     typeof id !== "number" || typeof eventId !== "number" ||
-    typeof createdAt !== "string" || typeof playerIndex !== "number" ||
+    typeof createdAt !== "string" || !isSeatId(seat) ||
     typeof seq !== "number" || typeof attempt !== "number"
   ) {
     return null;
@@ -79,7 +83,7 @@ export function transcriptRecord(
     id,
     event_id: eventId,
     created_at: createdAt,
-    player_index: playerIndex,
+    seat,
     seq,
     attempt,
     api_request: apiRequest,
@@ -87,6 +91,11 @@ export function transcriptRecord(
     api_error: apiError,
     tool_result: toolResult,
   };
+}
+
+function isSeatId(value: unknown): value is SeatId {
+  return value === "a" || value === "b" || value === "c" ||
+    value === "d";
 }
 
 function nullableString(value: unknown): string | null | undefined {

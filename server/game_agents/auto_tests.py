@@ -15,7 +15,7 @@ from server.game.snapshots.tricks import (
 )
 from server.game_agents.auto import AutoAgent, automatic_command
 from server.game_runtime.session import CommandDecoder, Delivery
-from tests.support import card, snapshot
+from tests.support import card, seat_values, snapshot
 
 
 def test_automatic_command_ignores_unrequested_action() -> None:
@@ -42,8 +42,8 @@ def test_automatic_command_passes_bid_without_legal_reveal() -> None:
         snapshot(
             phase="DEAL_BID",
             awaiting_action="bid",
-            player_hand=[card("spades", "3")],
-            player_hand_counts=(1, 0, 0, 0),
+            hand=[card("spades", "3")],
+            remaining_cards=seat_values(1, 0, 0, 0),
         ),
         random.Random(1),
     )
@@ -57,8 +57,8 @@ def test_automatic_command_can_choose_complete_bid_reveal() -> None:
         snapshot(
             phase="DEAL_BID",
             awaiting_action="bid",
-            player_hand=[level],
-            player_hand_counts=(1, 0, 0, 0),
+            hand=[level],
+            remaining_cards=seat_values(1, 0, 0, 0),
         ),
         random.Random(1),
     )
@@ -83,7 +83,7 @@ def test_automatic_command_buries_exact_bottom_count() -> None:
         snapshot(
             phase="STIRRING",
             awaiting_action="discard",
-            player_hand=hand,
+            hand=hand,
             bottom_cards=hand[:8],
         ),
         random.Random(3),
@@ -102,7 +102,7 @@ def test_automatic_command_stirs_only_with_a_complete_pair() -> None:
         snapshot(
             phase="STIRRING",
             awaiting_action="stir",
-            player_hand=(first, second),
+            hand=(first, second),
         ),
         random.Random(1),
     )
@@ -119,7 +119,7 @@ def test_automatic_command_passes_stir_without_pair() -> None:
         snapshot(
             phase="STIRRING",
             awaiting_action="stir",
-            player_hand=(card("spades", "2", 1),),
+            hand=(card("spades", "2", 1),),
         ),
         random.Random(1),
     )
@@ -134,8 +134,8 @@ def test_automatic_command_leads_a_card_from_hand() -> None:
     )
     command = automatic_command(
         snapshot(
-            player_hand=hand,
-            player_hand_counts=(2, 2, 2, 2),
+            hand=hand,
+            remaining_cards=seat_values(2, 2, 2, 2),
         ),
         random.Random(0),
     )
@@ -157,14 +157,14 @@ def test_automatic_command_follows_pair_structure() -> None:
     off_suit = card("hearts", "A")
     command = automatic_command(
         snapshot(
-            player_hand=(*follow_pair, off_suit),
-            player_hand_counts=(3, 3, 3, 3),
+            hand=(*follow_pair, off_suit),
+            remaining_cards=seat_values(3, 3, 3, 3),
             trick=TrickSnapshot(
-                lead_player=Seat.NORTH,
-                current_player=Seat.WEST,
+                lead_actor=Seat.A,
+                current_actor=Seat.B,
                 slots=(
                     TrickSlotSnapshot(
-                        player=Seat.NORTH,
+                        actor=Seat.A,
                         cards=lead_pair,
                     ),
                 ),
@@ -207,7 +207,7 @@ async def test_agent_requests_state_then_processes_delivery() -> None:
     await asyncio.sleep(0)
     await agent.offer(
         Delivery(
-            viewer=Seat.NORTH,
+            viewer=Seat.A,
             seq=1,
             snapshot=snapshot(awaiting_action=None),
             error=None,
@@ -216,7 +216,7 @@ async def test_agent_requests_state_then_processes_delivery() -> None:
     await starting
     await agent.offer(
         Delivery(
-            viewer=Seat.NORTH,
+            viewer=Seat.A,
             seq=2,
             snapshot=snapshot(
                 phase="WAITING",

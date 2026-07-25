@@ -10,6 +10,7 @@ from typing import Protocol
 import torch
 
 from server.foundation.result import Ok, Rejected
+from server.game import seat_id
 from server.training.legal_actions import LegalActionIndex
 from server.training.observation import Observation
 from server.training.policy import PolicyDecision
@@ -274,7 +275,7 @@ class BatchedPolicyClient:
             rollout_id=decision_key.rollout_id,
             worker_index=self.worker_index,
             episode_id=decision_key.episode_id,
-            player_index=decision_key.player_index,
+            seat=seat_id(decision_key.seat),
             decision_index=decision_key.decision_index,
             request_id=request_id,
         )

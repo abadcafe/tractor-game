@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import torch
 
+from server.game import Seat
 from server.game.rules.cards import Card
 from server.training.observation import Observation, build_observation
 from server.training.observation_memory import ObservationMemoryView
@@ -23,7 +24,7 @@ from tests.support import snapshot as make_snapshot
 
 def test_tensorize_observation_exposes_every_typed_column() -> None:
     observation = _observation(
-        player_hand=[
+        hand=[
             card("spades", "A", 1),
             card("spades", "A", 2),
         ]
@@ -65,9 +66,9 @@ def test_tensorize_observation_exposes_every_typed_column() -> None:
 
 
 def test_tensorize_observations_pads_only_to_batch_maximum() -> None:
-    short = _observation(player_hand=[card("spades", "A", 1)])
+    short = _observation(hand=[card("spades", "A", 1)])
     long = _observation(
-        player_hand=[
+        hand=[
             card("spades", "A", 1),
             card("hearts", "K", 2),
             card("clubs", "3", 1),
@@ -96,7 +97,7 @@ def test_tensorize_observations_pads_only_to_batch_maximum() -> None:
 
 def test_card_multiplicity_is_a_universal_scalar() -> None:
     observation = _observation(
-        player_hand=[
+        hand=[
             card("spades", "A", 1),
             card("spades", "A", 2),
         ]
@@ -123,7 +124,7 @@ def test_canonical_observation_has_exact_vocab_and_structure_rows() -> (
 ):
     """Pin the model-facing vocabulary without an opaque hash."""
     observation = _observation(
-        player_hand=[
+        hand=[
             card("spades", "A", 1),
             card("spades", "A", 2),
         ]
@@ -192,10 +193,10 @@ def test_canonical_observation_has_exact_vocab_and_structure_rows() -> (
     assert int(batch.query_indices[0].item()) == 15
 
 
-def _observation(*, player_hand: list[Card]) -> Observation:
+def _observation(*, hand: list[Card]) -> Observation:
     return build_observation(
-        viewer=0,
-        snapshot=make_snapshot(player_hand=player_hand),
+        viewer=Seat.A,
+        snapshot=make_snapshot(hand=hand),
         memory=ObservationMemoryView(
             bid_actions=(), completed_tricks=()
         ),

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from itertools import cycle, islice
+
 import pytest
 import torch
 from torch import Tensor
 
 from server.foundation.result import Ok, Rejected
+from server.game import Seat, seats
 from server.game.rules.cards.faces import CardFace, FaceCount
 from server.training.config import TrainConfig
 from server.training.legal_actions import (
@@ -513,15 +516,14 @@ def _single_card_batch(*, count: int) -> PPOBatchSource:
     store = ModelRankSampleArena(model_rank_index=0, device=device)
     handles: list[DecisionHandle] = []
     return_values: list[float] = []
-    for index in range(count):
-        player_index = index % 4
+    for seat in islice(cycle(seats()), count):
         handle = _store_single_card_decision(
             store=store,
             device=device,
-            player_index=player_index,
+            seat=seat,
         )
         handles.append(handle)
-        return_values.append(1.0 if player_index in (0, 2) else -1.0)
+        return_values.append(1.0 if seat in (Seat.A, Seat.C) else -1.0)
     returns = RankReturnTargets(
         policy_version=0,
         model_rank_index=0,
@@ -570,23 +572,23 @@ def _store_single_card_decision(
     *,
     store: ModelRankSampleArena,
     device: torch.device,
-    player_index: int,
+    seat: Seat,
 ) -> DecisionHandle:
     test_card = card("spades", "A", 1)
     snapshot = make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
-        player_hand=[test_card],
+        hand=[test_card],
     )
     observation = build_observation(
-        viewer=player_index,
+        viewer=seat,
         snapshot=snapshot,
         memory=ObservationMemoryView(
             bid_actions=(), completed_tricks=()
         ),
     )
     legal_actions = build_legal_action_index(
-        player_index=player_index,
+        viewer=seat,
         snapshot=snapshot,
         query=observation.action_query,
     )

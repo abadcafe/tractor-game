@@ -138,15 +138,15 @@ def _round_nodes(observation: RelativeObservation) -> list[TokenNode]:
         _node(
             RoundToken(
                 RoundField.REMAINING_CARDS,
-                context.left_enemy_remaining,
-                actor=RelativeActor.LEFT_ENEMY,
+                context.next_opponent_remaining,
+                actor=RelativeActor.NEXT_OPPONENT,
             )
         ),
         _node(
             RoundToken(
                 RoundField.REMAINING_CARDS,
-                context.right_enemy_remaining,
-                actor=RelativeActor.RIGHT_ENEMY,
+                context.previous_opponent_remaining,
+                actor=RelativeActor.PREVIOUS_OPPONENT,
             )
         ),
     ]

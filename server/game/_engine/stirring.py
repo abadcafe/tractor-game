@@ -6,9 +6,10 @@ from dataclasses import replace
 
 from server.foundation.result import Ok, Rejected
 from server.game import commands
-from server.game.config import Seat
 from server.game.rules import bidding
+from server.game.seating import Seat, next_seat, seats
 
+from ..rejections import wrong_turn
 from . import phases
 from .contracts import rule_declaration
 from .hands import replace_hand, resolve_cards
@@ -20,7 +21,6 @@ from .round_values import (
     StirEvent,
 )
 from .state import GameState, replace_phase
-from .topology import SEATS, next_seat, wrong_turn
 
 
 def bury(
@@ -98,7 +98,7 @@ def pass_stir(
     events = phase.stir_events + (
         StirEvent(actor=actor, cards=(), priority=None),
     )
-    if len(passed) == len(SEATS):
+    if len(passed) == len(seats()):
         return Ok(
             replace_phase(
                 state,
@@ -130,7 +130,7 @@ def stir(
     if actor != phase.current_actor:
         return wrong_turn(phase.current_actor)
     match resolve_cards(
-        phase.hands[int(actor)],
+        phase.hands.at(actor),
         command.card_ids,
     ):
         case Ok(value=cards):
@@ -176,7 +176,7 @@ def stir(
                 bottom_cards=phase.bottom_cards,
                 current_actor=actor,
                 hand_after_pickup=(
-                    phase.hands[int(actor)] + phase.bottom_cards
+                    phase.hands.at(actor) + phase.bottom_cards
                 ),
                 cause=BottomExchangeCause.STIR,
                 bid_reveals=phase.bid_reveals,

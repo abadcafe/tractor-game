@@ -15,7 +15,7 @@ public API.
 import json
 import time
 from collections.abc import AsyncGenerator, Generator
-from typing import Protocol, TypeGuard
+from typing import Literal, Protocol, TypeGuard
 
 import httpx
 import pytest
@@ -25,6 +25,7 @@ from starlette.testclient import TestClient, WebSocketTestSession
 from server.web.app import WebApplication
 
 _DEFAULT_WS_RECEIVE_TIMEOUT_SECONDS: float = 5.0
+type WireSeat = Literal["a", "b", "c", "d"]
 
 
 class WsReceiveTimeout(TimeoutError):
@@ -172,21 +173,21 @@ def _create_game_sync(sync_client: SyncServerClient) -> str:
     return _game_id_from_response(resp)
 
 
-def _player_ws_path(
-    game_id: str, *, player: int = 2, user_id: str = "user-2"
+def _seat_ws_path(
+    game_id: str, *, seat: WireSeat = "c", user_id: str = "user-2"
 ) -> str:
-    return f"/game/{game_id}/player/{player}?user_id={user_id}"
+    return f"/game/{game_id}/seat/{seat}?user_id={user_id}"
 
 
 def _prepare_ws_game(
     sync_client: SyncServerClient,
     game_id: str,
     *,
-    player: int = 2,
+    seat: WireSeat = "c",
     user_id: str = "user-2",
 ) -> None:
     attach_resp = sync_client.post(
-        f"/api/game/{game_id}/player/{player}?user_id={user_id}"
+        f"/api/game/{game_id}/seat/{seat}?user_id={user_id}"
     )
     assert attach_resp.status_code == 200
     fill_resp = sync_client.post(
@@ -202,7 +203,7 @@ def test_full_game_flow(sync_client: SyncServerClient) -> None:
     """Test creating a game, connecting, and verifying initial state."""
     game_id = _create_game_sync(sync_client)
     _prepare_ws_game(sync_client, game_id)
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws:
         # Client must send seq=0 to get initial state (no auto-push on
         # connect)
         ws.send_json({"seq": 0})
@@ -210,8 +211,8 @@ def test_full_game_flow(sync_client: SyncServerClient) -> None:
         assert data["type"] == "state"
         state = _as_dict(data["state"])
         assert "phase" in state
-        assert "player_hand" in state
-        assert "trump_rank" in state
+        assert "hand" in state
+        assert "trump" in state
 
 
 def test_reconnect_mid_game(sync_client: SyncServerClient) -> None:
@@ -219,12 +220,12 @@ def test_reconnect_mid_game(sync_client: SyncServerClient) -> None:
     game_id = _create_game_sync(sync_client)
     _prepare_ws_game(sync_client, game_id)
     # First connection
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         data1 = _as_dict(_receive_ws_json(ws))
         assert data1["type"] == "state"
     # Reconnect
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         data2 = _as_dict(_receive_ws_json(ws))
         assert data2["type"] == "state"
@@ -259,7 +260,7 @@ def test_invalid_action_returns_error(
     """
     game_id = _create_game_sync(sync_client)
     _prepare_ws_game(sync_client, game_id)
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws:
         # Get initial state via seq=0
         ws.send_json({"seq": 0})
         initial = _as_dict(_receive_ws_json(ws))
@@ -279,7 +280,7 @@ def test_delete_game_disconnects_ws(
     """Test that deleting a game while connected closes cleanly."""
     game_id = _create_game_sync(sync_client)
     _prepare_ws_game(sync_client, game_id)
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         _receive_ws_json(ws)
     # Delete after disconnect is fine
@@ -300,10 +301,10 @@ async def test_list_games_shows_lobby_fields(
     assert games[0]["game_id"] == game_id
     assert games[0]["user_count"] == 0
     assert games[0]["capacity"] == 4
-    assert games[0]["user_players"] == []
-    players_raw = _as_list(games[0]["players"])
-    assert len(players_raw) == 4
-    players = [_as_dict(player) for player in players_raw]
-    assert [player["index"] for player in players] == [0, 1, 2, 3]
-    assert all(player["occupied"] is False for player in players)
+    assert games[0]["user_seats"] == []
+    seats_raw = _as_list(games[0]["seats"])
+    assert len(seats_raw) == 4
+    seats = [_as_dict(seat) for seat in seats_raw]
+    assert [seat["seat"] for seat in seats] == ["a", "b", "c", "d"]
+    assert all(seat["occupied"] is False for seat in seats)
     assert "phase" not in games[0]

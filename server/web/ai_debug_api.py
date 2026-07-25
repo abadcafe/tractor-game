@@ -14,6 +14,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, Response
 
+from server.game import seat_from_id
 from server.game_agents.llm import LLMAgent, TranscriptRecordDict
 from server.game_runtime.room import GameRoom
 from server.web.state import ServerState
@@ -33,24 +34,24 @@ def register_ai_debug_routes(
         )
 
     async def ai_debug_stream(
-        websocket: WebSocket, game_id: str, player: int | None = None
+        websocket: WebSocket,
+        game_id: str,
+        seat: str | None = None,
     ) -> None:
         room = state.registry.get(game_id)
         if room is None:
             await websocket.close(code=4404, reason="game not found")
             return
-        ai_player = _ai_player_at(room, player)
-        if ai_player is None:
-            await websocket.close(
-                code=4404, reason="ai player not found"
-            )
+        ai_agent = _ai_agent_at(room, seat)
+        if ai_agent is None:
+            await websocket.close(code=4404, reason="ai seat not found")
             return
 
         await websocket.accept()
-        queue = ai_player.subscribe_transcript()
+        queue = ai_agent.subscribe_transcript()
         last_sent_event_id = 0
         try:
-            for message in ai_player.transcript_stream():
+            for message in ai_agent.transcript_stream():
                 await _send_ai_debug_message(websocket, message)
                 last_sent_event_id = message["event_id"]
             await _stream_live_ai_debug_messages(
@@ -59,7 +60,7 @@ def register_ai_debug_routes(
         except WebSocketDisconnect:
             pass
         finally:
-            ai_player.unsubscribe_transcript(queue)
+            ai_agent.unsubscribe_transcript(queue)
 
     app.add_api_route(
         "/debug/ai/{game_id}", ai_debug_page, methods=["GET"]
@@ -76,12 +77,15 @@ def _room_or_404(state: ServerState, game_id: str) -> GameRoom:
     return room
 
 
-def _ai_player_at(
-    room: GameRoom, player: int | None
+def _ai_agent_at(
+    room: GameRoom, seat_id: str | None
 ) -> LLMAgent | None:
-    if player is None or player < 0 or player >= 4:
+    if seat_id is None:
         return None
-    candidate = room.player_at(player)
+    seat = seat_from_id(seat_id)
+    if seat is None:
+        return None
+    candidate = room.agent_at(seat)
     if isinstance(candidate, LLMAgent):
         return candidate
     return None

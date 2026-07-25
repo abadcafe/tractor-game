@@ -165,22 +165,22 @@ def test_action_query_requires_current_trick_width_when_following() -> (
     hand_first = card("spades", "K", 1)
     hand_second = card("clubs", "K", 1)
     trick = TrickSnapshot(
-        lead_player=Seat.WEST,
-        current_player=Seat.SOUTH,
+        lead_actor=Seat.B,
+        current_actor=Seat.C,
         slots=(
-            TrickSlotSnapshot(player=Seat.NORTH, cards=()),
-            TrickSlotSnapshot(player=Seat.WEST, cards=(lead,)),
-            TrickSlotSnapshot(player=Seat.SOUTH, cards=()),
-            TrickSlotSnapshot(player=Seat.EAST, cards=()),
+            TrickSlotSnapshot(actor=Seat.A, cards=()),
+            TrickSlotSnapshot(actor=Seat.B, cards=(lead,)),
+            TrickSlotSnapshot(actor=Seat.C, cards=()),
+            TrickSlotSnapshot(actor=Seat.D, cards=()),
         ),
     )
     query = build_action_query(
-        player_index=2,
+        viewer=Seat.C,
         snapshot=make_snapshot(
             phase="PLAYING",
             awaiting_action="play",
             trick=trick,
-            player_hand=[hand_first, hand_second],
+            hand=[hand_first, hand_second],
         ),
     )
 

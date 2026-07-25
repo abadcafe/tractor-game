@@ -1,13 +1,13 @@
 import type { ClientAction, ServerMessage } from "../core/protocol.ts";
 import {
-  PLAYER_LEFT_WS_CLOSE_CODE,
-  type PlayerIndex,
+  SEAT_VACATED_WS_CLOSE_CODE,
+  type SeatId,
   WS_PATH,
 } from "../config.ts";
 
 export interface WsConnectionIdentity {
   gameId: string;
-  playerIndex: PlayerIndex;
+  seatId: SeatId;
   userId: string;
 }
 
@@ -175,7 +175,7 @@ export class WsClient {
           return;
         }
         this._ws = null;
-        if (event.code === PLAYER_LEFT_WS_CLOSE_CODE) {
+        if (event.code === SEAT_VACATED_WS_CLOSE_CODE) {
           this._disconnecting = true;
           this._reconnecting = false;
           this._cancelReconnectTimer();
@@ -254,5 +254,5 @@ export class WsClient {
 }
 
 function pathForTarget(target: WsConnectionIdentity): string {
-  return WS_PATH(target.gameId, target.playerIndex, target.userId);
+  return WS_PATH(target.gameId, target.seatId, target.userId);
 }

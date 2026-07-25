@@ -5,14 +5,11 @@ import type {
   StateSnapshot,
   TrickSlot,
 } from "../../core/types.ts";
+import { trumpRank, trumpSuit } from "../../core/types.ts";
 import { el } from "../dom.ts";
 import { cardDisplay, sortHand, suitSymbol } from "../../core/card.ts";
-import {
-  PLAYER_INDEXES,
-  type PlayerIndex,
-  playerIndexFromNumber,
-} from "../../config.ts";
-import { playerView } from "../player-view.ts";
+import { SEAT_IDS, type SeatId } from "../../config.ts";
+import { seatView } from "../seat-view.ts";
 
 /**
  * Render the current trick area showing played cards with player labels,
@@ -20,9 +17,9 @@ import { playerView } from "../player-view.ts";
  */
 export function renderTrickView(
   snapshot: StateSnapshot,
+  viewerSeat: SeatId,
   previousTrickPreview?: CompletedTrick | null,
   failedThrowPreview?: FailedThrow | null,
-  viewerPlayer?: PlayerIndex | null,
 ): HTMLElement {
   const showingFailedThrow = failedThrowPreview !== null &&
     failedThrowPreview !== undefined;
@@ -43,11 +40,11 @@ export function renderTrickView(
     ? renderCompletedTrickGrid(
       previousTrickPreview,
       snapshot,
-      viewerPlayer,
+      viewerSeat,
     )
     : showingScoringTrick
-    ? renderCompletedTrickGrid(scoringTrick, snapshot, viewerPlayer)
-    : renderCurrentTrickGrid(snapshot, viewerPlayer);
+    ? renderCompletedTrickGrid(scoringTrick, snapshot, viewerSeat)
+    : renderCurrentTrickGrid(snapshot, viewerSeat);
   if (grid !== null) {
     trickView.appendChild(grid);
   }
@@ -56,7 +53,7 @@ export function renderTrickView(
       renderFailedThrowPreview(
         failedThrowPreview,
         snapshot,
-        viewerPlayer,
+        viewerSeat,
       ),
     );
   }
@@ -92,37 +89,37 @@ function trickViewClass(
 
 function renderCurrentTrickGrid(
   snapshot: StateSnapshot,
-  viewerPlayer?: PlayerIndex | null,
+  viewerSeat: SeatId,
 ): HTMLElement | null {
   if (!snapshot.trick) {
     return null;
   }
   const grid = el("div", { class: "trick-grid" });
-  const slotsByPlayer = new Map(
-    snapshot.trick.slots.map((slot) => [slot.player, slot]),
+  const slotsBySeat = new Map(
+    snapshot.trick.slots.map((slot) => [slot.actor, slot]),
   );
 
-  for (const player of PLAYER_INDEXES) {
-    const direction = playerView(player, viewerPlayer).direction;
-    const isLead = player === snapshot.trick.lead_player;
-    const isCurrent = player === snapshot.trick.current_player;
-    const slot = slotsByPlayer.get(player);
+  for (const seat of SEAT_IDS) {
+    const tableSlot = seatView(seat, viewerSeat).slot;
+    const isLead = seat === snapshot.trick.lead_actor;
+    const isCurrent = seat === snapshot.trick.current_actor;
+    const slot = slotsBySeat.get(seat);
 
     let slotClass = `${
       slot ? "trick-slot" : "trick-placeholder-slot"
-    } trick-slot-${direction}`;
+    } trick-slot-${tableSlot}`;
     if (isLead) slotClass += " lead";
     if (isCurrent && !isLead) slotClass += " current";
     if (!slot) slotClass += " empty";
 
     grid.appendChild(
       renderTrickSlot(
-        player,
+        seat,
         slot,
         slotClass,
         isLead,
         snapshot,
-        viewerPlayer,
+        viewerSeat,
       ),
     );
   }
@@ -133,28 +130,28 @@ function renderCurrentTrickGrid(
 function renderCompletedTrickGrid(
   trick: CompletedTrick,
   snapshot: StateSnapshot,
-  viewerPlayer?: PlayerIndex | null,
+  viewerSeat: SeatId,
 ): HTMLElement {
   const grid = el("div", { class: "trick-grid trick-grid--previous" });
-  const slotsByPlayer = new Map(
-    trick.slots.map((slot) => [slot.player, slot]),
+  const slotsBySeat = new Map(
+    trick.slots.map((slot) => [slot.actor, slot]),
   );
 
-  for (const player of PLAYER_INDEXES) {
-    const direction = playerView(player, viewerPlayer).direction;
-    const slot = slotsByPlayer.get(player);
-    let slotClass = `trick-slot trick-slot-${direction}`;
-    const isLead = player === trick.lead_player;
+  for (const seat of SEAT_IDS) {
+    const tableSlot = seatView(seat, viewerSeat).slot;
+    const slot = slotsBySeat.get(seat);
+    let slotClass = `trick-slot trick-slot-${tableSlot}`;
+    const isLead = seat === trick.lead_actor;
     if (isLead) slotClass += " lead";
-    if (player === trick.winner) slotClass += " winner";
+    if (seat === trick.winner) slotClass += " winner";
     grid.appendChild(
       renderTrickSlot(
-        player,
+        seat,
         slot,
         slotClass,
         isLead,
         snapshot,
-        viewerPlayer,
+        viewerSeat,
       ),
     );
   }
@@ -163,18 +160,18 @@ function renderCompletedTrickGrid(
 }
 
 function renderTrickSlot(
-  player: PlayerIndex,
+  seat: SeatId,
   slot: TrickSlot | undefined,
   slotClass: string,
   isLead: boolean,
   snapshot: StateSnapshot,
-  viewerPlayer?: PlayerIndex | null,
+  viewerSeat: SeatId,
 ): HTMLElement {
   const slotEl = el("div", { class: slotClass });
-  const playerInfo = playerView(player, viewerPlayer);
+  const seatInfo = seatView(seat, viewerSeat);
   if (slot && slot.cards.length > 0) {
     slotEl.appendChild(
-      el("span", { class: "trick-player-label" }, playerInfo.label),
+      el("span", { class: "trick-player-label" }, seatInfo.label),
     );
     if (isLead) {
       slotEl.appendChild(
@@ -196,7 +193,7 @@ function sortTrickSlotCards(
   cards: Card[],
   snapshot: StateSnapshot,
 ): Card[] {
-  return sortHand(cards, snapshot.trump_suit, snapshot.trump_rank);
+  return sortHand(cards, trumpSuit(snapshot), trumpRank(snapshot));
 }
 
 function renderTrickCard(card: Card): HTMLElement {
@@ -218,18 +215,15 @@ function trickCardClass(card: Card): string {
 function renderFailedThrowPreview(
   event: FailedThrow,
   snapshot: StateSnapshot,
-  viewerPlayer?: PlayerIndex | null,
+  viewerSeat: SeatId,
 ): HTMLElement {
-  const playerIndex = playerIndexFromNumber(event.player);
-  const playerLabel = playerIndex === null
-    ? `玩家 ${event.player}`
-    : playerView(playerIndex, viewerPlayer).label;
+  const seatLabel = seatView(event.actor, viewerSeat).label;
   const preview = el("div", { class: "failed-throw-preview" });
   preview.appendChild(
     el(
       "div",
       { class: "failed-throw-preview__title" },
-      `${playerLabel}甩牌失败`,
+      `${seatLabel}甩牌失败`,
     ),
   );
   preview.appendChild(
@@ -264,8 +258,8 @@ function renderFailedThrowRow(
   for (
     const card of sortHand(
       cards,
-      snapshot.trump_suit,
-      snapshot.trump_rank,
+      trumpSuit(snapshot),
+      trumpRank(snapshot),
     )
   ) {
     cardsEl.appendChild(renderTrickCard(card));

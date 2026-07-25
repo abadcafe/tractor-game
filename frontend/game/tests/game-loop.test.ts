@@ -17,12 +17,11 @@ function makeSnapshot(
 ): StateSnapshot {
   return {
     phase: "PLAYING",
-    player_hand: [],
+    round_number: 1,
+    hand: [],
     bottom_cards: [],
-    trump_rank: "2",
-    trump_suit: null,
-    declarer_team: null,
-    declarer_player: null,
+    trump: { kind: "no_trump", rank: "2" },
+    declarer: null,
     defender_points: 0,
     action_hints: [],
     trick: null,
@@ -35,10 +34,10 @@ function makeSnapshot(
     awaiting_action: "play",
     stirring_state: null,
     scoring: null,
-    winning_team: null,
-    team0_level: "2",
-    team1_level: "2",
-    player_hand_counts: [13, 13, 13, 13],
+    winning_partnership: null,
+    partnership_levels: { first: "2", second: "2" },
+    remaining_cards: { a: 13, b: 13, c: 13, d: 13 },
+    mandatory_levels: ["A"],
     next_round_confirmed: [],
     ...overrides,
   };
@@ -122,9 +121,9 @@ Deno.test("test_handleMessage_stirring_our_turn", () => {
     stirring_state: {
       phase: "WAITING",
       trump_suit: null,
-      current_player: 2,
-      declarer_player: 0,
-      exchanging_player: null,
+      current_actor: "c",
+      declarer: "a",
+      exchanging_actor: null,
       exchange_count: null,
     },
   });
@@ -143,9 +142,9 @@ Deno.test("test_handleMessage_stirring_not_our_turn", () => {
     stirring_state: {
       phase: "WAITING",
       trump_suit: null,
-      current_player: 1,
-      declarer_player: 0,
-      exchanging_player: null,
+      current_actor: "b",
+      declarer: "a",
+      exchanging_actor: null,
       exchange_count: null,
     },
   });
@@ -164,9 +163,9 @@ Deno.test("test_handleMessage_exchange_our_turn", () => {
     stirring_state: {
       phase: "EXCHANGING",
       trump_suit: null,
-      current_player: 2,
-      declarer_player: 0,
-      exchanging_player: 2,
+      current_actor: "c",
+      declarer: "a",
+      exchanging_actor: "c",
       exchange_count: 8,
     },
   });
@@ -209,7 +208,7 @@ Deno.test("test_handleMessage_waiting_next_round", () => {
     phase: "WAITING",
     awaiting_action: "next_round",
     scoring: {
-      round_winning_team: 0,
+      winning_partnership: "first",
       defender_points: 30,
       total_defender_points: 30,
       bottom_card_bonus: 0,
@@ -227,11 +226,11 @@ Deno.test("test_handleMessage_game_over_no_interaction", () => {
   const loop = new GameLoop(stateManager, mockRender, mockContainer);
   const msg = makeStateMsg({
     phase: "WAITING",
-    winning_team: 0,
+    winning_partnership: "first",
     awaiting_action: null,
   });
   loop.handleMessage(msg);
-  assertEquals(lastRenderedSnapshot!.winning_team, 0);
+  assertEquals(lastRenderedSnapshot!.winning_partnership, "first");
   // Game over has no awaiting action -> null interaction mode
   assertEquals(lastInteractionMode, null);
 });

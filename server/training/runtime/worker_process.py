@@ -1033,8 +1033,12 @@ async def _play_worker_round(
         context=context,
         fields={
             "duration_seconds": round_data.elapsed_seconds,
-            "team0_reward": round_data.team0_reward,
-            "team1_reward": round_data.team1_reward,
+            "first_partnership_reward": (
+                round_data.first_partnership_reward
+            ),
+            "second_partnership_reward": (
+                round_data.second_partnership_reward
+            ),
             "generated_action_count": round_data.generated_action_count,
             "accepted_action_count": round_data.accepted_action_count,
             "action_choice_count": round_data.action_choice_count,
@@ -1081,8 +1085,8 @@ def _round_metrics(
     round_data: TrainingRoundResult,
 ) -> RolloutRoundMetrics:
     return RolloutRoundMetrics(
-        team0_reward=round_data.team0_reward,
-        team1_reward=round_data.team1_reward,
+        first_partnership_reward=round_data.first_partnership_reward,
+        second_partnership_reward=round_data.second_partnership_reward,
         generated_action_count=round_data.generated_action_count,
         accepted_action_count=round_data.accepted_action_count,
         action_choice_count=round_data.action_choice_count,

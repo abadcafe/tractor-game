@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import torch
 
+from server.game import Seat
 from server.training import model as model_api
 from server.training.model import TractorPolicyModel
 from server.training.observation import Observation, build_observation
@@ -14,7 +15,7 @@ from server.training.semantic_actions.choices import (
     PASS_CHOICE_ID,
 )
 from server.training.tensorize import tensorize_observation
-from tests.support import card
+from tests.support import card, seat_values
 from tests.support import snapshot as make_snapshot
 
 
@@ -83,12 +84,12 @@ def test_live_query_seed_matches_teacher_forced_scoring() -> None:
 
 def _bid_observation() -> Observation:
     return build_observation(
-        viewer=0,
+        viewer=Seat.A,
         snapshot=make_snapshot(
             phase="DEAL_BID",
             awaiting_action="bid",
-            player_hand=[card("hearts", "2")],
-            player_hand_counts=[1, 0, 0, 0],
+            hand=[card("hearts", "2")],
+            remaining_cards=seat_values(1, 0, 0, 0),
             trump_rank="2",
         ),
         memory=ObservationMemoryView(

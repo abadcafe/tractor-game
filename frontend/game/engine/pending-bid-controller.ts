@@ -1,5 +1,5 @@
 import type { ServerMessage } from "../core/protocol.ts";
-import type { StateSnapshot } from "../core/types.ts";
+import { type StateSnapshot, trumpRank } from "../core/types.ts";
 import {
   computeBidOptionsFromHints,
   computeBidPriority,
@@ -30,7 +30,7 @@ export class PendingBidController {
   ): BidRenderState {
     const currentBidOptions = computeBidOptionsFromHints(
       snapshot.action_hints ?? [],
-      snapshot.trump_rank,
+      trumpRank(snapshot),
     );
     if (snapshot.phase !== "DEAL_BID") {
       this.reset();
@@ -110,12 +110,12 @@ function filterAllowedBidOptions(
   if (snapshot.phase !== "DEAL_BID") {
     return [];
   }
-  const handIds = new Set(snapshot.player_hand.map((card) => card.id));
+  const handIds = new Set(snapshot.hand.map((card) => card.id));
   const currentBidPriority = snapshot.bid_winner === null
     ? 0
     : computeBidPriority(
       snapshot.bid_winner.cards,
-      snapshot.trump_rank,
+      trumpRank(snapshot),
     );
   return options.filter((option) =>
     option.priority > currentBidPriority &&

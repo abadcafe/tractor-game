@@ -14,7 +14,7 @@ export function render(
   snapshot: StateSnapshot,
   container: Element,
   interactionMode: InteractionMode,
-  ctx?: RenderContext,
+  ctx: RenderContext,
 ): void {
   // Clear the container
   container.innerHTML = "";
@@ -29,10 +29,10 @@ export function render(
   container.appendChild(
     renderGameTable(
       snapshot,
-      ctx?.previousTrickPreview,
-      ctx?.failedThrowPreview,
-      ctx?.gameId,
-      ctx?.viewerPlayer,
+      ctx.viewerSeat,
+      ctx.previousTrickPreview,
+      ctx.failedThrowPreview,
+      ctx.gameId,
     ),
   );
 
@@ -40,55 +40,58 @@ export function render(
     renderHandView(
       snapshot,
       interactionMode,
-      ctx?.selectedCardIds,
-      ctx?.legalCardIds,
-      ctx?.callbacks?.onCardClick,
-      ctx?.callbacks?.onAction,
-      ctx?.callbacks?.onClearSelection,
-      ctx?.callbacks?.onUseHint,
-      ctx?.callbacks?.onToggleHandCompact,
-      ctx?.compactHand,
-      ctx?.callbacks?.onStir,
-      ctx?.callbacks?.onPass,
-      ctx?.stirButtonState,
-      ctx?.callbacks?.onShowPreviousTrick,
-      ctx?.bidOptions,
-      ctx?.pendingBidIntent,
-      ctx?.callbacks?.onBidOptionSelect,
-      ctx?.callbacks?.onCardRangeSelect,
+      ctx.selectedCardIds,
+      ctx.legalCardIds,
+      ctx.callbacks?.onCardClick,
+      ctx.callbacks?.onAction,
+      ctx.callbacks?.onClearSelection,
+      ctx.callbacks?.onUseHint,
+      ctx.callbacks?.onToggleHandCompact,
+      ctx.compactHand,
+      ctx.callbacks?.onStir,
+      ctx.callbacks?.onPass,
+      ctx.stirButtonState,
+      ctx.callbacks?.onShowPreviousTrick,
+      ctx.bidOptions,
+      ctx.pendingBidIntent,
+      ctx.callbacks?.onBidOptionSelect,
+      ctx.callbacks?.onCardRangeSelect,
     ),
   );
 
   container.appendChild(
     renderScoreboard(
       snapshot,
-      ctx?.viewerPlayer,
-      ctx?.connectionStatus,
+      ctx.viewerSeat,
+      ctx.connectionStatus,
     ),
   );
 
   // Scoring overlay for completed rounds that can continue.
-  if (snapshot.phase === "WAITING" && snapshot.winning_team === null) {
+  if (
+    snapshot.phase === "WAITING" &&
+    snapshot.winning_partnership === null
+  ) {
     container.appendChild(
       renderScoringOverlay(
         snapshot,
+        ctx.viewerSeat,
         interactionMode,
-        interactionMode === "next_round" && ctx?.callbacks?.onAction
-          ? () => ctx!.callbacks!.onAction("next_round")
+        interactionMode === "next_round" && ctx.callbacks?.onAction
+          ? () => ctx.callbacks?.onAction("next_round")
           : undefined,
-        ctx?.levelChange,
-        ctx?.viewerPlayer,
+        ctx.levelChange,
       ),
     );
   }
 
-  // Game over is represented by winning_team, not by phase.
-  if (snapshot.winning_team !== null) {
+  // Game over is represented by winning_partnership, not by phase.
+  if (snapshot.winning_partnership !== null) {
     container.appendChild(
       renderGameOverOverlay(
         snapshot,
-        ctx?.viewerPlayer,
-        ctx?.callbacks?.onNewGame,
+        ctx.viewerSeat,
+        ctx.callbacks?.onNewGame,
       ),
     );
   }

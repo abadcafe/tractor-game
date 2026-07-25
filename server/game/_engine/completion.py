@@ -1,15 +1,17 @@
 """Score a completed round and advance the game."""
 
 from server.game.rules import progression, scoring
+from server.game.seating import (
+    Partnership,
+    PartnershipMap,
+    next_seat,
+    partner_seat,
+    partnership_of,
+)
 
 from . import phases
-from .round_values import (
-    CompletedRound,
-    InternalCompletedTrick,
-    TeamLevels,
-)
+from .round_values import CompletedRound, InternalCompletedTrick
 from .state import GameState, config_of, replace_phase
-from .topology import next_seat, partner, team
 
 
 def finish_round(
@@ -17,8 +19,10 @@ def finish_round(
     phase: phases.Playing,
     last_trick: InternalCompletedTrick,
 ) -> GameState:
-    declarer_team = team(phase.contract.declarer)
-    defenders_won_last = team(last_trick.winner) != declarer_team
+    declarer_partnership = partnership_of(phase.contract.declarer)
+    defenders_won_last = (
+        partnership_of(last_trick.winner) != declarer_partnership
+    )
     result = scoring.score_round(
         defender_points=sum(
             card.points for card in phase.defender_point_cards
@@ -29,37 +33,51 @@ def finish_round(
         trump_suit=phase.contract.trump_suit,
         trump_rank=phase.contract.trump_rank,
     )
-    winning_team = (
-        1 - declarer_team if result.defenders_win else declarer_team
+    winning_partnership = (
+        _opponent(declarer_partnership)
+        if result.defenders_win
+        else declarer_partnership
     )
     next_declarer = (
         next_seat(phase.contract.declarer)
         if result.defenders_win
-        else partner(phase.contract.declarer)
+        else partner_seat(phase.contract.declarer)
     )
-    gains = [0, 0]
-    gains[winning_team] = (
+    winning_gain = (
         result.defender_level_gain
         if result.defenders_win
         else result.declarer_level_gain
     )
-    advances = tuple(
-        progression.advance_team(
-            level=phase.levels[team_index],
-            raw_gain=gains[team_index],
-            was_declarer=team_index == declarer_team,
+    advances = PartnershipMap(
+        first=progression.advance_team(
+            level=phase.levels.at(Partnership.FIRST),
+            raw_gain=(
+                winning_gain
+                if winning_partnership == Partnership.FIRST
+                else 0
+            ),
+            was_declarer=(declarer_partnership == Partnership.FIRST),
             mandatory_levels=config_of(state).mandatory_levels,
-        )
-        for team_index in (0, 1)
+        ),
+        second=progression.advance_team(
+            level=phase.levels.at(Partnership.SECOND),
+            raw_gain=(
+                winning_gain
+                if winning_partnership == Partnership.SECOND
+                else 0
+            ),
+            was_declarer=(declarer_partnership == Partnership.SECOND),
+            mandatory_levels=config_of(state).mandatory_levels,
+        ),
     )
-    levels_after: TeamLevels = (
-        advances[0].level,
-        advances[1].level,
+    levels_after = PartnershipMap(
+        first=advances.at(Partnership.FIRST).level,
+        second=advances.at(Partnership.SECOND).level,
     )
     completed = CompletedRound(
         round_number=phase.round_number,
         contract=phase.contract,
-        winning_team=winning_team,
+        winning_partnership=winning_partnership,
         next_declarer=next_declarer,
         defender_points=sum(
             card.points for card in phase.defender_point_cards
@@ -76,12 +94,12 @@ def finish_round(
         exchange_events=phase.exchange_events,
         defender_point_cards=phase.defender_point_cards,
     )
-    if advances[winning_team].won_game:
+    if advances.at(winning_partnership).won_game:
         return replace_phase(
             state,
             phases.Finished(
                 completed=completed,
-                winning_team=winning_team,
+                winning_partnership=winning_partnership,
             ),
         )
     return replace_phase(
@@ -91,3 +109,9 @@ def finish_round(
             confirmed=frozenset(),
         ),
     )
+
+
+def _opponent(partnership: Partnership) -> Partnership:
+    if partnership == Partnership.FIRST:
+        return Partnership.SECOND
+    return Partnership.FIRST

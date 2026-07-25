@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from server.foundation.result import Ok, Rejected
-from server.game import commands
+from server.game import Seat, commands
 from server.game.snapshots import PlayerSnapshot
 from server.training.legal_actions import build_legal_action_index
 from server.training.observation import build_observation
@@ -19,7 +19,7 @@ from server.training.trajectory import DecisionStep, TrajectoryRecorder
 
 
 @dataclass(frozen=True, slots=True)
-class TrainingPlayerStats:
+class SelfPlayActorStats:
     """Per-round model action statistics."""
 
     generated_action_count: int = 0
@@ -35,25 +35,24 @@ class TrainingDecision:
     step: DecisionStep
 
 
-class TrainingPlayer:
+class SelfPlayActor:
     """Create policy decisions from contiguous player snapshots."""
 
     def __init__(
         self,
-        index: int,
+        seat: Seat,
         *,
         policy: TrainingPolicy,
         recorder: TrajectoryRecorder | None = None,
         observation_memory: ObservationMemory | None = None,
     ) -> None:
-        assert 0 <= index < 4
-        self.index = index
+        self.seat = seat
         self._policy = policy
         self._recorder = recorder or TrajectoryRecorder()
         self._observation_memory = (
             observation_memory or ObservationMemory()
         )
-        self._stats = TrainingPlayerStats()
+        self._stats = SelfPlayActorStats()
         self._base_seed = 0
         self._policy_version = 0
         self._rollout_id = "uninitialized"
@@ -64,7 +63,7 @@ class TrainingPlayer:
         """Return the accepted trajectory recorder."""
         return self._recorder
 
-    def stats(self) -> TrainingPlayerStats:
+    def stats(self) -> SelfPlayActorStats:
         """Return per-round action statistics."""
         return self._stats
 
@@ -82,7 +81,7 @@ class TrainingPlayer:
         assert rollout_id
         assert episode_id >= 0
         self._observation_memory.reset_episode()
-        self._stats = TrainingPlayerStats()
+        self._stats = SelfPlayActorStats()
         self._base_seed = base_seed
         self._policy_version = policy_version
         self._rollout_id = rollout_id
@@ -118,12 +117,12 @@ class TrainingPlayer:
             "play",
         )
         observation = build_observation(
-            viewer=self.index,
+            viewer=self.seat,
             snapshot=snapshot,
             memory=self._observation_memory.view(),
         )
         legal_actions = build_legal_action_index(
-            player_index=self.index,
+            viewer=self.seat,
             snapshot=snapshot,
             query=observation.action_query,
         )
@@ -135,7 +134,7 @@ class TrainingPlayer:
                 policy_version=self._policy_version,
                 rollout_id=self._rollout_id,
                 episode_id=self._episode_id,
-                player_index=self.index,
+                seat=self.seat,
                 decision_index=self._decision_index,
             ),
         )
@@ -144,7 +143,7 @@ class TrainingPlayer:
         decision = decision_result.value
         command_result = bind_generated_action(
             decision.action,
-            snapshot.player_hand,
+            snapshot.hand,
         )
         if isinstance(command_result, Rejected):
             return command_result
@@ -157,7 +156,7 @@ class TrainingPlayer:
             value=TrainingDecision(
                 command=command_result.value,
                 step=DecisionStep(
-                    player_index=self.index,
+                    seat=self.seat,
                     seq=seq,
                     action=decision.action,
                     decision_handle=decision.decision_handle,
@@ -173,19 +172,21 @@ class TrainingPlayer:
 
 
 def _add_generated(
-    stats: TrainingPlayerStats,
+    stats: SelfPlayActorStats,
     *,
     choice_count: int,
-) -> TrainingPlayerStats:
-    return TrainingPlayerStats(
+) -> SelfPlayActorStats:
+    return SelfPlayActorStats(
         generated_action_count=stats.generated_action_count + 1,
         accepted_action_count=stats.accepted_action_count,
         action_choice_count=stats.action_choice_count + choice_count,
     )
 
 
-def _add_accepted(stats: TrainingPlayerStats) -> TrainingPlayerStats:
-    return TrainingPlayerStats(
+def _add_accepted(
+    stats: SelfPlayActorStats,
+) -> SelfPlayActorStats:
+    return SelfPlayActorStats(
         generated_action_count=stats.generated_action_count,
         accepted_action_count=stats.accepted_action_count + 1,
         action_choice_count=stats.action_choice_count,
@@ -193,7 +194,7 @@ def _add_accepted(stats: TrainingPlayerStats) -> TrainingPlayerStats:
 
 
 __all__ = (
+    "SelfPlayActor",
+    "SelfPlayActorStats",
     "TrainingDecision",
-    "TrainingPlayer",
-    "TrainingPlayerStats",
 )

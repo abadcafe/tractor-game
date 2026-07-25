@@ -6,15 +6,16 @@ import type {
 } from "../../engine/types.ts";
 import { el } from "../dom.ts";
 import {
-  DEFAULT_VIEWER_PLAYER,
-  PLAYER_INDEXES,
-  type PlayerIndex,
+  type PartnershipId,
+  partnershipOf,
+  SEAT_IDS,
+  type SeatId,
 } from "../../config.ts";
 import {
-  playerView,
-  teamLabelForViewer,
-  viewerTeam,
-} from "../player-view.ts";
+  partnershipLabelForViewer,
+  seatView,
+  viewerPartnership,
+} from "../seat-view.ts";
 import { cardDisplay, suitSymbol } from "../../core/card.ts";
 
 /**
@@ -23,10 +24,10 @@ import { cardDisplay, suitSymbol } from "../../core/card.ts";
  */
 export function renderScoringOverlay(
   snapshot: StateSnapshot,
+  viewerSeat: SeatId,
   _interactionMode: InteractionMode,
   onNextRound?: () => void,
   levelChange?: LevelChangeInfo,
-  viewerPlayer?: PlayerIndex | null,
 ): HTMLElement {
   const overlay = el("div", { class: "scoring-overlay" });
   const card = el("div", { class: "scoring-overlay__card" });
@@ -35,7 +36,7 @@ export function renderScoringOverlay(
 
   if (snapshot.scoring) {
     card.appendChild(
-      renderScoringSummary(snapshot, levelChange, viewerPlayer),
+      renderScoringSummary(snapshot, levelChange, viewerSeat),
     );
     card.appendChild(renderBottomCards(snapshot.scoring.bottom_cards));
   } else {
@@ -50,7 +51,7 @@ export function renderScoringOverlay(
   }
 
   card.appendChild(
-    renderScoringActions(confirmedSet, onNextRound, viewerPlayer),
+    renderScoringActions(confirmedSet, onNextRound, viewerSeat),
   );
 
   overlay.appendChild(card);
@@ -59,8 +60,8 @@ export function renderScoringOverlay(
 
 function renderScoringSummary(
   snapshot: StateSnapshot,
-  levelChange?: LevelChangeInfo,
-  viewerPlayer?: PlayerIndex | null,
+  levelChange: LevelChangeInfo | undefined,
+  viewerSeat: SeatId,
 ): HTMLElement {
   const scoring = snapshot.scoring;
   const summary = el("div", { class: "scoring-overlay__summary" });
@@ -71,9 +72,9 @@ function renderScoringSummary(
     return summary;
   }
 
-  const roundWinnerLabel = teamLabelForViewer(
-    scoring.round_winning_team,
-    viewerPlayer,
+  const roundWinnerLabel = partnershipLabelForViewer(
+    scoring.winning_partnership,
+    viewerSeat,
   );
   summary.appendChild(
     el(
@@ -98,9 +99,11 @@ function renderScoringSummary(
   );
 
   const resultText = scoringResultText(
-    snapshot.declarer_team,
+    snapshot.declarer === null
+      ? null
+      : partnershipOf(snapshot.declarer),
     levelChange,
-    viewerPlayer,
+    viewerSeat,
   );
   if (resultText !== null) {
     summary.appendChild(
@@ -111,14 +114,15 @@ function renderScoringSummary(
 }
 
 function scoringResultText(
-  declarerTeam: number | null,
-  levelChange?: LevelChangeInfo,
-  viewerPlayer?: PlayerIndex | null,
+  declarerPartnership: PartnershipId | null,
+  levelChange: LevelChangeInfo | undefined,
+  viewerSeat: SeatId,
 ): string | null {
   if (levelChange === undefined) {
     return null;
   }
-  const isViewerDeclarer = declarerTeam === viewerTeam(viewerPlayer);
+  const isViewerDeclarer = declarerPartnership ===
+    viewerPartnership(viewerSeat);
   if (levelChange.switched) {
     const loser = isViewerDeclarer ? "我方" : "对方";
     const winner = isViewerDeclarer ? "对方" : "我方";
@@ -158,15 +162,15 @@ function renderBottomCard(card: Card): HTMLElement {
 }
 
 function renderScoringActions(
-  confirmedSet: Set<number>,
-  onNextRound?: () => void,
-  viewerPlayer?: PlayerIndex | null,
+  confirmedSet: Set<SeatId>,
+  onNextRound: (() => void) | undefined,
+  viewerSeat: SeatId,
 ): HTMLElement {
   const actions = el("div", { class: "scoring-overlay__actions" });
   const confirmGrid = el("div", { class: "confirm-grid" });
-  for (const playerIndex of PLAYER_INDEXES) {
-    const view = playerView(playerIndex, viewerPlayer);
-    const isReady = confirmedSet.has(playerIndex);
+  for (const seatId of SEAT_IDS) {
+    const view = seatView(seatId, viewerSeat);
+    const isReady = confirmedSet.has(seatId);
     const slotClass = `confirm-slot ${isReady ? "ready" : "pending"}`;
     const slot = el("div", { class: slotClass });
     slot.appendChild(
@@ -184,7 +188,7 @@ function renderScoringActions(
   actions.appendChild(confirmGrid);
 
   const viewerReady = confirmedSet.has(
-    viewerPlayer ?? DEFAULT_VIEWER_PLAYER,
+    viewerSeat,
   );
   if (!viewerReady) {
     const button = el("button", {

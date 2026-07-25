@@ -115,10 +115,10 @@ def _is_biggest(
             trump_suit,
             trump_rank,
         )
-        for player_hand in other_players_hands:
+        for hand in other_players_hands:
             others = [
                 c
-                for c in player_hand
+                for c in hand
                 if effective_suit(c, trump_suit, trump_rank) == eff
             ]
             for c in others:
@@ -141,10 +141,10 @@ def _is_biggest(
             trump_rank,
         )
 
-        for player_hand in other_players_hands:
+        for hand in other_players_hands:
             others = [
                 c
-                for c in player_hand
+                for c in hand
                 if effective_suit(c, trump_suit, trump_rank) == eff
             ]
             for pair_cards in _player_pair_groups(others):
@@ -163,10 +163,10 @@ def _is_biggest(
         _card_order_for_effective_suit(c, eff, trump_suit, trump_rank)
         for c in cards
     )
-    for player_hand in other_players_hands:
+    for hand in other_players_hands:
         others = [
             c
-            for c in player_hand
+            for c in hand
             if effective_suit(c, trump_suit, trump_rank) == eff
         ]
         other_subs = (

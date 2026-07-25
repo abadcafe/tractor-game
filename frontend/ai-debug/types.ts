@@ -3,12 +3,13 @@ export type SlotKind =
   | "api_response"
   | "api_error"
   | "tool_result";
+export type SeatId = "a" | "b" | "c" | "d";
 
 export interface TranscriptRecord {
   id: number;
   event_id: number;
   created_at: string;
-  player_index: number;
+  seat: SeatId;
   seq: number;
   attempt: number;
   api_request: string | null;

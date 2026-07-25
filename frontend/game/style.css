@@ -151,9 +151,9 @@ button:disabled {
   min-height: 0;
   display: grid;
   grid-template-areas:
-    "info north notice"
-    "west trick east"
-    ". south .";
+    "info top notice"
+    "left trick right"
+    ". bottom .";
   grid-template-columns:
     minmax(106px, 154px) minmax(260px, 1fr) minmax(106px, 154px);
   grid-template-rows: 68px minmax(92px, 1fr) 68px 26px;
@@ -218,13 +218,13 @@ button:disabled {
   white-space: nowrap;
 }
 
-.player-label.team0,
-.scoreboard__team-label.team0 {
+.player-label.partnership-first,
+.scoreboard__team-label.partnership-first {
   color: #83cdf4;
 }
 
-.player-label.team1,
-.scoreboard__team-label.team1 {
+.player-label.partnership-second,
+.scoreboard__team-label.partnership-second {
   color: #ffb06b;
 }
 
@@ -238,11 +238,11 @@ button:disabled {
   background: rgba(255, 255, 255, 0.13);
 }
 
-.team-chip.team0 {
+.team-chip.partnership-first {
   background: rgba(78, 163, 216, 0.25);
 }
 
-.team-chip.team1 {
+.team-chip.partnership-second {
   background: rgba(226, 139, 60, 0.24);
 }
 
@@ -269,17 +269,17 @@ button:disabled {
   font-size: 12px;
 }
 
-.player-area[data-position="北"] {
-  grid-area: north;
+.player-area[data-position="top"] {
+  grid-area: top;
 }
-.player-area[data-position="西"] {
-  grid-area: west;
+.player-area[data-position="left"] {
+  grid-area: left;
 }
-.player-area[data-position="东"] {
-  grid-area: east;
+.player-area[data-position="right"] {
+  grid-area: right;
 }
-.player-area[data-position="南"] {
-  grid-area: south;
+.player-area[data-position="bottom"] {
+  grid-area: bottom;
 }
 
 .trick-view {
@@ -339,9 +339,9 @@ button:disabled {
   aspect-ratio: 1.28;
   display: grid;
   grid-template-areas:
-    ". north ."
-    "west center east"
-    ". south .";
+    ". top ."
+    "left center right"
+    ". bottom .";
   grid-template-columns: 1fr 1fr 1fr;
   grid-template-rows: 1fr 0.72fr 1fr;
   align-items: center;
@@ -392,17 +392,17 @@ button:disabled {
   opacity: 0.72;
 }
 
-.trick-slot-north {
-  grid-area: north;
+.trick-slot-top {
+  grid-area: top;
 }
-.trick-slot-west {
-  grid-area: west;
+.trick-slot-left {
+  grid-area: left;
 }
-.trick-slot-east {
-  grid-area: east;
+.trick-slot-right {
+  grid-area: right;
 }
-.trick-slot-south {
-  grid-area: south;
+.trick-slot-bottom {
+  grid-area: bottom;
 }
 
 .trick-cards {
@@ -644,11 +644,11 @@ button:disabled {
   font-weight: 800;
 }
 
-.scoreboard__player-row.team0 {
+.scoreboard__player-row.partnership-first {
   border-left: 3px solid var(--blue);
 }
 
-.scoreboard__player-row.team1 {
+.scoreboard__player-row.partnership-second {
   border-left: 3px solid var(--orange);
 }
 
@@ -1483,9 +1483,9 @@ body {
   align-self: center;
   justify-self: center;
   grid-template-areas:
-    ". north ."
-    "west table east"
-    ". south .";
+    ". top ."
+    "left table right"
+    ". bottom .";
   grid-template-columns: 76px minmax(120px, 1fr) 76px;
   grid-template-rows: 76px minmax(120px, 1fr) 76px;
   gap: 8px;
@@ -1587,20 +1587,20 @@ body {
   opacity: 1;
 }
 
-.lobby-preview-player[data-player-area="north"] {
-  grid-area: north;
+.lobby-preview-player[data-seat-area="top"] {
+  grid-area: top;
 }
 
-.lobby-preview-player[data-player-area="west"] {
-  grid-area: west;
+.lobby-preview-player[data-seat-area="left"] {
+  grid-area: left;
 }
 
-.lobby-preview-player[data-player-area="south"] {
-  grid-area: south;
+.lobby-preview-player[data-seat-area="bottom"] {
+  grid-area: bottom;
 }
 
-.lobby-preview-player[data-player-area="east"] {
-  grid-area: east;
+.lobby-preview-player[data-seat-area="right"] {
+  grid-area: right;
 }
 
 .lobby-preview-player__label {
@@ -1689,12 +1689,12 @@ body {
   box-shadow: none;
 }
 
-.player-area[data-position="南"] {
+.player-area[data-position="bottom"] {
   align-content: start;
 }
 
-.player-area[data-position="西"],
-.player-area[data-position="东"] {
+.player-area[data-position="left"],
+.player-area[data-position="right"] {
   justify-items: center;
 }
 
@@ -1723,7 +1723,7 @@ body {
   font-size: 0;
 }
 
-.player-avatar.team1 {
+.player-avatar.partnership-second {
   background:
     radial-gradient(circle at 50% 34%, #ffe0b8 0 23%, transparent 24%),
     radial-gradient(circle at 50% 72%, #92315f 0 32%, transparent 33%),
@@ -1740,7 +1740,7 @@ body {
   background: linear-gradient(145deg, #f6d76c, #f1a93d);
 }
 
-.player-avatar--debug.team1 {
+.player-avatar--debug.partnership-second {
   background: linear-gradient(145deg, #84d7ff, #3c97d4);
 }
 
@@ -1756,8 +1756,8 @@ body {
 }
 
 .player-label,
-.player-label.team0,
-.player-label.team1 {
+.player-label.partnership-first,
+.player-label.partnership-second {
   grid-area: label;
   color: #effcff;
   font-size: 14px;
@@ -1816,8 +1816,8 @@ body {
   gap: 4px;
 }
 
-.player-area[data-position="南"] .player-badges,
-.player-area[data-position="北"] .player-badges {
+.player-area[data-position="bottom"] .player-badges,
+.player-area[data-position="top"] .player-badges {
   max-width: 190px;
 }
 
@@ -2255,8 +2255,8 @@ button {
 }
 
 .scoreboard__team-label,
-.scoreboard__team-label.team0,
-.scoreboard__team-label.team1,
+.scoreboard__team-label.partnership-first,
+.scoreboard__team-label.partnership-second,
 .scoreboard__section-title,
 .scoreboard__muted,
 .scoreboard__empty {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from server.game import Seat
 from server.game.rules import bidding
 from server.game.snapshots import PlayerSnapshot
 from server.training.legal_actions.complete_trace import (
@@ -15,15 +16,15 @@ from server.training.semantic_actions.values import GeneratedAction
 
 def build_stir_index(
     *,
-    player_index: int,
+    viewer: Seat,
     snapshot: PlayerSnapshot,
     query: ActionQuery,
 ) -> CompleteTraceLegalActionIndex:
     """Build legal semantic traces for a stir decision."""
     actions: list[GeneratedAction] = [pass_action("stir")]
-    if _last_stir_player(snapshot) != player_index:
+    if _last_stir_actor(snapshot) != viewer:
         for declaration in bidding.legal_reveals(
-            snapshot.player_hand,
+            snapshot.hand,
             snapshot.trump_rank,
             _current_declaration(snapshot),
         ):
@@ -33,10 +34,10 @@ def build_stir_index(
     return CompleteTraceLegalActionIndex(query, tuple(actions))
 
 
-def _last_stir_player(snapshot: PlayerSnapshot) -> int | None:
+def _last_stir_actor(snapshot: PlayerSnapshot) -> Seat | None:
     for event in reversed(snapshot.stir_events):
         if event.kind == "stir":
-            return event.player
+            return event.actor
     return None
 
 

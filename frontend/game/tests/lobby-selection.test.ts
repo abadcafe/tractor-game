@@ -2,7 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import type { ListedGame } from "../net/rest-client.ts";
 import {
   resolveLobbySelectedGameId,
-  selectedGameHasEmptyPlayer,
+  selectedGameHasEmptySeat,
 } from "../lobby-selection.ts";
 
 function makeGame(gameId: string): ListedGame {
@@ -10,31 +10,31 @@ function makeGame(gameId: string): ListedGame {
     gameId,
     userCount: 0,
     capacity: 4,
-    userPlayers: [],
-    players: [
+    userSeats: [],
+    seats: [
       {
-        index: 0,
+        seat: "a",
         occupied: false,
         connected: false,
         mine: false,
         ready: false,
       },
       {
-        index: 1,
+        seat: "b",
         occupied: false,
         connected: false,
         mine: false,
         ready: false,
       },
       {
-        index: 2,
+        seat: "c",
         occupied: false,
         connected: false,
         mine: false,
         ready: false,
       },
       {
-        index: 3,
+        seat: "d",
         occupied: false,
         connected: false,
         mine: false,
@@ -47,9 +47,9 @@ function makeGame(gameId: string): ListedGame {
 function makeFilledGame(gameId: string): ListedGame {
   return {
     ...makeGame(gameId),
-    players: [
+    seats: [
       {
-        index: 0,
+        seat: "a",
         occupied: true,
         connected: false,
         kind: "auto",
@@ -57,7 +57,7 @@ function makeFilledGame(gameId: string): ListedGame {
         ready: true,
       },
       {
-        index: 1,
+        seat: "b",
         occupied: true,
         connected: false,
         kind: "user",
@@ -65,7 +65,7 @@ function makeFilledGame(gameId: string): ListedGame {
         ready: false,
       },
       {
-        index: 2,
+        seat: "c",
         occupied: true,
         connected: false,
         kind: "auto",
@@ -73,7 +73,7 @@ function makeFilledGame(gameId: string): ListedGame {
         ready: true,
       },
       {
-        index: 3,
+        seat: "d",
         occupied: true,
         connected: false,
         kind: "auto",
@@ -118,23 +118,23 @@ Deno.test("resolveLobbySelectedGameId clears selection when no games remain", ()
   assertEquals(resolveLobbySelectedGameId([], "game-1"), null);
 });
 
-Deno.test("selectedGameHasEmptyPlayer detects open players", () => {
+Deno.test("selectedGameHasEmptySeat detects open seats", () => {
   assertEquals(
-    selectedGameHasEmptyPlayer([makeGame("game-1")], "game-1"),
+    selectedGameHasEmptySeat([makeGame("game-1")], "game-1"),
     true,
   );
 });
 
-Deno.test("selectedGameHasEmptyPlayer is false when selected game is filled", () => {
+Deno.test("selectedGameHasEmptySeat is false when selected game is filled", () => {
   assertEquals(
-    selectedGameHasEmptyPlayer([makeFilledGame("game-1")], "game-1"),
+    selectedGameHasEmptySeat([makeFilledGame("game-1")], "game-1"),
     false,
   );
 });
 
-Deno.test("selectedGameHasEmptyPlayer is false for missing game", () => {
+Deno.test("selectedGameHasEmptySeat is false for missing game", () => {
   assertEquals(
-    selectedGameHasEmptyPlayer([makeGame("game-1")], "missing-game"),
+    selectedGameHasEmptySeat([makeGame("game-1")], "missing-game"),
     false,
   );
 });

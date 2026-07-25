@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from server.game.config import Seat
 from server.game.rules import play
 from server.game.rules.cards import Card, Rank, Suit
+from server.game.seating import Partnership, Seat, SeatMap
 from server.game.snapshots import PlayerSnapshot
 from server.game.snapshots.contract import PendingTrump
 from server.game.snapshots.events import StirringStateSnapshot
@@ -34,11 +34,11 @@ def observe_game(state: GameState, viewer: Seat) -> PlayerSnapshot:
         return PlayerSnapshot(
             phase="WAITING",
             round_number=0,
-            player_hand=(),
-            player_hand_counts=(0, 0, 0, 0),
+            hand=(),
+            remaining_cards=SeatMap(a=0, b=0, c=0, d=0),
             bottom_cards=(),
-            trump=PendingTrump(rank=phase.levels[0]),
-            declarer_player=None,
+            trump=PendingTrump(rank=phase.levels.at(Partnership.FIRST)),
+            declarer=None,
             defender_points=0,
             trick=None,
             last_completed_trick=None,
@@ -47,8 +47,8 @@ def observe_game(state: GameState, viewer: Seat) -> PlayerSnapshot:
                 "next_round" if viewer not in phase.confirmed else None
             ),
             scoring=None,
-            winning_team=None,
-            team_levels=phase.levels,
+            winning_partnership=None,
+            partnership_levels=phase.levels,
             mandatory_levels=config_of(state).mandatory_levels,
             bid_events=(),
             bid_winner=None,
@@ -62,15 +62,15 @@ def observe_game(state: GameState, viewer: Seat) -> PlayerSnapshot:
         return PlayerSnapshot(
             phase="DEAL_BID",
             round_number=phase.round_number,
-            player_hand=_sorted_hand(
-                phase.hands[int(viewer)],
+            hand=_sorted_hand(
+                phase.hands.at(viewer),
                 None,
                 rank,
             ),
-            player_hand_counts=_hand_counts(phase.hands),
+            remaining_cards=_hand_counts(phase.hands),
             bottom_cards=(),
             trump=PendingTrump(rank=rank),
-            declarer_player=phase.fixed_declarer,
+            declarer=phase.fixed_declarer,
             defender_points=0,
             trick=None,
             last_completed_trick=None,
@@ -79,8 +79,8 @@ def observe_game(state: GameState, viewer: Seat) -> PlayerSnapshot:
                 "bid" if viewer == phase.current_actor else None
             ),
             scoring=None,
-            winning_team=None,
-            team_levels=phase.levels,
+            winning_partnership=None,
+            partnership_levels=phase.levels,
             mandatory_levels=config_of(state).mandatory_levels,
             bid_events=tuple(
                 bid_event(event) for event in phase.bid_reveals
@@ -92,7 +92,7 @@ def observe_game(state: GameState, viewer: Seat) -> PlayerSnapshot:
             next_round_confirmed=frozenset(),
         )
     if isinstance(phase, phases.BottomExchange):
-        hand = phase.hands[int(viewer)]
+        hand = phase.hands.at(viewer)
         counts = _hand_counts(phase.hands)
         if viewer == phase.current_actor:
             hand = phase.hand_after_pickup
@@ -104,19 +104,19 @@ def observe_game(state: GameState, viewer: Seat) -> PlayerSnapshot:
         return PlayerSnapshot(
             phase="STIRRING",
             round_number=phase.round_number,
-            player_hand=_sorted_hand(
+            hand=_sorted_hand(
                 hand,
                 phase.contract.trump_suit,
                 phase.contract.trump_rank,
             ),
-            player_hand_counts=counts,
+            remaining_cards=counts,
             bottom_cards=(
                 phase.bottom_cards
                 if viewer == phase.current_actor
                 else ()
             ),
             trump=contract_snapshot(phase.contract),
-            declarer_player=phase.contract.declarer,
+            declarer=phase.contract.declarer,
             defender_points=0,
             trick=None,
             last_completed_trick=None,
@@ -125,8 +125,8 @@ def observe_game(state: GameState, viewer: Seat) -> PlayerSnapshot:
                 "discard" if viewer == phase.current_actor else None
             ),
             scoring=None,
-            winning_team=None,
-            team_levels=phase.levels,
+            winning_partnership=None,
+            partnership_levels=phase.levels,
             mandatory_levels=config_of(state).mandatory_levels,
             bid_events=tuple(
                 bid_event(event) for event in phase.bid_reveals
@@ -144,9 +144,9 @@ def observe_game(state: GameState, viewer: Seat) -> PlayerSnapshot:
             stirring_state=StirringStateSnapshot(
                 phase="EXCHANGING",
                 trump_suit=phase.contract.trump_suit,
-                current_player=phase.current_actor,
-                declarer_player=phase.contract.declarer,
-                exchanging_player=phase.current_actor,
+                current_actor=phase.current_actor,
+                declarer=phase.contract.declarer,
+                exchanging_actor=phase.current_actor,
                 exchange_count=len(phase.bottom_cards),
             ),
             next_round_confirmed=frozenset(),
@@ -155,19 +155,19 @@ def observe_game(state: GameState, viewer: Seat) -> PlayerSnapshot:
         return PlayerSnapshot(
             phase="STIRRING",
             round_number=phase.round_number,
-            player_hand=_sorted_hand(
-                phase.hands[int(viewer)],
+            hand=_sorted_hand(
+                phase.hands.at(viewer),
                 phase.contract.trump_suit,
                 phase.contract.trump_rank,
             ),
-            player_hand_counts=_hand_counts(phase.hands),
+            remaining_cards=_hand_counts(phase.hands),
             bottom_cards=(
                 phase.bottom_cards
                 if viewer == phase.bottom_owner
                 else ()
             ),
             trump=contract_snapshot(phase.contract),
-            declarer_player=phase.contract.declarer,
+            declarer=phase.contract.declarer,
             defender_points=0,
             trick=None,
             last_completed_trick=None,
@@ -176,8 +176,8 @@ def observe_game(state: GameState, viewer: Seat) -> PlayerSnapshot:
                 "stir" if viewer == phase.current_actor else None
             ),
             scoring=None,
-            winning_team=None,
-            team_levels=phase.levels,
+            winning_partnership=None,
+            partnership_levels=phase.levels,
             mandatory_levels=config_of(state).mandatory_levels,
             bid_events=tuple(
                 bid_event(event) for event in phase.bid_reveals
@@ -195,9 +195,9 @@ def observe_game(state: GameState, viewer: Seat) -> PlayerSnapshot:
             stirring_state=StirringStateSnapshot(
                 phase="WAITING",
                 trump_suit=phase.contract.trump_suit,
-                current_player=phase.current_actor,
-                declarer_player=phase.contract.declarer,
-                exchanging_player=None,
+                current_actor=phase.current_actor,
+                declarer=phase.contract.declarer,
+                exchanging_actor=None,
                 exchange_count=None,
             ),
             next_round_confirmed=frozenset(),
@@ -206,19 +206,19 @@ def observe_game(state: GameState, viewer: Seat) -> PlayerSnapshot:
         return PlayerSnapshot(
             phase="PLAYING",
             round_number=phase.round_number,
-            player_hand=_sorted_hand(
-                phase.hands[int(viewer)],
+            hand=_sorted_hand(
+                phase.hands.at(viewer),
                 phase.contract.trump_suit,
                 phase.contract.trump_rank,
             ),
-            player_hand_counts=_hand_counts(phase.hands),
+            remaining_cards=_hand_counts(phase.hands),
             bottom_cards=(
                 phase.bottom_cards
                 if viewer == phase.bottom_owner
                 else ()
             ),
             trump=contract_snapshot(phase.contract),
-            declarer_player=phase.contract.declarer,
+            declarer=phase.contract.declarer,
             defender_points=sum(
                 card.points for card in phase.defender_point_cards
             ),
@@ -233,8 +233,8 @@ def observe_game(state: GameState, viewer: Seat) -> PlayerSnapshot:
                 else None
             ),
             scoring=None,
-            winning_team=None,
-            team_levels=phase.levels,
+            winning_partnership=None,
+            partnership_levels=phase.levels,
             mandatory_levels=config_of(state).mandatory_levels,
             bid_events=tuple(
                 bid_event(event) for event in phase.bid_reveals
@@ -258,7 +258,7 @@ def observe_game(state: GameState, viewer: Seat) -> PlayerSnapshot:
             viewer,
             phase.confirmed,
             config_of(state).mandatory_levels,
-            winning_team=None,
+            winning_partnership=None,
         )
     assert isinstance(phase, phases.Finished)
     return completed_round_snapshot(
@@ -266,7 +266,7 @@ def observe_game(state: GameState, viewer: Seat) -> PlayerSnapshot:
         viewer,
         frozenset(),
         config_of(state).mandatory_levels,
-        winning_team=phase.winning_team,
+        winning_partnership=phase.winning_partnership,
     )
 
 
@@ -278,20 +278,13 @@ def _sorted_hand(
     return play.sort_hand(hand, trump_suit, trump_rank)
 
 
-def _hand_counts(hands: Hands) -> tuple[int, int, int, int]:
-    return (
-        len(hands[0]),
-        len(hands[1]),
-        len(hands[2]),
-        len(hands[3]),
-    )
+def _hand_counts(hands: Hands) -> SeatMap[int]:
+    return hands.map(len)
 
 
 def _replace_count(
-    counts: tuple[int, int, int, int],
+    counts: SeatMap[int],
     seat: Seat,
     value: int,
-) -> tuple[int, int, int, int]:
-    values = list(counts)
-    values[int(seat)] = value
-    return (values[0], values[1], values[2], values[3])
+) -> SeatMap[int]:
+    return counts.replace(seat, value)

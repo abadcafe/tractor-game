@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from server.game import Seat
 from server.training.policy_sampling import DecisionHandle
 from server.training.returns import (
     terminal_return_commit,
@@ -19,12 +20,12 @@ def test_terminal_return_commit_assigns_team_returns() -> None:
         policy_version=4,
         episode_id=9,
         steps=(
-            _step(player_index=0, row_index=0),
-            _step(player_index=1, row_index=1),
-            _step(player_index=2, row_index=2),
+            _step(seat=Seat.A, row_index=0),
+            _step(seat=Seat.B, row_index=1),
+            _step(seat=Seat.C, row_index=2),
         ),
-        team0_reward=1.5,
-        team1_reward=-1.5,
+        first_partnership_reward=1.5,
+        second_partnership_reward=-1.5,
     )
 
     assert commit.policy_version == 4
@@ -35,9 +36,9 @@ def test_terminal_return_commit_assigns_team_returns() -> None:
     assert commit.return_values == (1.5, 1.5, -1.5)
 
 
-def _step(*, player_index: int, row_index: int) -> DecisionStep:
+def _step(*, seat: Seat, row_index: int) -> DecisionStep:
     return DecisionStep(
-        player_index=player_index,
+        seat=seat,
         seq=row_index,
         action=GeneratedAction(
             action_kind="pass",

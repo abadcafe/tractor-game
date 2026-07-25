@@ -170,8 +170,8 @@ def snapshot_rollout_arenas(
         cancelled_env_count=0,
         total_step_count=0,
         max_step_count=0,
-        team0_reward_sum=0.0,
-        team1_reward_sum=0.0,
+        first_partnership_reward_sum=0.0,
+        second_partnership_reward_sum=0.0,
         elapsed_seconds_max=0.0,
     )
     for handle, segment in zip(
@@ -244,8 +244,8 @@ def header_snapshot(header: RolloutArenaHeader) -> RolloutArenaSnapshot:
         cancelled_env_count=header.cancelled_env_count,
         total_step_count=header.total_step_count,
         max_step_count=header.max_step_count,
-        team0_reward_sum=header.team0_reward_sum,
-        team1_reward_sum=header.team1_reward_sum,
+        first_partnership_reward_sum=header.first_partnership_reward_sum,
+        second_partnership_reward_sum=header.second_partnership_reward_sum,
         elapsed_seconds_max=header.elapsed_seconds_max,
     )
 
@@ -303,11 +303,13 @@ def _merge_snapshot(
             first.total_step_count + second.total_step_count
         ),
         max_step_count=max(first.max_step_count, second.max_step_count),
-        team0_reward_sum=(
-            first.team0_reward_sum + second.team0_reward_sum
+        first_partnership_reward_sum=(
+            first.first_partnership_reward_sum
+            + second.first_partnership_reward_sum
         ),
-        team1_reward_sum=(
-            first.team1_reward_sum + second.team1_reward_sum
+        second_partnership_reward_sum=(
+            first.second_partnership_reward_sum
+            + second.second_partnership_reward_sum
         ),
         elapsed_seconds_max=max(
             first.elapsed_seconds_max, second.elapsed_seconds_max

@@ -16,7 +16,7 @@ def test_game_spa_owns_root_and_deep_game_routes(
     sync_client: SyncServerClient,
 ) -> None:
     root = sync_client.get("/")
-    deep = sync_client.get("/game/example/player/1?user_id=user-1")
+    deep = sync_client.get("/game/example/seat/b?user_id=user-1")
 
     assert root.status_code == 200
     assert deep.status_code == 200

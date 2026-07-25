@@ -20,7 +20,7 @@ from server.training.tokenization import (
     TrickToken,
     tokenize,
 )
-from tests.support import card
+from tests.support import card, seat_values
 from tests.support import snapshot as make_snapshot
 
 
@@ -103,27 +103,26 @@ def _sequence() -> TokenSequence:
     first = card("spades", "A", 1)
     second = card("spades", "A", 2)
     trick = TrickSnapshot(
-        lead_player=Seat.WEST,
-        current_player=Seat.SOUTH,
+        lead_actor=Seat.B,
+        current_actor=Seat.C,
         slots=(
-            TrickSlotSnapshot(player=Seat.NORTH, cards=()),
+            TrickSlotSnapshot(actor=Seat.A, cards=()),
             TrickSlotSnapshot(
-                player=Seat.WEST,
+                actor=Seat.B,
                 cards=(card("hearts", "K"),),
             ),
-            TrickSlotSnapshot(player=Seat.SOUTH, cards=()),
-            TrickSlotSnapshot(player=Seat.EAST, cards=()),
+            TrickSlotSnapshot(actor=Seat.C, cards=()),
+            TrickSlotSnapshot(actor=Seat.D, cards=()),
         ),
     )
     projected = project_relative_observation(
-        viewer=2,
+        viewer=Seat.C,
         snapshot=make_snapshot(
             phase="PLAYING",
             awaiting_action="play",
-            declarer_player=0,
-            declarer_team=0,
-            player_hand=[first, second],
-            player_hand_counts=[3, 4, 2, 5],
+            declarer=Seat.A,
+            hand=[first, second],
+            remaining_cards=seat_values(3, 4, 2, 5),
             trick=trick,
         ),
         memory=ObservationMemoryView(

@@ -9,11 +9,15 @@ from server.game import (
     GameConfig,
     GameSeed,
     GameState,
+    Partnership,
+    PartnershipMap,
     Seat,
+    SeatMap,
     apply,
     commands,
     create,
     observe,
+    seats,
     snapshots,
 )
 from server.game.rules import play
@@ -64,13 +68,13 @@ type TestRank = Literal[
     "BJ",
 ]
 
-GAME_SEATS: tuple[Seat, Seat, Seat, Seat] = (
-    Seat.NORTH,
-    Seat.WEST,
-    Seat.SOUTH,
-    Seat.EAST,
-)
+GAME_SEATS = seats()
 _DECISION_ACTIONS = frozenset(("bid", "discard", "stir", "play"))
+_EMPTY_REMAINING_CARDS = SeatMap(a=0, b=0, c=0, d=0)
+_INITIAL_LEVELS = PartnershipMap(
+    first=Rank.TWO,
+    second=Rank.TWO,
+)
 
 
 def card(
@@ -85,6 +89,24 @@ def card(
         suit=Suit(suit),
         rank=value,
         points=card_points(value),
+    )
+
+
+def seat_values[T](a: T, b: T, c: T, d: T) -> SeatMap[T]:
+    """Build an explicitly keyed total seat map for a test."""
+
+    return SeatMap(a=a, b=b, c=c, d=d)
+
+
+def partnership_levels(
+    first: TestRank,
+    second: TestRank,
+) -> PartnershipMap[Rank]:
+    """Build explicitly keyed partnership levels for a test."""
+
+    return PartnershipMap(
+        first=Rank(first),
+        second=Rank(second),
     )
 
 
@@ -132,9 +154,7 @@ def automatic_game_command(
         return commands.Bury(
             tuple(
                 CardId(item.id)
-                for item in current.player_hand[
-                    : len(current.bottom_cards)
-                ]
+                for item in current.hand[: len(current.bottom_cards)]
             )
         )
     if action == "stir":
@@ -144,7 +164,7 @@ def automatic_game_command(
     if current.trick is not None and current.trick.slots:
         lead = current.trick.slots[0].cards
     selected = play.choose_legal_play(
-        current.player_hand,
+        current.hand,
         lead,
         current.trump_suit,
         current.trump_rank,
@@ -174,16 +194,10 @@ def snapshot(
     awaiting_action: AwaitingAction | None = "play",
     trump_rank: TestRank = "2",
     trump_suit: TestSuit | None = None,
-    player_hand: list[Card] | tuple[Card, ...] = (),
-    player_hand_counts: (list[int] | tuple[int, int, int, int]) = (
-        0,
-        0,
-        0,
-        0,
-    ),
+    hand: list[Card] | tuple[Card, ...] = (),
+    remaining_cards: SeatMap[int] = _EMPTY_REMAINING_CARDS,
     bottom_cards: list[Card] | tuple[Card, ...] = (),
-    declarer_team: int | None = None,
-    declarer_player: int | None = None,
+    declarer: Seat | None = None,
     defender_points: int = 0,
     trick: TrickSnapshot | None = None,
     last_completed_trick: CompletedTrickSnapshot | None = None,
@@ -199,12 +213,9 @@ def snapshot(
     ) = (),
     stirring_state: StirringStateSnapshot | None = None,
     scoring: ScoringSnapshot | None = None,
-    winning_team: int | None = None,
-    team0_level: TestRank = "2",
-    team1_level: TestRank = "2",
-    next_round_confirmed: (
-        list[int] | tuple[int, ...] | frozenset[int]
-    ) = (),
+    winning_partnership: Partnership | None = None,
+    partnership_levels: PartnershipMap[Rank] = _INITIAL_LEVELS,
+    next_round_confirmed: frozenset[Seat] = frozenset(),
     mandatory_levels: tuple[Rank, ...] = (Rank.ACE,),
 ) -> snapshots.PlayerSnapshot:
     """Create one complete player snapshot through its public type."""
@@ -219,42 +230,35 @@ def snapshot(
             rank=rank,
             suit=Suit(trump_suit),
         )
-    player_value = declarer_player
-    if player_value is None and declarer_team is not None:
-        player_value = declarer_team
     return snapshots.PlayerSnapshot(
         phase=phase,
         round_number=1,
-        player_hand=tuple(player_hand),
-        player_hand_counts=(
-            player_hand_counts[0],
-            player_hand_counts[1],
-            player_hand_counts[2],
-            player_hand_counts[3],
-        ),
+        hand=tuple(hand),
+        remaining_cards=remaining_cards,
         bottom_cards=tuple(bottom_cards),
         trump=trump,
-        declarer_player=(
-            None if player_value is None else Seat(player_value)
-        ),
+        declarer=declarer,
         defender_points=defender_points,
         trick=trick,
         last_completed_trick=last_completed_trick,
         defender_point_cards=tuple(defender_point_cards),
         awaiting_action=awaiting_action,
         scoring=scoring,
-        winning_team=winning_team,
-        team_levels=(Rank(team0_level), Rank(team1_level)),
+        winning_partnership=winning_partnership,
+        partnership_levels=partnership_levels,
         mandatory_levels=mandatory_levels,
         bid_events=tuple(bid_events),
         bid_winner=bid_winner,
         own_initial_bottom_exchange=own_initial_bottom_exchange,
         stir_events=tuple(stir_events),
         stirring_state=stirring_state,
-        next_round_confirmed=frozenset(
-            Seat(value) for value in next_round_confirmed
-        ),
+        next_round_confirmed=next_round_confirmed,
     )
 
 
-__all__ = ("card", "snapshot")
+__all__ = (
+    "card",
+    "partnership_levels",
+    "seat_values",
+    "snapshot",
+)

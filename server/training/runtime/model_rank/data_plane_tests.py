@@ -9,6 +9,7 @@ import torch
 
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
+from server.game import Seat
 from server.training.legal_actions import (
     LegalActionIndex,
     build_legal_action_index,
@@ -638,11 +639,11 @@ def _observation() -> Observation:
     snapshot = make_snapshot(
         phase="DEAL_BID",
         awaiting_action="bid",
-        player_hand=[card("hearts", "2", 1)],
+        hand=[card("hearts", "2", 1)],
         trump_rank="2",
     )
     return build_observation(
-        viewer=0,
+        viewer=Seat.A,
         snapshot=snapshot,
         memory=ObservationMemoryView(
             bid_actions=(), completed_tricks=()
@@ -654,11 +655,11 @@ def _legal_actions(observation: Observation) -> LegalActionIndex:
     snapshot = make_snapshot(
         phase="DEAL_BID",
         awaiting_action="bid",
-        player_hand=[card("hearts", "2", 1)],
+        hand=[card("hearts", "2", 1)],
         trump_rank="2",
     )
     return build_legal_action_index(
-        player_index=0,
+        viewer=Seat.A,
         snapshot=snapshot,
         query=observation.action_query,
     )
@@ -670,7 +671,7 @@ def _decision_key(*, policy_version: int) -> PolicyDecisionKey:
         policy_version=policy_version,
         rollout_id=f"rollout-{policy_version}",
         episode_id=0,
-        player_index=0,
+        seat=Seat.A,
         decision_index=0,
     )
 

@@ -9,6 +9,7 @@ from typing import Literal, Protocol
 
 from server.foundation.result import Ok, Rejected
 from server.game import GameConfig, GameSeed, Seat
+from server.game import seats as all_seats
 
 from .session import (
     AgentSubmission,
@@ -22,7 +23,7 @@ __all__ = [
     "AgentFactory",
     "BotKind",
     "GameRoom",
-    "RoomPlayer",
+    "RoomSeat",
     "RuntimeAgent",
 ]
 
@@ -57,24 +58,17 @@ class AgentFactory(Protocol):
         ...
 
 
-type PlayerKind = Literal["empty", "user", "ai", "auto"]
-
-_SEATS: tuple[Seat, Seat, Seat, Seat] = (
-    Seat.NORTH,
-    Seat.WEST,
-    Seat.SOUTH,
-    Seat.EAST,
-)
+type OccupantKind = Literal["empty", "user", "ai", "auto"]
 
 
 @dataclass(frozen=True, slots=True)
-class RoomPlayer:
+class RoomSeat:
     """Lobby state for one seat."""
 
-    index: int
+    seat: Seat
     occupied: bool
     connected: bool
-    kind: PlayerKind
+    kind: OccupantKind
     mine: bool
     ready: bool
 
@@ -112,25 +106,22 @@ class GameRoom:
         """Return whether the game session has been created."""
         return self._session is not None
 
-    async def attach_player(
+    async def occupy_seat(
         self,
         *,
-        player: int,
+        seat: Seat,
         user_id: str,
     ) -> Ok[Seat] | Rejected:
         """Assign a user to an unoccupied seat."""
-        seat = _seat_from_int(player)
-        if seat is None:
-            return Rejected("invalid player")
         if not user_id.strip():
             return Rejected("missing user id")
         occupant = self._occupants.get(seat)
         if isinstance(occupant, _User):
             if occupant.user_id == user_id:
                 return Ok(seat)
-            return Rejected("player occupied")
+            return Rejected("seat occupied")
         if isinstance(occupant, _Bot):
-            return Rejected("player occupied")
+            return Rejected("seat occupied")
         for other, value in tuple(self._occupants.items()):
             if (
                 isinstance(value, _User)
@@ -141,23 +132,20 @@ class GameRoom:
         self._occupants[seat] = _User(user_id)
         return Ok(seat)
 
-    async def detach_player(
+    async def vacate_seat(
         self,
         *,
-        player: int,
+        seat: Seat,
         user_id: str,
     ) -> Ok[None] | Rejected:
         """Remove a matching user assignment."""
-        seat = _seat_from_int(player)
-        if seat is None:
-            return Rejected("invalid player")
         if not user_id.strip():
             return Rejected("missing user id")
         occupant = self._occupants.get(seat)
         if not isinstance(occupant, _User):
-            return Rejected("user is not attached to player")
+            return Rejected("user does not occupy seat")
         if occupant.user_id != user_id:
-            return Rejected("user is not attached to player")
+            return Rejected("user does not occupy seat")
         await self._remove_user(seat)
         return Ok(None)
 
@@ -174,7 +162,7 @@ class GameRoom:
             isinstance(value, _User) and value.user_id == user_id
             for value in self._occupants.values()
         ):
-            return Rejected("user is not attached to a player")
+            return Rejected("user does not occupy a seat")
         return self.fill_empty_bots(kind=kind)
 
     def fill_empty_bots(
@@ -187,30 +175,30 @@ class GameRoom:
         if self._session is not None:
             return Rejected("game already started")
         preserved = set(preserve)
-        for seat in _SEATS:
+        for seat in all_seats():
             if seat in preserved or seat in self._occupants:
                 continue
             self._occupants[seat] = _Bot(kind)
         return Ok(None)
 
-    async def connect_player(
+    async def connect_seat(
         self,
         *,
-        player: int,
+        seat: Seat,
         user_id: str,
         sink: DeliverySink,
     ) -> Ok[Seat] | Rejected:
         """Connect an attached user sink to the game session."""
-        seat = self._attached_user(player, user_id)
-        if isinstance(seat, Rejected):
-            return seat
+        attached = self._occupied_user(seat, user_id)
+        if isinstance(attached, Rejected):
+            return attached
         session = await self._ensure_session()
         if isinstance(session, Rejected):
             return session
-        await session.value.attach(seat.value, sink)
-        return seat
+        await session.value.attach(attached.value, sink)
+        return attached
 
-    def disconnect_player(
+    def disconnect_seat(
         self,
         seat: Seat,
         sink: DeliverySink,
@@ -232,19 +220,16 @@ class GameRoom:
             return
         await session.receive(seat, seq, decoder)
 
-    def players(
+    def seats(
         self,
         *,
         user_id: str | None = None,
-    ) -> list[RoomPlayer]:
+    ) -> list[RoomSeat]:
         """Return all four lobby seats."""
-        return [self._room_player(seat, user_id) for seat in _SEATS]
+        return [self._room_seat(seat, user_id) for seat in all_seats()]
 
-    def player_at(self, player: int) -> RuntimeAgent | None:
+    def agent_at(self, seat: Seat) -> RuntimeAgent | None:
         """Return a bot agent for diagnostics."""
-        seat = _seat_from_int(player)
-        if seat is None:
-            return None
         return self._agents.get(seat)
 
     async def close(self) -> None:
@@ -258,14 +243,11 @@ class GameRoom:
         for agent in agents:
             await agent.stop()
 
-    def _attached_user(
+    def _occupied_user(
         self,
-        player: int,
+        seat: Seat,
         user_id: str,
     ) -> Ok[Seat] | Rejected:
-        seat = _seat_from_int(player)
-        if seat is None:
-            return Rejected("invalid player")
         if not user_id.strip():
             return Rejected("missing user id")
         occupant = self._occupants.get(seat)
@@ -273,14 +255,14 @@ class GameRoom:
             not isinstance(occupant, _User)
             or occupant.user_id != user_id
         ):
-            return Rejected("player occupied")
+            return Rejected("seat occupied")
         return Ok(seat)
 
     async def _ensure_session(self) -> Ok[Session] | Rejected:
         if self._session is not None:
             return Ok(self._session)
-        if any(seat not in self._occupants for seat in _SEATS):
-            return Rejected("not enough players")
+        if any(seat not in self._occupants for seat in all_seats()):
+            return Rejected("not enough occupants")
         session = Session(self._config, self._seed)
         self._session = session
         for seat, occupant in self._occupants.items():
@@ -304,15 +286,15 @@ class GameRoom:
                 DisconnectReason.DETACHED,
             )
 
-    def _room_player(
+    def _room_seat(
         self,
         seat: Seat,
         user_id: str | None,
-    ) -> RoomPlayer:
+    ) -> RoomSeat:
         occupant = self._occupants.get(seat)
-        kind = _player_kind(occupant)
-        return RoomPlayer(
-            index=int(seat),
+        kind = _occupant_kind(occupant)
+        return RoomSeat(
+            seat=seat,
             occupied=occupant is not None,
             connected=(
                 isinstance(occupant, _User)
@@ -335,14 +317,7 @@ class GameRoom:
         return seat in snapshot.next_round_confirmed
 
 
-def _seat_from_int(value: int) -> Seat | None:
-    try:
-        return Seat(value)
-    except ValueError:
-        return None
-
-
-def _player_kind(occupant: _Occupant | None) -> PlayerKind:
+def _occupant_kind(occupant: _Occupant | None) -> OccupantKind:
     if isinstance(occupant, _User):
         return "user"
     if isinstance(occupant, _Bot):

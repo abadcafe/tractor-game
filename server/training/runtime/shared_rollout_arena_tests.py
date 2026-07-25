@@ -486,8 +486,8 @@ def _reject_group_shared_memory_attach(*, name: str) -> NoReturn:
 
 def _metrics(*, decision_count: int) -> RolloutRoundMetrics:
     return RolloutRoundMetrics(
-        team0_reward=1.0,
-        team1_reward=-1.0,
+        first_partnership_reward=1.0,
+        second_partnership_reward=-1.0,
         generated_action_count=decision_count,
         accepted_action_count=decision_count,
         action_choice_count=decision_count * 2,

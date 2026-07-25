@@ -7,6 +7,7 @@ import logging
 from fastapi import WebSocket, WebSocketDisconnect
 
 from server.foundation.result import Rejected
+from server.game import Seat
 from server.game_runtime.room import GameRoom
 from server.game_runtime.session import (
     Delivery,
@@ -53,14 +54,14 @@ async def handle_game_connection(
     websocket: WebSocket,
     room: GameRoom,
     *,
-    player: int,
+    seat: Seat,
     user_id: str,
 ) -> None:
     """Own one human WebSocket until disconnect or takeover."""
     sink = WebSocketSink(websocket)
     await websocket.accept()
-    connected = await room.connect_player(
-        player=player,
+    connected = await room.connect_seat(
+        seat=seat,
         user_id=user_id,
         sink=sink,
     )
@@ -85,7 +86,7 @@ async def handle_game_connection(
                 frame.decoder,
             )
     finally:
-        room.disconnect_player(seat, sink)
+        room.disconnect_seat(seat, sink)
 
 
 def _disconnect_code(reason: DisconnectReason) -> int:
@@ -97,6 +98,6 @@ def _disconnect_code(reason: DisconnectReason) -> int:
 
 
 def _rejection_code(reason: str) -> int:
-    if reason in ("invalid player", "missing user id"):
+    if reason in ("invalid seat", "missing user id"):
         return 4410
     return 4409

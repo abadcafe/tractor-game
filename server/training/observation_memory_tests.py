@@ -12,7 +12,7 @@ from server.game.snapshots.tricks import (
     TrickSnapshot,
 )
 from server.training.observation_memory import ObservationMemory
-from tests.support import card, snapshot
+from tests.support import card, seat_values, snapshot
 
 
 def test_memory_records_pass_and_reveal_at_deal_ordinals() -> None:
@@ -21,23 +21,23 @@ def test_memory_records_pass_and_reveal_at_deal_ordinals() -> None:
         snapshot(
             phase="DEAL_BID",
             awaiting_action="bid",
-            player_hand=[revealed],
-            player_hand_counts=[1, 0, 0, 0],
+            hand=[revealed],
+            remaining_cards=seat_values(1, 0, 0, 0),
         ),
         snapshot(
             phase="DEAL_BID",
             awaiting_action=None,
-            player_hand=[revealed],
-            player_hand_counts=[1, 1, 0, 0],
+            hand=[revealed],
+            remaining_cards=seat_values(1, 1, 0, 0),
         ),
         snapshot(
             phase="DEAL_BID",
             awaiting_action=None,
-            player_hand=[revealed],
-            player_hand_counts=[1, 1, 1, 0],
+            hand=[revealed],
+            remaining_cards=seat_values(1, 1, 1, 0),
             bid_events=[
                 BidEventSnapshot(
-                    player=Seat.WEST,
+                    actor=Seat.B,
                     cards=(revealed,),
                     kind="trump_rank",
                     suit=revealed.suit,
@@ -70,8 +70,8 @@ def test_memory_rejects_missing_state_sequence() -> None:
     state = snapshot(
         phase="DEAL_BID",
         awaiting_action="bid",
-        player_hand=[card("hearts", "2")],
-        player_hand_counts=[1, 0, 0, 0],
+        hand=[card("hearts", "2")],
+        remaining_cards=seat_values(1, 0, 0, 0),
     )
     memory = ObservationMemory()
     assert isinstance(memory.observe(seq=8, snapshot=state), Ok)
@@ -96,14 +96,14 @@ def test_memory_accepts_identical_duplicate_delivery() -> None:
 def test_memory_records_each_completed_trick_once() -> None:
     played = card("spades", "A")
     trick = CompletedTrickSnapshot(
-        lead_player=Seat.NORTH,
+        lead_actor=Seat.A,
         slots=(
             TrickSlotSnapshot(
-                player=Seat.NORTH,
+                actor=Seat.A,
                 cards=(played,),
             ),
         ),
-        winner=Seat.NORTH,
+        winner=Seat.A,
         points=0,
         failed_throw=None,
     )
@@ -130,8 +130,8 @@ def test_memory_ignores_error_at_current_sequence() -> None:
     state = snapshot(
         phase="DEAL_BID",
         awaiting_action="bid",
-        player_hand=[card("hearts", "2")],
-        player_hand_counts=[1, 0, 0, 0],
+        hand=[card("hearts", "2")],
+        remaining_cards=seat_values(1, 0, 0, 0),
     )
     memory = ObservationMemory()
     first = memory.observe(seq=4, snapshot=state)
@@ -151,8 +151,8 @@ def test_memory_rejects_error_for_unknown_sequence() -> None:
     state = snapshot(
         phase="DEAL_BID",
         awaiting_action="bid",
-        player_hand=[card("hearts", "2")],
-        player_hand_counts=[1, 0, 0, 0],
+        hand=[card("hearts", "2")],
+        remaining_cards=seat_values(1, 0, 0, 0),
     )
     memory = ObservationMemory()
 
@@ -189,20 +189,20 @@ def test_memory_keeps_consecutive_equal_face_tricks() -> None:
     deal = snapshot(
         phase="DEAL_BID",
         awaiting_action="bid",
-        player_hand=[card("spades", "2")],
-        player_hand_counts=[1, 0, 0, 0],
+        hand=[card("spades", "2")],
+        remaining_cards=seat_values(1, 0, 0, 0),
     )
     playing = snapshot(
         phase="PLAYING",
         awaiting_action=None,
-        player_hand_counts=[25, 25, 25, 25],
+        remaining_cards=seat_values(25, 25, 25, 25),
     )
     open_second = TrickSnapshot(
-        lead_player=Seat.NORTH,
-        current_player=Seat.WEST,
+        lead_actor=Seat.A,
+        current_actor=Seat.B,
         slots=(
             TrickSlotSnapshot(
-                player=Seat.NORTH,
+                actor=Seat.A,
                 cards=(second_card,),
             ),
         ),
@@ -253,8 +253,8 @@ def test_memory_clears_history_at_new_round_deal() -> None:
     next_deal = snapshot(
         phase="DEAL_BID",
         awaiting_action="bid",
-        player_hand=[card("hearts", "2")],
-        player_hand_counts=[1, 0, 0, 0],
+        hand=[card("hearts", "2")],
+        remaining_cards=seat_values(1, 0, 0, 0),
     )
     memory = ObservationMemory()
     assert isinstance(memory.observe(seq=1, snapshot=waiting), Ok)
@@ -268,13 +268,13 @@ def test_memory_clears_history_at_new_round_deal() -> None:
 
 def _completed_trick(played: Card) -> CompletedTrickSnapshot:
     return CompletedTrickSnapshot(
-        lead_player=Seat.NORTH,
+        lead_actor=Seat.A,
         slots=(
             TrickSlotSnapshot(
-                player=Seat.NORTH,
+                actor=Seat.A,
                 cards=(played,),
             ),
         ),
-        winner=Seat.NORTH,
+        winner=Seat.A,
         points=played.points,
     )

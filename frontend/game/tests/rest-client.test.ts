@@ -2,10 +2,10 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   createGame,
   deleteGame,
-  fillBotPlayers,
-  joinPlayer,
-  leavePlayer,
+  fillBotSeats,
   listGames,
+  occupySeat,
+  vacateSeat,
 } from "../net/rest-client.ts";
 
 // Helper to start a mock HTTP server
@@ -104,10 +104,10 @@ Deno.test("test_listGames_success", async () => {
               game_id: "game-123",
               user_count: 2,
               capacity: 4,
-              user_players: [1, 3],
-              players: [
+              user_seats: ["b", "d"],
+              seats: [
                 {
-                  index: 0,
+                  seat: "a",
                   occupied: false,
                   connected: false,
                   kind: "empty",
@@ -115,7 +115,7 @@ Deno.test("test_listGames_success", async () => {
                   ready: false,
                 },
                 {
-                  index: 1,
+                  seat: "b",
                   occupied: true,
                   connected: true,
                   kind: "user",
@@ -123,7 +123,7 @@ Deno.test("test_listGames_success", async () => {
                   ready: false,
                 },
                 {
-                  index: 2,
+                  seat: "c",
                   occupied: false,
                   connected: false,
                   kind: "empty",
@@ -131,7 +131,7 @@ Deno.test("test_listGames_success", async () => {
                   ready: false,
                 },
                 {
-                  index: 3,
+                  seat: "d",
                   occupied: true,
                   connected: false,
                   kind: "auto",
@@ -152,10 +152,10 @@ Deno.test("test_listGames_success", async () => {
         gameId: "game-123",
         userCount: 2,
         capacity: 4,
-        userPlayers: [1, 3],
-        players: [
+        userSeats: ["b", "d"],
+        seats: [
           {
-            index: 0,
+            seat: "a",
             occupied: false,
             connected: false,
             kind: "empty",
@@ -163,7 +163,7 @@ Deno.test("test_listGames_success", async () => {
             ready: false,
           },
           {
-            index: 1,
+            seat: "b",
             occupied: true,
             connected: true,
             kind: "user",
@@ -171,7 +171,7 @@ Deno.test("test_listGames_success", async () => {
             ready: false,
           },
           {
-            index: 2,
+            seat: "c",
             occupied: false,
             connected: false,
             kind: "empty",
@@ -179,7 +179,7 @@ Deno.test("test_listGames_success", async () => {
             ready: false,
           },
           {
-            index: 3,
+            seat: "d",
             occupied: true,
             connected: false,
             kind: "auto",
@@ -212,7 +212,7 @@ Deno.test("test_listGames_sends_user_id_query", async () => {
   );
 });
 
-Deno.test("test_joinPlayer_sends_player_request", async () => {
+Deno.test("test_occupySeat_sends_seat_request", async () => {
   let observedMethod = "";
   let observedPath = "";
   let observedSearch = "";
@@ -224,7 +224,7 @@ Deno.test("test_joinPlayer_sends_player_request", async () => {
       observedSearch = url.search;
       if (
         req.method === "POST" &&
-        url.pathname === "/api/game/game%201/player/3"
+        url.pathname === "/api/game/game%201/seat/d"
       ) {
         return new Response(JSON.stringify({ ok: true }), {
           headers: { "Content-Type": "application/json" },
@@ -233,16 +233,16 @@ Deno.test("test_joinPlayer_sends_player_request", async () => {
       return new Response("Not Found", { status: 404 });
     },
     async (baseUrl) => {
-      const ok = await joinPlayer("game 1", 3, "user 1", baseUrl);
+      const ok = await occupySeat("game 1", "d", "user 1", baseUrl);
       assertEquals(ok, true);
       assertEquals(observedMethod, "POST");
-      assertEquals(observedPath, "/api/game/game%201/player/3");
+      assertEquals(observedPath, "/api/game/game%201/seat/d");
       assertEquals(observedSearch, "?user_id=user%201");
     },
   );
 });
 
-Deno.test("test_leavePlayer_sends_player_request", async () => {
+Deno.test("test_vacateSeat_sends_seat_request", async () => {
   let observedMethod = "";
   let observedPath = "";
   let observedSearch = "";
@@ -254,7 +254,7 @@ Deno.test("test_leavePlayer_sends_player_request", async () => {
       observedSearch = url.search;
       if (
         req.method === "DELETE" &&
-        url.pathname === "/api/game/game-1/player/2"
+        url.pathname === "/api/game/game-1/seat/c"
       ) {
         return new Response(JSON.stringify({ ok: true }), {
           headers: { "Content-Type": "application/json" },
@@ -263,16 +263,16 @@ Deno.test("test_leavePlayer_sends_player_request", async () => {
       return new Response("Not Found", { status: 404 });
     },
     async (baseUrl) => {
-      const ok = await leavePlayer("game-1", 2, "user 2", baseUrl);
+      const ok = await vacateSeat("game-1", "c", "user 2", baseUrl);
       assertEquals(ok, true);
       assertEquals(observedMethod, "DELETE");
-      assertEquals(observedPath, "/api/game/game-1/player/2");
+      assertEquals(observedPath, "/api/game/game-1/seat/c");
       assertEquals(observedSearch, "?user_id=user%202");
     },
   );
 });
 
-Deno.test("test_fillBotPlayers_sends_bot_fill_request", async () => {
+Deno.test("test_fillBotSeats_sends_bot_fill_request", async () => {
   let observedMethod = "";
   let observedPath = "";
   let observedSearch = "";
@@ -293,7 +293,7 @@ Deno.test("test_fillBotPlayers_sends_bot_fill_request", async () => {
       return new Response("Not Found", { status: 404 });
     },
     async (baseUrl) => {
-      const ok = await fillBotPlayers(
+      const ok = await fillBotSeats(
         "game-1",
         "ai",
         "user 1",

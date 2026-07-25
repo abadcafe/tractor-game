@@ -34,7 +34,7 @@ export class GameLoop {
       interactionMode: InteractionMode,
     ) => void,
     container: Element,
-    _humanPlayerIndex?: number,
+    _humanSeatId?: number,
     isReconnecting?: ReconnectingProvider,
     onError?: ErrorHandler,
   ) {

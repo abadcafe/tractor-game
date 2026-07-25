@@ -10,7 +10,7 @@ from server.foundation import result as _result
 
 DATABASE_FILENAME = "training.sqlite3"
 APPLICATION_ID = 0x54524149
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _CREATE_SCHEMA = """
 CREATE TABLE training_log_store (
@@ -49,7 +49,7 @@ CREATE TABLE training_logs (
     ) STORED,
     CHECK (
         json_type(event_json, '$.schema_version') IS 'integer'
-        AND json_extract(event_json, '$.schema_version') = 2
+        AND json_extract(event_json, '$.schema_version') = 3
     ),
     CHECK (json_type(event_json, '$.recorded_at_ms') IS 'integer'),
     CHECK (json_type(event_json, '$.process') IS 'object'),
@@ -87,6 +87,14 @@ CREATE TABLE training_logs (
         OR (
             json_type(event_json, '$.context.episode_id') IS 'integer'
             AND json_extract(event_json, '$.context.episode_id') >= 0
+        )
+    ),
+    CHECK (
+        json_type(event_json, '$.context.seat') IS NULL
+        OR (
+            json_type(event_json, '$.context.seat') IS 'text'
+            AND json_extract(event_json, '$.context.seat')
+                IN ('a', 'b', 'c', 'd')
         )
     ),
     CHECK (

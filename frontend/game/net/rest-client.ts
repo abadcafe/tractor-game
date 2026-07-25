@@ -1,15 +1,15 @@
-import { API_BASE, type PlayerIndex } from "../config.ts";
+import { API_BASE, type SeatId } from "../config.ts";
 
-export type { PlayerIndex } from "../config.ts";
-export type PlayerKind = "empty" | "user" | "ai" | "auto";
+export type { SeatId } from "../config.ts";
+export type OccupantKind = "empty" | "user" | "ai" | "auto";
 export type BotFillKind = "ai" | "auto";
 export type BotFillMode = "none" | BotFillKind;
 
-export interface ListedPlayer {
-  index: PlayerIndex;
+export interface ListedSeat {
+  seat: SeatId;
   occupied: boolean;
   connected: boolean;
-  kind?: PlayerKind;
+  kind?: OccupantKind;
   mine: boolean;
   ready: boolean;
 }
@@ -18,15 +18,15 @@ export interface ListedGame {
   gameId: string;
   userCount: number;
   capacity: number;
-  userPlayers: PlayerIndex[];
-  players: ListedPlayer[];
+  userSeats: SeatId[];
+  seats: ListedSeat[];
 }
 
-type ListedPlayerWire = {
-  index: PlayerIndex;
+type ListedSeatWire = {
+  seat: SeatId;
   occupied: boolean;
   connected: boolean;
-  kind: PlayerKind;
+  kind: OccupantKind;
   mine: boolean;
   ready: boolean;
 };
@@ -35,8 +35,8 @@ type ListedGameWire = {
   game_id: string;
   user_count: number;
   capacity: number;
-  user_players: PlayerIndex[];
-  players: ListedPlayerWire[];
+  user_seats: SeatId[];
+  seats: ListedSeatWire[];
 };
 
 type GameListResponseWire = {
@@ -47,7 +47,7 @@ type CreateGameResponseWire = {
   game_id: string;
 };
 
-type PlayerOperationResponseWire = {
+type SeatOperationResponseWire = {
   ok: boolean;
 };
 
@@ -90,37 +90,37 @@ export async function listGames(
   return data.games.map(listedGameFromWire);
 }
 
-export async function joinPlayer(
+export async function occupySeat(
   gameId: string,
-  playerIndex: PlayerIndex,
+  seatId: SeatId,
   userId: string,
   baseUrl: string = "",
 ): Promise<boolean> {
-  return await sendPlayerOperation(
+  return await sendSeatOperation(
     "POST",
     gameId,
-    playerIndex,
+    seatId,
     userId,
     baseUrl,
   );
 }
 
-export async function leavePlayer(
+export async function vacateSeat(
   gameId: string,
-  playerIndex: PlayerIndex,
+  seatId: SeatId,
   userId: string,
   baseUrl: string = "",
 ): Promise<boolean> {
-  return await sendPlayerOperation(
+  return await sendSeatOperation(
     "DELETE",
     gameId,
-    playerIndex,
+    seatId,
     userId,
     baseUrl,
   );
 }
 
-export async function fillBotPlayers(
+export async function fillBotSeats(
   gameId: string,
   kind: BotFillKind,
   userId: string,
@@ -131,10 +131,10 @@ export async function fillBotPlayers(
     { method: "POST" },
   );
   if (!resp.ok) {
-    throw new Error(`Failed to fill bot players: ${resp.status}`);
+    throw new Error(`Failed to fill bot seats: ${resp.status}`);
   }
   const data: unknown = await resp.json();
-  if (!isPlayerOperationResponseWire(data)) {
+  if (!isSeatOperationResponseWire(data)) {
     throw new Error("Invalid bot fill response");
   }
   return data.ok;
@@ -152,7 +152,7 @@ export async function deleteGame(
     throw new Error(`Failed to delete game: ${resp.status}`);
   }
   const data: unknown = await resp.json();
-  if (!isPlayerOperationResponseWire(data)) {
+  if (!isSeatOperationResponseWire(data)) {
     throw new Error("Invalid delete game response");
   }
   return data.ok;
@@ -169,13 +169,13 @@ function isListedGameWire(value: unknown): value is ListedGameWire {
   const gameId = value["game_id"];
   const userCount = value["user_count"];
   const capacity = value["capacity"];
-  const userPlayers = value["user_players"];
-  const players = value["players"];
+  const userSeats = value["user_seats"];
+  const seats = value["seats"];
   return typeof gameId === "string" &&
     isNonNegativeInteger(userCount) &&
     isPositiveInteger(capacity) &&
-    Array.isArray(userPlayers) && userPlayers.every(isPlayerIndex) &&
-    Array.isArray(players) && players.every(isListedPlayerWire);
+    Array.isArray(userSeats) && userSeats.every(isSeatId) &&
+    Array.isArray(seats) && seats.every(isListedSeatWire);
 }
 
 function isGameListResponseWire(
@@ -194,9 +194,9 @@ function isCreateGameResponseWire(
   return isRecord(value) && typeof value["game_id"] === "string";
 }
 
-function isPlayerOperationResponseWire(
+function isSeatOperationResponseWire(
   value: unknown,
-): value is PlayerOperationResponseWire {
+): value is SeatOperationResponseWire {
   return isRecord(value) && typeof value["ok"] === "boolean";
 }
 
@@ -210,29 +210,30 @@ function isPositiveInteger(value: unknown): value is number {
     value > 0;
 }
 
-function isPlayerIndex(value: unknown): value is PlayerIndex {
-  return value === 0 || value === 1 || value === 2 || value === 3;
+function isSeatId(value: unknown): value is SeatId {
+  return value === "a" || value === "b" || value === "c" ||
+    value === "d";
 }
 
-function isListedPlayerWire(value: unknown): value is ListedPlayerWire {
+function isListedSeatWire(value: unknown): value is ListedSeatWire {
   if (!isRecord(value)) {
     return false;
   }
-  const index = value["index"];
+  const seat = value["seat"];
   const occupied = value["occupied"];
   const connected = value["connected"];
   const kind = value["kind"];
   const mine = value["mine"];
   const ready = value["ready"];
-  return isPlayerIndex(index) &&
+  return isSeatId(seat) &&
     typeof occupied === "boolean" &&
     typeof connected === "boolean" &&
-    isPlayerKind(kind) &&
+    isOccupantKind(kind) &&
     typeof mine === "boolean" &&
     typeof ready === "boolean";
 }
 
-function isPlayerKind(value: unknown): value is PlayerKind {
+function isOccupantKind(value: unknown): value is OccupantKind {
   return value === "empty" || value === "user" || value === "ai" ||
     value === "auto";
 }
@@ -242,51 +243,49 @@ function listedGameFromWire(game: ListedGameWire): ListedGame {
     gameId: game.game_id,
     userCount: game.user_count,
     capacity: game.capacity,
-    userPlayers: game.user_players,
-    players: game.players.map(listedPlayerFromWire),
+    userSeats: game.user_seats,
+    seats: game.seats.map(listedSeatFromWire),
   };
 }
 
-function listedPlayerFromWire(player: ListedPlayerWire): ListedPlayer {
+function listedSeatFromWire(seat: ListedSeatWire): ListedSeat {
   return {
-    index: player.index,
-    occupied: player.occupied,
-    connected: player.connected,
-    kind: player.kind,
-    mine: player.mine,
-    ready: player.ready,
+    seat: seat.seat,
+    occupied: seat.occupied,
+    connected: seat.connected,
+    kind: seat.kind,
+    mine: seat.mine,
+    ready: seat.ready,
   };
 }
 
-async function sendPlayerOperation(
+async function sendSeatOperation(
   method: "POST" | "DELETE",
   gameId: string,
-  playerIndex: PlayerIndex,
+  seatId: SeatId,
   userId: string,
   baseUrl: string,
 ): Promise<boolean> {
   const resp = await fetch(
-    `${baseUrl}${playerApiPath(gameId, playerIndex, userId)}`,
+    `${baseUrl}${seatApiPath(gameId, seatId, userId)}`,
     { method },
   );
   if (!resp.ok) {
-    throw new Error(`Failed to update player: ${resp.status}`);
+    throw new Error(`Failed to update seat: ${resp.status}`);
   }
   const data: unknown = await resp.json();
-  if (!isPlayerOperationResponseWire(data)) {
-    throw new Error("Invalid player operation response");
+  if (!isSeatOperationResponseWire(data)) {
+    throw new Error("Invalid seat operation response");
   }
   return data.ok;
 }
 
-function playerApiPath(
+function seatApiPath(
   gameId: string,
-  playerIndex: PlayerIndex,
+  seatId: SeatId,
   userId: string,
 ): string {
-  return `${API_BASE}/${
-    encodeURIComponent(gameId)
-  }/player/${playerIndex}` +
+  return `${API_BASE}/${encodeURIComponent(gameId)}/seat/${seatId}` +
     `?user_id=${encodeURIComponent(userId)}`;
 }
 

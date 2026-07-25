@@ -1,7 +1,15 @@
 """Black-box deal-time bidding tests for the game aggregate."""
 
 from server.foundation.result import Ok
-from server.game import CommandRejected, Seat, apply, commands, observe
+from server.game import (
+    CommandRejected,
+    Seat,
+    SeatMap,
+    apply,
+    commands,
+    next_seat,
+    observe,
+)
 from server.game.rules import bidding
 from server.game.rules.cards import CardId, Rank
 from tests.support import (
@@ -13,54 +21,56 @@ from tests.support import (
 
 def test_pass_deals_one_card_to_next_seat() -> None:
     state = started_game(seed=3)
-    before = observe(state, Seat.NORTH)
+    actor, before = game_decision(state)
 
     state = accepted_game_command(
         state,
-        Seat.NORTH,
+        actor,
         commands.PassBid(),
     )
 
-    north = observe(state, Seat.NORTH)
-    west = observe(state, Seat.WEST)
-    assert before.player_hand_counts == (1, 0, 0, 0)
-    assert north.player_hand_counts == (1, 1, 0, 0)
-    assert north.awaiting_action is None
-    assert west.awaiting_action == "bid"
+    after_actor = next_seat(actor)
+    after = observe(state, after_actor)
+    assert before.remaining_cards.at(actor) == 1
+    assert before.remaining_cards.at(after_actor) == 0
+    assert after.remaining_cards.at(actor) == 1
+    assert after.remaining_cards.at(after_actor) == 1
+    assert observe(state, actor).awaiting_action is None
+    assert after.awaiting_action == "bid"
 
 
 def test_bid_rejects_wrong_turn_unknown_duplicate_and_non_level() -> (
     None
 ):
     state = started_game(seed=5)
-    north = observe(state, Seat.NORTH)
-    first = CardId(north.player_hand[0].id)
+    actor, snapshot = game_decision(state)
+    first = CardId(snapshot.hand[0].id)
 
     wrong_turn = apply(
         state,
-        Seat.WEST,
+        next_seat(actor),
         commands.RevealBid((first,)),
     )
     unknown = apply(
         state,
-        Seat.NORTH,
+        actor,
         commands.RevealBid((CardId("unknown"),)),
     )
     duplicate = apply(
         state,
-        Seat.NORTH,
+        actor,
         commands.RevealBid((first, first)),
     )
     non_level = apply(
         state,
-        Seat.NORTH,
+        actor,
         commands.RevealBid((first,)),
     )
 
     assert isinstance(wrong_turn, CommandRejected)
     assert isinstance(unknown, CommandRejected)
     assert isinstance(duplicate, CommandRejected)
-    if north.player_hand[0].rank != Rank.TWO:
+    if snapshot.hand[0].rank != Rank.TWO:
         assert isinstance(non_level, CommandRejected)
 
 
@@ -69,13 +79,13 @@ def test_successful_bid_records_actor_cards_and_deal_ordinal() -> None:
     while True:
         actor, current = game_decision(state)
         reveals = bidding.legal_reveals(
-            current.player_hand,
+            current.hand,
             current.trump_rank,
             current=None,
         )
         if reveals:
             reveal = reveals[0]
-            ordinal = sum(current.player_hand_counts)
+            ordinal = sum(current.remaining_cards.values())
             state = accepted_game_command(
                 state,
                 actor,
@@ -90,9 +100,9 @@ def test_successful_bid_records_actor_cards_and_deal_ordinal() -> None:
             commands.PassBid(),
         )
 
-    public = observe(state, Seat.EAST)
+    public = observe(state, Seat.D)
     assert len(public.bid_events) == 1
-    assert public.bid_events[0].player == actor
+    assert public.bid_events[0].actor == actor
     assert public.bid_events[0].cards == reveal.cards
     assert public.bid_events[0].deal_ordinal == ordinal
     assert public.bid_winner == public.bid_events[0]
@@ -105,7 +115,7 @@ def test_current_bid_winner_cannot_raise_again_without_override() -> (
     while True:
         actor, current = game_decision(state)
         reveals = bidding.legal_reveals(
-            current.player_hand,
+            current.hand,
             current.trump_rank,
             current=None,
         )
@@ -137,7 +147,7 @@ def test_current_bid_winner_cannot_raise_again_without_override() -> (
     result = apply(
         state,
         winner,
-        commands.RevealBid((CardId(current.player_hand[0].id),)),
+        commands.RevealBid((CardId(current.hand[0].id),)),
     )
 
     assert isinstance(result, CommandRejected)
@@ -157,7 +167,7 @@ def test_overridden_bidder_can_bid_again() -> None:
             else bidding.Declaration(cards=current.bid_winner.cards)
         )
         reveals = bidding.legal_reveals(
-            current.player_hand,
+            current.hand,
             current.trump_rank,
             current=current_declaration,
         )
@@ -194,7 +204,7 @@ def test_last_dealt_card_still_has_a_bid_decision() -> None:
     state = started_game(seed=0)
     while True:
         actor, current = game_decision(state)
-        if sum(current.player_hand_counts) == 100:
+        if sum(current.remaining_cards.values()) == 100:
             break
         state = accepted_game_command(
             state,
@@ -203,9 +213,14 @@ def test_last_dealt_card_still_has_a_bid_decision() -> None:
         )
 
     assert current.awaiting_action == "bid"
-    assert current.player_hand_counts == (25, 25, 25, 25)
+    assert current.remaining_cards == SeatMap(
+        a=25,
+        b=25,
+        c=25,
+        d=25,
+    )
     reveals = bidding.legal_reveals(
-        current.player_hand,
+        current.hand,
         current.trump_rank,
         current=None,
     )

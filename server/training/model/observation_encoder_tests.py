@@ -2,10 +2,11 @@
 
 import torch
 
+from server.game import Seat
 from server.training.observation import build_observation
 from server.training.observation_memory import ObservationMemoryView
 from server.training.tensorize import tensorize_observation
-from tests.support import card
+from tests.support import card, seat_values
 from tests.support import snapshot as make_snapshot
 
 from .observation_encoder import ObservationEncoder
@@ -14,12 +15,12 @@ from .observation_encoder import ObservationEncoder
 def test_encoder_returns_query_and_all_card_candidates() -> None:
     encoder = ObservationEncoder(d_model=16, layers=1, heads=2)
     observation = build_observation(
-        viewer=0,
+        viewer=Seat.A,
         snapshot=make_snapshot(
             phase="DEAL_BID",
             awaiting_action="bid",
-            player_hand=[card("hearts", "2")],
-            player_hand_counts=[1, 0, 0, 0],
+            hand=[card("hearts", "2")],
+            remaining_cards=seat_values(1, 0, 0, 0),
             trump_rank="2",
         ),
         memory=ObservationMemoryView(

@@ -17,7 +17,7 @@ import json
 import time
 from collections.abc import Generator
 from itertools import combinations
-from typing import Protocol, TypeGuard
+from typing import Literal, Protocol, TypeGuard
 
 import httpx
 import pytest
@@ -43,13 +43,15 @@ _WS_ERRORS: tuple[type[Exception], ...] = (
     EndOfStream,
 )
 _DEFAULT_WS_RECEIVE_TIMEOUT_SECONDS: float = 5.0
-_USER_PLAYER_INDEX: int = 2
+type WireSeat = Literal["a", "b", "c", "d"]
+type WirePartnership = Literal["first", "second"]
+_USER_SEAT: WireSeat = "c"
 
 
-def _player_ws_path(
-    game_id: str, *, player: int = 2, user_id: str = "user-2"
+def _seat_ws_path(
+    game_id: str, *, seat: WireSeat = "c", user_id: str = "user-2"
 ) -> str:
-    return f"/game/{game_id}/player/{player}?user_id={user_id}"
+    return f"/game/{game_id}/seat/{seat}?user_id={user_id}"
 
 
 class WsReceiveTimeout(TimeoutError):
@@ -69,11 +71,11 @@ def _prepare_ws_game(
     sync_client: SyncServerClient,
     game_id: str,
     *,
-    player: int = 2,
+    seat: WireSeat = "c",
     user_id: str = "user-2",
 ) -> None:
     attach_resp = sync_client.post(
-        f"/api/game/{game_id}/player/{player}?user_id={user_id}"
+        f"/api/game/{game_id}/seat/{seat}?user_id={user_id}"
     )
     assert attach_resp.status_code == 200
     fill_resp = sync_client.post(
@@ -156,6 +158,52 @@ def _as_str_or_none(val: object) -> str | None:
         f"Expected str or None, got {type(val).__name__}"
     )
     return val
+
+
+def _as_wire_seat(val: object) -> WireSeat:
+    seat = _as_str(val)
+    assert seat in ("a", "b", "c", "d")
+    return seat
+
+
+def _as_wire_partnership(val: object) -> WirePartnership:
+    partnership = _as_str(val)
+    assert partnership in ("first", "second")
+    return partnership
+
+
+def _partnership_of_seat(seat: WireSeat) -> WirePartnership:
+    return "first" if seat in ("a", "c") else "second"
+
+
+def _trump(state: dict[str, object]) -> dict[str, object]:
+    return _as_dict(state["trump"])
+
+
+def _trump_rank(state: dict[str, object]) -> str:
+    return _as_str(_trump(state)["rank"])
+
+
+def _trump_suit(state: dict[str, object]) -> str | None:
+    trump = _trump(state)
+    kind = _as_str(trump["kind"])
+    assert kind in ("pending", "no_trump", "suited")
+    if kind != "suited":
+        return None
+    return _as_str(trump["suit"])
+
+
+def _partnership_level(
+    state: dict[str, object], partnership: WirePartnership
+) -> str:
+    levels = _as_dict(state["partnership_levels"])
+    return _as_str(levels[partnership])
+
+
+def _declarer_partnership(
+    state: dict[str, object],
+) -> WirePartnership:
+    return _partnership_of_seat(_as_wire_seat(state["declarer"]))
 
 
 def _awaiting(msg: dict[str, object]) -> str | None:
@@ -284,7 +332,7 @@ class WsGameDriver:
         """
         self._game_id = game_id
         self._ws_cm = self._client.websocket_connect(
-            _player_ws_path(game_id)
+            _seat_ws_path(game_id)
         )
         self._ws = self._ws_cm.__enter__()
         self._known_seq = 0
@@ -403,22 +451,22 @@ class WsGameDriver:
             f"last_seq={self._last_state_msg.get('seq')}",
             f"phase={state.get('phase')}",
             f"awaiting={_awaiting(self._last_state_msg)}",
-            f"hand_count={len(_as_list(state.get('player_hand', [])))}",
+            f"hand_count={len(_as_list(state.get('hand', [])))}",
         ]
         stirring = _as_dict_or_none(state.get("stirring_state"))
         if stirring is not None:
             parts.append(
                 "stirring="
                 f"phase:{stirring.get('phase')},"
-                f"current:{stirring.get('current_player')},"
-                f"exchanging:{stirring.get('exchanging_player')}"
+                f"current:{stirring.get('current_actor')},"
+                f"exchanging:{stirring.get('exchanging_actor')}"
             )
         trick = _as_dict_or_none(state.get("trick"))
         if trick is not None:
             parts.append(
                 "trick="
-                f"current:{trick.get('current_player')},"
-                f"lead:{trick.get('lead_player')}"
+                f"current:{trick.get('current_actor')},"
+                f"lead:{trick.get('lead_actor')}"
             )
         return " ".join(parts)
 
@@ -717,7 +765,7 @@ class WsGameDriver:
             if state.get("phase") != "WAITING":
                 return msg
             confirmed = _as_list(state.get("next_round_confirmed", []))
-            if _USER_PLAYER_INDEX in confirmed:
+            if _USER_SEAT in confirmed:
                 return msg
             if _awaiting(msg) == "next_round" and attempts < 4:
                 attempts += 1
@@ -776,8 +824,8 @@ def test_list_games(sync_client: SyncServerClient) -> None:
     for g in games:
         assert g["user_count"] == 0
         assert g["capacity"] == 4
-        assert g["user_players"] == []
-        assert len(g["players"]) == 4
+        assert g["user_seats"] == []
+        assert len(g["seats"]) == 4
         assert "phase" not in g
 
 
@@ -792,7 +840,7 @@ def test_delete_game_closes_ws(sync_client: SyncServerClient) -> None:
     game_id = _as_str(data["game_id"])
     _prepare_ws_game(sync_client, game_id)
 
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         raw = _receive_ws_json(ws)
         data_msg = _as_dict(raw)
@@ -811,7 +859,7 @@ def test_connect_nonexistent_game(
     """Connecting to a nonexistent game closes with code 4404."""
     with pytest.raises(WebSocketDisconnect) as exc_info:
         with sync_client.websocket_connect(
-            _player_ws_path("nonexistent_id")
+            _seat_ws_path("nonexistent_id")
         ) as ws:
             _receive_ws_json(ws)
     assert exc_info.value.code == 4404
@@ -828,7 +876,7 @@ def test_connection_takeover(sync_client: SyncServerClient) -> None:
     _prepare_ws_game(sync_client, game_id)
 
     # First connection: get state
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws1:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws1:
         ws1.send_json({"seq": 0})
         raw1 = _receive_ws_json(ws1)
         data1 = _as_dict(raw1)
@@ -836,7 +884,7 @@ def test_connection_takeover(sync_client: SyncServerClient) -> None:
 
         # Second connection (should kick first)
         with sync_client.websocket_connect(
-            _player_ws_path(game_id)
+            _seat_ws_path(game_id)
         ) as ws2:
             ws2.send_json({"seq": 0})
             raw2 = _receive_ws_json(ws2)
@@ -866,7 +914,7 @@ def test_reconnect_resumes_game(sync_client: SyncServerClient) -> None:
     _prepare_ws_game(sync_client, game_id)
 
     # First connection: get state
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws1:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws1:
         ws1.send_json({"seq": 0})
         raw1 = _receive_ws_json(ws1)
         data1 = _as_dict(raw1)
@@ -874,7 +922,7 @@ def test_reconnect_resumes_game(sync_client: SyncServerClient) -> None:
         seq1 = _as_int(data1["seq"])
 
     # Reconnect: send seq=0 to request the current state.
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws2:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws2:
         ws2.send_json({"seq": 0})
         raw2 = _receive_ws_json(ws2)
         data2 = _as_dict(raw2)
@@ -942,9 +990,9 @@ def _advance_level(rank: str, change: int) -> str:
 
 def _compute_expected_levels(
     total_defender_points: int,
-    declarer_team: int,
-    team0_level: str,
-    team1_level: str,
+    declarer_partnership: WirePartnership,
+    first_partnership_level: str,
+    second_partnership_level: str,
 ) -> tuple[str, str]:
     """Compute expected team levels from scoring data.
 
@@ -966,15 +1014,15 @@ def _compute_expected_levels(
         # defender_points >= 80: switch, formula for new declarer gain
         defender_gain = max(0, (total_defender_points - 80) // 40)
 
-    if declarer_team == 0:
+    if declarer_partnership == "first":
         return (
-            _advance_level(team0_level, declarer_change),
-            _advance_level(team1_level, defender_gain),
+            _advance_level(first_partnership_level, declarer_change),
+            _advance_level(second_partnership_level, defender_gain),
         )
     else:
         return (
-            _advance_level(team0_level, defender_gain),
-            _advance_level(team1_level, declarer_change),
+            _advance_level(first_partnership_level, defender_gain),
+            _advance_level(second_partnership_level, declarer_change),
         )
 
 
@@ -985,18 +1033,19 @@ def _verify_common_fields(state: dict[str, object], phase: str) -> None:
     """Verify common state fields are present and valid."""
     assert "phase" in state
     assert state["phase"] == phase
-    assert "player_hand" in state
-    assert "player_hand_counts" in state
-    hand_counts = _as_list(state["player_hand_counts"])
-    assert len(hand_counts) == 4
-    for count in hand_counts:
+    assert "hand" in state
+    hand_counts = _as_dict(state["remaining_cards"])
+    assert set(hand_counts) == {"a", "b", "c", "d"}
+    for count in hand_counts.values():
         assert isinstance(count, int)
         assert count >= 0
-    assert "trump_rank" in state
-    assert "declarer_team" in state
-    assert "declarer_player" in state or phase == "DEAL_BID"
-    assert "team0_level" in state
-    assert "team1_level" in state
+    trump = _trump(state)
+    assert "kind" in trump
+    assert "rank" in trump
+    assert "declarer" in state
+    assert "partnership_levels" in state
+    levels = _as_dict(state["partnership_levels"])
+    assert set(levels) == {"first", "second"}
     assert "defender_points" in state
 
 
@@ -1028,14 +1077,14 @@ def _recv_state(
             awaiting = _awaiting(msg)
             phase = state.get("phase", "?")
             seq = msg.get("seq", "?")
-            # Show trick current_player when in PLAYING
+            # Show trick current_actor when in PLAYING
             extra = ""
             if phase == "PLAYING":
                 trick_raw = state.get("trick")
                 if trick_raw is not None:
                     trick = _as_dict(trick_raw)
-                    cp = trick.get("current_player")
-                    lp = trick.get("lead_player")
+                    cp = trick.get("current_actor")
+                    lp = trick.get("lead_actor")
                     extra = f" trick_cp={cp} lead={lp}"
             print(
                 f"  [{label}] recv: phase={phase} awaiting={awaiting}"
@@ -1162,8 +1211,8 @@ def _recv_until_our_turn(
 
 
 def _hand_dicts(state: dict[str, object]) -> list[dict[str, object]]:
-    """Extract player_hand as list[dict] from state."""
-    raw = state.get("player_hand")
+    """Extract hand as list[dict] from state."""
+    raw = state.get("hand")
     if raw is None:
         return []
     result: list[dict[str, object]] = []
@@ -1233,10 +1282,15 @@ def _pick_free_play_candidates(
     lead_cards: list[dict[str, object]] = []
     trick = _as_dict_or_none(state.get("trick"))
     if trick is not None:
-        lead_player = _as_int(trick.get("lead_player", 0))
+        lead_actor = _as_wire_seat(trick["lead_actor"])
         slots = _as_list(trick.get("slots", []))
-        if 0 <= lead_player < len(slots):
-            lead_slot = _as_dict(slots[lead_player])
+        lead_slots = [
+            _as_dict(slot)
+            for slot in slots
+            if _as_dict(slot).get("actor") == lead_actor
+        ]
+        if lead_slots:
+            lead_slot = lead_slots[0]
             raw_lead_cards = _as_list(lead_slot.get("cards", []))
             lead_cards = [_as_dict(c) for c in raw_lead_cards]
             if raw_lead_cards:
@@ -1244,8 +1298,8 @@ def _pick_free_play_candidates(
     if not lead_cards:
         return [[card] for card in hand[:limit]]
 
-    trump_suit = _as_str_or_none(state.get("trump_suit"))
-    trump_rank = _as_str(state.get("trump_rank", "2"))
+    trump_suit = _trump_suit(state)
+    trump_rank = _trump_rank(state)
     lead_eff = _effective_suit_dict(
         lead_cards[0], trump_suit, trump_rank
     )
@@ -1496,8 +1550,8 @@ def _expect_seq_mismatch_response(
 def _play_deal_bid(
     driver: WsGameDriver,
     round_count: int,
-    expected_t0: str | None,
-    expected_t1: str | None,
+    expected_first: str | None,
+    expected_second: str | None,
     initial_state: dict[str, object] | None = None,
     initial_msg: dict[str, object] | None = None,
 ) -> tuple[
@@ -1505,7 +1559,7 @@ def _play_deal_bid(
 ]:
     """Play through DEAL_BID phase.
 
-    Returns (final_state, final_msg, expected_t0, expected_t1).
+    Returns (final_state, final_msg, expected_first, expected_second).
 
     In the correct DEAL_BID flow, each card dealt triggers a push.
     The player who received the card sees awaiting_action='bid' and
@@ -1531,16 +1585,16 @@ def _play_deal_bid(
     assert "bid_events" in state
     assert "action_hints" in state
     assert "bid_winner" in state
-    assert "trump_suit" in state
+    assert "trump" in state
 
-    if expected_t0 is not None and expected_t1 is not None:
-        assert state["team0_level"] == expected_t0, (
-            f"team0_level: expected {expected_t0}, got"
-            f"{state['team0_level']}"
+    if expected_first is not None and expected_second is not None:
+        assert _partnership_level(state, "first") == expected_first, (
+            f"first_partnership_level: expected {expected_first}, got"
+            f"{_partnership_level(state, 'first')}"
         )
-        assert state["team1_level"] == expected_t1, (
-            f"team1_level: expected {expected_t1}, got"
-            f"{state['team1_level']}"
+        assert _partnership_level(state, "second") == expected_second, (
+            f"second_partnership_level: expected {expected_second}, got"
+            f"{_partnership_level(state, 'second')}"
         )
 
     bid_made: bool = (
@@ -1643,7 +1697,7 @@ def _play_deal_bid(
             )
             break
 
-    return state, msg, expected_t0, expected_t1
+    return state, msg, expected_first, expected_second
 
 
 def _play_stirring(
@@ -1666,8 +1720,8 @@ def _play_stirring(
     assert stirring is not None
     assert "phase" in stirring
     assert "trump_suit" in stirring
-    assert "current_player" in stirring
-    assert "declarer_player" in stirring
+    assert "current_actor" in stirring
+    assert "declarer" in stirring
     assert "legal_actions" not in stirring
 
     while True:
@@ -1731,10 +1785,10 @@ def _play_stirring_exchange(
     _verify_common_fields(state, "STIRRING")
     stirring = _as_dict_or_none(state.get("stirring_state"))
     assert stirring is not None
-    exchanging_player_raw = stirring.get("exchanging_player")
-    exchanging_player = (
-        _as_int(exchanging_player_raw)
-        if isinstance(exchanging_player_raw, int)
+    exchanging_actor_raw = stirring.get("exchanging_actor")
+    exchanging_actor = (
+        _as_wire_seat(exchanging_actor_raw)
+        if isinstance(exchanging_actor_raw, str)
         else None
     )
     exchange_count_raw = stirring.get("exchange_count", 8)
@@ -1748,7 +1802,7 @@ def _play_stirring_exchange(
     # responses
     msg: dict[str, object] = {}
 
-    if exchanging_player == 2:
+    if exchanging_actor == _USER_SEAT:
         hand = _hand_dicts(state)
         discard_ids: list[str] = []
         for c in hand[-exchange_count:]:
@@ -1794,7 +1848,7 @@ def _play_stirring_exchange(
     else:
         print(
             f"  [R{round_count}:STIR-EXCH]"
-            f"exchanging_player={exchanging_player}, waiting for our"
+            f"exchanging_actor={exchanging_actor}, waiting for our"
             f"turn",
             flush=True,
         )
@@ -1825,10 +1879,7 @@ def _verify_trick_invariants(
     assert "winner" in last_trick, (
         "last_completed_trick must have 'winner' field"
     )
-    winner_val = last_trick["winner"]
-    assert isinstance(winner_val, int) and winner_val in (0, 1, 2, 3), (
-        f"trick_winner must be a valid player index, got {winner_val}"
-    )
+    _as_wire_seat(last_trick["winner"])
 
     # Verify suit-following in the last trick
     last_trick_slots_raw = last_trick.get("slots", [])
@@ -1863,7 +1914,7 @@ def _verify_trick_invariants(
         winner_slot = None
         for slot in last_trick_slots:
             slot_dict = _as_dict(slot)
-            if slot_dict.get("player") == last_trick["winner"]:
+            if slot_dict.get("actor") == last_trick["winner"]:
                 winner_slot = slot_dict
                 break
         if winner_slot is not None:
@@ -1884,9 +1935,7 @@ def _verify_trick_invariants(
                     ):
                         assert last_trick["winner"] != _as_dict(
                             last_trick_slots[0]
-                        ).get("player"), (
-                            "Trump must beat non-trump lead"
-                        )
+                        ).get("actor"), "Trump must beat non-trump lead"
 
 
 def _last_completed_trick_key(state: dict[str, object]) -> str | None:
@@ -1902,11 +1951,11 @@ def _last_completed_trick_key(state: dict[str, object]) -> str | None:
         card_ids = ",".join(
             _as_str(_as_dict(card).get("id")) for card in cards
         )
-        slot_parts.append(f"{_as_int(slot.get('player'))}:{card_ids}")
+        slot_parts.append(f"{_as_wire_seat(slot['actor'])}:{card_ids}")
     return "|".join(
         [
-            str(_as_int(last_trick.get("lead_player"))),
-            str(_as_int(last_trick.get("winner"))),
+            _as_wire_seat(last_trick["lead_actor"]),
+            _as_wire_seat(last_trick["winner"]),
             str(_as_int(last_trick.get("points"))),
             *slot_parts,
         ]
@@ -1933,9 +1982,7 @@ def _play_playing(
     """
     print(f"[round {round_count}] === PLAYING ===", flush=True)
     tricks_played = 0
-    current_trump_suit: str | None = _as_str_or_none(
-        state.get("trump_suit")
-    )
+    current_trump_suit = _trump_suit(state)
     completed_tricks_seen = 0
     prev_completed_trick_key = _last_completed_trick_key(state)
 
@@ -1966,7 +2013,7 @@ def _play_playing(
         assert "defender_points" in state
         assert "action_hints" in state or _awaiting(msg) != "play"
 
-        ts_raw = _as_str_or_none(state.get("trump_suit"))
+        ts_raw = _trump_suit(state)
         if ts_raw is not None:
             current_trump_suit = ts_raw
 
@@ -2128,8 +2175,8 @@ def _play_waiting(
     state: dict[str, object],
     msg: dict[str, object],
     round_count: int,
-    prev_team0_level: str | None = None,
-    prev_team1_level: str | None = None,
+    prev_first_partnership_level: str | None = None,
+    prev_second_partnership_level: str | None = None,
 ) -> tuple[
     dict[str, object], dict[str, object], str | None, str | None
 ]:
@@ -2137,12 +2184,11 @@ def _play_waiting(
     Play through WAITING phase (round complete, awaiting next_round
     confirm).
 
-    Returns (final_state, final_msg, expected_t0, expected_t1).
+    Returns (final_state, final_msg, expected_first, expected_second).
 
-    prev_team0_level/prev_team1_level: the levels BEFORE
-    process_round_result
-    updated them. These are needed because process_round_result runs at
-    the
+    prev_first_partnership_level and prev_second_partnership_level are
+    the levels before process_round_result updated them. These are
+    needed because process_round_result runs at the
     end of PLAYING, so the WAITING state already contains the updated
     levels.
     We need the pre-update levels to compute the expected change.
@@ -2178,16 +2224,17 @@ def _play_waiting(
     assert scoring_raw is not None
     scoring = _as_dict(scoring_raw)
     assert "total_defender_points" in scoring
-    assert "round_winning_team" in scoring
-    assert "declarer_team" not in scoring
+    assert "winning_partnership" in scoring
+    assert "declarer_partnership" not in scoring
     assert isinstance(state["next_round_confirmed"], list)
 
     scoring_tdp = scoring["total_defender_points"]
     assert isinstance(scoring_tdp, int)
-    round_winning_team = scoring["round_winning_team"]
-    assert isinstance(round_winning_team, int)
-    round_declarer_team = state["declarer_team"]
-    assert isinstance(round_declarer_team, int)
+    winning_partnership = _as_wire_partnership(
+        scoring["winning_partnership"]
+    )
+    assert "declarer_partnership" not in state
+    round_declarer_partnership = _declarer_partnership(state)
 
     # Compute expected levels from scoring data. process_round_result
     # runs
@@ -2195,41 +2242,46 @@ def _play_waiting(
     # We need the pre-update levels to verify the change was correct.
     # If prev levels are not available, use current levels (no
     # verification).
-    t0_for_calc = (
-        prev_team0_level
-        if prev_team0_level is not None
-        else _as_str(state["team0_level"])
+    first_for_calc = (
+        prev_first_partnership_level
+        if prev_first_partnership_level is not None
+        else _partnership_level(state, "first")
     )
-    t1_for_calc = (
-        prev_team1_level
-        if prev_team1_level is not None
-        else _as_str(state["team1_level"])
+    second_for_calc = (
+        prev_second_partnership_level
+        if prev_second_partnership_level is not None
+        else _partnership_level(state, "second")
     )
-    expected_t0, expected_t1 = _compute_expected_levels(
+    expected_first, expected_second = _compute_expected_levels(
         scoring_tdp,
-        round_declarer_team,
-        t0_for_calc,
-        t1_for_calc,
+        round_declarer_partnership,
+        first_for_calc,
+        second_for_calc,
     )
     # Verify that the levels in the state match our expected calculation
-    if prev_team0_level is not None and prev_team1_level is not None:
-        assert _as_str(state["team0_level"]) == expected_t0, (
-            f"team0_level mismatch: expected {expected_t0}, got"
-            f"{state['team0_level']}"
-            f"(prev={prev_team0_level}, tdp={scoring_tdp},"
-            f"declarer_team={round_declarer_team})"
+    if (
+        prev_first_partnership_level is not None
+        and prev_second_partnership_level is not None
+    ):
+        assert _partnership_level(state, "first") == expected_first, (
+            "first partnership level mismatch: "
+            f"expected {expected_first}, got "
+            f"{_partnership_level(state, 'first')}"
+            f"(prev={prev_first_partnership_level}, tdp={scoring_tdp},"
+            f"declarer_partnership={round_declarer_partnership})"
         )
-        assert _as_str(state["team1_level"]) == expected_t1, (
-            f"team1_level mismatch: expected {expected_t1}, got"
-            f"{state['team1_level']}"
-            f"(prev={prev_team1_level}, tdp={scoring_tdp},"
-            f"declarer_team={round_declarer_team})"
+        assert _partnership_level(state, "second") == expected_second, (
+            "second partnership level mismatch: "
+            f"expected {expected_second}, got "
+            f"{_partnership_level(state, 'second')}"
+            f"(prev={prev_second_partnership_level}, tdp={scoring_tdp},"
+            f"declarer_partnership={round_declarer_partnership})"
         )
     print(
         f"  [R{round_count}:WAITING] defender_pts={scoring_tdp} "
-        f"declarer_team={round_declarer_team} "
-        f"round_winning_team={round_winning_team} "
-        f"levels: t0={expected_t0} t1={expected_t1}",
+        f"declarer_partnership={round_declarer_partnership} "
+        f"winning_partnership={winning_partnership} "
+        f"levels: first={expected_first} second={expected_second}",
         flush=True,
     )
 
@@ -2258,7 +2310,7 @@ def _play_waiting(
                     f"[round {round_count}] WAITING ->{state['phase']}",
                     flush=True,
                 )
-                return state, msg, expected_t0, expected_t1
+                return state, msg, expected_first, expected_second
         while state["phase"] == "WAITING":
             state, msg = _recv_until_our_turn(
                 driver,
@@ -2271,7 +2323,7 @@ def _play_waiting(
     print(
         f"[round {round_count}] WAITING -> {state['phase']}", flush=True
     )
-    return state, msg, expected_t0, expected_t1
+    return state, msg, expected_first, expected_second
 
 
 def _verify_game_over(
@@ -2279,22 +2331,23 @@ def _verify_game_over(
     state: dict[str, object],
     game_id: str,
     sync_client: SyncServerClient,
-    expected_t0: str | None,
-    expected_t1: str | None,
+    expected_first: str | None,
+    expected_second: str | None,
 ) -> None:
     """Verify finished game state and post-game cleanup."""
     print("=== GAME OVER ===")
     assert state["phase"] == "WAITING", (
         f"Expected finished game to remain WAITING, got{state['phase']}"
     )
-    assert "winning_team" in state
-    winning_team = state["winning_team"]
-    assert isinstance(winning_team, int) and winning_team in (0, 1)
-    print(f"  winning_team={winning_team}")
+    assert "winning_partnership" in state
+    winning_partnership = _as_wire_partnership(
+        state["winning_partnership"]
+    )
+    print(f"  winning_partnership={winning_partnership}")
 
-    if expected_t0 is not None and expected_t1 is not None:
-        assert state["team0_level"] == expected_t0
-        assert state["team1_level"] == expected_t1
+    if expected_first is not None and expected_second is not None:
+        assert _partnership_level(state, "first") == expected_first
+        assert _partnership_level(state, "second") == expected_second
 
     # Close the current connection and verify a fresh connection can
     # recover the finished state with seq=0.
@@ -2316,14 +2369,17 @@ def _verify_game_over(
     print("  game retained in registry", flush=True)
 
     print("  checking seq=0 reconnect...", flush=True)
-    with sync_client.websocket_connect(_player_ws_path(game_id)) as ws:
+    with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
         raw = _receive_ws_json(ws)
         msg = _as_dict(raw)
         assert msg["type"] == "state"
         reconnect_state = _as_dict(msg["state"])
         assert reconnect_state["phase"] == "WAITING"
-        assert reconnect_state["winning_team"] == winning_team
+        assert (
+            reconnect_state["winning_partnership"]
+            == winning_partnership
+        )
     print("  game over verification complete", flush=True)
 
 
@@ -2332,7 +2388,7 @@ def _verify_game_over(
 
 @pytest.mark.timeout(120.0)
 def test_full_game(sync_client: SyncServerClient) -> None:
-    """Play a complete game from start to winning_team.
+    """Play a complete game from start to winning_partnership.
 
     At each phase:
     - Before every correct user action, inject 1-3 rejected requests
@@ -2340,11 +2396,11 @@ def test_full_game(sync_client: SyncServerClient) -> None:
     - Verify state fields and phase transitions
     - Let AutoPlayers handle their turns automatically
 
-    The user player (index 2) acts when awaiting_action matches.
-    AutoPlayers (indices 0, 1, 3) act automatically via the server.
+    The user occupies seat c and acts when awaiting_action matches.
+    Bots occupy the other seats and act automatically.
     """
     print(">>> test_full_game starting <<<", flush=True)
-    resp = sync_client.post("/api/game/auto")
+    resp = sync_client.post("/api/game")
     game_id = resp.json()["game_id"]
     assert isinstance(game_id, str)
     _prepare_ws_game(sync_client, game_id)
@@ -2356,8 +2412,7 @@ def test_full_game(sync_client: SyncServerClient) -> None:
         driver.connect(game_id)
         print(">>> connected <<<", flush=True)
 
-        # Game starts in WAITING phase. AutoPlayers (0, 1, 3)
-        # request state
+        # Game starts in WAITING phase. Bots request state
         # with
         # seq=0 and confirm automatically via run(). The user client
         # must
@@ -2405,7 +2460,7 @@ def test_full_game(sync_client: SyncServerClient) -> None:
             )
             if (
                 cur_phase in ("DEAL_BID", "STIRRING", "PLAYING")
-                or state.get("winning_team") is not None
+                or state.get("winning_partnership") is not None
             ):
                 break
             # Still in WAITING or transitional state — drain more
@@ -2417,9 +2472,9 @@ def test_full_game(sync_client: SyncServerClient) -> None:
                 break
 
         round_count = 0
-        max_rounds = 100  # play until winning_team is set
-        expected_t0: str | None = None
-        expected_t1: str | None = None
+        max_rounds = 100  # play until winning_partnership is set
+        expected_first: str | None = None
+        expected_second: str | None = None
         # state and msg are set during initialization or by phase
         # handlers
         msg: dict[str, object] = msg  # from initialization drain above
@@ -2433,18 +2488,20 @@ def test_full_game(sync_client: SyncServerClient) -> None:
 
             # Snapshot levels before the round starts (before
             # process_round_result)
-            prev_t0 = _as_str(state["team0_level"])
-            prev_t1 = _as_str(state["team1_level"])
+            prev_first = _partnership_level(state, "first")
+            prev_second = _partnership_level(state, "second")
 
             # DEAL_BID: pass initial state for round 1 (already obtained
             # above)
-            state, msg, expected_t0, expected_t1 = _play_deal_bid(
-                driver,
-                round_count,
-                expected_t0,
-                expected_t1,
-                initial_state=state if round_count == 1 else None,
-                initial_msg=msg if round_count == 1 else None,
+            state, msg, expected_first, expected_second = (
+                _play_deal_bid(
+                    driver,
+                    round_count,
+                    expected_first,
+                    expected_second,
+                    initial_state=state if round_count == 1 else None,
+                    initial_msg=msg if round_count == 1 else None,
+                )
             )
 
             # STIRRING (optional)
@@ -2461,16 +2518,18 @@ def test_full_game(sync_client: SyncServerClient) -> None:
 
             # WAITING (round complete)
             if state["phase"] == "WAITING":
-                state, msg, expected_t0, expected_t1 = _play_waiting(
-                    driver,
-                    state,
-                    msg,
-                    round_count,
-                    prev_team0_level=prev_t0,
-                    prev_team1_level=prev_t1,
+                state, msg, expected_first, expected_second = (
+                    _play_waiting(
+                        driver,
+                        state,
+                        msg,
+                        round_count,
+                        prev_first_partnership_level=prev_first,
+                        prev_second_partnership_level=prev_second,
+                    )
                 )
 
-            if state.get("winning_team") is not None:
+            if state.get("winning_partnership") is not None:
                 # Compute expected levels for this round if needed.
                 scoring = (
                     _as_dict(state["scoring"])
@@ -2479,32 +2538,31 @@ def test_full_game(sync_client: SyncServerClient) -> None:
                 )
                 if scoring is not None:
                     scoring_tdp = scoring.get("total_defender_points")
-                    round_declarer_team = state.get("declarer_team")
-                    if isinstance(scoring_tdp, int) and isinstance(
-                        round_declarer_team, int
-                    ):
-                        expected_t0, expected_t1 = (
+                    if isinstance(scoring_tdp, int):
+                        expected_first, expected_second = (
                             _compute_expected_levels(
                                 scoring_tdp,
-                                round_declarer_team,
-                                prev_t0,
-                                prev_t1,
+                                _declarer_partnership(state),
+                                prev_first,
+                                prev_second,
                             )
                         )
                 break
 
-        assert isinstance(state.get("winning_team"), int), (
-            f"Game should set winning_team within {max_rounds} rounds, "
+        _as_wire_partnership(state["winning_partnership"])
+        assert state.get("winning_partnership") is not None, (
+            "Game should set winning_partnership within "
+            f"{max_rounds} rounds, "
             f"but phase={state['phase']}"
-            f"winning_team={state.get('winning_team')}"
+            f"winning_partnership={state.get('winning_partnership')}"
         )
         _verify_game_over(
             driver,
             state,
             game_id,
             sync_client,
-            expected_t0,
-            expected_t1,
+            expected_first,
+            expected_second,
         )
     finally:
         # ALWAYS close the WebSocket driver — even if the test fails

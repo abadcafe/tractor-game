@@ -1595,8 +1595,8 @@ def _rollout_snapshot(
         cancelled_env_count=0,
         total_step_count=sample_count,
         max_step_count=0 if sample_count == 0 else 1,
-        team0_reward_sum=0.0,
-        team1_reward_sum=0.0,
+        first_partnership_reward_sum=0.0,
+        second_partnership_reward_sum=0.0,
         elapsed_seconds_max=0.0,
     )
 

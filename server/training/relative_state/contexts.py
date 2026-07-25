@@ -48,8 +48,8 @@ class RoundContext:
     level_rank: Rank
     defender_points: int
     partner_remaining: int
-    left_enemy_remaining: int
-    right_enemy_remaining: int
+    next_opponent_remaining: int
+    previous_opponent_remaining: int
 
 
 @dataclass(frozen=True, slots=True)
