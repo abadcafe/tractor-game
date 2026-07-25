@@ -30,7 +30,7 @@ from anyio import (
 from starlette.testclient import TestClient, WebSocketTestSession
 from starlette.websockets import WebSocketDisconnect
 
-from server.web.app import app
+from server.web.app import WebApplication
 
 # Connection-related exceptions from third-party libraries (normal flow
 # control).
@@ -222,24 +222,21 @@ def _receive_ws_json(
 # ---- Fixtures ----
 
 
-@pytest.fixture(autouse=True)
-def clean_registry(
-    sync_client: SyncServerClient,
-) -> Generator[None, None, None]:
-    """Reset the global registry before each test."""
-    resp = sync_client.get("/api/game")
-    for g in resp.json()["games"]:
-        sync_client.delete(f"/api/game/{g['game_id']}")
-    yield
-    resp = sync_client.get("/api/game")
-    for g in resp.json()["games"]:
-        sync_client.delete(f"/api/game/{g['game_id']}")
+@pytest.fixture
+def application() -> WebApplication:
+    """Create isolated process-local state for one test."""
+    return WebApplication()
 
 
 @pytest.fixture
-def sync_client() -> Generator[SyncServerClient, None, None]:
+def sync_client(
+    application: WebApplication,
+) -> Generator[SyncServerClient, None, None]:
     """Synchronous test client using Starlette TestClient."""
-    with TestClient(app, backend_options={"use_uvloop": True}) as c:
+    with TestClient(
+        application.asgi,
+        backend_options={"use_uvloop": True},
+    ) as c:
         yield c
 
 

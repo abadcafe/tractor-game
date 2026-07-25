@@ -13,6 +13,7 @@ from starlette.responses import StreamingResponse
 from server.foundation import result as _result
 from server.training_control.process_inspection import ProcessState
 from server.web.state import ServerState
+from server.web.training_events.lifecycle import EventStreamLifecycle
 from server.web.training_events.wire import (
     KEEP_ALIVE,
     RETRY,
@@ -24,14 +25,20 @@ from server.web.training_events.wire import (
 _HEARTBEAT_SECONDS = 15.0
 
 
-def register_process_route(app: FastAPI, state: ServerState) -> None:
+def register_process_route(
+    app: FastAPI,
+    state: ServerState,
+    lifecycle: EventStreamLifecycle,
+) -> None:
     async def training_process(
         run_dir: Path | None = None,
     ) -> StreamingResponse:
         canonical = state.training_control_config.resolve_run_dir(
             run_dir
         )
-        return event_response(_process_events(state, canonical))
+        return event_response(
+            lifecycle, _process_events(state, canonical)
+        )
 
     app.add_api_route(
         "/api/training/events/process",

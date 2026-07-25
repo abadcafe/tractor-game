@@ -22,7 +22,7 @@ import pytest
 from anyio import WouldBlock
 from starlette.testclient import TestClient, WebSocketTestSession
 
-from server.web.app import app
+from server.web.app import WebApplication
 
 _DEFAULT_WS_RECEIVE_TIMEOUT_SECONDS: float = 5.0
 
@@ -123,33 +123,20 @@ def _receive_ws_json(
             time.sleep(0.001)
 
 
-@pytest.fixture(autouse=True)
-def clean_registry(
-    sync_client: SyncServerClient,
-) -> Generator[None, None, None]:
-    """Reset the global registry before each test.
-
-    Uses public API only: GET /api/game + DELETE /api/game/{id}.
-    """
-    resp = sync_client.get("/api/game")
-    games = _as_list(_as_dict(resp.json())["games"])
-    for g in games:
-        game = _as_dict(g)
-        sync_client.delete(f"/api/game/{game['game_id']}")
-    yield
-    resp = sync_client.get("/api/game")
-    games = _as_list(_as_dict(resp.json())["games"])
-    for g in games:
-        game = _as_dict(g)
-        sync_client.delete(f"/api/game/{game['game_id']}")
+@pytest.fixture
+def application() -> WebApplication:
+    """Create isolated process-local state for one test."""
+    return WebApplication()
 
 
 @pytest.fixture
-async def client() -> AsyncGenerator[AsyncRestClient, None]:
+async def client(
+    application: WebApplication,
+) -> AsyncGenerator[AsyncRestClient, None]:
     """
     Async test client using httpx with ASGI transport for REST tests.
     """
-    transport = httpx.ASGITransport(app=app)
+    transport = httpx.ASGITransport(app=application.asgi)
     async with httpx.AsyncClient(
         transport=transport, base_url="http://test"
     ) as ac:
@@ -157,12 +144,17 @@ async def client() -> AsyncGenerator[AsyncRestClient, None]:
 
 
 @pytest.fixture
-def sync_client() -> Generator[SyncServerClient, None, None]:
+def sync_client(
+    application: WebApplication,
+) -> Generator[SyncServerClient, None, None]:
     """
     Synchronous test client using Starlette TestClient for WebSocket
     tests.
     """
-    with TestClient(app, backend_options={"use_uvloop": True}) as c:
+    with TestClient(
+        application.asgi,
+        backend_options={"use_uvloop": True},
+    ) as c:
         yield c
 
 

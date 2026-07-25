@@ -19,6 +19,7 @@ from server.training_metrics.queries import (
     query_training_metrics,
 )
 from server.web.state import ServerState
+from server.web.training_events.lifecycle import EventStreamLifecycle
 from server.web.training_events.wire import (
     KEEP_ALIVE,
     RETRY,
@@ -31,7 +32,11 @@ _POLL_SECONDS = 1.0
 _HEARTBEAT_SECONDS = 15.0
 
 
-def register_metrics_route(app: FastAPI, state: ServerState) -> None:
+def register_metrics_route(
+    app: FastAPI,
+    state: ServerState,
+    lifecycle: EventStreamLifecycle,
+) -> None:
     async def training_metrics(
         run_dir: Path | None = None,
         update_limit: Annotated[int, Query(ge=1, le=5000)] = 500,
@@ -41,11 +46,12 @@ def register_metrics_route(app: FastAPI, state: ServerState) -> None:
             run_dir
         )
         return event_response(
+            lifecycle,
             _metrics_events(
                 canonical,
                 update_limit=update_limit,
                 series_points=series_points,
-            )
+            ),
         )
 
     app.add_api_route(
@@ -67,7 +73,8 @@ async def _metrics_events(
     last_sent = time.monotonic()
     while True:
         cursor_result = await to_thread.run_sync(
-            partial(query_metrics_cursor, run_dir)
+            partial(query_metrics_cursor, run_dir),
+            abandon_on_cancel=True,
         )
         if isinstance(cursor_result, _result.Rejected):
             yield rejected_event(cursor_result.reason).encode()
@@ -83,7 +90,8 @@ async def _metrics_events(
                     run_dir,
                     update_limit=update_limit,
                     series_points=series_points,
-                )
+                ),
+                abandon_on_cancel=True,
             )
             if isinstance(snapshot_result, _result.Rejected):
                 yield rejected_event(snapshot_result.reason).encode()

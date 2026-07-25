@@ -9,6 +9,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from fastapi import FastAPI
 
 from server.web.state import ServerState
+from server.web.training_events.lifecycle import EventStreamLifecycle
 
 _CLEANUP_INTERVAL_SECONDS = 300
 _GAME_MAX_AGE_SECONDS = 3600
@@ -16,6 +17,7 @@ _GAME_MAX_AGE_SECONDS = 3600
 
 def lifespan_for(
     state: ServerState,
+    event_stream_lifecycle: EventStreamLifecycle,
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     @asynccontextmanager
     async def lifespan(
@@ -25,6 +27,7 @@ def lifespan_for(
         try:
             yield
         finally:
+            event_stream_lifecycle.close()
             task.cancel()
             await state.training_process_control.close()
             try:

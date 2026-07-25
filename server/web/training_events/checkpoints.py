@@ -20,6 +20,7 @@ from server.training_artifacts import (
     query_checkpoint_invalidation,
 )
 from server.web.state import ServerState
+from server.web.training_events.lifecycle import EventStreamLifecycle
 from server.web.training_events.wire import (
     KEEP_ALIVE,
     RETRY,
@@ -44,7 +45,9 @@ class CheckpointCursorEvent(BaseModel):
 
 
 def register_checkpoints_route(
-    app: FastAPI, state: ServerState
+    app: FastAPI,
+    state: ServerState,
+    lifecycle: EventStreamLifecycle,
 ) -> None:
     async def training_checkpoints(
         run_dir: Path | None = None,
@@ -54,7 +57,8 @@ def register_checkpoints_route(
             run_dir
         )
         return event_response(
-            _checkpoint_events(canonical, expected_store=store_id)
+            lifecycle,
+            _checkpoint_events(canonical, expected_store=store_id),
         )
 
     app.add_api_route(
@@ -72,7 +76,8 @@ async def _checkpoint_events(
     last_sent = time.monotonic()
     while True:
         result = await to_thread.run_sync(
-            partial(query_checkpoint_invalidation, run_dir)
+            partial(query_checkpoint_invalidation, run_dir),
+            abandon_on_cancel=True,
         )
         if isinstance(result, _result.Rejected):
             yield rejected_event(result.reason).encode()

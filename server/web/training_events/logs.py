@@ -18,6 +18,7 @@ from starlette.responses import StreamingResponse
 from server.foundation import result as _result
 from server.training_events.queries import query_training_log_tail
 from server.web.state import ServerState
+from server.web.training_events.lifecycle import EventStreamLifecycle
 from server.web.training_events.wire import (
     KEEP_ALIVE,
     RETRY,
@@ -42,7 +43,11 @@ class StoreReplacement(BaseModel):
     store_id: str | None
 
 
-def register_logs_route(app: FastAPI, state: ServerState) -> None:
+def register_logs_route(
+    app: FastAPI,
+    state: ServerState,
+    lifecycle: EventStreamLifecycle,
+) -> None:
     async def training_logs(
         request: Request,
         run_dir: Path | None = None,
@@ -53,12 +58,13 @@ def register_logs_route(app: FastAPI, state: ServerState) -> None:
             run_dir
         )
         return event_response(
+            lifecycle,
             _log_events(
                 canonical,
                 expected_store=store_id,
                 after_sequence=after_sequence,
                 last_event_id=request.headers.get("last-event-id"),
-            )
+            ),
         )
 
     app.add_api_route(
@@ -91,7 +97,8 @@ async def _log_events(
                 run_dir,
                 after_sequence=cursor,
                 limit=_TAIL_BATCH_SIZE,
-            )
+            ),
+            abandon_on_cancel=True,
         )
         if isinstance(result, _result.Rejected):
             yield rejected_event(result.reason).encode()

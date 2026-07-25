@@ -4,7 +4,7 @@ Visible Playwright playthrough pytest test for the Tractor browser UI.
 
 Default behavior:
 - build the frontend into static/
-- start uvicorn with websockets-sansio
+- start the production web-server entry point
 - launch an isolated visible Chromium window
   (or use an explicitly configured CDP URL)
 - drive a full game through the rendered UI
@@ -445,14 +445,20 @@ class ManagedServer:
     log_file: TextIO
 
     def stop(self) -> None:
-        if self.process.poll() is None:
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait(timeout=5)
-        self.log_file.close()
+        try:
+            if self.process.poll() is None:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=5)
+                except subprocess.TimeoutExpired as error:
+                    self.process.kill()
+                    self.process.wait(timeout=5)
+                    raise AssertionError(
+                        "production web server did not stop after "
+                        "SIGTERM"
+                    ) from error
+        finally:
+            self.log_file.close()
 
 
 @dataclass(frozen=True)
@@ -1089,24 +1095,21 @@ def post_json(url: str) -> JsonObject:
 
 def start_server(config: Config, recorder: Recorder) -> ManagedServer:
     config.output_dir.mkdir(parents=True, exist_ok=True)
-    log_file = (config.output_dir / "uvicorn.log").open(
+    log_file = (config.output_dir / "server.log").open(
         "w", encoding="utf-8"
     )
     command = [
         sys.executable,
         "-m",
-        "uvicorn",
-        "server.web.app:app",
+        "server.web",
         "--host",
         "127.0.0.1",
         "--port",
         str(config.port),
-        "--ws",
-        "websockets-sansio",
     ]
     recorder.event(
         "server",
-        "starting uvicorn",
+        "starting production web server",
         {"command": json_string_list(command)},
     )
     process: subprocess.Popen[str] = subprocess.Popen(
@@ -1122,7 +1125,8 @@ def start_server(config: Config, recorder: Recorder) -> ManagedServer:
         if process.poll() is not None:
             managed.stop()
             raise SystemExit(
-                f"uvicorn exited early with code {process.returncode}"
+                "production web server exited early with code "
+                f"{process.returncode}"
             )
         if server_ready(config.server_url):
             recorder.event("server", f"ready at {config.server_url}")

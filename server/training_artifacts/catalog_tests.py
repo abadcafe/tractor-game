@@ -105,7 +105,9 @@ def test_web_application_import_does_not_load_torch() -> None:
         (
             sys.executable,
             "-c",
-            "import sys; import server.web.app; "
+            "import sys; "
+            "from server.web.app import WebApplication; "
+            "WebApplication(); "
             "assert 'torch' not in sys.modules",
         ),
         check=False,

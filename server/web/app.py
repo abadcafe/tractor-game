@@ -1,31 +1,52 @@
-"""ASGI app assembly for the Tractor game server."""
+"""Composition root for the Tractor game web application."""
 
 from __future__ import annotations
 
-import os
+from pathlib import Path
 
 from fastapi import FastAPI
 
 from server.web.ai_debug_api import register_ai_debug_routes
 from server.web.game_api import register_game_routes
 from server.web.lifespan import lifespan_for
-from server.web.logging_config import configure_server_logging
 from server.web.state import ServerState
 from server.web.static_assets import register_static_routes
 from server.web.training_api import register_training_routes
 from server.web.training_events import register_training_event_routes
+from server.web.training_events.lifecycle import EventStreamLifecycle
 
-configure_server_logging()
+__all__ = ["WebApplication"]
 
-state = ServerState()
-registry = state.registry
-static_dir = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "static")
-)
 
-app = FastAPI(lifespan=lifespan_for(state))
-register_game_routes(app, state)
-register_ai_debug_routes(app, state, static_dir)
-register_training_routes(app, state)
-register_training_event_routes(app, state)
-register_static_routes(app, static_dir)
+class WebApplication:
+    """Own one ASGI application and all of its process-local state."""
+
+    __slots__ = ("_asgi", "_event_stream_lifecycle")
+
+    def __init__(self) -> None:
+        state = ServerState()
+        event_stream_lifecycle = EventStreamLifecycle()
+        asgi = FastAPI(
+            lifespan=lifespan_for(state, event_stream_lifecycle)
+        )
+        static_dir = str(Path(__file__).resolve().parents[2] / "static")
+
+        register_game_routes(asgi, state)
+        register_ai_debug_routes(asgi, state, static_dir)
+        register_training_routes(asgi, state)
+        register_training_event_routes(
+            asgi, state, event_stream_lifecycle
+        )
+        register_static_routes(asgi, static_dir)
+
+        self._asgi = asgi
+        self._event_stream_lifecycle = event_stream_lifecycle
+
+    @property
+    def asgi(self) -> FastAPI:
+        """Return the composed ASGI application."""
+        return self._asgi
+
+    def begin_shutdown(self) -> None:
+        """Stop every application-owned event stream."""
+        self._event_stream_lifecycle.close()

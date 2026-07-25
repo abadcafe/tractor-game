@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterable
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 from starlette.responses import StreamingResponse
+
+from server.web.training_events.lifecycle import EventStreamLifecycle
 
 type EventName = Literal[
     "process",
@@ -63,10 +65,13 @@ def rejected_event(reason: str) -> ServerEvent:
     )
 
 
-def event_response(content: AsyncIterable[bytes]) -> StreamingResponse:
+def event_response(
+    lifecycle: EventStreamLifecycle,
+    content: AsyncGenerator[bytes, None],
+) -> StreamingResponse:
     """Return an unbuffered SSE response for an async byte iterator."""
     return StreamingResponse(
-        content,
+        lifecycle.stream(content),
         media_type="text/event-stream",
         headers=_HEADERS,
     )

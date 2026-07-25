@@ -43,4 +43,4 @@
 
 ## 启动游戏
 
-- 启动服务器时必须加 `--ws websockets-sansio` 参数，例如：`uvicorn app:app --ws websockets-sansio`
+- 服务器唯一启动入口为 `python -m server.web --host 127.0.0.1 --port 8000`
