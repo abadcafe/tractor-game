@@ -10,6 +10,7 @@ import {
   renderLobby,
 } from "../ui/lobby.ts";
 import type { SeatId } from "../config.ts";
+import type { BotPolicyName, ListedSeat } from "../net/rest-client.ts";
 
 function makeState(overrides: Partial<LobbyState> = {}): LobbyState {
   return {
@@ -41,6 +42,40 @@ function callbacksStub(
     onChangeBotFillMode: () => {},
     onRefreshGames: () => {},
     ...overrides,
+  };
+}
+
+function emptySeat(seat: SeatId): ListedSeat {
+  return { seat, player: null, ready: false };
+}
+
+function botSeat(
+  seat: SeatId,
+  policy: BotPolicyName = "auto",
+  ready: boolean = false,
+): ListedSeat {
+  return {
+    seat,
+    player: { kind: "bot", policy },
+    ready,
+  };
+}
+
+function humanSeat(
+  seat: SeatId,
+  options: {
+    mine: boolean;
+    connected: boolean;
+  },
+): ListedSeat {
+  return {
+    seat,
+    player: {
+      kind: "human",
+      mine: options.mine,
+      connected: options.connected,
+    },
+    ready: false,
   };
 }
 
@@ -83,35 +118,10 @@ Deno.test("test_renderLobby_shows_game_counts", () => {
           capacity: 4,
           userSeats: ["b", "d"],
           seats: [
-            {
-              seat: "a",
-              occupied: true,
-              connected: false,
-              kind: "auto",
-              mine: false,
-              ready: false,
-            },
-            {
-              seat: "b",
-              occupied: true,
-              connected: true,
-              mine: false,
-              ready: false,
-            },
-            {
-              seat: "c",
-              occupied: false,
-              connected: false,
-              mine: false,
-              ready: false,
-            },
-            {
-              seat: "d",
-              occupied: true,
-              connected: false,
-              mine: false,
-              ready: false,
-            },
+            botSeat("a"),
+            humanSeat("b", { mine: false, connected: true }),
+            emptySeat("c"),
+            humanSeat("d", { mine: false, connected: false }),
           ],
         }],
         selectedGameId: "abcdef123456",
@@ -147,35 +157,10 @@ Deno.test("test_renderLobby_callbacks", () => {
           capacity: 4,
           userSeats: ["c"],
           seats: [
-            {
-              seat: "a",
-              occupied: true,
-              connected: false,
-              kind: "auto",
-              mine: false,
-              ready: false,
-            },
-            {
-              seat: "b",
-              occupied: false,
-              connected: false,
-              mine: false,
-              ready: false,
-            },
-            {
-              seat: "c",
-              occupied: true,
-              connected: true,
-              mine: false,
-              ready: false,
-            },
-            {
-              seat: "d",
-              occupied: false,
-              connected: false,
-              mine: false,
-              ready: false,
-            },
+            botSeat("a"),
+            emptySeat("b"),
+            humanSeat("c", { mine: false, connected: true }),
+            emptySeat("d"),
           ],
         }],
         selectedGameId: "game-to-join",
@@ -245,37 +230,10 @@ Deno.test("test_renderLobby_delete_button_deletes_without_selecting", () => {
           capacity: 4,
           userSeats: [],
           seats: [
-            {
-              seat: "a",
-              occupied: true,
-              connected: false,
-              kind: "auto",
-              mine: false,
-              ready: false,
-            },
-            {
-              seat: "b",
-              occupied: false,
-              connected: false,
-              mine: false,
-              ready: false,
-            },
-            {
-              seat: "c",
-              occupied: true,
-              connected: false,
-              kind: "auto",
-              mine: false,
-              ready: false,
-            },
-            {
-              seat: "d",
-              occupied: true,
-              connected: false,
-              kind: "auto",
-              mine: false,
-              ready: false,
-            },
+            botSeat("a"),
+            emptySeat("b"),
+            botSeat("c"),
+            botSeat("d"),
           ],
         }],
       }),
@@ -314,37 +272,10 @@ Deno.test("test_renderLobby_my_player_toggles_and_center_enters", () => {
           capacity: 4,
           userSeats: ["b"],
           seats: [
-            {
-              seat: "a",
-              occupied: true,
-              connected: false,
-              kind: "auto",
-              mine: false,
-              ready: false,
-            },
-            {
-              seat: "b",
-              occupied: true,
-              connected: true,
-              mine: true,
-              ready: false,
-            },
-            {
-              seat: "c",
-              occupied: true,
-              connected: false,
-              kind: "auto",
-              mine: false,
-              ready: false,
-            },
-            {
-              seat: "d",
-              occupied: true,
-              connected: false,
-              kind: "auto",
-              mine: false,
-              ready: false,
-            },
+            botSeat("a"),
+            humanSeat("b", { mine: true, connected: true }),
+            botSeat("c"),
+            botSeat("d"),
           ],
         }],
         selectedGameId: "mine-game",
@@ -406,34 +337,10 @@ Deno.test("test_renderLobby_center_disabled_before_controlling_player", () => {
           capacity: 4,
           userSeats: [],
           seats: [
-            {
-              seat: "a",
-              occupied: false,
-              connected: false,
-              mine: false,
-              ready: false,
-            },
-            {
-              seat: "b",
-              occupied: false,
-              connected: false,
-              mine: false,
-              ready: false,
-            },
-            {
-              seat: "c",
-              occupied: false,
-              connected: false,
-              mine: false,
-              ready: false,
-            },
-            {
-              seat: "d",
-              occupied: false,
-              connected: false,
-              mine: false,
-              ready: false,
-            },
+            emptySeat("a"),
+            emptySeat("b"),
+            emptySeat("c"),
+            emptySeat("d"),
           ],
         }],
         selectedGameId: "empty-game",
@@ -477,34 +384,10 @@ Deno.test("test_renderLobby_bot_fill_control_in_player_header", () => {
           capacity: 4,
           userSeats: ["c"],
           seats: [
-            {
-              seat: "a",
-              occupied: false,
-              connected: false,
-              mine: false,
-              ready: false,
-            },
-            {
-              seat: "b",
-              occupied: false,
-              connected: false,
-              mine: false,
-              ready: false,
-            },
-            {
-              seat: "c",
-              occupied: true,
-              connected: true,
-              mine: true,
-              ready: false,
-            },
-            {
-              seat: "d",
-              occupied: false,
-              connected: false,
-              mine: false,
-              ready: false,
-            },
+            emptySeat("a"),
+            emptySeat("b"),
+            humanSeat("c", { mine: true, connected: true }),
+            emptySeat("d"),
           ],
         }],
         selectedGameId: "bot-game",
@@ -528,25 +411,25 @@ Deno.test("test_renderLobby_bot_fill_control_in_player_header", () => {
   );
   assertEquals(
     buttons.map((button) => button.getAttribute("data-bot-fill-mode")),
-    ["none", "ai", "auto"],
+    ["none", "llm", "auto"],
   );
   assertEquals(
     buttons.map((button) => button.textContent),
-    ["不填充", "AI", "AUTO"],
+    ["不填充", "LLM", "AUTO"],
   );
   const autoButton = buttons.find((button) =>
     button.getAttribute("data-bot-fill-mode") === "auto"
   );
-  const aiButton = buttons.find((button) =>
-    button.getAttribute("data-bot-fill-mode") === "ai"
+  const llmButton = buttons.find((button) =>
+    button.getAttribute("data-bot-fill-mode") === "llm"
   );
   assert(autoButton !== undefined);
-  assert(aiButton !== undefined);
+  assert(llmButton !== undefined);
   assertEquals(autoButton.getAttribute("aria-pressed"), "true");
 
-  aiButton.dispatchEvent(new Event("click", { bubbles: true }));
+  llmButton.dispatchEvent(new Event("click", { bubbles: true }));
 
-  assertEquals(selectedMode, "ai");
+  assertEquals(selectedMode, "llm");
 });
 
 Deno.test("test_renderLobby_bot_filled_players_show_kind_labels", () => {
@@ -560,38 +443,10 @@ Deno.test("test_renderLobby_bot_filled_players_show_kind_labels", () => {
           capacity: 4,
           userSeats: ["c"],
           seats: [
-            {
-              seat: "a",
-              occupied: true,
-              connected: false,
-              kind: "ai",
-              mine: false,
-              ready: true,
-            },
-            {
-              seat: "b",
-              occupied: true,
-              connected: false,
-              kind: "auto",
-              mine: false,
-              ready: true,
-            },
-            {
-              seat: "c",
-              occupied: true,
-              connected: true,
-              kind: "user",
-              mine: true,
-              ready: false,
-            },
-            {
-              seat: "d",
-              occupied: false,
-              connected: false,
-              kind: "empty",
-              mine: false,
-              ready: false,
-            },
+            botSeat("a", "llm", true),
+            botSeat("b", "auto", true),
+            humanSeat("c", { mine: true, connected: true }),
+            emptySeat("d"),
           ],
         }],
         selectedGameId: "bot-filled-game",
@@ -604,7 +459,7 @@ Deno.test("test_renderLobby_bot_filled_players_show_kind_labels", () => {
   const seatB = root.querySelector("[data-seat='b']");
   assert(seatA !== null);
   assert(seatB !== null);
-  assertEquals(seatA.textContent, "AAI");
+  assertEquals(seatA.textContent, "ALLM");
   assertEquals(seatB.textContent, "BAUTO");
   assertEquals(
     root.querySelectorAll(".lobby-player-dot--filled").length,
@@ -631,38 +486,10 @@ Deno.test("test_renderLobby_disables_bot_fill_when_no_empty_players", () => {
           capacity: 4,
           userSeats: ["b"],
           seats: [
-            {
-              seat: "a",
-              occupied: true,
-              connected: false,
-              kind: "auto",
-              mine: false,
-              ready: true,
-            },
-            {
-              seat: "b",
-              occupied: true,
-              connected: false,
-              kind: "user",
-              mine: true,
-              ready: false,
-            },
-            {
-              seat: "c",
-              occupied: true,
-              connected: false,
-              kind: "auto",
-              mine: false,
-              ready: true,
-            },
-            {
-              seat: "d",
-              occupied: true,
-              connected: false,
-              kind: "auto",
-              mine: false,
-              ready: true,
-            },
+            botSeat("a", "auto", true),
+            humanSeat("b", { mine: true, connected: false }),
+            botSeat("c", "auto", true),
+            botSeat("d", "auto", true),
           ],
         }],
         selectedGameId: "filled-game",
@@ -687,11 +514,11 @@ Deno.test("test_renderLobby_disables_bot_fill_when_no_empty_players", () => {
     true,
   );
 
-  const aiButton = botModeButtons.find((button) =>
-    button.getAttribute("data-bot-fill-mode") === "ai"
+  const llmButton = botModeButtons.find((button) =>
+    button.getAttribute("data-bot-fill-mode") === "llm"
   );
-  assert(aiButton !== undefined);
-  aiButton.dispatchEvent(new Event("click", { bubbles: true }));
+  assert(llmButton !== undefined);
+  llmButton.dispatchEvent(new Event("click", { bubbles: true }));
 
   assertEquals(selectedMode, null);
 });

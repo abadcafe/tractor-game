@@ -49,7 +49,7 @@ Deno.test("test_renderGameTable_shows_four_players", () => {
   assertEquals(players.length, 4);
 });
 
-Deno.test("test_renderGameTable_debug_avatars_use_player_labels_not_ai_type", () => {
+Deno.test("debug avatars use seat labels, not policy labels", () => {
   const snap = makeSnapshot();
   const el = renderGameTable(snap, "c", null, null, "game-1");
   const avatars = Array.from(el.querySelectorAll(".player-avatar"));
@@ -61,7 +61,7 @@ Deno.test("test_renderGameTable_debug_avatars_use_player_labels_not_ai_type", ()
     "D",
   ]);
   assertEquals(
-    avatars.every((avatar) => avatar.textContent !== "ai"),
+    avatars.every((avatar) => avatar.textContent !== "llm"),
     true,
   );
 });

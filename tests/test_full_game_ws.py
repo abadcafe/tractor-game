@@ -79,7 +79,7 @@ def _prepare_ws_game(
     )
     assert attach_resp.status_code == 200
     fill_resp = sync_client.post(
-        f"/api/game/{game_id}/bots?kind=auto&user_id={user_id}"
+        f"/api/game/{game_id}/bots?policy=auto&user_id={user_id}"
     )
     assert fill_resp.status_code == 200
 

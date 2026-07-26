@@ -199,7 +199,7 @@ def encode_state(
     snapshot: snapshots.PlayerSnapshot,
     error: str | None,
 ) -> StateMessage:
-    """Encode one delivery without serializing domain models."""
+    """Encode one player view without serializing domain models."""
     return StateMessage(
         seq=seq,
         state=StateWire(

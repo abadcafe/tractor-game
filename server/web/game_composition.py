@@ -1,37 +1,52 @@
-"""Compose game rooms from runtime and agent modules."""
+"""Compose one game room and its policy diagnostics."""
 
 from __future__ import annotations
 
-import os
 import secrets
+from dataclasses import dataclass
 
 from server.game import GameConfig, GameSeed
-from server.game_agents.factory import DefaultAgentFactory
-from server.game_runtime.room import BotKind, GameRoom
+from server.game_bots import DefaultBotPlayerFactory
+from server.game_bots.llm import LLMTranscriptRegistry
+from server.game_runtime import BotPolicyName, GameRoom
 
 
-def create_game_room() -> GameRoom:
-    """Create one independently seeded game room."""
-    return GameRoom(
+@dataclass(frozen=True, slots=True)
+class GameInstance:
+    """One room plus diagnostics owned by the web composition root."""
+
+    room: GameRoom
+    llm_transcripts: LLMTranscriptRegistry
+
+
+def create_game_instance() -> GameInstance:
+    """Create one independently seeded game instance."""
+    transcripts = LLMTranscriptRegistry()
+    room = GameRoom(
         GameConfig(),
         GameSeed(secrets.randbits(64)),
-        DefaultAgentFactory(),
+        DefaultBotPlayerFactory(transcripts),
+    )
+    return GameInstance(
+        room=room,
+        llm_transcripts=transcripts,
     )
 
 
-def bot_kind_from_env() -> BotKind:
-    """Read the default bot kind from the environment."""
-    return (
-        bot_kind_from_str(os.environ.get("TRACTOR_BOT_PLAYER", "auto"))
-        or BotKind.AUTO
-    )
-
-
-def bot_kind_from_str(value: str | None) -> BotKind | None:
-    """Parse a wire bot-kind value."""
+def bot_policy_name_from_str(
+    value: str | None,
+) -> BotPolicyName | None:
+    """Parse one closed bot-policy name."""
     normalized = (value or "").strip().lower()
-    if normalized == "ai":
-        return BotKind.AI
     if normalized == "auto":
-        return BotKind.AUTO
+        return "auto"
+    if normalized == "llm":
+        return "llm"
     return None
+
+
+__all__ = (
+    "GameInstance",
+    "bot_policy_name_from_str",
+    "create_game_instance",
+)

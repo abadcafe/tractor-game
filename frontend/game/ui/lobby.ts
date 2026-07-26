@@ -1,9 +1,9 @@
 import { SEAT_IDS, type SeatId } from "../config.ts";
 import type {
   BotFillMode,
+  BotPolicyName,
   ListedGame,
   ListedSeat,
-  OccupantKind,
 } from "../net/rest-client.ts";
 import { el } from "./dom.ts";
 
@@ -31,13 +31,15 @@ export interface LobbyCallbacks {
   onRefreshGames: () => void;
 }
 
+type PlayerDisplayKind = "empty" | "human" | BotPolicyName;
+
 const TABLE_CAPACITY = 4;
 const BOT_FILL_MODES: readonly {
   mode: BotFillMode;
   label: string;
 }[] = [
   { mode: "none", label: "不填充" },
-  { mode: "ai", label: "AI" },
+  { mode: "llm", label: "LLM" },
   { mode: "auto", label: "AUTO" },
 ];
 const LOBBY_SEATS: readonly {
@@ -257,7 +259,8 @@ function renderPlayerDots(game: ListedGame): HTMLElement {
   const players = el("div", { class: "lobby-player-dots" });
   for (const seatId of SEAT_IDS) {
     const status = playerStatus(game, seatId);
-    const className = status?.occupied === true
+    const className = status?.player !== null &&
+        status?.player !== undefined
       ? "lobby-player-dot lobby-player-dot--filled"
       : "lobby-player-dot";
     players.appendChild(el("span", { class: className }));
@@ -280,10 +283,10 @@ function renderTablePreview(
     highlightedGame,
   );
   const allPlayersOccupied =
-    highlightedGame?.seats.every((player) => player.occupied) ??
+    highlightedGame?.seats.every((seat) => seat.player !== null) ??
       false;
   const hasEmptyPlayer =
-    highlightedGame?.seats.some((player) => !player.occupied) ??
+    highlightedGame?.seats.some((seat) => seat.player === null) ??
       false;
   const pendingSelectedGame = highlightedGame !== null &&
     state.pendingSeatGameId === highlightedGame.gameId;
@@ -382,8 +385,10 @@ function renderPreviewPlayer(
   onPlayerClick: ((seatId: SeatId) => void) | null,
 ): HTMLButtonElement {
   const status = game === null ? null : playerStatus(game, seat.seat);
-  const occupied = status?.occupied === true;
-  const mine = status?.mine === true;
+  const occupied = status?.player !== null &&
+    status?.player !== undefined;
+  const mine = status?.player?.kind === "human" &&
+    status.player.mine;
   const kind = playerKind(status);
   const pending = joiningSeatId === seat.seat;
   const selected = pending || occupied;
@@ -430,13 +435,13 @@ function previewPlayerClassName(
   selected: boolean,
   mine: boolean,
   pending: boolean,
-  kind: OccupantKind,
+  kind: PlayerDisplayKind,
 ): string {
   const classes = ["lobby-preview-player"];
   if (selected) {
     classes.push("lobby-preview-player--filled");
   }
-  if (kind === "ai" || kind === "auto") {
+  if (kind === "llm" || kind === "auto") {
     classes.push("lobby-preview-player--bot");
   }
   if (mine) {
@@ -484,23 +489,26 @@ function renderBotFillControl(
   return group;
 }
 
-function playerKind(status: ListedSeat | null): OccupantKind {
-  if (status === null) {
+function playerKind(status: ListedSeat | null): PlayerDisplayKind {
+  if (status?.player === null || status === null) {
     return "empty";
   }
-  return status.kind ?? (status.occupied ? "user" : "empty");
+  if (status.player.kind === "human") {
+    return "human";
+  }
+  return status.player.policy;
 }
 
 function previewPlayerStatusText(
-  kind: OccupantKind,
+  kind: PlayerDisplayKind,
   mine: boolean,
   pending: boolean,
 ): string | null {
   if (mine || pending) {
     return "你";
   }
-  if (kind === "ai") {
-    return "AI";
+  if (kind === "llm") {
+    return "LLM";
   }
   if (kind === "auto") {
     return "AUTO";
@@ -525,7 +533,7 @@ function boundedUserCount(game: ListedGame): number {
 }
 
 function occupiedPlayerCount(game: ListedGame): number {
-  return game.seats.filter((player) => player.occupied).length;
+  return game.seats.filter((seat) => seat.player !== null).length;
 }
 
 function playerStatus(
@@ -537,7 +545,9 @@ function playerStatus(
 }
 
 function currentMinePlayer(game: ListedGame): ListedSeat | null {
-  return game.seats.find((player) => player.mine) ?? null;
+  return game.seats.find((seat) =>
+    seat.player?.kind === "human" && seat.player.mine
+  ) ?? null;
 }
 
 function shortGameId(gameId: string): string {

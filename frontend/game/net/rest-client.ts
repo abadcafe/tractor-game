@@ -1,16 +1,23 @@
 import { API_BASE, type SeatId } from "../config.ts";
 
 export type { SeatId } from "../config.ts";
-export type OccupantKind = "empty" | "user" | "ai" | "auto";
-export type BotFillKind = "ai" | "auto";
-export type BotFillMode = "none" | BotFillKind;
+export type BotPolicyName = "auto" | "llm";
+export type BotFillMode = "none" | BotPolicyName;
+
+export type PlayerDescription =
+  | {
+    kind: "human";
+    connected: boolean;
+    mine: boolean;
+  }
+  | {
+    kind: "bot";
+    policy: BotPolicyName;
+  };
 
 export interface ListedSeat {
   seat: SeatId;
-  occupied: boolean;
-  connected: boolean;
-  kind?: OccupantKind;
-  mine: boolean;
+  player: PlayerDescription | null;
   ready: boolean;
 }
 
@@ -24,10 +31,7 @@ export interface ListedGame {
 
 type ListedSeatWire = {
   seat: SeatId;
-  occupied: boolean;
-  connected: boolean;
-  kind: OccupantKind;
-  mine: boolean;
+  player: PlayerDescription | null;
   ready: boolean;
 };
 
@@ -122,12 +126,12 @@ export async function vacateSeat(
 
 export async function fillBotSeats(
   gameId: string,
-  kind: BotFillKind,
+  policy: BotPolicyName,
   userId: string,
   baseUrl: string = "",
 ): Promise<boolean> {
   const resp = await fetch(
-    `${baseUrl}${botFillApiPath(gameId, kind, userId)}`,
+    `${baseUrl}${botFillApiPath(gameId, policy, userId)}`,
     { method: "POST" },
   );
   if (!resp.ok) {
@@ -220,22 +224,29 @@ function isListedSeatWire(value: unknown): value is ListedSeatWire {
     return false;
   }
   const seat = value["seat"];
-  const occupied = value["occupied"];
-  const connected = value["connected"];
-  const kind = value["kind"];
-  const mine = value["mine"];
+  const player = value["player"];
   const ready = value["ready"];
   return isSeatId(seat) &&
-    typeof occupied === "boolean" &&
-    typeof connected === "boolean" &&
-    isOccupantKind(kind) &&
-    typeof mine === "boolean" &&
+    (player === null || isPlayerDescription(player)) &&
     typeof ready === "boolean";
 }
 
-function isOccupantKind(value: unknown): value is OccupantKind {
-  return value === "empty" || value === "user" || value === "ai" ||
-    value === "auto";
+function isPlayerDescription(
+  value: unknown,
+): value is PlayerDescription {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const kind = value["kind"];
+  if (kind === "human") {
+    return typeof value["connected"] === "boolean" &&
+      typeof value["mine"] === "boolean";
+  }
+  return kind === "bot" && isBotPolicy(value["policy"]);
+}
+
+function isBotPolicy(value: unknown): value is BotPolicyName {
+  return value === "auto" || value === "llm";
 }
 
 function listedGameFromWire(game: ListedGameWire): ListedGame {
@@ -251,10 +262,7 @@ function listedGameFromWire(game: ListedGameWire): ListedGame {
 function listedSeatFromWire(seat: ListedSeatWire): ListedSeat {
   return {
     seat: seat.seat,
-    occupied: seat.occupied,
-    connected: seat.connected,
-    kind: seat.kind,
-    mine: seat.mine,
+    player: seat.player,
     ready: seat.ready,
   };
 }
@@ -291,10 +299,10 @@ function seatApiPath(
 
 function botFillApiPath(
   gameId: string,
-  kind: BotFillKind,
+  policy: BotPolicyName,
   userId: string,
 ): string {
   return `${API_BASE}/${encodeURIComponent(gameId)}/bots` +
-    `?kind=${encodeURIComponent(kind)}` +
+    `?policy=${encodeURIComponent(policy)}` +
     `&user_id=${encodeURIComponent(userId)}`;
 }

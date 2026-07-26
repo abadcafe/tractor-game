@@ -1117,7 +1117,7 @@ def prepare_playthrough_game(
     assert attached.get("ok") is True
     filled = post_json(
         f"{server_url}/api/game/{quote(game_id)}/bots"
-        f"?kind=auto&user_id={quote(user_id)}"
+        f"?policy=auto&user_id={quote(user_id)}"
     )
     assert filled.get("ok") is True
 

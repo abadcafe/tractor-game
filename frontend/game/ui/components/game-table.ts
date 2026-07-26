@@ -206,10 +206,10 @@ function renderDebugAvatar(
     "a",
     {
       ...attrs,
-      href: `/debug/ai/${encodeURIComponent(gameId)}?seat=${seat}`,
+      href: `/debug/llm/${encodeURIComponent(gameId)}?seat=${seat}`,
       target: "_blank",
       rel: "noreferrer",
-      title: `AI transcript seat ${seat}`,
+      title: `LLM transcript seat ${seat}`,
     },
     avatarText,
   );

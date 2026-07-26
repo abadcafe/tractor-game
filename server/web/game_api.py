@@ -9,10 +9,16 @@ from fastapi.responses import JSONResponse
 
 from server.foundation.result import Rejected
 from server.game import SeatId, seat_from_id, seat_id
-from server.game_runtime.room import BotKind, GameRoom, RoomSeat
+from server.game_runtime import (
+    BotPolicyName,
+    SeatStatus,
+    UserId,
+)
+from server.game_runtime.player import PlayerDescription
 from server.web.game_composition import (
-    bot_kind_from_str,
-    create_game_room,
+    GameInstance,
+    bot_policy_name_from_str,
+    create_game_instance,
 )
 from server.web.game_connection import handle_game_connection
 from server.web.state import ServerState
@@ -22,10 +28,7 @@ _SEAT_CAPACITY = 4
 
 class SeatResponse(TypedDict):
     seat: SeatId
-    occupied: bool
-    connected: bool
-    kind: str
-    mine: bool
+    player: PlayerDescription | None
     ready: bool
 
 
@@ -46,23 +49,28 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
         return {"status": "ok"}
 
     async def create_game() -> dict[str, str]:
-        game_id = state.registry.create(create_game_room())
+        game_id = state.registry.create(create_game_instance())
         return {"game_id": game_id}
 
     async def list_games(
         user_id: str | None = None,
     ) -> dict[str, list[ListedGameResponse]]:
+        requester = UserId.parse(user_id)
         return {
             "games": [
-                _listed_game_response(state, game_id, user_id)
+                _listed_game_response(
+                    state.registry.get(game_id),
+                    game_id,
+                    requester,
+                )
                 for game_id in state.registry.list_ids()
             ]
         }
 
     async def delete_game(game_id: str) -> dict[str, bool]:
-        room = state.registry.delete(game_id)
-        if room is not None:
-            await room.close()
+        instance = state.registry.delete(game_id)
+        if instance is not None:
+            await instance.room.close()
         return {"ok": True}
 
     async def occupy_seat(
@@ -70,15 +78,19 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
         seat_id: str,
         user_id: str | None = None,
     ) -> JSONResponse:
-        room = state.registry.get(game_id)
-        if room is None:
+        instance = state.registry.get(game_id)
+        if instance is None:
             return _seat_error_response("game not found")
         seat = seat_from_id(seat_id)
         if seat is None:
             return _seat_error_response("invalid seat")
-        if user_id is None:
+        parsed_user = UserId.parse(user_id)
+        if parsed_user is None:
             return _seat_error_response("missing user id")
-        result = await room.occupy_seat(seat=seat, user_id=user_id)
+        result = instance.room.occupy_seat(
+            seat=seat,
+            user_id=parsed_user,
+        )
         if isinstance(result, Rejected):
             return _seat_error_response(result.reason)
         return _seat_ok_response()
@@ -88,35 +100,40 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
         seat_id: str,
         user_id: str | None = None,
     ) -> JSONResponse:
-        room = state.registry.get(game_id)
-        if room is None:
+        instance = state.registry.get(game_id)
+        if instance is None:
             return _seat_error_response("game not found")
         seat = seat_from_id(seat_id)
         if seat is None:
             return _seat_error_response("invalid seat")
-        if user_id is None:
+        parsed_user = UserId.parse(user_id)
+        if parsed_user is None:
             return _seat_error_response("missing user id")
-        result = await room.vacate_seat(seat=seat, user_id=user_id)
+        result = instance.room.vacate_seat(
+            seat=seat,
+            user_id=parsed_user,
+        )
         if isinstance(result, Rejected):
             return _seat_error_response(result.reason)
         return _seat_ok_response()
 
     async def fill_bot_seats(
         game_id: str,
-        kind: str | None = None,
+        policy: str | None = None,
         user_id: str | None = None,
     ) -> JSONResponse:
-        room = state.registry.get(game_id)
-        if room is None:
+        instance = state.registry.get(game_id)
+        if instance is None:
             return _seat_error_response("game not found")
-        bot_kind = _bot_kind_response(kind)
-        if isinstance(bot_kind, JSONResponse):
-            return bot_kind
-        if user_id is None:
+        policy_name = _bot_policy_response(policy)
+        if isinstance(policy_name, JSONResponse):
+            return policy_name
+        parsed_user = UserId.parse(user_id)
+        if parsed_user is None:
             return _seat_error_response("missing user id")
-        result = await room.fill_bots(
-            kind=bot_kind,
-            user_id=user_id,
+        result = instance.room.fill_bots(
+            policy=policy_name,
+            user_id=parsed_user,
         )
         if isinstance(result, Rejected):
             return _seat_error_response(result.reason)
@@ -128,23 +145,23 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
         seat_id: str,
         user_id: str | None = None,
     ) -> None:
-        room = state.registry.get(game_id)
-        if room is None:
+        instance = state.registry.get(game_id)
+        if instance is None:
             await websocket.close(code=4404, reason="game not found")
             return
         seat = seat_from_id(seat_id)
         if seat is None:
             await websocket.close(code=4410, reason="invalid seat")
             return
-        if user_id is None:
+        parsed_user = UserId.parse(user_id)
+        if parsed_user is None:
             await websocket.close(code=4410, reason="missing user id")
             return
-
         await handle_game_connection(
             websocket,
-            room,
+            instance.room,
             seat=seat,
-            user_id=user_id,
+            user_id=parsed_user,
         )
 
     app.add_api_route("/health", health, methods=["GET"])
@@ -176,13 +193,16 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
 
 
 def _listed_game_response(
-    state: ServerState, game_id: str, user_id: str | None
+    instance: GameInstance | None,
+    game_id: str,
+    requester: UserId | None,
 ) -> ListedGameResponse:
-    room = state.registry.get(game_id)
-    room_seats = _room_seats(room, user_id)
-    user_seats: list[SeatId] = [
-        seat["seat"] for seat in room_seats if seat["kind"] == "user"
-    ]
+    room_seats = _room_seats(instance, requester)
+    user_seats: list[SeatId] = []
+    for room_seat in room_seats:
+        player = room_seat["player"]
+        if player is not None and player["kind"] == "human":
+            user_seats.append(room_seat["seat"])
     return {
         "game_id": game_id,
         "user_count": len(user_seats),
@@ -193,23 +213,22 @@ def _listed_game_response(
 
 
 def _room_seats(
-    room: GameRoom | None, user_id: str | None
+    instance: GameInstance | None,
+    requester: UserId | None,
 ) -> list[SeatResponse]:
-    if room is None:
+    if instance is None:
         return []
     return [
-        _seat_response(seat) for seat in room.seats(user_id=user_id)
+        _seat_response(seat)
+        for seat in instance.room.seats(user_id=requester)
     ]
 
 
-def _seat_response(seat: RoomSeat) -> SeatResponse:
+def _seat_response(status: SeatStatus) -> SeatResponse:
     return {
-        "seat": seat_id(seat.seat),
-        "occupied": seat.occupied,
-        "connected": seat.connected,
-        "kind": seat.kind,
-        "mine": seat.mine,
-        "ready": seat.ready,
+        "seat": seat_id(status.seat),
+        "player": status.player,
+        "ready": status.ready,
     }
 
 
@@ -229,14 +248,16 @@ def _seat_error_status(reason: str) -> int:
     match reason:
         case "game not found":
             return 404
-        case "invalid seat" | "missing user id" | "invalid bot kind":
+        case "invalid seat" | "missing user id" | "invalid bot policy":
             return 400
         case _:
             return 409
 
 
-def _bot_kind_response(kind: str | None) -> BotKind | JSONResponse:
-    bot_kind = bot_kind_from_str(kind)
-    if bot_kind is None:
-        return _seat_error_response("invalid bot kind")
-    return bot_kind
+def _bot_policy_response(
+    policy: str | None,
+) -> BotPolicyName | JSONResponse:
+    policy_name = bot_policy_name_from_str(policy)
+    if policy_name is None:
+        return _seat_error_response("invalid bot policy")
+    return policy_name

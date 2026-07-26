@@ -609,7 +609,8 @@ function main() {
     const selectedSeat = selectedGame?.seats.find(
       (player) => player.seat === seatId,
     ) ?? null;
-    const leavingSeat = selectedSeat?.mine === true;
+    const leavingSeat = selectedSeat?.player?.kind === "human" &&
+      selectedSeat.player.mine;
     try {
       if (leavingSeat) {
         await vacateSeat(gameId, seatId, userId);
@@ -660,7 +661,9 @@ function main() {
         null;
     if (
       selectedGame === null ||
-      !selectedGame.seats.some((player) => player.mine) ||
+      !selectedGame.seats.some((seat) =>
+        seat.player?.kind === "human" && seat.player.mine
+      ) ||
       !selectedGameHasEmptySeat(lobbyGames, selectedGame.gameId)
     ) {
       renderLobbyScreen();

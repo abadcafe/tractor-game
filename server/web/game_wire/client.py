@@ -8,7 +8,7 @@ from typing import TypeGuard
 from server.foundation.result import Ok
 from server.game import CommandRejected, commands
 from server.game.rules.cards import CardId
-from server.game_runtime.session import CommandDecoder
+from server.game_runtime.player import CommandDecoder
 
 
 @dataclass(frozen=True, slots=True)

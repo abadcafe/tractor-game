@@ -33,30 +33,30 @@ def test_training_and_game_do_not_depend_on_control_or_cli() -> None:
         (
             *forbidden,
             "server.training",
-            "server.game_agents",
+            "server.game_bots",
             "server.game_runtime",
             "server.web",
         ),
     )
 
 
-def test_game_runtime_and_agents_follow_dependency_direction() -> None:
+def test_game_runtime_and_bots_follow_dependency_direction() -> None:
     assert not _matching(
         _package_imports("game_runtime"),
         (
-            "server.game_agents",
+            "server.game_bots",
             "server.training",
             "server.web",
         ),
     )
     assert not _matching(
-        _package_imports("game_agents"),
+        _package_imports("game_bots"),
         ("server.training", "server.web"),
     )
     assert not _matching(
         _package_imports("training"),
         (
-            "server.game_agents",
+            "server.game_bots",
             "server.game_runtime",
             "server.web",
         ),
@@ -81,7 +81,7 @@ def test_game_domain_has_no_io_or_synchronization_dependencies() -> (
             "threading",
             "time",
             "server.game_runtime",
-            "server.game_agents",
+            "server.game_bots",
             "server.web",
         ),
     )
@@ -127,7 +127,7 @@ def test_game_internals_stay_behind_public_facades() -> None:
     assert game_imports <= allowed
 
 
-def test_runtime_and_agent_internals_stay_behind_facades() -> None:
+def test_runtime_and_bot_internals_stay_behind_facades() -> None:
     imports = _imports_outside_package("game_runtime")
     runtime_imports = {
         imported
@@ -136,21 +136,21 @@ def test_runtime_and_agent_internals_stay_behind_facades() -> None:
         or imported.startswith("server.game_runtime.")
     }
     assert runtime_imports <= {
+        "server.game_runtime",
+        "server.game_runtime.player",
         "server.game_runtime.registry",
-        "server.game_runtime.room",
-        "server.game_runtime.session",
     }
 
-    imports = _imports_outside_package("game_agents")
-    agent_imports = {
+    imports = _imports_outside_package("game_bots")
+    bot_imports = {
         imported
         for imported in imports
-        if imported == "server.game_agents"
-        or imported.startswith("server.game_agents.")
+        if imported == "server.game_bots"
+        or imported.startswith("server.game_bots.")
     }
-    assert agent_imports <= {
-        "server.game_agents.factory",
-        "server.game_agents.llm",
+    assert bot_imports <= {
+        "server.game_bots",
+        "server.game_bots.llm",
     }
 
 

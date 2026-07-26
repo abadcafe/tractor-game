@@ -1,4 +1,4 @@
-"""Human WebSocket connection at the web/runtime boundary."""
+"""Human WebSocket transport at the web/runtime boundary."""
 
 from __future__ import annotations
 
@@ -8,11 +8,12 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from server.foundation.result import Rejected
 from server.game import Seat
-from server.game_runtime.room import GameRoom
-from server.game_runtime.session import (
-    Delivery,
-    DeliverySink,
-    DisconnectReason,
+from server.game_runtime import GameRoom
+from server.game_runtime.player import (
+    ConnectionCloseReason,
+    HumanTransport,
+    PlayerView,
+    UserId,
 )
 
 from .game_wire import encode_state, read_frame
@@ -20,18 +21,18 @@ from .game_wire import encode_state, read_frame
 logger = logging.getLogger(__name__)
 
 
-class WebSocketSink(DeliverySink):
+class WebSocketTransport(HumanTransport):
     """Encode runtime deliveries onto one WebSocket."""
 
     def __init__(self, websocket: WebSocket) -> None:
         self._websocket = websocket
 
-    async def offer(self, delivery: Delivery) -> None:
+    async def send(self, view: PlayerView) -> None:
         message = encode_state(
-            viewer=delivery.viewer,
-            seq=delivery.seq,
-            snapshot=delivery.snapshot,
-            error=delivery.error,
+            viewer=view.viewer,
+            seq=view.seq,
+            snapshot=view.snapshot,
+            error=view.error,
         )
         try:
             await self._websocket.send_json(
@@ -40,7 +41,7 @@ class WebSocketSink(DeliverySink):
         except WebSocketDisconnect, OSError:
             logger.debug("game websocket send failed")
 
-    async def disconnect(self, reason: DisconnectReason) -> None:
+    async def close(self, reason: ConnectionCloseReason) -> None:
         try:
             await self._websocket.close(
                 code=_disconnect_code(reason),
@@ -55,15 +56,15 @@ async def handle_game_connection(
     room: GameRoom,
     *,
     seat: Seat,
-    user_id: str,
+    user_id: UserId,
 ) -> None:
     """Own one human WebSocket until disconnect or takeover."""
-    sink = WebSocketSink(websocket)
+    transport = WebSocketTransport(websocket)
     await websocket.accept()
     connected = await room.connect_seat(
         seat=seat,
         user_id=user_id,
-        sink=sink,
+        transport=transport,
     )
     if isinstance(connected, Rejected):
         await websocket.close(
@@ -71,7 +72,6 @@ async def handle_game_connection(
             reason=connected.reason,
         )
         return
-    seat = connected.value
     try:
         while True:
             try:
@@ -80,20 +80,23 @@ async def handle_game_connection(
                 return
             frame = read_frame(raw)
             await room.receive(
-                seat,
-                sink,
-                frame.seq,
-                frame.decoder,
+                seat=seat,
+                user_id=user_id,
+                transport=transport,
+                seq=frame.seq,
+                decoder=frame.decoder,
             )
     finally:
-        room.disconnect_seat(seat, sink)
+        room.disconnect_seat(
+            seat=seat,
+            user_id=user_id,
+            transport=transport,
+        )
 
 
-def _disconnect_code(reason: DisconnectReason) -> int:
-    if reason == DisconnectReason.REPLACED:
+def _disconnect_code(reason: ConnectionCloseReason) -> int:
+    if reason == ConnectionCloseReason.REPLACED:
         return 4000
-    if reason == DisconnectReason.DETACHED:
-        return 4408
     return 1000
 
 
@@ -101,3 +104,6 @@ def _rejection_code(reason: str) -> int:
     if reason in ("invalid seat", "missing user id"):
         return 4410
     return 4409
+
+
+__all__ = ("WebSocketTransport", "handle_game_connection")

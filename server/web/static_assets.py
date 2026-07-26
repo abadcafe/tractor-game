@@ -25,8 +25,8 @@ def register_static_routes(app: FastAPI, static_dir: str) -> None:
     async def training_asset(path: str) -> Response:
         return _spa_response(root, "training", path)
 
-    async def ai_debug_asset(path: str) -> Response:
-        return _asset_response(root, "ai-debug", path)
+    async def llm_debug_asset(path: str) -> Response:
+        return _asset_response(root, "llm-debug", path)
 
     async def shared_browser_asset(path: str) -> Response:
         return _asset_response(root, "browser", path)
@@ -39,7 +39,7 @@ def register_static_routes(app: FastAPI, static_dir: str) -> None:
         "/training/{path:path}", training_asset, methods=["GET"]
     )
     app.add_api_route(
-        "/ai-debug/{path:path}", ai_debug_asset, methods=["GET"]
+        "/llm-debug/{path:path}", llm_debug_asset, methods=["GET"]
     )
     app.add_api_route(
         "/browser/{path:path}", shared_browser_asset, methods=["GET"]

@@ -61,7 +61,7 @@ def _prepare_ws_game(
     )
     assert attach_response.status_code == 200
     fill_response = sync_client.post(
-        f"/api/game/{game_id}/bots?kind=auto&user_id={user_id}"
+        f"/api/game/{game_id}/bots?policy=auto&user_id={user_id}"
     )
     assert fill_response.status_code == 200
 
@@ -273,7 +273,9 @@ def test_ws_connect_takeover_closes_old_connection(
             seat="c",
             user_id="user-2",
         )
-        assert first_seat["connected"] is True
+        first_player = first_seat["player"]
+        assert _is_dict(first_player)
+        assert first_player["connected"] is True
 
         with sync_client.websocket_connect(
             _seat_ws_path(game_id)
@@ -288,7 +290,9 @@ def test_ws_connect_takeover_closes_old_connection(
                 seat="c",
                 user_id="user-2",
             )
-            assert replacement_seat["connected"] is True
+            replacement_player = replacement_seat["player"]
+            assert _is_dict(replacement_player)
+            assert replacement_player["connected"] is True
             with pytest.raises(_WS_ERRORS):
                 _receive_ws_dict(ws1)
 

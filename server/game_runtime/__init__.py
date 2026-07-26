@@ -1,5 +1,14 @@
-"""Process-local orchestration around the pure game domain."""
+"""Process-local game-room orchestration."""
 
-from . import registry, room, session
+from ._room import GameRoom, RoomClosed, SeatStatus
+from ._roster import BotPlayerFactory
+from .player import BotPolicyName, UserId
 
-__all__ = ["registry", "room", "session"]
+__all__ = (
+    "BotPlayerFactory",
+    "BotPolicyName",
+    "GameRoom",
+    "RoomClosed",
+    "SeatStatus",
+    "UserId",
+)

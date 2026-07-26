@@ -191,7 +191,7 @@ def _prepare_ws_game(
     )
     assert attach_resp.status_code == 200
     fill_resp = sync_client.post(
-        f"/api/game/{game_id}/bots?kind=auto&user_id={user_id}"
+        f"/api/game/{game_id}/bots?policy=auto&user_id={user_id}"
     )
     assert fill_resp.status_code == 200
 
@@ -306,5 +306,5 @@ async def test_list_games_shows_lobby_fields(
     assert len(seats_raw) == 4
     seats = [_as_dict(seat) for seat in seats_raw]
     assert [seat["seat"] for seat in seats] == ["a", "b", "c", "d"]
-    assert all(seat["occupied"] is False for seat in seats)
+    assert all(seat["player"] is None for seat in seats)
     assert "phase" not in games[0]

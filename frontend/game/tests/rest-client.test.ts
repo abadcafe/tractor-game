@@ -108,34 +108,29 @@ Deno.test("test_listGames_success", async () => {
               seats: [
                 {
                   seat: "a",
-                  occupied: false,
-                  connected: false,
-                  kind: "empty",
-                  mine: false,
+                  player: null,
                   ready: false,
                 },
                 {
                   seat: "b",
-                  occupied: true,
-                  connected: true,
-                  kind: "user",
-                  mine: true,
+                  player: {
+                    kind: "human",
+                    connected: true,
+                    mine: true,
+                  },
                   ready: false,
                 },
                 {
                   seat: "c",
-                  occupied: false,
-                  connected: false,
-                  kind: "empty",
-                  mine: false,
+                  player: null,
                   ready: false,
                 },
                 {
                   seat: "d",
-                  occupied: true,
-                  connected: false,
-                  kind: "auto",
-                  mine: false,
+                  player: {
+                    kind: "bot",
+                    policy: "auto",
+                  },
                   ready: true,
                 },
               ],
@@ -156,34 +151,29 @@ Deno.test("test_listGames_success", async () => {
         seats: [
           {
             seat: "a",
-            occupied: false,
-            connected: false,
-            kind: "empty",
-            mine: false,
+            player: null,
             ready: false,
           },
           {
             seat: "b",
-            occupied: true,
-            connected: true,
-            kind: "user",
-            mine: true,
+            player: {
+              kind: "human",
+              connected: true,
+              mine: true,
+            },
             ready: false,
           },
           {
             seat: "c",
-            occupied: false,
-            connected: false,
-            kind: "empty",
-            mine: false,
+            player: null,
             ready: false,
           },
           {
             seat: "d",
-            occupied: true,
-            connected: false,
-            kind: "auto",
-            mine: false,
+            player: {
+              kind: "bot",
+              policy: "auto",
+            },
             ready: true,
           },
         ],
@@ -295,14 +285,14 @@ Deno.test("test_fillBotSeats_sends_bot_fill_request", async () => {
     async (baseUrl) => {
       const ok = await fillBotSeats(
         "game-1",
-        "ai",
+        "llm",
         "user 1",
         baseUrl,
       );
       assertEquals(ok, true);
       assertEquals(observedMethod, "POST");
       assertEquals(observedPath, "/api/game/game-1/bots");
-      assertEquals(observedSearch, "?kind=ai&user_id=user%201");
+      assertEquals(observedSearch, "?policy=llm&user_id=user%201");
     },
   );
 });

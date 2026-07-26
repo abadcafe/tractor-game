@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from server.game_runtime.registry import GameRegistry
-from server.game_runtime.room import GameRoom
 from server.training_control.config import (
     TrainingControlConfig,
     training_control_config,
@@ -13,15 +12,16 @@ from server.training_control.config import (
 from server.training_control.process_control import (
     TrainingProcessControl,
 )
+from server.web.game_composition import GameInstance
 
 
-def _game_registry() -> GameRegistry[GameRoom]:
+def _game_registry() -> GameRegistry[GameInstance]:
     return GameRegistry()
 
 
 @dataclass(slots=True)
 class ServerState:
-    registry: GameRegistry[GameRoom] = field(
+    registry: GameRegistry[GameInstance] = field(
         default_factory=_game_registry
     )
     training_control_config: TrainingControlConfig = field(
@@ -36,5 +36,5 @@ class ServerState:
         self, *, max_age_seconds: int
     ) -> None:
         rooms = self.registry.expire(max_idle_seconds=max_age_seconds)
-        for room in rooms:
-            await room.close()
+        for instance in rooms:
+            await instance.room.close()

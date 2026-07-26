@@ -26,6 +26,6 @@ export function selectedGameHasEmptySeat(
   const selectedGame = games.find((game) =>
     game.gameId === selectedGameId
   );
-  return selectedGame?.seats.some((player) => !player.occupied) ??
+  return selectedGame?.seats.some((seat) => seat.player === null) ??
     false;
 }
