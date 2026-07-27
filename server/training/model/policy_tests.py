@@ -40,6 +40,7 @@ def test_model_scores_exactly_110_choices_and_one_value() -> None:
     encoding = model.encode_observations(batch)
     scores = model.score_action_traces(
         encoding,
+        source_rows=torch.tensor((0,), dtype=torch.long, device=device),
         choice_ids_padded=torch.tensor(
             ((PASS_CHOICE_ID,),), dtype=torch.long, device=device
         ),
@@ -68,15 +69,23 @@ def test_live_query_seed_matches_teacher_forced_scoring() -> None:
         encoding = model.encode_observations(batch)
         scored = model.score_action_traces(
             encoding,
+            source_rows=torch.tensor(
+                (0,), dtype=torch.long, device=device
+            ),
             choice_ids_padded=choices,
             step_counts=steps,
         )
         session = model.begin_action_decode_session(
-            encoding, max_steps=2
+            encoding,
+            source_rows=torch.tensor(
+                (0,), dtype=torch.long, device=device
+            ),
+            max_steps=2,
         )
-        first = session.next_choice_logits()
-        session.advance(choices[:, 0])
-        second = session.next_choice_logits()
+        active = torch.tensor((True,), dtype=torch.bool, device=device)
+        first = session.next_choice_logits(active, active)
+        session.advance(choices[:, 0], active)
+        second = session.next_choice_logits(active, active)
 
     torch.testing.assert_close(first, scored.choice_logits[:, 0])
     torch.testing.assert_close(second, scored.choice_logits[:, 1])

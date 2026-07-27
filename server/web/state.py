@@ -44,3 +44,12 @@ class ServerState:
         rooms = self.registry.expire(max_idle_seconds=max_age_seconds)
         for room in rooms:
             await room.close()
+
+    async def close(self) -> None:
+        """Stop game tasks before closing their shared services."""
+        for game_id in self.registry.list_ids():
+            room = self.registry.delete(game_id)
+            assert room is not None
+            await room.close()
+        await self.ai_service.close()
+        await self.training_process_control.close()

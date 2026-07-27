@@ -109,15 +109,27 @@ class ObservationEncoder(nn.Module):
             batch_indices, observation.query_indices
         ]
         card_categories = observation.candidate_category_ids
+        candidate_rows = _shared_candidate_rows(observation)
         card_choice_embeddings = (
             self._token_encoder.encode_card_candidates(
-                suit_ids=card_categories[:, :, 0],
-                rank_ids=card_categories[:, :, 1],
-                effective_suit_ids=card_categories[:, :, 2],
-                counts=observation.candidate_counts,
-                rule_values=observation.candidate_card_rule_values,
+                suit_ids=card_categories[candidate_rows, :, 0],
+                rank_ids=card_categories[candidate_rows, :, 1],
+                effective_suit_ids=card_categories[
+                    candidate_rows, :, 2
+                ],
+                counts=observation.candidate_counts[candidate_rows],
+                rule_values=observation.candidate_card_rule_values[
+                    candidate_rows
+                ],
             )
         )
+        if (
+            int(card_choice_embeddings.shape[0]) == 1
+            and batch_indices.numel() > 1
+        ):
+            card_choice_embeddings = card_choice_embeddings.expand(
+                int(batch_indices.shape[0]), -1, -1
+            )
         assert int(card_choice_embeddings.shape[1]) == CARD_CHOICE_COUNT
         return EncodedObservation(
             _memory=memory,
@@ -125,6 +137,23 @@ class ObservationEncoder(nn.Module):
             _observation_context=observation_context,
             _card_choice_embeddings=card_choice_embeddings,
         )
+
+
+def _shared_candidate_rows(
+    observation: ObservationTensorBatch,
+) -> slice:
+    batch_size = int(observation.category_ids.shape[0])
+    if batch_size == 1:
+        return slice(None)
+    categories = observation.candidate_category_ids
+    counts = observation.candidate_counts
+    rules = observation.candidate_card_rule_values
+    shared = categories.eq(categories[0:1].expand_as(categories)).all()
+    shared = shared & counts.eq(counts[0:1].expand_as(counts)).all()
+    shared = shared & rules.eq(rules[0:1].expand_as(rules)).all()
+    if bool(shared.item()):
+        return slice(0, 1)
+    return slice(None)
 
 
 __all__ = ("EncodedObservation", "ObservationEncoder")

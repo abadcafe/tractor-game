@@ -37,15 +37,60 @@ class _ZeroDecoder(ActionChoiceLogitDecoder):
     batch_size: int
     device: torch.device
 
-    def next_choice_logits(self) -> Tensor:
+    def next_choice_logits(
+        self,
+        active_rows: Tensor,
+        scored_rows: Tensor,
+    ) -> Tensor:
+        assert active_rows.shape == (self.batch_size,)
+        assert scored_rows.shape == active_rows.shape
         return torch.zeros(
             (self.batch_size, ACTION_CHOICE_COUNT),
             dtype=torch.float32,
             device=self.device,
         )
 
-    def advance(self, selected_choice_ids: Tensor) -> None:
+    def advance(
+        self,
+        selected_choice_ids: Tensor,
+        active_rows: Tensor,
+    ) -> None:
         assert selected_choice_ids.shape == (self.batch_size,)
+        assert active_rows.shape == (self.batch_size,)
+
+
+@dataclass(slots=True)
+class _RecordingDecoder(ActionChoiceLogitDecoder):
+    batch_size: int
+    device: torch.device
+    preferred_choice: int
+    scored_counts: list[int]
+
+    def next_choice_logits(
+        self,
+        active_rows: Tensor,
+        scored_rows: Tensor,
+    ) -> Tensor:
+        assert active_rows.shape == (self.batch_size,)
+        assert scored_rows.shape == active_rows.shape
+        self.scored_counts.append(
+            int(scored_rows.count_nonzero().item())
+        )
+        logits = torch.zeros(
+            (self.batch_size, ACTION_CHOICE_COUNT),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        logits[:, self.preferred_choice] = 100.0
+        return logits
+
+    def advance(
+        self,
+        selected_choice_ids: Tensor,
+        active_rows: Tensor,
+    ) -> None:
+        assert selected_choice_ids.shape == (self.batch_size,)
+        assert active_rows.shape == (self.batch_size,)
 
 
 def test_trace_set_samples_direct_choice_ids() -> None:
@@ -61,6 +106,42 @@ def test_trace_set_samples_direct_choice_ids() -> None:
     assert sample.legal_choice_masks.shape == (1, ACTION_CHOICE_COUNT)
     assert bool(sample.legal_choice_masks[0, PASS_CHOICE_ID])
     assert bool(sample.legal_choice_masks[0, CARD_CHOICE_BASE_ID])
+
+
+def test_forced_prefix_is_not_scored_before_ambiguous_choice() -> None:
+    device = torch.device("cpu")
+    first = CARD_CHOICE_BASE_ID
+    second = CARD_CHOICE_BASE_ID + 1
+    preferred = CARD_CHOICE_BASE_ID + 2
+    frame = _frame(
+        kind=ACTION_KIND_TRACE_SET,
+        traces=((first, second), (first, preferred)),
+    )
+    decoder = _RecordingDecoder(
+        batch_size=1,
+        device=device,
+        preferred_choice=preferred,
+        scored_counts=[],
+    )
+
+    result = ActionSampler.create(
+        batch_capacity=1,
+        device=device,
+    ).sample(
+        action_batch=plan_batch_to_device((frame,), device=device),
+        generation_step_counts=torch.tensor(
+            (2,), dtype=torch.long, device=device
+        ),
+        sampling_thresholds=torch.tensor(
+            ((0.5, 0.5),), dtype=torch.float64, device=device
+        ),
+        padded_generation_steps=2,
+        logit_decoder=decoder,
+    )
+
+    assert isinstance(result, Ok)
+    assert _trace(result.value) == (first, preferred)
+    assert decoder.scored_counts == [0, 1]
 
 
 def test_lead_uses_card_then_explicit_finish() -> None:

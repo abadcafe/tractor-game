@@ -57,6 +57,11 @@ def sample_policy_batch(
 
         logit_decoder = model.begin_action_decode_session(
             encoding,
+            source_rows=torch.arange(
+                encoding.batch_size,
+                dtype=torch.long,
+                device=encoding.device,
+            ),
             max_steps=requests.padded_generation_steps,
         )
         action_result = sampler.sample(
@@ -113,6 +118,11 @@ def sample_policy_batch_into_arena(
 
         logit_decoder = model.begin_action_decode_session(
             encoding,
+            source_rows=torch.arange(
+                encoding.batch_size,
+                dtype=torch.long,
+                device=encoding.device,
+            ),
             max_steps=requests.padded_generation_steps,
         )
         action_result = sampler.sample(

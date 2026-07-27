@@ -14,7 +14,7 @@ from server.game.snapshots.tricks import (
 )
 from server.training.observation_memory import ObservationMemoryView
 
-from .runtime import EngineBranch
+from ..branch import EngineBranch
 
 
 @dataclass(frozen=True, slots=True)

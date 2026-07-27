@@ -178,11 +178,12 @@ class _FixedChoiceModel(TractorPolicyModel):
         self,
         encoding: EncodedObservation,
         *,
+        source_rows: Tensor,
         max_steps: int,
     ) -> ActionDecodeSession:
         return _FixedChoiceSession(
             choice_logits=self._fixed_choice_logits,
-            batch_size=encoding.batch_size,
+            batch_size=int(source_rows.shape[0]),
             device=encoding.device,
             score_batch_sizes=self.score_batch_sizes,
             max_steps=max_steps,
@@ -206,14 +207,27 @@ class _FixedChoiceSession(ActionDecodeSession):
         self._max_steps = max_steps
         self._step_index = 0
 
-    def next_choice_logits(self) -> Tensor:
-        self._score_batch_sizes.append(self._batch_size)
+    def next_choice_logits(
+        self,
+        active_rows: Tensor,
+        scored_rows: Tensor,
+    ) -> Tensor:
+        assert active_rows.shape == (self._batch_size,)
+        assert scored_rows.shape == active_rows.shape
+        self._score_batch_sizes.append(
+            int(scored_rows.count_nonzero().item())
+        )
         return self._choice_logits.to(self._device).repeat(
             self._batch_size, 1
         )
 
-    def advance(self, selected_choice_ids: Tensor) -> None:
+    def advance(
+        self,
+        selected_choice_ids: Tensor,
+        active_rows: Tensor,
+    ) -> None:
         assert selected_choice_ids.shape == (self._batch_size,)
+        assert active_rows.shape == (self._batch_size,)
         self._step_index += 1
         assert self._step_index <= self._max_steps
 

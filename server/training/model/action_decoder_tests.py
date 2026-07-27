@@ -23,15 +23,21 @@ def test_cached_decode_exactly_matches_causal_teacher_forcing() -> None:
     with torch.no_grad():
         teacher = decoder.score_action_traces(
             encoding,
+            source_rows=torch.tensor((0,), dtype=torch.long),
             choice_ids_padded=choices,
             step_counts=step_counts,
         ).choice_logits
-        session = decoder.begin_decode_session(encoding, max_steps=3)
-        live_steps = [session.next_choice_logits()]
-        session.advance(choices[:, 0])
-        live_steps.append(session.next_choice_logits())
-        session.advance(choices[:, 1])
-        live_steps.append(session.next_choice_logits())
+        session = decoder.begin_decode_session(
+            encoding,
+            source_rows=torch.tensor((0,), dtype=torch.long),
+            max_steps=3,
+        )
+        active = torch.tensor((True,), dtype=torch.bool)
+        live_steps = [session.next_choice_logits(active, active)]
+        session.advance(choices[:, 0], active)
+        live_steps.append(session.next_choice_logits(active, active))
+        session.advance(choices[:, 1], active)
+        live_steps.append(session.next_choice_logits(active, active))
 
     torch.testing.assert_close(
         torch.stack(live_steps, dim=1),
@@ -50,11 +56,13 @@ def test_teacher_forcing_cannot_see_future_choices() -> None:
     with torch.no_grad():
         first_scores = decoder.score_action_traces(
             encoding,
+            source_rows=torch.tensor((0,), dtype=torch.long),
             choice_ids_padded=first,
             step_counts=step_counts,
         ).choice_logits
         changed_scores = decoder.score_action_traces(
             encoding,
+            source_rows=torch.tensor((0,), dtype=torch.long),
             choice_ids_padded=changed_future,
             step_counts=step_counts,
         ).choice_logits
@@ -69,6 +77,7 @@ def test_action_decoder_parameters_receive_finite_gradients() -> None:
     decoder = ActionDecoder(d_model=8, heads=1)
     scores = decoder.score_action_traces(
         _encoding(),
+        source_rows=torch.tensor((0,), dtype=torch.long),
         choice_ids_padded=torch.tensor(((2, 7, 1),), dtype=torch.long),
         step_counts=torch.tensor((3,), dtype=torch.long),
     )

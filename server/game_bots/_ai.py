@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-
 from server.foundation.result import Ok, Rejected
 from server.game import commands
 from server.game_ai import AIControllerPort
@@ -30,9 +28,8 @@ class AIPolicy:
         self,
         request: DecisionRequest,
     ) -> Ok[DecisionCommand] | Rejected:
-        """Run CPU/GPU inference outside the event-loop thread."""
-        result = await asyncio.to_thread(
-            self._controller.decide,
+        """Await the model runtime without blocking the event loop."""
+        result = await self._controller.decide(
             seq=request.view.seq,
             snapshot=request.view.snapshot,
         )

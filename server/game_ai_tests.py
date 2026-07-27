@@ -22,12 +22,14 @@ from server.game import (
 )
 from server.game.rules.cards.faces import FaceCount
 from server.game_ai import (
-    ActionEvaluation,
+    ActionSampleRequest,
+    ActionSamples,
     ActionScoreRequest,
-    AIController,
     ModelQuery,
-    SearchConfig,
+    SampledAction,
 )
+from server.game_ai.controller import AIController
+from server.game_ai.search import SearchConfig
 from server.training.legal_actions.complete_trace import (
     trace_for_selection,
 )
@@ -53,17 +55,36 @@ from server.training.semantic_actions.choices import (
 class _ZeroDecoder(ActionChoiceLogitDecoder):
     batch_size: int
 
-    def next_choice_logits(self) -> Tensor:
+    def next_choice_logits(
+        self,
+        active_rows: Tensor,
+        scored_rows: Tensor,
+    ) -> Tensor:
+        assert active_rows.shape == (self.batch_size,)
+        assert scored_rows.shape == active_rows.shape
         return torch.zeros(
             (self.batch_size, ACTION_CHOICE_COUNT),
             dtype=torch.float32,
         )
 
-    def advance(self, selected_choice_ids: Tensor) -> None:
+    def advance(
+        self,
+        selected_choice_ids: Tensor,
+        active_rows: Tensor,
+    ) -> None:
         assert selected_choice_ids.shape == (self.batch_size,)
+        assert active_rows.shape == (self.batch_size,)
 
 
 def _actions() -> list[GeneratedAction]:
+    return []
+
+
+def _sample_request_counts() -> list[tuple[int, ...]]:
+    return []
+
+
+def _score_batch_sizes() -> list[int]:
     return []
 
 
@@ -73,15 +94,27 @@ class _SearchBiasedModel:
         default_factory=_actions
     )
     public_score_count: int = 0
+    sample_request_counts: list[tuple[int, ...]] = field(
+        default_factory=_sample_request_counts
+    )
+    score_batch_sizes: list[int] = field(
+        default_factory=_score_batch_sizes
+    )
 
-    def sample(
+    async def sample(
         self,
         *,
-        queries: tuple[ModelQuery, ...],
-        decision_seed: int,
-    ) -> Ok[tuple[ActionEvaluation, ...]] | Rejected:
-        del decision_seed
-        assert queries
+        requests: tuple[ActionSampleRequest, ...],
+    ) -> Ok[tuple[ActionSamples, ...]] | Rejected:
+        assert requests
+        self.sample_request_counts.append(
+            tuple(len(request.draws) for request in requests)
+        )
+        queries = tuple(
+            request.query
+            for request in requests
+            for _draw in request.draws
+        )
         if (
             len(queries) == 2
             and queries[0].observation.action_query.kind == "lead_play"
@@ -100,50 +133,46 @@ class _SearchBiasedModel:
             )
             return Ok(
                 (
-                    ActionEvaluation(
-                        action=actions[0].value,
-                        log_probability=10.0,
-                        value=0.0,
+                    ActionSamples(
+                        samples=(
+                            SampledAction(
+                                action=actions[0].value,
+                                log_probability=10.0,
+                            ),
+                            SampledAction(
+                                action=actions[1].value,
+                                log_probability=0.0,
+                            ),
+                        )
                     ),
-                    ActionEvaluation(
-                        action=actions[1].value,
+                )
+            )
+        groups: list[ActionSamples] = []
+        for request in requests:
+            samples: list[SampledAction] = []
+            for _draw in request.draws:
+                action = _first_legal_action(request.query)
+                if isinstance(action, Rejected):
+                    return action
+                samples.append(
+                    SampledAction(
+                        action=action.value,
                         log_probability=0.0,
-                        value=0.0,
-                    ),
+                    )
                 )
-            )
-        evaluations: list[ActionEvaluation] = []
-        for query in queries:
-            action = _first_legal_action(query)
-            if isinstance(action, Rejected):
-                return action
-            evaluations.append(
-                ActionEvaluation(
-                    action=action.value,
-                    log_probability=0.0,
-                    value=0.0,
-                )
-            )
-        return Ok(tuple(evaluations))
+            groups.append(ActionSamples(samples=tuple(samples)))
+        return Ok(tuple(groups))
 
-    def score(
+    async def score(
         self,
         *,
         requests: tuple[ActionScoreRequest, ...],
-    ) -> Ok[tuple[ActionEvaluation, ...]] | Rejected:
+    ) -> Ok[tuple[float, ...]] | Rejected:
         self.public_score_count += len(requests)
-        return Ok(
-            tuple(
-                ActionEvaluation(
-                    action=request.action,
-                    log_probability=-0.25,
-                    value=0.0,
-                )
-                for request in requests
-            )
-        )
+        self.score_batch_sizes.append(len(requests))
+        return Ok(tuple(-0.25 for _request in requests))
 
-    def values(
+    async def values(
         self,
         *,
         observations: tuple[Observation, ...],
@@ -152,9 +181,7 @@ class _SearchBiasedModel:
         return Ok((-1.0, 1.0))
 
 
-def test_ai_uses_particle_rollout_value_instead_of_policy_argmax() -> (
-    None
-):
+async def test_ai_uses_rollout_value_instead_of_argmax() -> None:
     state = _round_start_with_actor(Seat.A)
     model = _SearchBiasedModel()
     controller = AIController(
@@ -164,7 +191,7 @@ def test_ai_uses_particle_rollout_value_instead_of_policy_argmax() -> (
         direct_samples=1,
         search_config=SearchConfig(
             candidate_samples=2,
-            rollouts_per_particle=1,
+            rollouts_per_particle=2,
             rollout_depth=1,
         ),
         random_source=random.Random(7),
@@ -186,7 +213,7 @@ def test_ai_uses_particle_rollout_value_instead_of_policy_argmax() -> (
             command = commands.PassBid()
         elif actor_view.awaiting_action == "discard":
             assert actor == Seat.A
-            decided = controller.decide(
+            decided = await controller.decide(
                 seq=seq,
                 snapshot=current,
             )
@@ -207,7 +234,7 @@ def test_ai_uses_particle_rollout_value_instead_of_policy_argmax() -> (
         )
         assert isinstance(observed, Ok)
 
-    decided = controller.decide(seq=seq, snapshot=current)
+    decided = await controller.decide(seq=seq, snapshot=current)
 
     assert isinstance(decided, Ok)
     assert isinstance(decided.value, commands.Play)
@@ -219,6 +246,8 @@ def test_ai_uses_particle_rollout_value_instead_of_policy_argmax() -> (
     assert isinstance(expected, Ok)
     assert decided.value == expected.value
     assert model.public_score_count >= 100
+    assert max(model.score_batch_sizes) > 1
+    assert (2, 2) in model.sample_request_counts
 
 
 def _round_start_with_actor(actor: Seat) -> GameState:

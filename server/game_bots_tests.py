@@ -58,7 +58,7 @@ class _AIController:
         del seq, snapshot, error
         return Ok(None)
 
-    def decide(
+    async def decide(
         self,
         *,
         seq: int,
@@ -162,7 +162,7 @@ async def _settle() -> None:
 def test_factory_creates_ai_player_through_controller_boundary() -> (
     None
 ):
-    controller = _AIController(
+    controller: AIControllerPort = _AIController(
         decision=Ok(commands.PassBid()),
     )
     controllers = _AIControllerFactory(result=Ok(controller))

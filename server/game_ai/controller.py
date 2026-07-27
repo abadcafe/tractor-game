@@ -13,7 +13,12 @@ from server.training.observation_memory import ObservationMemory
 
 from .actions import physical_command
 from .belief import ParticleBelief
-from .model import ModelEvaluator, ModelQuery
+from .model import (
+    ActionDrawKey,
+    ActionSampleRequest,
+    ModelEvaluator,
+    ModelQuery,
+)
 from .search import ParticleSearch, SearchConfig
 
 
@@ -69,7 +74,7 @@ class AIController:
             error=error,
         )
 
-    def decide(
+    async def decide(
         self,
         *,
         seq: int,
@@ -83,19 +88,24 @@ class AIController:
             )
         decision_seed = self._random.getrandbits(63)
         if action == "play":
-            particles = self._belief.synchronize()
+            particles = await self._belief.synchronize()
             if isinstance(particles, Rejected):
                 return particles
-            decided = self._search.decide(
+            searched = await self._search.decide(
                 particles=particles.value,
                 viewer=self._seat,
                 decision_seed=decision_seed,
             )
+            if isinstance(searched, Rejected):
+                return searched
+            decided: Ok[commands.Command] | Rejected = Ok(
+                searched.value.command
+            )
         else:
-            synchronized = self._belief.synchronize()
+            synchronized = await self._belief.synchronize()
             if isinstance(synchronized, Rejected):
                 return synchronized
-            decided = self._direct_decision(
+            decided = await self._direct_decision(
                 snapshot=snapshot,
                 decision_seed=decision_seed,
             )
@@ -104,7 +114,7 @@ class AIController:
         self._belief.submitted(seq=seq, command=decided.value)
         return decided
 
-    def _direct_decision(
+    async def _direct_decision(
         self,
         *,
         snapshot: PlayerSnapshot,
@@ -125,14 +135,25 @@ class AIController:
             legal_actions=legal_actions,
             seat=self._seat,
         )
-        sampled = self._model.sample(
-            queries=tuple(query for _ in range(self._direct_samples)),
-            decision_seed=decision_seed,
+        sampled = await self._model.sample(
+            requests=(
+                ActionSampleRequest(
+                    query=query,
+                    draws=tuple(
+                        ActionDrawKey(
+                            seed=decision_seed,
+                            ordinal=index,
+                        )
+                        for index in range(self._direct_samples)
+                    ),
+                ),
+            ),
         )
         if isinstance(sampled, Rejected):
             return sampled
+        assert len(sampled.value) == 1
         selected = max(
-            sampled.value,
+            sampled.value[0].samples,
             key=lambda evaluation: evaluation.log_probability,
         )
         return physical_command(

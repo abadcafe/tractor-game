@@ -106,6 +106,11 @@ def _action_step_batch_eval(
     decode_start = profile.mark()
     scores = model.score_action_traces(
         encoding,
+        source_rows=torch.arange(
+            int(replay.step_counts.shape[0]),
+            dtype=torch.long,
+            device=replay.step_counts.device,
+        ),
         choice_ids_padded=replay.choice_ids_padded,
         step_counts=replay.step_counts,
     )

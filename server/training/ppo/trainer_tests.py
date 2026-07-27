@@ -96,6 +96,7 @@ class CountingTractorPolicyModel(TractorPolicyModel):
         self,
         encoding: EncodedObservation,
         *,
+        source_rows: Tensor,
         choice_ids_padded: Tensor,
         step_counts: Tensor,
     ) -> ActionTraceScores:
@@ -104,6 +105,7 @@ class CountingTractorPolicyModel(TractorPolicyModel):
         self.score_prefix_widths.append(int(choice_ids_padded.shape[1]))
         return super().score_action_traces(
             encoding,
+            source_rows=source_rows,
             choice_ids_padded=choice_ids_padded,
             step_counts=step_counts,
         )
@@ -133,7 +135,13 @@ class _TraceChoiceDecoder:
         self._device = device
         self._step_index = 0
 
-    def next_choice_logits(self) -> Tensor:
+    def next_choice_logits(
+        self,
+        active_rows: Tensor,
+        scored_rows: Tensor,
+    ) -> Tensor:
+        assert active_rows.shape == (self._batch_size,)
+        assert scored_rows.shape == active_rows.shape
         logits = torch.zeros(
             (self._batch_size, ACTION_CHOICE_COUNT),
             dtype=torch.float32,
@@ -143,8 +151,13 @@ class _TraceChoiceDecoder:
             logits[:, self._target_choice_ids[self._step_index]] = 100.0
         return logits
 
-    def advance(self, selected_choice_ids: Tensor) -> None:
+    def advance(
+        self,
+        selected_choice_ids: Tensor,
+        active_rows: Tensor,
+    ) -> None:
         assert selected_choice_ids.shape == (self._batch_size,)
+        assert active_rows.shape == (self._batch_size,)
         self._step_index += 1
 
 

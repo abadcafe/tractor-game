@@ -29,7 +29,7 @@ def lifespan_for(
         finally:
             event_stream_lifecycle.close()
             task.cancel()
-            await state.training_process_control.close()
+            await state.close()
             try:
                 await task
             except asyncio.CancelledError:

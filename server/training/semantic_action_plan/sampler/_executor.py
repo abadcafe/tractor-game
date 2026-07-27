@@ -47,12 +47,20 @@ _ERROR_UNTERMINATED = 1000
 class ActionChoiceLogitDecoder(Protocol):
     """Stateful fixed-vocabulary decoder consumed during sampling."""
 
-    def next_choice_logits(self) -> Tensor:
-        """Return logits for all 110 choices at the current prefix."""
+    def next_choice_logits(
+        self,
+        active_rows: Tensor,
+        scored_rows: Tensor,
+    ) -> Tensor:
+        """Return logits only for ambiguous active rows."""
         ...
 
-    def advance(self, selected_choice_ids: Tensor) -> None:
-        """Advance with the choice sampled at the current step."""
+    def advance(
+        self,
+        selected_choice_ids: Tensor,
+        active_rows: Tensor,
+    ) -> None:
+        """Advance active rows with the sampled current choice."""
         ...
 
 
@@ -112,8 +120,26 @@ class ActionScoreBatch:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ForcedActionBatch:
+    """Action traces proven unique without evaluating policy logits."""
+
+    forced_mask: Tensor
+    choice_ids_padded: Tensor
+    step_counts: Tensor
+
+    def __post_init__(self) -> None:
+        batch_size, _steps = self.choice_ids_padded.shape
+        assert self.forced_mask.shape == (batch_size,)
+        assert self.step_counts.shape == (batch_size,)
+        assert self.forced_mask.dtype == torch.bool
+        assert self.choice_ids_padded.dtype == torch.long
+        assert self.step_counts.dtype == torch.long
+
+
 type ActionSamplingResult = Ok[ActionSampleBatch] | Rejected
 type ActionScoringResult = Ok[ActionScoreBatch] | Rejected
+type ForcedActionResult = Ok[ForcedActionBatch] | Rejected
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +199,21 @@ class ActionSampler:
             step_counts=step_counts,
             padded_generation_steps=padded_generation_steps,
             logit_decoder=logit_decoder,
+            workspace=self.workspace,
+        )
+
+    def resolve_forced(
+        self,
+        *,
+        action_batch: DeviceActionPlanBatch,
+        generation_step_counts: Tensor,
+        padded_generation_steps: int,
+    ) -> ForcedActionResult:
+        """Resolve rows whose complete legal trace is unique."""
+        return _resolve_forced_actions(
+            action_batch=action_batch,
+            generation_step_counts=generation_step_counts,
+            padded_generation_steps=padded_generation_steps,
             workspace=self.workspace,
         )
 
@@ -329,8 +370,12 @@ def _sample_actions(
             state=state,
             active_rows=active_rows,
         )
+        scored_rows = active_rows & legal.choice_counts.gt(1)
         sampled = sample_legal_choices(
-            choice_logits=logit_decoder.next_choice_logits(),
+            choice_logits=logit_decoder.next_choice_logits(
+                active_rows,
+                scored_rows,
+            ),
             legal_choices=legal,
             thresholds=sampling_thresholds[:, step_index],
             active_rows=active_rows,
@@ -354,7 +399,7 @@ def _sample_actions(
             )
         )
         if step_index + 1 < padded_generation_steps:
-            logit_decoder.advance(sampled.choice_ids)
+            logit_decoder.advance(sampled.choice_ids, active_rows)
     final_state = workspace.state_view(batch_size=batch_size)
     error_code = _set_error_if(
         error_code, (~final_state.done).any(), _ERROR_UNTERMINATED
@@ -378,6 +423,67 @@ def _sample_actions(
             step_counts=workspace.step_counts[:batch_size],
             choice_counts=workspace.choice_counts[:batch_size],
             log_probabilities=workspace.log_probabilities[:batch_size],
+        )
+    )
+
+
+def _resolve_forced_actions(
+    *,
+    action_batch: DeviceActionPlanBatch,
+    generation_step_counts: Tensor,
+    padded_generation_steps: int,
+    workspace: ActionSamplerWorkspace,
+) -> ForcedActionResult:
+    batch_size = action_batch.batch_size()
+    assert batch_size <= workspace.batch_capacity
+    assert generation_step_counts.shape == (batch_size,)
+    workspace.reset(
+        action_batch=action_batch,
+        padded_generation_steps=padded_generation_steps,
+        log_probability_dtype=torch.float32,
+    )
+    still_forced = torch.ones(
+        (batch_size,),
+        dtype=torch.bool,
+        device=action_batch.device,
+    )
+    for _step_index in range(padded_generation_steps):
+        state = workspace.state_view(batch_size=batch_size)
+        active_rows = (
+            still_forced
+            & ~state.done
+            & (state.step_counts < generation_step_counts)
+        )
+        if not bool(active_rows.any().item()):
+            break
+        legal = _legal_choices(
+            workspace=workspace,
+            batch=action_batch,
+            state=state,
+            active_rows=active_rows,
+        )
+        if bool((active_rows & legal.choice_counts.eq(0)).any().item()):
+            return Rejected(
+                reason="action plan has no legal forced choice"
+            )
+        unique_rows = active_rows & legal.choice_counts.eq(1)
+        still_forced = still_forced & (~active_rows | unique_rows)
+        selected = legal.masks.to(dtype=torch.long).argmax(dim=1)
+        _advance_state(
+            workspace=workspace,
+            batch=action_batch,
+            selected_choice_ids=selected,
+            choice_counts=legal.choice_counts,
+            active_rows=unique_rows,
+        )
+    final_state = workspace.state_view(batch_size=batch_size)
+    return Ok(
+        ForcedActionBatch(
+            forced_mask=(still_forced & final_state.done).clone(),
+            choice_ids_padded=workspace.choice_ids[
+                :batch_size, :padded_generation_steps
+            ].clone(),
+            step_counts=workspace.step_counts[:batch_size].clone(),
         )
     )
 
@@ -427,7 +533,11 @@ def _score_actions(
             return Rejected(
                 reason="policy action trace contains an illegal choice"
             )
-        logits = logit_decoder.next_choice_logits()
+        scored_rows = active_rows & legal.choice_counts.gt(1)
+        logits = logit_decoder.next_choice_logits(
+            active_rows,
+            scored_rows,
+        )
         valid_logits = logits[legal.masks & active_rows.unsqueeze(1)]
         if bool((~torch.isfinite(valid_logits)).any().cpu().item()):
             return Rejected(
@@ -454,7 +564,7 @@ def _score_actions(
             active_rows=active_rows,
         )
         if step_index + 1 < padded_generation_steps:
-            logit_decoder.advance(selected)
+            logit_decoder.advance(selected, active_rows)
     final_state = workspace.state_view(batch_size=batch_size)
     if bool((~final_state.done).any().cpu().item()):
         return Rejected(reason=_error_reason(_ERROR_UNTERMINATED))

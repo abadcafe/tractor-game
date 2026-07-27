@@ -14,10 +14,24 @@ from server.training.semantic_actions.choices import (
     MAX_ACTION_STEPS,
 )
 
-from .observation_encoder import (
+from ..observation_encoder import (
     ActionDecoderInputs,
     EncodedObservation,
 )
+
+
+def _sorted_unique_inverse(values: Tensor) -> tuple[Tensor, Tensor]:
+    """Return sorted unique values and their inverse mapping."""
+    assert values.ndim == 1
+    assert int(values.shape[0]) > 0
+    sorted_result = torch.sort(values)
+    sorted_values = sorted_result.values
+    starts = torch.ones_like(sorted_values, dtype=torch.bool)
+    starts[1:] = sorted_values[1:] != sorted_values[:-1]
+    groups = starts.to(dtype=torch.long).cumsum(dim=0) - 1
+    inverse = torch.empty_like(groups)
+    inverse.scatter_(0, sorted_result.indices, groups)
+    return sorted_values[starts], inverse
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,38 +43,162 @@ class ActionTraceScores:
 
 @dataclass(slots=True)
 class ActionDecodeSession:
-    """Incremental decoder state for one encoded observation batch."""
+    """Incremental decoder state shared by identical action prefixes."""
 
     _decoder: ActionDecoder
-    _encoding: EncodedObservation
     _cache: _ActionDecodeCache
+    _base_observation_context: Tensor
+    _base_choice_embeddings: Tensor
+    _base_choice_keys: Tensor
+    _prefix_source_rows: Tensor
+    _lane_to_prefix: Tensor
+    _lane_count: int
     _step_index: int = 0
 
-    def next_choice_logits(self) -> Tensor:
-        """Return choice logits for the current prefix."""
-        prefix_context = self._decoder.decode_live_action_step(
-            cache=self._cache
-        )
-        return self._decoder.choice_logits_from_prefix_context(
-            encoding=self._encoding,
-            prefix_context=prefix_context,
-        )
+    @property
+    def unique_prefix_count(self) -> int:
+        """Number of decoder cache rows currently materialized."""
+        return self._cache.batch_size
 
-    def advance(self, selected_choice_ids: Tensor) -> None:
-        """Append one choice per row to the live cache."""
+    def next_choice_logits(
+        self,
+        active_rows: Tensor,
+        scored_rows: Tensor,
+    ) -> Tensor:
+        """Evaluate every unique active prefix exactly once."""
+        assert active_rows.shape == (self._lane_count,)
+        assert scored_rows.shape == (self._lane_count,)
+        assert active_rows.dtype == torch.bool
+        assert scored_rows.dtype == torch.bool
+        assert active_rows.device == self._lane_to_prefix.device
+        assert bool((~scored_rows | active_rows).all().item())
+        logits = torch.zeros(
+            (
+                self._lane_count,
+                int(self._base_choice_keys.shape[1]),
+            ),
+            dtype=self._base_choice_keys.dtype,
+            device=self._base_choice_keys.device,
+        )
+        if not bool(active_rows.any().item()):
+            return logits
+        self._compact_prefixes(active_rows)
+        if not bool(scored_rows.any().item()):
+            return logits
+        scored_lane_rows = torch.nonzero(
+            scored_rows, as_tuple=False
+        ).squeeze(1)
+        scored_prefixes = self._lane_to_prefix.index_select(
+            0, scored_lane_rows
+        )
+        unique_prefixes, scored_inverse = _sorted_unique_inverse(
+            scored_prefixes
+        )
+        scored_cache = self._cache.select_rows(unique_prefixes)
+        source_rows = self._prefix_source_rows.index_select(
+            0, unique_prefixes
+        )
+        prefix_context = self._decoder.decode_live_action_step(
+            cache=scored_cache
+        )
+        prefix_logits = self._decoder.choice_logits_from_prefix_context(
+            observation_context=(
+                self._base_observation_context.index_select(
+                    0, source_rows
+                )
+            ),
+            prefix_context=prefix_context,
+            choice_keys=self._base_choice_keys.index_select(
+                0, source_rows
+            ),
+        )
+        logits.index_copy_(
+            0,
+            scored_lane_rows,
+            prefix_logits.index_select(0, scored_inverse),
+        )
+        return logits
+
+    def advance(
+        self,
+        selected_choice_ids: Tensor,
+        active_rows: Tensor,
+    ) -> None:
+        """Fork cache state once per distinct selected child prefix."""
+        assert selected_choice_ids.shape == (self._lane_count,)
+        assert active_rows.shape == (self._lane_count,)
+        assert active_rows.dtype == torch.bool
+        if not bool(active_rows.any().item()):
+            return
         next_index = self._step_index + 1
         assert next_index < self._cache.max_steps
-        assert selected_choice_ids.shape == (self._cache.batch_size,)
+        active_lane_rows = torch.nonzero(
+            active_rows, as_tuple=False
+        ).squeeze(1)
+        active_parents = self._lane_to_prefix.index_select(
+            0, active_lane_rows
+        )
+        active_choices = selected_choice_ids.index_select(
+            0, active_lane_rows
+        )
+        child_keys = (
+            active_parents * int(self._base_choice_embeddings.shape[1])
+            + active_choices
+        )
+        unique_child_keys, child_inverse = _sorted_unique_inverse(
+            child_keys
+        )
+        choice_count = int(self._base_choice_embeddings.shape[1])
+        parent_rows = torch.div(
+            unique_child_keys,
+            choice_count,
+            rounding_mode="floor",
+        )
+        child_choice_ids = unique_child_keys.remainder(choice_count)
+        child_source_rows = self._prefix_source_rows.index_select(
+            0, parent_rows
+        )
+        cache = self._cache.select_rows(parent_rows)
+        child_choice_embeddings = (
+            self._base_choice_embeddings.index_select(
+                0, child_source_rows
+            )
+        )
         embeddings = self._decoder.embed_selected_choices(
-            encoding=self._encoding,
-            choice_ids=selected_choice_ids,
+            choice_embeddings=child_choice_embeddings,
+            choice_ids=child_choice_ids,
             position=next_index,
         )
         self._decoder.append_live_action_choice(
-            cache=self._cache,
+            cache=cache,
             choice_embeddings=embeddings,
         )
+        lane_to_prefix = torch.zeros_like(self._lane_to_prefix)
+        lane_to_prefix.index_copy_(0, active_lane_rows, child_inverse)
+        self._cache = cache
+        self._prefix_source_rows = child_source_rows
+        self._lane_to_prefix = lane_to_prefix
         self._step_index = next_index
+
+    def _compact_prefixes(self, active_rows: Tensor) -> None:
+        active_lane_rows = torch.nonzero(
+            active_rows, as_tuple=False
+        ).squeeze(1)
+        active_prefixes = self._lane_to_prefix.index_select(
+            0, active_lane_rows
+        )
+        unique_prefixes, inverse = _sorted_unique_inverse(
+            active_prefixes
+        )
+        if int(unique_prefixes.shape[0]) == self._cache.batch_size:
+            return
+        self._cache = self._cache.select_rows(unique_prefixes)
+        self._prefix_source_rows = (
+            self._prefix_source_rows.index_select(0, unique_prefixes)
+        )
+        lane_to_prefix = torch.zeros_like(self._lane_to_prefix)
+        lane_to_prefix.index_copy_(0, active_lane_rows, inverse)
+        self._lane_to_prefix = lane_to_prefix
 
 
 @dataclass(slots=True)
@@ -104,6 +242,32 @@ class _ActionDecodeCache:
     def batch_size(self) -> int:
         return int(self.self_keys.shape[0])
 
+    def select_rows(self, row_indices: Tensor) -> _ActionDecodeCache:
+        """Fork selected prefix rows while retaining projected K/V."""
+        assert row_indices.ndim == 1
+        assert row_indices.dtype == torch.long
+        assert row_indices.device == self.self_keys.device
+        assert int(row_indices.shape[0]) > 0
+        return _ActionDecodeCache(
+            self_keys=self.self_keys.index_select(0, row_indices),
+            self_values=self.self_values.index_select(0, row_indices),
+            memory_keys=self.memory_keys.index_select(0, row_indices),
+            memory_values=self.memory_values.index_select(
+                0, row_indices
+            ),
+            memory_padding_mask=(
+                self.memory_padding_mask.index_select(0, row_indices)
+            ),
+            current_embedding=self.current_embedding.index_select(
+                0, row_indices
+            ),
+            current_query=self.current_query.index_select(
+                0, row_indices
+            ),
+            current_length=self.current_length,
+            max_steps=self.max_steps,
+        )
+
 
 class ActionDecoder(nn.Module):
     """Own all parameters and state transitions for action decoding."""
@@ -146,13 +310,35 @@ class ActionDecoder(nn.Module):
         self,
         encoding: EncodedObservation,
         *,
+        source_rows: Tensor,
         choice_ids_padded: Tensor,
         step_counts: Tensor,
     ) -> ActionTraceScores:
         """Score complete traces with causal teacher forcing."""
         assert choice_ids_padded.ndim == 2
         assert step_counts.shape == (int(choice_ids_padded.shape[0]),)
-        inputs = encoding.action_decoder_inputs()
+        assert source_rows.shape == (int(choice_ids_padded.shape[0]),)
+        assert source_rows.dtype == torch.long
+        assert source_rows.device == encoding.device
+        base_inputs = encoding.action_decoder_inputs()
+        inputs = ActionDecoderInputs(
+            memory=base_inputs.memory.index_select(0, source_rows),
+            memory_padding_mask=(
+                base_inputs.memory_padding_mask.index_select(
+                    0, source_rows
+                )
+            ),
+            observation_context=(
+                base_inputs.observation_context.index_select(
+                    0, source_rows
+                )
+            ),
+            card_choice_embeddings=(
+                base_inputs.card_choice_embeddings.index_select(
+                    0, source_rows
+                )
+            ),
+        )
         prefix_embeddings = self._teacher_forced_prefix_embeddings(
             inputs=inputs,
             choice_ids_padded=choice_ids_padded,
@@ -203,29 +389,55 @@ class ActionDecoder(nn.Module):
         self,
         encoding: EncodedObservation,
         *,
+        source_rows: Tensor,
         max_steps: int,
     ) -> ActionDecodeSession:
-        """Decode from contextual query state without a start token."""
+        """Decode lanes through caches owned by unique root rows."""
         assert 0 < max_steps <= MAX_ACTION_STEPS
+        assert source_rows.ndim == 1
+        assert source_rows.dtype == torch.long
+        assert source_rows.device == encoding.device
+        assert int(source_rows.shape[0]) > 0
+        assert bool((source_rows >= 0).all().item())
+        assert bool((source_rows < encoding.batch_size).all().item())
         inputs = encoding.action_decoder_inputs()
-        seed = self._query_seed(inputs.observation_context)
+        prefix_source_rows, lane_to_prefix = _sorted_unique_inverse(
+            source_rows
+        )
+        root_context = inputs.observation_context.index_select(
+            0, prefix_source_rows
+        )
+        seed = self._query_seed(root_context)
         seed = seed + self._action_position_embedding(
             torch.zeros(
-                (encoding.batch_size,),
+                (int(prefix_source_rows.shape[0]),),
                 dtype=torch.long,
                 device=seed.device,
             )
         )
         cache = self._transformer.begin_decode_cache(
             first_embeddings=seed,
-            memory=inputs.memory,
-            memory_padding_mask=inputs.memory_padding_mask,
+            memory=inputs.memory.index_select(0, prefix_source_rows),
+            memory_padding_mask=(
+                inputs.memory_padding_mask.index_select(
+                    0, prefix_source_rows
+                )
+            ),
             max_steps=max_steps,
+        )
+        choice_embeddings = self._choice_embeddings(
+            batch_size=encoding.batch_size,
+            inputs=inputs,
         )
         return ActionDecodeSession(
             _decoder=self,
-            _encoding=encoding,
             _cache=cache,
+            _base_observation_context=inputs.observation_context,
+            _base_choice_embeddings=choice_embeddings,
+            _base_choice_keys=self._choice_key(choice_embeddings),
+            _prefix_source_rows=prefix_source_rows,
+            _lane_to_prefix=lane_to_prefix,
+            _lane_count=int(source_rows.shape[0]),
         )
 
     def decode_live_action_step(
@@ -247,33 +459,27 @@ class ActionDecoder(nn.Module):
     def choice_logits_from_prefix_context(
         self,
         *,
-        encoding: EncodedObservation,
+        observation_context: Tensor,
         prefix_context: Tensor,
+        choice_keys: Tensor,
     ) -> Tensor:
-        inputs = encoding.action_decoder_inputs()
         decision_context = torch.tanh(
             self._decision_projection(
                 torch.cat(
-                    (
-                        inputs.observation_context,
-                        prefix_context,
-                    ),
+                    (observation_context, prefix_context),
                     dim=-1,
                 )
             )
         )
-        return self._score_choices(
+        return self._score_projected_choices(
             decision_context=decision_context,
-            choice_embeddings=self._choice_embeddings(
-                batch_size=encoding.batch_size,
-                inputs=inputs,
-            ),
+            choice_keys=choice_keys,
         )
 
     def embed_selected_choices(
         self,
         *,
-        encoding: EncodedObservation,
+        choice_embeddings: Tensor,
         choice_ids: Tensor,
         position: int,
     ) -> Tensor:
@@ -284,10 +490,7 @@ class ActionDecoder(nn.Module):
             dtype=torch.long,
             device=choice_ids.device,
         )
-        selected = self._choice_embeddings(
-            batch_size=encoding.batch_size,
-            inputs=encoding.action_decoder_inputs(),
-        )[batch_indices, choice_ids]
+        selected = choice_embeddings[batch_indices, choice_ids]
         positions = torch.full_like(choice_ids, position)
         return self._selected_choice_adapter(
             selected
@@ -353,14 +556,24 @@ class ActionDecoder(nn.Module):
         decision_context: Tensor,
         choice_embeddings: Tensor,
     ) -> Tensor:
+        return self._score_projected_choices(
+            decision_context=decision_context,
+            choice_keys=self._choice_key(choice_embeddings),
+        )
+
+    def _score_projected_choices(
+        self,
+        *,
+        decision_context: Tensor,
+        choice_keys: Tensor,
+    ) -> Tensor:
         queries = self._choice_query(decision_context)
-        keys = self._choice_key(choice_embeddings)
         if queries.ndim == 2:
-            logits = torch.einsum("bd,bcd->bc", queries, keys)
+            logits = torch.einsum("bd,bcd->bc", queries, choice_keys)
         else:
             assert queries.ndim == 3
-            logits = torch.einsum("bsd,bcd->bsc", queries, keys)
-        return logits / math.sqrt(float(keys.shape[-1])) + (
+            logits = torch.einsum("bsd,bcd->bsc", queries, choice_keys)
+        return logits / math.sqrt(float(choice_keys.shape[-1])) + (
             self._choice_logit_bias
         )
 

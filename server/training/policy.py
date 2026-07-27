@@ -32,15 +32,26 @@ class _UniformChoiceLogitDecoder:
     batch_size: int
     device: torch.device
 
-    def next_choice_logits(self) -> torch.Tensor:
+    def next_choice_logits(
+        self,
+        active_rows: torch.Tensor,
+        scored_rows: torch.Tensor,
+    ) -> torch.Tensor:
+        assert active_rows.shape == (self.batch_size,)
+        assert scored_rows.shape == active_rows.shape
         return torch.zeros(
             (self.batch_size, ACTION_CHOICE_COUNT),
             dtype=torch.float32,
             device=self.device,
         )
 
-    def advance(self, selected_choice_ids: torch.Tensor) -> None:
+    def advance(
+        self,
+        selected_choice_ids: torch.Tensor,
+        active_rows: torch.Tensor,
+    ) -> None:
         assert selected_choice_ids.shape == (self.batch_size,)
+        assert active_rows.shape == (self.batch_size,)
 
 
 @dataclass(frozen=True, slots=True)

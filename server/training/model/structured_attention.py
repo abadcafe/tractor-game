@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor, nn
 
 from server.training.observation_structure import (
@@ -20,6 +22,25 @@ _STRUCTURE_SCORE_DIMENSION = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class _AxisRotation:
+    """One batch's reusable RoPE factors for a structure axis."""
+
+    active: Tensor
+    cosine: Tensor
+    sine: Tensor
+
+
+@dataclass(frozen=True, slots=True)
+class _StructureContext:
+    """Reusable structure relations for one observation batch."""
+
+    rotations: tuple[_AxisRotation, ...]
+    same_round_event: Tensor
+    same_trick: Tensor
+    same_play: Tensor
+
+
 class StructuredObservationEncoder(nn.Module):
     """Apply repeated structure-aware self-attention blocks."""
 
@@ -33,6 +54,15 @@ class StructuredObservationEncoder(nn.Module):
             _StructuredAttentionBlock(d_model=d_model, heads=heads)
             for _ in range(layers)
         )
+        frequencies = torch.exp(
+            -math.log(10000.0)
+            * torch.arange(STRUCTURE_AXIS_DIMENSION // 2)
+            / float(STRUCTURE_AXIS_DIMENSION // 2)
+        )
+        self.register_buffer(
+            "_rope_frequencies", frequencies, persistent=False
+        )
+        self._rope_frequencies: Tensor = frequencies
 
     def forward(
         self,
@@ -43,13 +73,16 @@ class StructuredObservationEncoder(nn.Module):
     ) -> Tensor:
         """Encode a batch using one-based semantic coordinates."""
         result = values
+        structure_context = _structure_context(
+            encoded_structure_coordinates,
+            frequencies=self._rope_frequencies,
+            dtype=values.dtype,
+        )
         for layer in self._layers:
             result = layer(
                 result,
                 padding_mask=padding_mask,
-                encoded_structure_coordinates=(
-                    encoded_structure_coordinates
-                ),
+                structure_context=structure_context,
             )
         return result
 
@@ -81,22 +114,13 @@ class _StructuredAttentionBlock(nn.Module):
             nn.GELU(),
             nn.Linear(d_model * 4, d_model),
         )
-        frequencies = torch.exp(
-            -math.log(10000.0)
-            * torch.arange(STRUCTURE_AXIS_DIMENSION // 2)
-            / float(STRUCTURE_AXIS_DIMENSION // 2)
-        )
-        self.register_buffer(
-            "_rope_frequencies", frequencies, persistent=False
-        )
-        self._rope_frequencies: Tensor = frequencies
 
     def forward(
         self,
         values: Tensor,
         *,
         padding_mask: Tensor,
-        encoded_structure_coordinates: Tensor,
+        structure_context: _StructureContext,
     ) -> Tensor:
         batch, tokens, d_model = values.shape
         projected = self._qkv(values).view(
@@ -107,24 +131,26 @@ class _StructuredAttentionBlock(nn.Module):
         value = projected[:, :, 2].transpose(1, 2)
         structure_query = self._structure_projection(
             self._structure_query(values),
-            encoded_structure_coordinates=encoded_structure_coordinates,
+            structure_context=structure_context,
         )
         structure_key = self._structure_projection(
             self._structure_key(values),
-            encoded_structure_coordinates=encoded_structure_coordinates,
+            structure_context=structure_context,
         )
         query = torch.cat((content_query, structure_query), dim=-1)
         key = torch.cat((content_key, structure_key), dim=-1)
-        scores = torch.matmul(query, key.transpose(-2, -1))
-        scores = scores / math.sqrt(float(self._score_dim))
-        scores = scores + self._relation_bias(
-            encoded_structure_coordinates
-        )
-        scores = scores.masked_fill(
+        attention_bias = self._relation_bias(structure_context)
+        attention_bias = attention_bias.masked_fill(
             padding_mask[:, None, None, :], -torch.inf
         )
-        probabilities = torch.softmax(scores, dim=-1)
-        attended = torch.matmul(probabilities, value)
+        attended = F.scaled_dot_product_attention(
+            query,
+            key,
+            value,
+            attn_mask=attention_bias,
+            dropout_p=0.0,
+            scale=1.0 / math.sqrt(float(self._score_dim)),
+        )
         merged = attended.transpose(1, 2).reshape(
             batch, tokens, d_model
         )
@@ -137,7 +163,7 @@ class _StructuredAttentionBlock(nn.Module):
         self,
         projected: Tensor,
         *,
-        encoded_structure_coordinates: Tensor,
+        structure_context: _StructureContext,
     ) -> Tensor:
         batch, tokens, _dimension = projected.shape
         axes = projected.view(
@@ -152,45 +178,61 @@ class _StructuredAttentionBlock(nn.Module):
             rotated.append(
                 _apply_axis_rope(
                     axes[:, :, :, int(axis), :],
-                    encoded_coordinate=(
-                        encoded_structure_coordinates[:, :, int(axis)]
-                    ),
-                    frequencies=self._rope_frequencies,
+                    rotation=structure_context.rotations[int(axis)],
                 )
             )
         return torch.cat(rotated, dim=-1)
 
     def _relation_bias(
-        self, encoded_structure_coordinates: Tensor
+        self, structure_context: _StructureContext
     ) -> Tensor:
-        round_event = encoded_structure_coordinates[
-            :, :, int(StructureAxis.ROUND_EVENT)
-        ]
-        trick = encoded_structure_coordinates[
-            :, :, int(StructureAxis.TRICK)
-        ]
-        play = encoded_structure_coordinates[
-            :, :, int(StructureAxis.PLAY_POSITION)
-        ]
-        same_round_event = _same_active_coordinate(round_event)
-        same_trick = _same_active_coordinate(trick)
-        same_play = same_trick & _same_active_coordinate(play)
-        distinct = ~torch.eye(
-            int(round_event.shape[1]),
-            dtype=torch.bool,
-            device=round_event.device,
-        ).unsqueeze(0)
-        same_round_event = same_round_event & distinct
-        same_trick = same_trick & distinct
-        same_play = same_play & distinct
         return (
-            same_round_event.unsqueeze(1)
+            structure_context.same_round_event.unsqueeze(1)
             * self._same_round_event_bias.view(1, self._heads, 1, 1)
-            + same_trick.unsqueeze(1)
+            + structure_context.same_trick.unsqueeze(1)
             * self._same_trick_bias.view(1, self._heads, 1, 1)
-            + same_play.unsqueeze(1)
+            + structure_context.same_play.unsqueeze(1)
             * self._same_play_bias.view(1, self._heads, 1, 1)
         )
+
+
+def _structure_context(
+    encoded_structure_coordinates: Tensor,
+    *,
+    frequencies: Tensor,
+    dtype: torch.dtype,
+) -> _StructureContext:
+    rotations = tuple(
+        _axis_rotation(
+            encoded_structure_coordinates[:, :, int(axis)],
+            frequencies=frequencies,
+            dtype=dtype,
+        )
+        for axis in StructureAxis
+    )
+    round_event = encoded_structure_coordinates[
+        :, :, int(StructureAxis.ROUND_EVENT)
+    ]
+    trick = encoded_structure_coordinates[
+        :, :, int(StructureAxis.TRICK)
+    ]
+    play = encoded_structure_coordinates[
+        :, :, int(StructureAxis.PLAY_POSITION)
+    ]
+    same_round_event = _same_active_coordinate(round_event)
+    same_trick = _same_active_coordinate(trick)
+    same_play = same_trick & _same_active_coordinate(play)
+    distinct = ~torch.eye(
+        int(round_event.shape[1]),
+        dtype=torch.bool,
+        device=round_event.device,
+    ).unsqueeze(0)
+    return _StructureContext(
+        rotations=rotations,
+        same_round_event=same_round_event & distinct,
+        same_trick=same_trick & distinct,
+        same_play=same_play & distinct,
+    )
 
 
 def _same_active_coordinate(encoded_coordinate: Tensor) -> Tensor:
@@ -204,30 +246,38 @@ def _same_active_coordinate(encoded_coordinate: Tensor) -> Tensor:
     )
 
 
+def _axis_rotation(
+    encoded_coordinate: Tensor,
+    *,
+    frequencies: Tensor,
+    dtype: torch.dtype,
+) -> _AxisRotation:
+    active = encoded_coordinate.gt(0)
+    positions = (encoded_coordinate - 1).to(dtype=dtype)
+    angles = positions[:, None, :, None] * frequencies.to(dtype=dtype)
+    return _AxisRotation(
+        active=active[:, None, :, None].to(dtype=dtype),
+        cosine=torch.cos(angles),
+        sine=torch.sin(angles),
+    )
+
+
 def _apply_axis_rope(
     values: Tensor,
     *,
-    encoded_coordinate: Tensor,
-    frequencies: Tensor,
+    rotation: _AxisRotation,
 ) -> Tensor:
     half = STRUCTURE_AXIS_DIMENSION // 2
-    active = encoded_coordinate.gt(0)
-    positions = (encoded_coordinate - 1).to(dtype=values.dtype)
-    angles = positions[:, None, :, None] * frequencies.to(
-        dtype=values.dtype
-    )
-    cosine = torch.cos(angles)
-    sine = torch.sin(angles)
     first = values[..., :half]
     second = values[..., half:]
     rotated = torch.cat(
         (
-            first * cosine - second * sine,
-            first * sine + second * cosine,
+            first * rotation.cosine - second * rotation.sine,
+            first * rotation.sine + second * rotation.cosine,
         ),
         dim=-1,
     )
-    return rotated * active[:, None, :, None].to(dtype=values.dtype)
+    return rotated * rotation.active
 
 
 __all__ = ("StructuredObservationEncoder",)

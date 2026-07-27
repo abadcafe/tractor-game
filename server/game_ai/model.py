@@ -1,4 +1,4 @@
-"""Model evaluation contract used by belief updates and search."""
+"""Model evaluation contracts consumed by belief updates and search."""
 
 from __future__ import annotations
 
@@ -14,21 +14,54 @@ from server.training.semantic_actions import GeneratedAction
 
 
 @dataclass(frozen=True, slots=True)
-class ActionEvaluation:
-    """One legal semantic action with policy and value estimates."""
-
-    action: GeneratedAction
-    log_probability: float
-    value: float
-
-
-@dataclass(frozen=True, slots=True)
 class ModelQuery:
     """One observation paired with its exact legal action space."""
 
     observation: Observation
     legal_actions: LegalActionIndex
     seat: Seat
+
+
+@dataclass(frozen=True, slots=True)
+class ActionDrawKey:
+    """Stable random stream identity independent of runtime batching."""
+
+    seed: int
+    ordinal: int
+
+    def __post_init__(self) -> None:
+        assert self.seed >= 0
+        assert self.ordinal >= 0
+
+
+@dataclass(frozen=True, slots=True)
+class SampledAction:
+    """One sampled legal semantic action and its policy probability."""
+
+    action: GeneratedAction
+    log_probability: float
+
+
+@dataclass(frozen=True, slots=True)
+class ActionSamples:
+    """Samples returned for one model query in draw-key order."""
+
+    samples: tuple[SampledAction, ...]
+
+    def __post_init__(self) -> None:
+        assert self.samples
+
+
+@dataclass(frozen=True, slots=True)
+class ActionSampleRequest:
+    """One model query paired with explicit independent random draws."""
+
+    query: ModelQuery
+    draws: tuple[ActionDrawKey, ...]
+
+    def __post_init__(self) -> None:
+        assert self.draws
+        assert len(set(self.draws)) == len(self.draws)
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,24 +75,23 @@ class ActionScoreRequest:
 class ModelEvaluator(Protocol):
     """Read-only current-checkpoint model operations required by AI."""
 
-    def sample(
+    async def sample(
         self,
         *,
-        queries: tuple[ModelQuery, ...],
-        decision_seed: int,
-    ) -> Ok[tuple[ActionEvaluation, ...]] | Rejected:
-        """Sample one legal action for every supplied query."""
+        requests: tuple[ActionSampleRequest, ...],
+    ) -> Ok[tuple[ActionSamples, ...]] | Rejected:
+        """Sample every explicit draw without batching-dependent RNG."""
         ...
 
-    def score(
+    async def score(
         self,
         *,
         requests: tuple[ActionScoreRequest, ...],
-    ) -> Ok[tuple[ActionEvaluation, ...]] | Rejected:
-        """Score supplied actions under exact masked policy logits."""
+    ) -> Ok[tuple[float, ...]] | Rejected:
+        """Return masked log probabilities for supplied actions."""
         ...
 
-    def values(
+    async def values(
         self,
         *,
         observations: tuple[Observation, ...],
@@ -81,7 +113,7 @@ class AIControllerPort(Protocol):
         """Record one complete player observation."""
         ...
 
-    def decide(
+    async def decide(
         self,
         *,
         seq: int,
@@ -93,8 +125,11 @@ class AIControllerPort(Protocol):
 
 __all__ = (
     "AIControllerPort",
-    "ActionEvaluation",
+    "ActionDrawKey",
+    "ActionSampleRequest",
+    "ActionSamples",
     "ActionScoreRequest",
     "ModelEvaluator",
     "ModelQuery",
+    "SampledAction",
 )

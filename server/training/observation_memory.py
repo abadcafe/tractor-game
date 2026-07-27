@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal
 
 from server.foundation.result import Ok, Rejected
@@ -46,18 +46,6 @@ class ObservationMemoryView:
     completed_tricks: tuple[CompletedTrickSnapshot, ...]
 
 
-def _bid_actions() -> list[ObservedBidAction]:
-    return []
-
-
-def _completed_tricks() -> list[CompletedTrickSnapshot]:
-    return []
-
-
-def _completed_keys() -> set[CompletedTrickKey]:
-    return set()
-
-
 @dataclass(slots=True)
 class ObservationMemory:
     """Accumulate public history from contiguous state pushes."""
@@ -66,15 +54,9 @@ class ObservationMemory:
     _previous: PlayerSnapshot | None = None
     _pending_bid: PendingBid | None = None
     _seen_bid_count: int = 0
-    _bid_actions: list[ObservedBidAction] = field(
-        default_factory=_bid_actions
-    )
-    _completed_tricks: list[CompletedTrickSnapshot] = field(
-        default_factory=_completed_tricks
-    )
-    _completed_keys: set[CompletedTrickKey] = field(
-        default_factory=_completed_keys
-    )
+    _bid_actions: tuple[ObservedBidAction, ...] = ()
+    _completed_tricks: tuple[CompletedTrickSnapshot, ...] = ()
+    _completed_keys: frozenset[CompletedTrickKey] = frozenset()
 
     def observe(
         self,
@@ -129,8 +111,8 @@ class ObservationMemory:
     def view(self) -> ObservationMemoryView:
         """Return an immutable snapshot of the accumulated memory."""
         return ObservationMemoryView(
-            bid_actions=tuple(self._bid_actions),
-            completed_tricks=tuple(self._completed_tricks),
+            bid_actions=self._bid_actions,
+            completed_tricks=self._completed_tricks,
         )
 
     def reset_episode(self) -> None:
@@ -146,9 +128,9 @@ class ObservationMemory:
             _previous=self._previous,
             _pending_bid=self._pending_bid,
             _seen_bid_count=self._seen_bid_count,
-            _bid_actions=list(self._bid_actions),
-            _completed_tricks=list(self._completed_tricks),
-            _completed_keys=set(self._completed_keys),
+            _bid_actions=self._bid_actions,
+            _completed_tricks=self._completed_tricks,
+            _completed_keys=self._completed_keys,
         )
 
     def _accept_initial(
@@ -212,7 +194,7 @@ class ObservationMemory:
                 revealed_cards=tuple(event.cards),
                 deal_ordinal=deal_ordinal,
             )
-        self._bid_actions.append(action)
+        self._bid_actions = (*self._bid_actions, action)
         return Ok(value=None)
 
     def _record_completed(self, snapshot: PlayerSnapshot) -> None:
@@ -222,15 +204,15 @@ class ObservationMemory:
         key = _completed_trick_key(completed)
         if key in self._completed_keys:
             return
-        self._completed_keys.add(key)
-        self._completed_tricks.append(completed)
+        self._completed_keys = self._completed_keys.union((key,))
+        self._completed_tricks = (*self._completed_tricks, completed)
 
     def _clear_round(self) -> None:
         self._pending_bid = None
         self._seen_bid_count = 0
-        self._bid_actions.clear()
-        self._completed_tricks.clear()
-        self._completed_keys.clear()
+        self._bid_actions = ()
+        self._completed_tricks = ()
+        self._completed_keys = frozenset()
 
 
 def _initial_pending_bid(

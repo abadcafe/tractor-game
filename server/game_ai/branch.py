@@ -30,7 +30,8 @@ class EngineBranch:
 
     state: GameState
     seq: int
-    memories: SeatMap[ObservationMemory]
+    _memories: SeatMap[ObservationMemory]
+    _snapshots: SeatMap[PlayerSnapshot]
 
     @classmethod
     def start(
@@ -44,21 +45,21 @@ class EngineBranch:
             c=ObservationMemory(),
             d=ObservationMemory(),
         )
+        snapshots = _player_snapshots(state)
         for seat in seats():
             observed = memories.at(seat).observe(
                 seq=0,
-                snapshot=observe(state, seat),
+                snapshot=snapshots.at(seat),
             )
             if isinstance(observed, Rejected):
                 return observed
-        return Ok(cls(state=state, seq=0, memories=memories))
-
-    def fork(self) -> EngineBranch:
-        """Return an independent branch at the same engine position."""
-        return EngineBranch(
-            state=self.state,
-            seq=self.seq,
-            memories=self.memories.map(lambda memory: memory.fork()),
+        return Ok(
+            cls(
+                state=state,
+                seq=0,
+                _memories=memories,
+                _snapshots=snapshots,
+            )
         )
 
     def advance(
@@ -71,12 +72,13 @@ class EngineBranch:
         applied = apply(self.state, actor, command)
         if isinstance(applied, CommandRejected):
             return Rejected(reason=applied.reason)
-        next_memories = self.memories.map(lambda memory: memory.fork())
+        next_memories = self._memories.map(lambda memory: memory.fork())
         next_seq = self.seq + 1
+        next_snapshots = _player_snapshots(applied.value)
         for seat in seats():
             observed = next_memories.at(seat).observe(
                 seq=next_seq,
-                snapshot=observe(applied.value, seat),
+                snapshot=next_snapshots.at(seat),
             )
             if isinstance(observed, Rejected):
                 return observed
@@ -84,13 +86,14 @@ class EngineBranch:
             EngineBranch(
                 state=applied.value,
                 seq=next_seq,
-                memories=next_memories,
+                _memories=next_memories,
+                _snapshots=next_snapshots,
             )
         )
 
     def snapshot(self, seat: Seat) -> PlayerSnapshot:
         """Return one player view in this hypothetical branch."""
-        return observe(self.state, seat)
+        return self._snapshots.at(seat)
 
     def model_input(
         self,
@@ -101,7 +104,7 @@ class EngineBranch:
         observation = build_observation(
             viewer=seat,
             snapshot=snapshot,
-            memory=self.memories.at(seat).view(),
+            memory=self._memories.at(seat).view(),
         )
         return (
             observation,
@@ -111,6 +114,17 @@ class EngineBranch:
                 query=observation.action_query,
             ),
         )
+
+
+def _player_snapshots(
+    state: GameState,
+) -> SeatMap[PlayerSnapshot]:
+    return SeatMap(
+        a=observe(state, Seat.A),
+        b=observe(state, Seat.B),
+        c=observe(state, Seat.C),
+        d=observe(state, Seat.D),
+    )
 
 
 __all__ = ("EngineBranch",)

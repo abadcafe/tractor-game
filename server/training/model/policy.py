@@ -52,12 +52,14 @@ class TractorPolicyModel(nn.Module):
         self,
         encoding: EncodedObservation,
         *,
+        source_rows: Tensor,
         choice_ids_padded: Tensor,
         step_counts: Tensor,
     ) -> ActionTraceScores:
         """Score action traces through the model-owned decoder."""
         return self._action_decoder.score_action_traces(
             encoding,
+            source_rows=source_rows,
             choice_ids_padded=choice_ids_padded,
             step_counts=step_counts,
         )
@@ -66,11 +68,13 @@ class TractorPolicyModel(nn.Module):
         self,
         encoding: EncodedObservation,
         *,
+        source_rows: Tensor,
         max_steps: int,
     ) -> ActionDecodeSession:
         """Begin incremental action decoding for live inference."""
         return self._action_decoder.begin_decode_session(
             encoding,
+            source_rows=source_rows,
             max_steps=max_steps,
         )
 

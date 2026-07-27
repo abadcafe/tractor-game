@@ -49,7 +49,13 @@ class _PreferredChoiceDecoder:
     device: torch.device
     step_index: int = 0
 
-    def next_choice_logits(self) -> torch.Tensor:
+    def next_choice_logits(
+        self,
+        active_rows: torch.Tensor,
+        scored_rows: torch.Tensor,
+    ) -> torch.Tensor:
+        assert active_rows.shape == (self.batch_size,)
+        assert scored_rows.shape == active_rows.shape
         logits = torch.zeros(
             (self.batch_size, ACTION_CHOICE_COUNT),
             dtype=torch.float32,
@@ -59,8 +65,13 @@ class _PreferredChoiceDecoder:
             logits[:, self.target_choice_id] = 100.0
         return logits
 
-    def advance(self, selected_choice_ids: torch.Tensor) -> None:
+    def advance(
+        self,
+        selected_choice_ids: torch.Tensor,
+        active_rows: torch.Tensor,
+    ) -> None:
         assert selected_choice_ids.shape == (self.batch_size,)
+        assert active_rows.shape == (self.batch_size,)
         self.step_index += 1
 
 

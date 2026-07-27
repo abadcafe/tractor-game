@@ -11,6 +11,15 @@ from server.game import Seat, commands, instantiate
 from server.game.snapshots import PlayerSnapshot
 from server.training.observation_memory import ObservationMemoryView
 
+from ..actions import physical_command, semantic_action
+from ..branch import EngineBranch
+from ..model import (
+    ActionDrawKey,
+    ActionSampleRequest,
+    ActionScoreRequest,
+    ModelEvaluator,
+    ModelQuery,
+)
 from ._history import (
     ObservedFrame,
     awaited_actor,
@@ -19,13 +28,6 @@ from ._history import (
     stir_command,
 )
 from ._worlds import deal_constraints, sample_round_deal
-from .actions import physical_command, semantic_action
-from .model import (
-    ActionScoreRequest,
-    ModelEvaluator,
-    ModelQuery,
-)
-from .runtime import EngineBranch
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +46,13 @@ class Particle:
 class _WeightedBranch:
     branch: EngineBranch
     log_weight: float
+
+
+@dataclass(frozen=True, slots=True)
+class _ReplayBranch:
+    branch: EngineBranch
+    log_weight: float
+    pending_scores: tuple[ActionScoreRequest, ...]
 
 
 class _NoParticleSurvived(Rejected):
@@ -123,20 +132,22 @@ class ParticleBelief:
         assert seq not in self._submitted
         self._submitted[seq] = command
 
-    def synchronize(self) -> Ok[tuple[Particle, ...]] | Rejected:
+    async def synchronize(
+        self,
+    ) -> Ok[tuple[Particle, ...]] | Rejected:
         """Bring all particles to the latest recorded real state."""
         if not self._frames:
             return Rejected(reason="AI has no active round history")
         if not self._branches:
-            built = self._build_particles()
+            built = await self._build_particles()
             if isinstance(built, Rejected):
                 return built
             self._branches = built.value
             self._synced_frame_index = len(self._frames) - 1
         elif self._synced_frame_index < len(self._frames) - 1:
-            advanced = self._advance_recorded_frames()
+            advanced = await self._advance_recorded_frames()
             if isinstance(advanced, _NoParticleSurvived):
-                advanced = self._build_particles()
+                advanced = await self._build_particles()
             if isinstance(advanced, Rejected):
                 return advanced
             self._branches = advanced.value
@@ -148,7 +159,7 @@ class ParticleBelief:
         if _effective_sample_size(particles) < (
             float(self._particle_count) * 0.5
         ):
-            rebuilt = self._build_particles()
+            rebuilt = await self._build_particles()
             if isinstance(rebuilt, Rejected):
                 return rebuilt
             self._branches = rebuilt.value
@@ -158,7 +169,7 @@ class ParticleBelief:
             return refreshed
         return Ok(particles)
 
-    def _build_particles(
+    async def _build_particles(
         self,
     ) -> Ok[tuple[_WeightedBranch, ...]] | Rejected:
         constraints_result = deal_constraints(
@@ -177,7 +188,7 @@ class ParticleBelief:
         ):
             missing = self._particle_count - len(built)
             initial: list[_WeightedBranch] = []
-            for _index in range(missing * 2):
+            for _index in range(missing):
                 attempts += 1
                 deal_result = sample_round_deal(
                     constraints=constraints,
@@ -204,7 +215,7 @@ class ParticleBelief:
                 )
                 if attempts == attempt_limit:
                     break
-            replayed = self._replay_branches(tuple(initial))
+            replayed = await self._replay_branches(tuple(initial))
             if isinstance(replayed, _NoParticleSurvived):
                 continue
             if isinstance(replayed, Rejected):
@@ -219,60 +230,89 @@ class ParticleBelief:
             )
         )
 
-    def _replay_branches(
+    async def _replay_branches(
         self,
         branches: tuple[_WeightedBranch, ...],
     ) -> Ok[tuple[_WeightedBranch, ...]] | Rejected:
         if not branches:
             return Ok(())
-        current = branches
-        for previous, observed in zip(
-            self._frames[:-1],
-            self._frames[1:],
-            strict=True,
-        ):
-            advanced = self._advance_one_frame(
-                branches=current,
-                previous=previous,
-                current=observed,
-            )
-            if isinstance(advanced, Rejected):
-                return advanced
-            current = advanced.value
-        return Ok(current)
+        return await self._advance_frames(
+            branches=branches,
+            frame_pairs=tuple(
+                zip(
+                    self._frames[:-1],
+                    self._frames[1:],
+                    strict=True,
+                )
+            ),
+        )
 
-    def _advance_recorded_frames(
+    async def _advance_recorded_frames(
         self,
     ) -> Ok[tuple[_WeightedBranch, ...]] | Rejected:
-        branches = self._branches
-        for frame_index in range(
-            self._synced_frame_index + 1,
-            len(self._frames),
-        ):
-            previous = self._frames[frame_index - 1]
-            current = self._frames[frame_index]
-            advanced = self._advance_one_frame(
-                branches=branches,
+        frame_pairs = tuple(
+            (
+                self._frames[frame_index - 1],
+                self._frames[frame_index],
+            )
+            for frame_index in range(
+                self._synced_frame_index + 1,
+                len(self._frames),
+            )
+        )
+        return await self._advance_frames(
+            branches=self._branches,
+            frame_pairs=frame_pairs,
+        )
+
+    async def _advance_frames(
+        self,
+        *,
+        branches: tuple[_WeightedBranch, ...],
+        frame_pairs: tuple[tuple[ObservedFrame, ObservedFrame], ...],
+    ) -> Ok[tuple[_WeightedBranch, ...]] | Rejected:
+        active = tuple(
+            _ReplayBranch(
+                branch=item.branch,
+                log_weight=item.log_weight,
+                pending_scores=(),
+            )
+            for item in branches
+        )
+        for previous, current in frame_pairs:
+            advanced = await self._advance_replay_frame(
+                branches=active,
                 previous=previous,
                 current=current,
             )
             if isinstance(advanced, Rejected):
                 return advanced
-            branches = advanced.value
-        if not branches:
+            active = advanced.value
+        scored = await self._score_pending(active)
+        if isinstance(scored, Rejected):
+            return scored
+        if not scored.value:
             return _NoParticleSurvived()
-        return Ok(branches)
+        return Ok(
+            tuple(
+                _WeightedBranch(
+                    branch=item.branch,
+                    log_weight=item.log_weight,
+                )
+                for item in scored.value
+            )
+        )
 
-    def _advance_one_frame(
+    async def _advance_replay_frame(
         self,
         *,
-        branches: tuple[_WeightedBranch, ...],
+        branches: tuple[_ReplayBranch, ...],
         previous: ObservedFrame,
         current: ObservedFrame,
-    ) -> Ok[tuple[_WeightedBranch, ...]] | Rejected:
+    ) -> Ok[tuple[_ReplayBranch, ...]] | Rejected:
         unresolved: list[
             tuple[
-                _WeightedBranch,
+                _ReplayBranch,
                 Seat,
                 commands.Command | None,
                 bool,
@@ -290,7 +330,7 @@ class ParticleBelief:
             unresolved.append(
                 (particle, actor, command, observed_action)
             )
-        pending_result = self._resolve_hidden_commands(
+        pending_result = await self._resolve_hidden_commands(
             unresolved=tuple(unresolved),
             seed=previous.seq,
         )
@@ -299,45 +339,23 @@ class ParticleBelief:
         pending = pending_result.value
         if not pending:
             return _NoParticleSurvived()
-        scores: dict[int, float] = {}
-        score_requests: list[ActionScoreRequest] = []
-        score_indices: list[int] = []
-        for index, (
+        result: list[_ReplayBranch] = []
+        for (
             particle,
             actor,
             command,
             observed_action,
-        ) in enumerate(pending):
-            if not observed_action:
-                continue
-            request = _score_request(
-                branch=particle.branch,
-                actor=actor,
-                command=command,
-            )
-            if isinstance(request, Rejected):
-                continue
-            score_indices.append(index)
-            score_requests.append(request.value)
-        if score_requests:
-            scored = self._model.score(requests=tuple(score_requests))
-            if isinstance(scored, Rejected):
-                return scored
-            for index, evaluation in zip(
-                score_indices,
-                scored.value,
-                strict=True,
-            ):
-                scores[index] = evaluation.log_probability
-        result: list[_WeightedBranch] = []
-        for index, (
-            particle,
-            actor,
-            command,
-            observed_action,
-        ) in enumerate(pending):
-            if observed_action and index not in scores:
-                continue
+        ) in pending:
+            request: ActionScoreRequest | None = None
+            if observed_action:
+                request_result = _score_request(
+                    branch=particle.branch,
+                    actor=actor,
+                    command=command,
+                )
+                if isinstance(request_result, Rejected):
+                    continue
+                request = request_result.value
             advanced = particle.branch.advance(
                 actor=actor,
                 command=command,
@@ -350,14 +368,49 @@ class ParticleBelief:
             ):
                 continue
             result.append(
-                _WeightedBranch(
+                _ReplayBranch(
                     branch=advanced.value,
-                    log_weight=particle.log_weight
-                    + scores.get(index, 0.0),
+                    log_weight=particle.log_weight,
+                    pending_scores=(
+                        particle.pending_scores
+                        if request is None
+                        else (*particle.pending_scores, request)
+                    ),
                 )
             )
         if not result:
             return _NoParticleSurvived()
+        return Ok(tuple(result))
+
+    async def _score_pending(
+        self,
+        branches: tuple[_ReplayBranch, ...],
+    ) -> Ok[tuple[_ReplayBranch, ...]] | Rejected:
+        requests = tuple(
+            request
+            for particle in branches
+            for request in particle.pending_scores
+        )
+        if not requests:
+            return Ok(branches)
+        scored = await self._model.score(requests=requests)
+        if isinstance(scored, Rejected):
+            return scored
+        score_index = 0
+        result: list[_ReplayBranch] = []
+        for particle in branches:
+            log_weight = particle.log_weight
+            for _request in particle.pending_scores:
+                log_weight += scored.value[score_index]
+                score_index += 1
+            result.append(
+                _ReplayBranch(
+                    branch=particle.branch,
+                    log_weight=log_weight,
+                    pending_scores=(),
+                )
+            )
+        assert score_index == len(scored.value)
         return Ok(tuple(result))
 
     def _transition_command(
@@ -395,12 +448,12 @@ class ParticleBelief:
             reason="particle transition has no model action"
         )
 
-    def _resolve_hidden_commands(
+    async def _resolve_hidden_commands(
         self,
         *,
         unresolved: tuple[
             tuple[
-                _WeightedBranch,
+                _ReplayBranch,
                 Seat,
                 commands.Command | None,
                 bool,
@@ -412,7 +465,7 @@ class ParticleBelief:
         Ok[
             tuple[
                 tuple[
-                    _WeightedBranch,
+                    _ReplayBranch,
                     Seat,
                     commands.Command,
                     bool,
@@ -452,9 +505,19 @@ class ParticleBelief:
                     seat=actor,
                 )
             )
-        sampled = self._model.sample(
-            queries=tuple(queries),
-            decision_seed=seed,
+        sampled = await self._model.sample(
+            requests=tuple(
+                ActionSampleRequest(
+                    query=query,
+                    draws=(
+                        ActionDrawKey(
+                            seed=seed,
+                            ordinal=index,
+                        ),
+                    ),
+                )
+                for index, query in enumerate(queries)
+            ),
         )
         if isinstance(sampled, Rejected):
             return sampled
@@ -463,11 +526,13 @@ class ParticleBelief:
             index,
             particle,
             actor,
-        ), evaluation in zip(
+        ), samples in zip(
             hidden,
             sampled.value,
             strict=True,
         ):
+            assert len(samples.samples) == 1
+            evaluation = samples.samples[0]
             command = physical_command(
                 action=evaluation.action,
                 hand=particle.branch.snapshot(actor).hand,
