@@ -61,6 +61,16 @@ def test_game_runtime_and_bots_follow_dependency_direction() -> None:
             "server.web",
         ),
     )
+    assert not _matching(
+        _package_imports("game_ai"),
+        (
+            "server.game_bots",
+            "server.game_runtime",
+            "server.training_control",
+            "server.training_cli",
+            "server.web",
+        ),
+    )
 
 
 def test_game_domain_has_no_io_or_synchronization_dependencies() -> (
@@ -150,8 +160,23 @@ def test_runtime_and_bot_internals_stay_behind_facades() -> None:
     }
     assert bot_imports <= {
         "server.game_bots",
-        "server.game_bots.llm",
     }
+
+    imports = _imports_outside_package("game_ai")
+    ai_imports = {
+        imported
+        for imported in imports
+        if imported == "server.game_ai"
+        or imported.startswith("server.game_ai.")
+    }
+    assert ai_imports <= {"server.game_ai"}
+
+
+def test_checkpoint_contract_has_no_application_dependencies() -> None:
+    assert all(
+        not imported.startswith("server.")
+        for imported in _package_imports("checkpoint_contract")
+    )
 
 
 def test_events_metrics_and_artifacts_follow_read_model_dag() -> None:

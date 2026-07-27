@@ -1,7 +1,7 @@
 import { API_BASE, type SeatId } from "../config.ts";
 
 export type { SeatId } from "../config.ts";
-export type BotPolicyName = "auto" | "llm";
+export type BotPolicyName = "auto" | "ai";
 export type BotFillMode = "none" | BotPolicyName;
 
 export type PlayerDescription =
@@ -246,7 +246,7 @@ function isPlayerDescription(
 }
 
 function isBotPolicy(value: unknown): value is BotPolicyName {
-  return value === "auto" || value === "llm";
+  return value === "auto" || value === "ai";
 }
 
 function listedGameFromWire(game: ListedGameWire): ListedGame {

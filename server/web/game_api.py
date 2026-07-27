@@ -49,7 +49,9 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
         return {"status": "ok"}
 
     async def create_game() -> dict[str, str]:
-        game_id = state.registry.create(create_game_instance())
+        game_id = state.registry.create(
+            create_game_instance(state.ai_service)
+        )
         return {"game_id": game_id}
 
     async def list_games(
@@ -70,7 +72,7 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
     async def delete_game(game_id: str) -> dict[str, bool]:
         instance = state.registry.delete(game_id)
         if instance is not None:
-            await instance.room.close()
+            await instance.close()
         return {"ok": True}
 
     async def occupy_seat(
@@ -87,7 +89,7 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
         parsed_user = UserId.parse(user_id)
         if parsed_user is None:
             return _seat_error_response("missing user id")
-        result = instance.room.occupy_seat(
+        result = instance.occupy_seat(
             seat=seat,
             user_id=parsed_user,
         )
@@ -109,7 +111,7 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
         parsed_user = UserId.parse(user_id)
         if parsed_user is None:
             return _seat_error_response("missing user id")
-        result = instance.room.vacate_seat(
+        result = instance.vacate_seat(
             seat=seat,
             user_id=parsed_user,
         )
@@ -131,7 +133,7 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
         parsed_user = UserId.parse(user_id)
         if parsed_user is None:
             return _seat_error_response("missing user id")
-        result = instance.room.fill_bots(
+        result = instance.fill_bots(
             policy=policy_name,
             user_id=parsed_user,
         )
@@ -159,7 +161,7 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
             return
         await handle_game_connection(
             websocket,
-            instance.room,
+            instance,
             seat=seat,
             user_id=parsed_user,
         )
@@ -220,7 +222,7 @@ def _room_seats(
         return []
     return [
         _seat_response(seat)
-        for seat in instance.room.seats(user_id=requester)
+        for seat in instance.seats(user_id=requester)
     ]
 
 

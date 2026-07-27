@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+from server.checkpoint_contract import CHECKPOINT_OBJECTS_DIR
 from server.foundation import result as _result
 from server.training.torch_checkpoints.filesystem import (
     validate_checkpoint_dir,
@@ -19,7 +20,6 @@ from server.training.torch_checkpoints.manifest import (
     update_checkpoint_manifest_paths,
 )
 from server.training.torch_checkpoints.schema import (
-    CHECKPOINT_OBJECTS_DIR,
     checkpoint_corruption,
 )
 

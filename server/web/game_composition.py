@@ -1,35 +1,23 @@
-"""Compose one game room and its policy diagnostics."""
+"""Compose one game room and its player policies."""
 
 from __future__ import annotations
 
 import secrets
-from dataclasses import dataclass
 
 from server.game import GameConfig, GameSeed
+from server.game_ai import AIService
 from server.game_bots import DefaultBotPlayerFactory
-from server.game_bots.llm import LLMTranscriptRegistry
 from server.game_runtime import BotPolicyName, GameRoom
 
-
-@dataclass(frozen=True, slots=True)
-class GameInstance:
-    """One room plus diagnostics owned by the web composition root."""
-
-    room: GameRoom
-    llm_transcripts: LLMTranscriptRegistry
+type GameInstance = GameRoom
 
 
-def create_game_instance() -> GameInstance:
+def create_game_instance(ai_service: AIService) -> GameInstance:
     """Create one independently seeded game instance."""
-    transcripts = LLMTranscriptRegistry()
-    room = GameRoom(
+    return GameRoom(
         GameConfig(),
         GameSeed(secrets.randbits(64)),
-        DefaultBotPlayerFactory(transcripts),
-    )
-    return GameInstance(
-        room=room,
-        llm_transcripts=transcripts,
+        DefaultBotPlayerFactory(ai_service),
     )
 
 
@@ -40,8 +28,8 @@ def bot_policy_name_from_str(
     normalized = (value or "").strip().lower()
     if normalized == "auto":
         return "auto"
-    if normalized == "llm":
-        return "llm"
+    if normalized == "ai":
+        return "ai"
     return None
 
 

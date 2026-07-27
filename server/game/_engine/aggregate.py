@@ -7,8 +7,9 @@ from dataclasses import replace
 from server.foundation.result import Ok, Rejected
 from server.game import commands
 from server.game.config import GameConfig, GameSeed
+from server.game.positions import RoundDeal
 from server.game.rejections import CommandRejected
-from server.game.rules.cards import Rank
+from server.game.rules.cards import Rank, create_decks
 from server.game.seating import PartnershipMap, Seat, seats
 
 from . import deal, phases, playing, stirring
@@ -32,6 +33,40 @@ def create_game(config: GameConfig, seed: GameSeed) -> GameState:
             ),
             confirmed=frozenset(),
         ),
+    )
+
+
+def create_round_from_deal(
+    deal_position: RoundDeal,
+) -> Ok[GameState] | Rejected:
+    """Create an independent state from one complete round deal."""
+    expected = tuple(create_decks())
+    cards = deal_position.shuffled_cards
+    if len(cards) != len(expected):
+        return Rejected("完整局面必须包含两副牌")
+    expected_by_id = {card.id: card for card in expected}
+    actual_by_id = {card.id: card for card in cards}
+    if len(actual_by_id) != len(cards):
+        return Rejected("完整局面包含重复的物理牌")
+    if actual_by_id != expected_by_id:
+        return Rejected("完整局面的物理牌集合不正确")
+    initial = make_state(
+        deal_position.config,
+        deal_position.continuation_seed,
+        phases.AwaitingStart(
+            levels=deal_position.partnership_levels,
+            confirmed=frozenset(),
+        ),
+    )
+    return Ok(
+        deal.start_round_from_cards(
+            initial,
+            round_number=deal_position.round_number,
+            levels=deal_position.partnership_levels,
+            fixed_declarer=deal_position.fixed_declarer,
+            start_actor=deal_position.start_actor,
+            shuffled_cards=cards,
+        )
     )
 
 

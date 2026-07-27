@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import torch
 
+from server.checkpoint_contract import CHECKPOINT_OBJECTS_DIR
 from server.foundation import result as _result
 from server.training import training_state as _training_state
 from server.training.config import TrainConfig
@@ -23,10 +25,10 @@ from server.training.torch_checkpoints.manifest import (
     read_checkpoint_manifest,
 )
 from server.training.torch_checkpoints.payload import (
+    CheckpointPayload,
     read_checkpoint_payload,
 )
 from server.training.torch_checkpoints.schema import (
-    CHECKPOINT_OBJECTS_DIR,
     CheckpointManifest,
     TorchCheckpointMetadata,
     checkpoint_corruption,
@@ -35,6 +37,15 @@ from server.training.torch_checkpoints.schema import (
 from server.training.torch_checkpoints.validation import (
     validate_optimizer_state_payload,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class LoadedInferenceCheckpoint:
+    """Current model state restored without training-only machinery."""
+
+    model: TractorPolicyModel
+    model_config: ModelConfig
+    metadata: TorchCheckpointMetadata
 
 
 def load_torch_checkpoint(
@@ -46,10 +57,11 @@ def load_torch_checkpoint(
     device: torch.device,
 ) -> _result.Ok[_training_state.LoadedTrainingState] | _result.Rejected:
     """Load trainable state from a torch checkpoint."""
-    manifest_result = read_checkpoint_manifest(path)
-    if isinstance(manifest_result, _result.Rejected):
-        return manifest_result
-    manifest = manifest_result.value
+    checkpoint_result = _read_verified_checkpoint(path)
+    if isinstance(checkpoint_result, _result.Rejected):
+        return checkpoint_result
+    checkpoint = checkpoint_result.value
+    manifest = checkpoint.manifest
     metadata = manifest.metadata
     config_check = _validate_requested_config(
         path=path,
@@ -59,30 +71,8 @@ def load_torch_checkpoint(
     )
     if isinstance(config_check, _result.Rejected):
         return config_check
-    state_path_result = _validated_manifest_state_path(
-        manifest_path=path,
-        manifest=manifest,
-    )
-    if isinstance(state_path_result, _result.Rejected):
-        return state_path_result
-    state_path = state_path_result.value
-    state_sha256_result = sha256_checkpoint_file(state_path)
-    if isinstance(state_sha256_result, _result.Rejected):
-        return state_sha256_result
-    if state_sha256_result.value != manifest.state_sha256:
-        return checkpoint_corruption(
-            state_path,
-            f"state sha256 does not match manifest {path}",
-        )
-    payload_result = read_checkpoint_payload(state_path)
-    if isinstance(payload_result, _result.Rejected):
-        return payload_result
-    payload = payload_result.value
-    if payload.checkpoint_id != manifest.checkpoint_id:
-        return checkpoint_corruption(
-            state_path,
-            f"state checkpoint id does not match manifest {path}",
-        )
+    state_path = checkpoint.state_path
+    payload = checkpoint.payload
     model = _create_checkpoint_model_without_rng_side_effect(
         model_config=model_config,
         device=device,
@@ -118,6 +108,38 @@ def load_torch_checkpoint(
     )
 
 
+def load_inference_checkpoint(
+    *,
+    path: Path,
+    device: torch.device,
+) -> _result.Ok[LoadedInferenceCheckpoint] | _result.Rejected:
+    """Restore the model declared by the current checkpoint contract."""
+    checkpoint_result = _read_verified_checkpoint(path)
+    if isinstance(checkpoint_result, _result.Rejected):
+        return checkpoint_result
+    checkpoint = checkpoint_result.value
+    metadata = checkpoint.manifest.metadata
+    model = _create_checkpoint_model_without_rng_side_effect(
+        model_config=metadata.model_config,
+        device=device,
+    )
+    try:
+        model.load_state_dict(checkpoint.payload.model_state)
+    except RuntimeError:
+        return checkpoint_corruption(
+            checkpoint.state_path,
+            "model state does not match model config",
+        )
+    model.eval()
+    return _result.Ok(
+        value=LoadedInferenceCheckpoint(
+            model=model,
+            model_config=metadata.model_config,
+            metadata=metadata,
+        )
+    )
+
+
 def read_torch_checkpoint_metadata(
     path: Path,
 ) -> _result.Ok[TorchCheckpointMetadata] | _result.Rejected:
@@ -126,6 +148,53 @@ def read_torch_checkpoint_metadata(
     if isinstance(manifest_result, _result.Rejected):
         return manifest_result
     return _result.Ok(value=manifest_result.value.metadata)
+
+
+@dataclass(frozen=True, slots=True)
+class _VerifiedCheckpoint:
+    manifest: CheckpointManifest
+    state_path: Path
+    payload: CheckpointPayload
+
+
+def _read_verified_checkpoint(
+    path: Path,
+) -> _result.Ok[_VerifiedCheckpoint] | _result.Rejected:
+    manifest_result = read_checkpoint_manifest(path)
+    if isinstance(manifest_result, _result.Rejected):
+        return manifest_result
+    manifest = manifest_result.value
+    state_path_result = _validated_manifest_state_path(
+        manifest_path=path,
+        manifest=manifest,
+    )
+    if isinstance(state_path_result, _result.Rejected):
+        return state_path_result
+    state_path = state_path_result.value
+    state_sha256_result = sha256_checkpoint_file(state_path)
+    if isinstance(state_sha256_result, _result.Rejected):
+        return state_sha256_result
+    if state_sha256_result.value != manifest.state_sha256:
+        return checkpoint_corruption(
+            state_path,
+            f"state sha256 does not match manifest {path}",
+        )
+    payload_result = read_checkpoint_payload(state_path)
+    if isinstance(payload_result, _result.Rejected):
+        return payload_result
+    payload = payload_result.value
+    if payload.checkpoint_id != manifest.checkpoint_id:
+        return checkpoint_corruption(
+            state_path,
+            f"state checkpoint id does not match manifest {path}",
+        )
+    return _result.Ok(
+        value=_VerifiedCheckpoint(
+            manifest=manifest,
+            state_path=state_path,
+            payload=payload,
+        )
+    )
 
 
 def _validated_manifest_state_path(

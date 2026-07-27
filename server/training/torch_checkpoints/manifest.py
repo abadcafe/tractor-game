@@ -7,15 +7,17 @@ import os
 from pathlib import Path
 from typing import TypeGuard, cast
 
+from server.checkpoint_contract import (
+    CHECKPOINT_OBJECTS_DIR,
+    CHECKPOINT_SCHEMA_VERSION,
+    CHECKPOINT_STATE_FILENAME,
+)
 from server.foundation import result as _result
 from server.foundation.json_value import JsonObject, JsonValue
 from server.training.torch_checkpoints.filesystem import (
     validate_checkpoint_manifest_file,
 )
 from server.training.torch_checkpoints.schema import (
-    CHECKPOINT_OBJECTS_DIR,
-    CHECKPOINT_SCHEMA_VERSION,
-    CHECKPOINT_STATE_FILENAME,
     CheckpointManifest,
     TorchCheckpointMetadata,
     checkpoint_corruption,

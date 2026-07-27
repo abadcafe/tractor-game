@@ -58,7 +58,7 @@ class BotPlayerFactory(Protocol):
         self,
         seat: Seat,
         policy_name: BotPolicyName,
-    ) -> Player:
+    ) -> Ok[Player] | Rejected:
         """Create one unstarted bot player."""
         ...
 
@@ -133,12 +133,15 @@ class SeatRoster:
             return RoomAlreadyStarted()
         if user_id not in self._humans:
             return UserDoesNotOccupySeat()
+        created: list[tuple[Seat, Player]] = []
         for seat in seats():
-            if seat not in self._players:
-                self._players[seat] = self._bot_factory.create(
-                    seat,
-                    policy,
-                )
+            if seat in self._players:
+                continue
+            result = self._bot_factory.create(seat, policy)
+            if isinstance(result, Rejected):
+                return result
+            created.append((seat, result.value))
+        self._players.update(created)
         return Ok(None)
 
     def human(

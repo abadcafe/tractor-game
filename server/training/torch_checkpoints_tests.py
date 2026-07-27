@@ -32,6 +32,9 @@ from server.training.torch_checkpoints import (
 )
 from server.training.torch_checkpoints import save as _checkpoint_save
 from server.training.torch_checkpoints.load import (
+    load_inference_checkpoint as _load_inference_checkpoint,
+)
+from server.training.torch_checkpoints.load import (
     load_torch_checkpoint as _load_torch_checkpoint,
 )
 from server.training.torch_checkpoints.load import (
@@ -149,6 +152,47 @@ def test_read_metadata_uses_manifest_without_torch_load(
     assert metadata.train_config == train_config
     assert metadata.total_rounds == 11
     assert metadata.total_updates == 5
+
+
+def test_inference_load_restores_manifest_model_without_optimizer(
+    tmp_path: Path,
+) -> None:
+    model_config = ModelConfig(d_model=8, layers=1, heads=1)
+    train_config = TrainConfig()
+    state = create_training_state(
+        model_config=model_config,
+        train_config=train_config,
+        execution_config=ExecutionConfig(),
+        device=torch.device("cpu"),
+    )
+    path = tmp_path / "latest.json"
+    save_torch_checkpoint(
+        manifest_paths=(path,),
+        model=state.model,
+        trainer=state.trainer,
+        model_config=model_config,
+        train_config=train_config,
+        total_rounds=13,
+        total_samples=29,
+        total_updates=7,
+        retained_update_count=5,
+    )
+
+    result = _load_inference_checkpoint(
+        path=path,
+        device=torch.device("cpu"),
+    )
+
+    assert isinstance(result, Ok)
+    assert result.value.model_config == model_config
+    assert result.value.metadata.total_rounds == 13
+    assert result.value.metadata.total_samples == 29
+    assert result.value.metadata.total_updates == 7
+    assert result.value.model.training is False
+    assert _all_tensors_equal(
+        _model_parameters(result.value.model),
+        _model_parameters(state.model),
+    )
 
 
 def test_torch_checkpoint_save_rejects_payload_write_failure(

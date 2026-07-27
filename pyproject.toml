@@ -10,13 +10,12 @@ dependencies = [
     "pydantic>=2.0.0",
     "httpx>=0.27.0",
     "psutil>=7.0.0",
-]
-
-[project.optional-dependencies]
-training = [
     "numpy",
     "torch>=2.12.1",
 ]
+
+[project.optional-dependencies]
+training = []
 dev = [
     "playwright",
     "pytest>=8.0.0,<9.0.0",

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, TypedDict
 
-type BotPolicyName = Literal["auto", "llm"]
+type BotPolicyName = Literal["auto", "ai"]
 
 
 @dataclass(frozen=True, slots=True)

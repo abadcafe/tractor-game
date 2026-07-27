@@ -659,9 +659,12 @@ source = { virtual = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "numpy" },
     { name = "psutil" },
     { name = "pydantic" },
     { name = "starlette" },
+    { name = "torch", version = "2.12.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
+    { name = "torch", version = "2.12.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin'" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -674,17 +677,12 @@ dev = [
     { name = "pytest-timeout" },
     { name = "ruff" },
 ]
-training = [
-    { name = "numpy" },
-    { name = "torch", version = "2.12.1", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform == 'darwin'" },
-    { name = "torch", version = "2.12.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "sys_platform != 'darwin'" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = "==0.136.0" },
     { name = "httpx", specifier = ">=0.27.0" },
-    { name = "numpy", marker = "extra == 'training'" },
+    { name = "numpy" },
     { name = "playwright", marker = "extra == 'dev'" },
     { name = "psutil", specifier = ">=7.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
@@ -694,7 +692,7 @@ requires-dist = [
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.4.0" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "starlette", specifier = "==1.0.0" },
-    { name = "torch", marker = "extra == 'training'", specifier = ">=2.12.1", index = "https://download.pytorch.org/whl/cpu" },
+    { name = "torch", specifier = ">=2.12.1", index = "https://download.pytorch.org/whl/cpu" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
 ]
 provides-extras = ["training", "dev"]

@@ -8,6 +8,10 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from server.checkpoint_contract import (
+    CHECKPOINT_OBJECTS_DIR,
+    CHECKPOINT_STATE_FILENAME,
+)
 from server.foundation import result as _result
 from server.training.config import TrainConfig
 from server.training.model import (
@@ -31,8 +35,6 @@ from server.training.torch_checkpoints.pruning import (
     prune_torch_checkpoints,
 )
 from server.training.torch_checkpoints.schema import (
-    CHECKPOINT_OBJECTS_DIR,
-    CHECKPOINT_STATE_FILENAME,
     CheckpointManifest,
     TorchCheckpointMetadata,
     checkpoint_corruption,

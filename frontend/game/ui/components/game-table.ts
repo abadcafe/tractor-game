@@ -90,7 +90,6 @@ export function renderGameTable(
   viewerSeat: SeatId,
   previousTrickPreview?: CompletedTrick | null,
   failedThrowPreview?: FailedThrow | null,
-  gameId?: string | null,
 ): HTMLElement {
   const table = el("div", { class: "game-table" });
   const currentSeat = getCurrentSeat(snapshot);
@@ -112,10 +111,8 @@ export function renderGameTable(
     const header = el("div", { class: "player-area__header" });
     header.appendChild(
       renderDebugAvatar(
-        seatId,
         view.partnership,
         view.avatarText,
-        gameId,
       ),
     );
     const labelClass = `player-label partnership-${view.partnership}`;
@@ -190,29 +187,14 @@ export function renderGameTable(
 }
 
 function renderDebugAvatar(
-  seat: SeatId,
   partnership: PartnershipId,
   avatarText: string,
-  gameId?: string | null,
 ): HTMLElement {
   const attrs: Record<string, string> = {
     class:
       `player-avatar player-avatar--debug partnership-${partnership}`,
   };
-  if (gameId === null || gameId === undefined || gameId.length === 0) {
-    return el("span", attrs, avatarText);
-  }
-  return el(
-    "a",
-    {
-      ...attrs,
-      href: `/debug/llm/${encodeURIComponent(gameId)}?seat=${seat}`,
-      target: "_blank",
-      rel: "noreferrer",
-      title: `LLM transcript seat ${seat}`,
-    },
-    avatarText,
-  );
+  return el("span", attrs, avatarText);
 }
 
 function renderStatusBadge(

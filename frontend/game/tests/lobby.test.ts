@@ -411,25 +411,25 @@ Deno.test("test_renderLobby_bot_fill_control_in_player_header", () => {
   );
   assertEquals(
     buttons.map((button) => button.getAttribute("data-bot-fill-mode")),
-    ["none", "llm", "auto"],
+    ["none", "ai", "auto"],
   );
   assertEquals(
     buttons.map((button) => button.textContent),
-    ["不填充", "LLM", "AUTO"],
+    ["不填充", "AI", "AUTO"],
   );
   const autoButton = buttons.find((button) =>
     button.getAttribute("data-bot-fill-mode") === "auto"
   );
-  const llmButton = buttons.find((button) =>
-    button.getAttribute("data-bot-fill-mode") === "llm"
+  const aiButton = buttons.find((button) =>
+    button.getAttribute("data-bot-fill-mode") === "ai"
   );
   assert(autoButton !== undefined);
-  assert(llmButton !== undefined);
+  assert(aiButton !== undefined);
   assertEquals(autoButton.getAttribute("aria-pressed"), "true");
 
-  llmButton.dispatchEvent(new Event("click", { bubbles: true }));
+  aiButton.dispatchEvent(new Event("click", { bubbles: true }));
 
-  assertEquals(selectedMode, "llm");
+  assertEquals(selectedMode, "ai");
 });
 
 Deno.test("test_renderLobby_bot_filled_players_show_kind_labels", () => {
@@ -443,7 +443,7 @@ Deno.test("test_renderLobby_bot_filled_players_show_kind_labels", () => {
           capacity: 4,
           userSeats: ["c"],
           seats: [
-            botSeat("a", "llm", true),
+            botSeat("a", "ai", true),
             botSeat("b", "auto", true),
             humanSeat("c", { mine: true, connected: true }),
             emptySeat("d"),
@@ -459,7 +459,7 @@ Deno.test("test_renderLobby_bot_filled_players_show_kind_labels", () => {
   const seatB = root.querySelector("[data-seat='b']");
   assert(seatA !== null);
   assert(seatB !== null);
-  assertEquals(seatA.textContent, "ALLM");
+  assertEquals(seatA.textContent, "AAI");
   assertEquals(seatB.textContent, "BAUTO");
   assertEquals(
     root.querySelectorAll(".lobby-player-dot--filled").length,
@@ -514,11 +514,11 @@ Deno.test("test_renderLobby_disables_bot_fill_when_no_empty_players", () => {
     true,
   );
 
-  const llmButton = botModeButtons.find((button) =>
-    button.getAttribute("data-bot-fill-mode") === "llm"
+  const aiButton = botModeButtons.find((button) =>
+    button.getAttribute("data-bot-fill-mode") === "ai"
   );
-  assert(llmButton !== undefined);
-  llmButton.dispatchEvent(new Event("click", { bubbles: true }));
+  assert(aiButton !== undefined);
+  aiButton.dispatchEvent(new Event("click", { bubbles: true }));
 
   assertEquals(selectedMode, null);
 });

@@ -39,7 +39,7 @@ const BOT_FILL_MODES: readonly {
   label: string;
 }[] = [
   { mode: "none", label: "不填充" },
-  { mode: "llm", label: "LLM" },
+  { mode: "ai", label: "AI" },
   { mode: "auto", label: "AUTO" },
 ];
 const LOBBY_SEATS: readonly {
@@ -441,7 +441,7 @@ function previewPlayerClassName(
   if (selected) {
     classes.push("lobby-preview-player--filled");
   }
-  if (kind === "llm" || kind === "auto") {
+  if (kind === "ai" || kind === "auto") {
     classes.push("lobby-preview-player--bot");
   }
   if (mine) {
@@ -507,8 +507,8 @@ function previewPlayerStatusText(
   if (mine || pending) {
     return "你";
   }
-  if (kind === "llm") {
-    return "LLM";
+  if (kind === "ai") {
+    return "AI";
   }
   if (kind === "auto") {
     return "AUTO";

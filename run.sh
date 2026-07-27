@@ -1,7 +1,4 @@
-export TRACTOR_LLM_BASE_URL="${TRACTOR_LLM_BASE_URL:-https://api.openai.com/v1}"
-: "${TRACTOR_LLM_API_KEY:?TRACTOR_LLM_API_KEY must be set}"
-export TRACTOR_LLM_MODEL="${TRACTOR_LLM_MODEL:-gpt-5-mini}"
-export TRACTOR_LLM_HTTP_TIMEOUT_SECONDS="${TRACTOR_LLM_HTTP_TIMEOUT_SECONDS:-10}"
-export TRACTOR_LLM_HTTP_MAX_RETRIES="${TRACTOR_LLM_HTTP_MAX_RETRIES:-10}"
+#!/usr/bin/env bash
+set -euo pipefail
 
 exec python -m server.web --host 127.0.0.1 --port 8000

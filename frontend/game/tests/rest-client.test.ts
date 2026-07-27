@@ -285,14 +285,14 @@ Deno.test("test_fillBotSeats_sends_bot_fill_request", async () => {
     async (baseUrl) => {
       const ok = await fillBotSeats(
         "game-1",
-        "llm",
+        "ai",
         "user 1",
         baseUrl,
       );
       assertEquals(ok, true);
       assertEquals(observedMethod, "POST");
       assertEquals(observedPath, "/api/game/game-1/bots");
-      assertEquals(observedSearch, "?policy=llm&user_id=user%201");
+      assertEquals(observedSearch, "?policy=ai&user_id=user%201");
     },
   );
 });

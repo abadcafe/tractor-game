@@ -13,6 +13,7 @@ from server.training.semantic_action_plan.sampler import (
     ActionChoiceLogitDecoder,
     ActionSampleBatch,
     ActionSampler,
+    ActionScoreBatch,
 )
 from server.training.semantic_action_plan.spec import ACTION_FACE_COUNT
 from server.training.semantic_action_plan.trace import (
@@ -26,6 +27,7 @@ __all__ = (
     "DeviceActionPlanBatch",
     "ActionChoiceLogitDecoder",
     "ActionSampleBatch",
+    "ActionScoreBatch",
     "ActionSampler",
     "action_plan_generation_step_count",
     "compile_legal_action_frame",

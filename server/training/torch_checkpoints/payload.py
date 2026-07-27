@@ -12,13 +12,13 @@ from typing import TypeGuard
 import torch
 from torch import Tensor
 
+from server.checkpoint_contract import CHECKPOINT_SCHEMA_VERSION
 from server.foundation import result as _result
 from server.training.model import (
     TractorPolicyModel as _TractorPolicyModel,
 )
 from server.training.ppo import PPOTrainer
 from server.training.torch_checkpoints.schema import (
-    CHECKPOINT_SCHEMA_VERSION,
     checkpoint_corruption,
 )
 

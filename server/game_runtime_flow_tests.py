@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from server.foundation.result import Ok
+from server.foundation.result import Ok, Rejected
 from server.game import (
     CommandRejected,
     GameConfig,
@@ -66,11 +66,11 @@ class _Factory:
         self,
         seat: Seat,
         policy_name: BotPolicyName,
-    ) -> Player:
+    ) -> Ok[Player] | Rejected:
         assert policy_name == "auto"
         player = _Player()
         self.players[seat] = player
-        return player
+        return Ok(player)
 
 
 @dataclass(slots=True)

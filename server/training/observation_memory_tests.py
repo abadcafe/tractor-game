@@ -266,6 +266,27 @@ def test_memory_clears_history_at_new_round_deal() -> None:
     assert result.value.bid_actions == ()
 
 
+def test_memory_fork_continues_without_sharing_mutation() -> None:
+    waiting = snapshot(
+        phase="WAITING",
+        awaiting_action="next_round",
+    )
+    deal = snapshot(
+        phase="DEAL_BID",
+        awaiting_action="bid",
+        hand=[card("hearts", "2")],
+        remaining_cards=seat_values(1, 0, 0, 0),
+    )
+    original = ObservationMemory()
+    assert isinstance(original.observe(seq=1, snapshot=waiting), Ok)
+    forked = original.fork()
+
+    assert isinstance(forked.observe(seq=2, snapshot=deal), Ok)
+
+    assert forked.view() == original.view()
+    assert isinstance(original.observe(seq=2, snapshot=deal), Ok)
+
+
 def _completed_trick(played: Card) -> CompletedTrickSnapshot:
     return CompletedTrickSnapshot(
         lead_actor=Seat.A,

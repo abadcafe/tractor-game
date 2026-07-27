@@ -98,11 +98,26 @@ class _Factory:
         self,
         seat: Seat,
         policy_name: BotPolicyName,
-    ) -> Player:
+    ) -> Ok[Player] | Rejected:
         del seat
         bot = _Bot(policy_name=policy_name)
         self.bots.append(bot)
-        return bot
+        return Ok(bot)
+
+
+@dataclass(slots=True)
+class _RejectingFactory:
+    create_count: int = 0
+
+    def create(
+        self,
+        seat: Seat,
+        policy_name: BotPolicyName,
+    ) -> Ok[Player] | Rejected:
+        self.create_count += 1
+        if self.create_count == 2:
+            return Rejected("checkpoint unavailable")
+        return Ok(_Bot(policy_name=policy_name))
 
 
 def _room(factory: _Factory | None = None) -> GameRoom:
@@ -250,18 +265,18 @@ def test_fill_bots_requires_human_and_preserves_human() -> None:
     factory = _Factory()
     room = _room(factory)
     owner = _user()
-    missing = room.fill_bots(policy="llm", user_id=owner)
+    missing = room.fill_bots(policy="ai", user_id=owner)
     assert isinstance(
         room.occupy_seat(seat=Seat.C, user_id=owner),
         Ok,
     )
 
-    filled = room.fill_bots(policy="llm", user_id=owner)
+    filled = room.fill_bots(policy="ai", user_id=owner)
 
     assert isinstance(missing, Rejected)
     assert isinstance(filled, Ok)
     assert len(factory.bots) == 3
-    assert all(bot.policy_name == "llm" for bot in factory.bots)
+    assert all(bot.policy_name == "ai" for bot in factory.bots)
     descriptions = [seat.player for seat in room.seats(user_id=owner)]
     human = descriptions[2]
     assert human is not None
@@ -271,6 +286,27 @@ def test_fill_bots_requires_human_and_preserves_human() -> None:
         for index, description in enumerate(descriptions)
         if index != 2
     )
+
+
+def test_fill_bots_is_atomic_when_ai_creation_is_rejected() -> None:
+    factory = _RejectingFactory()
+    room = GameRoom(GameConfig(), GameSeed(19), factory)
+    owner = _user()
+    assert isinstance(
+        room.occupy_seat(seat=Seat.C, user_id=owner),
+        Ok,
+    )
+
+    filled = room.fill_bots(policy="ai", user_id=owner)
+
+    assert isinstance(filled, Rejected)
+    assert filled.reason == "checkpoint unavailable"
+    descriptions = [seat.player for seat in room.seats(user_id=owner)]
+    assert descriptions[0] is None
+    assert descriptions[1] is None
+    assert descriptions[3] is None
+    assert descriptions[2] is not None
+    assert descriptions[2]["kind"] == "human"
 
 
 async def test_connect_requires_owned_seat_and_complete_roster() -> (

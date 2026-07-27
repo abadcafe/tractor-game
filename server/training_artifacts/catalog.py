@@ -7,8 +7,19 @@ import re
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+)
 
+from server.checkpoint_contract import (
+    CHECKPOINT_OBJECTS_DIR,
+    CHECKPOINT_SCHEMA_VERSION,
+    CHECKPOINT_STATE_FILENAME,
+)
 from server.foundation import result as _result
 from server.foundation.json_value import JsonObject
 
@@ -20,7 +31,7 @@ class _ManifestDocument(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    schema_version: Literal[23]
+    schema_version: int
     checkpoint_id: str = Field(pattern=_CHECKPOINT_ID_PATTERN)
     state_path: str = Field(min_length=1)
     state_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -29,6 +40,15 @@ class _ManifestDocument(BaseModel):
     total_rounds: int = Field(ge=0)
     total_samples: int = Field(ge=0)
     total_updates: int = Field(ge=0)
+
+    @field_validator("schema_version")
+    @classmethod
+    def _require_current_schema(cls, value: int) -> int:
+        if value != CHECKPOINT_SCHEMA_VERSION:
+            raise ValueError(
+                f"Input should be {CHECKPOINT_SCHEMA_VERSION}"
+            )
+        return value
 
 
 class CheckpointManifestView(BaseModel):
@@ -201,7 +221,7 @@ def _object_views(
     checkpoint_dir: Path,
     references: dict[str, list[str]],
 ) -> _result.Ok[tuple[CheckpointObjectView, ...]] | _result.Rejected:
-    objects_dir = checkpoint_dir / "objects"
+    objects_dir = checkpoint_dir / CHECKPOINT_OBJECTS_DIR
     try:
         if objects_dir.is_symlink():
             return _result.Rejected(
@@ -221,7 +241,7 @@ def _object_views(
         )
     views: list[CheckpointObjectView] = []
     for object_dir in children:
-        state_path = object_dir / "state.pt"
+        state_path = object_dir / CHECKPOINT_STATE_FILENAME
         error: str | None = None
         if (
             re.fullmatch(_CHECKPOINT_ID_PATTERN, object_dir.name)
@@ -309,7 +329,11 @@ def _read_manifest(
     except ValidationError as error:
         return _checkpoint_rejection(path, str(error))
     state_path = Path(manifest.state_path)
-    expected = Path("objects") / manifest.checkpoint_id / "state.pt"
+    expected = (
+        Path(CHECKPOINT_OBJECTS_DIR)
+        / manifest.checkpoint_id
+        / CHECKPOINT_STATE_FILENAME
+    )
     if (
         state_path.is_absolute()
         or ".." in state_path.parts

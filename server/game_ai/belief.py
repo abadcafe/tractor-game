@@ -1,0 +1,562 @@
+"""Particle belief over hidden deals, exchanges, and remaining cards."""
+
+from __future__ import annotations
+
+import math
+import random
+from dataclasses import dataclass
+
+from server.foundation.result import Ok, Rejected
+from server.game import Seat, commands, instantiate
+from server.game.snapshots import PlayerSnapshot
+from server.training.observation_memory import ObservationMemoryView
+
+from ._history import (
+    ObservedFrame,
+    awaited_actor,
+    bid_command,
+    play_command,
+    stir_command,
+)
+from ._worlds import deal_constraints, sample_round_deal
+from .actions import physical_command, semantic_action
+from .model import (
+    ActionScoreRequest,
+    ModelEvaluator,
+    ModelQuery,
+)
+from .runtime import EngineBranch
+
+
+@dataclass(frozen=True, slots=True)
+class Particle:
+    """One complete legal hidden world and its posterior weight."""
+
+    branch: EngineBranch
+    weight: float
+
+    def __post_init__(self) -> None:
+        assert math.isfinite(self.weight)
+        assert self.weight > 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class _WeightedBranch:
+    branch: EngineBranch
+    log_weight: float
+
+
+class _NoParticleSurvived(Rejected):
+    """All proposed worlds conflicted with one public transition."""
+
+    def __init__(self) -> None:
+        super().__init__("all AI hidden worlds were eliminated")
+
+
+class ParticleBelief:
+    """Reconstruct and incrementally update independent game worlds."""
+
+    def __init__(
+        self,
+        *,
+        viewer: Seat,
+        model: ModelEvaluator,
+        particle_count: int,
+        random_source: random.Random,
+    ) -> None:
+        assert particle_count > 0
+        self._viewer = viewer
+        self._model = model
+        self._particle_count = particle_count
+        self._random = random_source
+        self._frames: list[ObservedFrame] = []
+        self._submitted: dict[int, commands.Command] = {}
+        self._branches: tuple[_WeightedBranch, ...] = ()
+        self._synced_frame_index = -1
+
+    def record(
+        self,
+        *,
+        seq: int,
+        snapshot: PlayerSnapshot,
+        memory: ObservationMemoryView,
+        error: str | None,
+    ) -> Ok[None] | Rejected:
+        """Record one contiguous real observation without inference."""
+        if error is not None:
+            return Ok(None)
+        if self._frames and seq == self._frames[-1].seq:
+            if snapshot != self._frames[-1].snapshot:
+                return Rejected(
+                    reason="AI received conflicting duplicate state"
+                )
+            return Ok(None)
+        if self._frames and seq != self._frames[-1].seq + 1:
+            return Rejected(reason="AI missed a game-state sequence")
+        if snapshot.phase == "DEAL_BID" and (
+            not self._frames
+            or self._frames[-1].snapshot.round_number
+            != snapshot.round_number
+        ):
+            self._frames.clear()
+            self._submitted.clear()
+            self._branches = ()
+            self._synced_frame_index = -1
+        if not self._frames and snapshot.phase != "DEAL_BID":
+            return Ok(None)
+        self._frames.append(
+            ObservedFrame(
+                seq=seq,
+                snapshot=snapshot,
+                memory=memory,
+            )
+        )
+        return Ok(None)
+
+    def submitted(
+        self,
+        *,
+        seq: int,
+        command: commands.Command,
+    ) -> None:
+        """Remember the viewer's private command for later replay."""
+        assert seq not in self._submitted
+        self._submitted[seq] = command
+
+    def synchronize(self) -> Ok[tuple[Particle, ...]] | Rejected:
+        """Bring all particles to the latest recorded real state."""
+        if not self._frames:
+            return Rejected(reason="AI has no active round history")
+        if not self._branches:
+            built = self._build_particles()
+            if isinstance(built, Rejected):
+                return built
+            self._branches = built.value
+            self._synced_frame_index = len(self._frames) - 1
+        elif self._synced_frame_index < len(self._frames) - 1:
+            advanced = self._advance_recorded_frames()
+            if isinstance(advanced, _NoParticleSurvived):
+                advanced = self._build_particles()
+            if isinstance(advanced, Rejected):
+                return advanced
+            self._branches = advanced.value
+            self._synced_frame_index = len(self._frames) - 1
+        normalized = _normalize(self._branches)
+        if isinstance(normalized, Rejected):
+            return normalized
+        particles = normalized.value
+        if _effective_sample_size(particles) < (
+            float(self._particle_count) * 0.5
+        ):
+            rebuilt = self._build_particles()
+            if isinstance(rebuilt, Rejected):
+                return rebuilt
+            self._branches = rebuilt.value
+            refreshed = _normalize(self._branches)
+            if isinstance(refreshed, Rejected):
+                return refreshed
+            return refreshed
+        return Ok(particles)
+
+    def _build_particles(
+        self,
+    ) -> Ok[tuple[_WeightedBranch, ...]] | Rejected:
+        constraints_result = deal_constraints(
+            viewer=self._viewer,
+            frames=tuple(self._frames),
+        )
+        if isinstance(constraints_result, Rejected):
+            return constraints_result
+        constraints = constraints_result.value
+        built: list[_WeightedBranch] = []
+        attempt_limit = self._particle_count * 200
+        attempts = 0
+        while (
+            len(built) < self._particle_count
+            and attempts < attempt_limit
+        ):
+            missing = self._particle_count - len(built)
+            initial: list[_WeightedBranch] = []
+            for _index in range(missing * 2):
+                attempts += 1
+                deal_result = sample_round_deal(
+                    constraints=constraints,
+                    random_source=self._random,
+                )
+                if isinstance(deal_result, Rejected):
+                    return deal_result
+                state_result = instantiate(deal_result.value)
+                if isinstance(state_result, Rejected):
+                    return state_result
+                branch_result = EngineBranch.start(state_result.value)
+                if isinstance(branch_result, Rejected):
+                    return branch_result
+                if (
+                    branch_result.value.snapshot(self._viewer)
+                    != self._frames[0].snapshot
+                ):
+                    continue
+                initial.append(
+                    _WeightedBranch(
+                        branch=branch_result.value,
+                        log_weight=0.0,
+                    )
+                )
+                if attempts == attempt_limit:
+                    break
+            replayed = self._replay_branches(tuple(initial))
+            if isinstance(replayed, _NoParticleSurvived):
+                continue
+            if isinstance(replayed, Rejected):
+                return replayed
+            built.extend(replayed.value[:missing])
+        if len(built) == self._particle_count:
+            return Ok(tuple(built))
+        return Rejected(
+            reason=(
+                "AI could not construct enough legal hidden worlds "
+                f"({len(built)}/{self._particle_count})"
+            )
+        )
+
+    def _replay_branches(
+        self,
+        branches: tuple[_WeightedBranch, ...],
+    ) -> Ok[tuple[_WeightedBranch, ...]] | Rejected:
+        if not branches:
+            return Ok(())
+        current = branches
+        for previous, observed in zip(
+            self._frames[:-1],
+            self._frames[1:],
+            strict=True,
+        ):
+            advanced = self._advance_one_frame(
+                branches=current,
+                previous=previous,
+                current=observed,
+            )
+            if isinstance(advanced, Rejected):
+                return advanced
+            current = advanced.value
+        return Ok(current)
+
+    def _advance_recorded_frames(
+        self,
+    ) -> Ok[tuple[_WeightedBranch, ...]] | Rejected:
+        branches = self._branches
+        for frame_index in range(
+            self._synced_frame_index + 1,
+            len(self._frames),
+        ):
+            previous = self._frames[frame_index - 1]
+            current = self._frames[frame_index]
+            advanced = self._advance_one_frame(
+                branches=branches,
+                previous=previous,
+                current=current,
+            )
+            if isinstance(advanced, Rejected):
+                return advanced
+            branches = advanced.value
+        if not branches:
+            return _NoParticleSurvived()
+        return Ok(branches)
+
+    def _advance_one_frame(
+        self,
+        *,
+        branches: tuple[_WeightedBranch, ...],
+        previous: ObservedFrame,
+        current: ObservedFrame,
+    ) -> Ok[tuple[_WeightedBranch, ...]] | Rejected:
+        unresolved: list[
+            tuple[
+                _WeightedBranch,
+                Seat,
+                commands.Command | None,
+                bool,
+            ]
+        ] = []
+        for particle in branches:
+            command_result = self._transition_command(
+                branch=particle.branch,
+                previous=previous,
+                current=current,
+            )
+            if isinstance(command_result, Rejected):
+                continue
+            actor, command, observed_action = command_result.value
+            unresolved.append(
+                (particle, actor, command, observed_action)
+            )
+        pending_result = self._resolve_hidden_commands(
+            unresolved=tuple(unresolved),
+            seed=previous.seq,
+        )
+        if isinstance(pending_result, Rejected):
+            return pending_result
+        pending = pending_result.value
+        if not pending:
+            return _NoParticleSurvived()
+        scores: dict[int, float] = {}
+        score_requests: list[ActionScoreRequest] = []
+        score_indices: list[int] = []
+        for index, (
+            particle,
+            actor,
+            command,
+            observed_action,
+        ) in enumerate(pending):
+            if not observed_action:
+                continue
+            request = _score_request(
+                branch=particle.branch,
+                actor=actor,
+                command=command,
+            )
+            if isinstance(request, Rejected):
+                continue
+            score_indices.append(index)
+            score_requests.append(request.value)
+        if score_requests:
+            scored = self._model.score(requests=tuple(score_requests))
+            if isinstance(scored, Rejected):
+                return scored
+            for index, evaluation in zip(
+                score_indices,
+                scored.value,
+                strict=True,
+            ):
+                scores[index] = evaluation.log_probability
+        result: list[_WeightedBranch] = []
+        for index, (
+            particle,
+            actor,
+            command,
+            observed_action,
+        ) in enumerate(pending):
+            if observed_action and index not in scores:
+                continue
+            advanced = particle.branch.advance(
+                actor=actor,
+                command=command,
+            )
+            if isinstance(advanced, Rejected):
+                continue
+            if (
+                advanced.value.snapshot(self._viewer)
+                != current.snapshot
+            ):
+                continue
+            result.append(
+                _WeightedBranch(
+                    branch=advanced.value,
+                    log_weight=particle.log_weight
+                    + scores.get(index, 0.0),
+                )
+            )
+        if not result:
+            return _NoParticleSurvived()
+        return Ok(tuple(result))
+
+    def _transition_command(
+        self,
+        *,
+        branch: EngineBranch,
+        previous: ObservedFrame,
+        current: ObservedFrame,
+    ) -> Ok[tuple[Seat, commands.Command | None, bool]] | Rejected:
+        actor_result = awaited_actor(branch)
+        if isinstance(actor_result, Rejected):
+            return actor_result
+        actor = actor_result.value
+        own = self._submitted.get(previous.seq)
+        if actor == self._viewer and own is not None:
+            return Ok((actor, own, True))
+        action = branch.snapshot(actor).awaiting_action
+        if action == "bid":
+            command = bid_command(previous.snapshot, current.snapshot)
+            return Ok((actor, command, True))
+        if action == "stir":
+            command = stir_command(
+                previous.snapshot,
+                current.snapshot,
+            )
+            return Ok((actor, command, True))
+        if action == "play":
+            command = play_command(previous, current)
+            if isinstance(command, Rejected):
+                return command
+            return Ok((actor, command.value, True))
+        if action == "discard":
+            return Ok((actor, None, False))
+        return Rejected(
+            reason="particle transition has no model action"
+        )
+
+    def _resolve_hidden_commands(
+        self,
+        *,
+        unresolved: tuple[
+            tuple[
+                _WeightedBranch,
+                Seat,
+                commands.Command | None,
+                bool,
+            ],
+            ...,
+        ],
+        seed: int,
+    ) -> (
+        Ok[
+            tuple[
+                tuple[
+                    _WeightedBranch,
+                    Seat,
+                    commands.Command,
+                    bool,
+                ],
+                ...,
+            ]
+        ]
+        | Rejected
+    ):
+        hidden = tuple(
+            (index, particle, actor)
+            for index, (
+                particle,
+                actor,
+                command,
+                _observed,
+            ) in enumerate(unresolved)
+            if command is None
+        )
+        if not hidden:
+            return Ok(
+                tuple(
+                    (particle, actor, command, observed)
+                    for particle, actor, command, observed in unresolved
+                    if command is not None
+                )
+            )
+        queries: list[ModelQuery] = []
+        for _index, particle, actor in hidden:
+            observation, legal_actions = particle.branch.model_input(
+                actor
+            )
+            queries.append(
+                ModelQuery(
+                    observation=observation,
+                    legal_actions=legal_actions,
+                    seat=actor,
+                )
+            )
+        sampled = self._model.sample(
+            queries=tuple(queries),
+            decision_seed=seed,
+        )
+        if isinstance(sampled, Rejected):
+            return sampled
+        commands_by_index: dict[int, commands.Command] = {}
+        for (
+            index,
+            particle,
+            actor,
+        ), evaluation in zip(
+            hidden,
+            sampled.value,
+            strict=True,
+        ):
+            command = physical_command(
+                action=evaluation.action,
+                hand=particle.branch.snapshot(actor).hand,
+            )
+            if isinstance(command, Rejected):
+                return command
+            commands_by_index[index] = command.value
+        return Ok(
+            tuple(
+                (
+                    particle,
+                    actor,
+                    (
+                        command
+                        if command is not None
+                        else commands_by_index[index]
+                    ),
+                    observed,
+                )
+                for index, (
+                    particle,
+                    actor,
+                    command,
+                    observed,
+                ) in enumerate(unresolved)
+                if command is not None or index in commands_by_index
+            )
+        )
+
+
+def _score_request(
+    *,
+    branch: EngineBranch,
+    actor: Seat,
+    command: commands.Command,
+) -> Ok[ActionScoreRequest] | Rejected:
+    observation, legal_actions = branch.model_input(actor)
+    action = semantic_action(
+        command=command,
+        hand=branch.snapshot(actor).hand,
+        legal_actions=legal_actions,
+    )
+    if isinstance(action, Rejected):
+        return action
+    return Ok(
+        ActionScoreRequest(
+            query=ModelQuery(
+                observation=observation,
+                legal_actions=legal_actions,
+                seat=actor,
+            ),
+            action=action.value,
+        )
+    )
+
+
+def _normalize(
+    branches: tuple[_WeightedBranch, ...],
+) -> Ok[tuple[Particle, ...]] | Rejected:
+    if not branches:
+        return Rejected(reason="AI has no legal hidden world")
+    maximum = max(item.log_weight for item in branches)
+    unscaled = tuple(
+        math.exp(item.log_weight - maximum) for item in branches
+    )
+    total = sum(unscaled)
+    if not math.isfinite(total) or total <= 0.0:
+        return Rejected(reason="AI particle weights are invalid")
+    return Ok(
+        tuple(
+            Particle(
+                branch=item.branch,
+                weight=weight / total,
+            )
+            for item, weight in zip(
+                branches,
+                unscaled,
+                strict=True,
+            )
+        )
+    )
+
+
+def _effective_sample_size(
+    particles: tuple[Particle, ...],
+) -> float:
+    return 1.0 / sum(
+        particle.weight * particle.weight for particle in particles
+    )
+
+
+__all__ = ("Particle", "ParticleBelief")

@@ -139,6 +139,18 @@ class ObservationMemory:
         self._previous = None
         self._clear_round()
 
+    def fork(self) -> ObservationMemory:
+        """Return an independent continuation of this exact history."""
+        return ObservationMemory(
+            _last_seq=self._last_seq,
+            _previous=self._previous,
+            _pending_bid=self._pending_bid,
+            _seen_bid_count=self._seen_bid_count,
+            _bid_actions=list(self._bid_actions),
+            _completed_tricks=list(self._completed_tricks),
+            _completed_keys=set(self._completed_keys),
+        )
+
     def _accept_initial(
         self,
         seq: int,

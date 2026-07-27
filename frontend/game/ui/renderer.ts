@@ -32,7 +32,6 @@ export function render(
       ctx.viewerSeat,
       ctx.previousTrickPreview,
       ctx.failedThrowPreview,
-      ctx.gameId,
     ),
   );
 

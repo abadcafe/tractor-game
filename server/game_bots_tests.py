@@ -8,10 +8,13 @@ from dataclasses import dataclass, field
 from server.foundation.result import Ok, Rejected
 from server.game import Seat, commands
 from server.game.rules.cards import CardId
+from server.game.snapshots import PlayerSnapshot
+from server.game_ai import AIControllerPort
 from server.game_bots import (
     BotPlayer,
     DecisionCommand,
     DecisionRequest,
+    DefaultBotPlayerFactory,
 )
 from server.game_runtime.player import (
     BotPlayerDescription,
@@ -35,6 +38,47 @@ def _decisions() -> list[Ok[DecisionCommand] | Rejected]:
 
 def _submissions() -> list[tuple[int, commands.Command]]:
     return []
+
+
+def _seats() -> list[Seat]:
+    return []
+
+
+@dataclass(slots=True)
+class _AIController:
+    decision: Ok[commands.Command] | Rejected
+
+    def observe(
+        self,
+        *,
+        seq: int,
+        snapshot: PlayerSnapshot,
+        error: str | None,
+    ) -> Ok[None] | Rejected:
+        del seq, snapshot, error
+        return Ok(None)
+
+    def decide(
+        self,
+        *,
+        seq: int,
+        snapshot: PlayerSnapshot,
+    ) -> Ok[commands.Command] | Rejected:
+        del seq, snapshot
+        return self.decision
+
+
+@dataclass(slots=True)
+class _AIControllerFactory:
+    result: Ok[AIControllerPort] | Rejected
+    requested_seats: list[Seat] = field(default_factory=_seats)
+
+    def controller(
+        self,
+        seat: Seat,
+    ) -> Ok[AIControllerPort] | Rejected:
+        self.requested_seats.append(seat)
+        return self.result
 
 
 @dataclass(slots=True)
@@ -115,6 +159,37 @@ async def _settle() -> None:
         await asyncio.sleep(0)
 
 
+def test_factory_creates_ai_player_through_controller_boundary() -> (
+    None
+):
+    controller = _AIController(
+        decision=Ok(commands.PassBid()),
+    )
+    controllers = _AIControllerFactory(result=Ok(controller))
+    factory = DefaultBotPlayerFactory(controllers)
+
+    created = factory.create(Seat.C, "ai")
+
+    assert isinstance(created, Ok)
+    assert controllers.requested_seats == [Seat.C]
+    assert created.value.lobby_status(None) == BotPlayerDescription(
+        kind="bot",
+        policy="ai",
+    )
+
+
+def test_factory_propagates_ai_checkpoint_rejection() -> None:
+    controllers = _AIControllerFactory(
+        result=Rejected("checkpoint unavailable")
+    )
+    factory = DefaultBotPlayerFactory(controllers)
+
+    created = factory.create(Seat.D, "ai")
+
+    assert isinstance(created, Rejected)
+    assert created.reason == "checkpoint unavailable"
+
+
 async def test_player_requests_state_and_observes_idle_view() -> None:
     policy = _Policy()
     channel = _Channel()
@@ -165,7 +240,7 @@ async def test_player_submits_exact_policy_command_and_sequence() -> (
     policy = _Policy(decisions=[Ok(command)])
     channel = _Channel()
     player = BotPlayer(
-        policy_name="llm",
+        policy_name="ai",
         policy=policy,
     )
     start = asyncio.create_task(player.start(channel))
@@ -182,7 +257,7 @@ async def test_player_submits_exact_policy_command_and_sequence() -> (
     description = player.lobby_status(None)
     assert description == BotPlayerDescription(
         kind="bot",
-        policy="llm",
+        policy="ai",
     )
 
 
@@ -190,7 +265,7 @@ async def test_policy_rejection_has_no_fallback() -> None:
     policy = _Policy(decisions=[Rejected("model unavailable")])
     channel = _Channel()
     player = BotPlayer(
-        policy_name="llm",
+        policy_name="ai",
         policy=policy,
     )
     start = asyncio.create_task(player.start(channel))
@@ -214,7 +289,7 @@ async def test_observation_rejection_prevents_decision() -> None:
     )
     channel = _Channel()
     player = BotPlayer(
-        policy_name="llm",
+        policy_name="ai",
         policy=policy,
     )
     start = asyncio.create_task(player.start(channel))

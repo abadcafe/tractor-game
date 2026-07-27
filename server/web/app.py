@@ -8,7 +8,6 @@ from fastapi import FastAPI
 
 from server.web.game_api import register_game_routes
 from server.web.lifespan import lifespan_for
-from server.web.llm_debug_api import register_llm_debug_routes
 from server.web.state import ServerState
 from server.web.static_assets import register_static_routes
 from server.web.training_api import register_training_routes
@@ -32,7 +31,6 @@ class WebApplication:
         static_dir = str(Path(__file__).resolve().parents[2] / "static")
 
         register_game_routes(asgi, state)
-        register_llm_debug_routes(asgi, state, static_dir)
         register_training_routes(asgi, state)
         register_training_event_routes(
             asgi, state, event_stream_lifecycle

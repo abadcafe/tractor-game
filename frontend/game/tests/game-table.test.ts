@@ -51,7 +51,7 @@ Deno.test("test_renderGameTable_shows_four_players", () => {
 
 Deno.test("debug avatars use seat labels, not policy labels", () => {
   const snap = makeSnapshot();
-  const el = renderGameTable(snap, "c", null, null, "game-1");
+  const el = renderGameTable(snap, "c", null, null);
   const avatars = Array.from(el.querySelectorAll(".player-avatar"));
   assertEquals(avatars.length, 4);
   assertEquals(avatars.map((avatar) => avatar.textContent), [
@@ -61,7 +61,11 @@ Deno.test("debug avatars use seat labels, not policy labels", () => {
     "D",
   ]);
   assertEquals(
-    avatars.every((avatar) => avatar.textContent !== "llm"),
+    avatars.every((avatar) => avatar.textContent !== "ai"),
+    true,
+  );
+  assertEquals(
+    avatars.every((avatar) => avatar.tagName.toLowerCase() === "span"),
     true,
   );
 });
@@ -175,7 +179,7 @@ Deno.test("test_renderGameTable_player_labels", () => {
 
 Deno.test("test_renderGameTable_orients_viewer_at_bottom", () => {
   const snap = makeSnapshot();
-  const el = renderGameTable(snap, "b", null, null, "game-1");
+  const el = renderGameTable(snap, "b", null, null);
   const bottomText =
     el.querySelector('.player-area[data-position="bottom"]')
       ?.textContent ?? "";

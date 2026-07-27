@@ -64,6 +64,35 @@ def start_round(
     return replace_phase(state, _deal_one(phase, start))
 
 
+def start_round_from_cards(
+    state: GameState,
+    *,
+    round_number: int,
+    levels: TeamLevels,
+    fixed_declarer: Seat | None,
+    start_actor: Seat,
+    shuffled_cards: tuple[Card, ...],
+) -> GameState:
+    """Start one round from an already validated complete shuffle."""
+    bottom = shuffled_cards[:_BOTTOM_COUNT]
+    deck = shuffled_cards[_BOTTOM_COUNT:]
+    empty: tuple[Card, ...] = ()
+    phase = phases.DealBid(
+        round_number=round_number,
+        levels=levels,
+        fixed_declarer=fixed_declarer,
+        start_actor=start_actor,
+        deck=deck,
+        bottom_cards=bottom,
+        hands=SeatMap(a=empty, b=empty, c=empty, d=empty),
+        deal_cursor=0,
+        current_actor=start_actor,
+        declaration=None,
+        bid_reveals=(),
+    )
+    return replace_phase(state, _deal_one(phase, start_actor))
+
+
 def pass_bid(
     state: GameState,
     phase: phases.DealBid,

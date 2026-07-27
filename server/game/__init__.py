@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
-from server.foundation.result import Ok
+from server.foundation.result import Ok, Rejected
 
 from . import commands, snapshots
-from ._engine.aggregate import apply_command, create_game
+from ._engine.aggregate import (
+    apply_command,
+    create_game,
+    create_round_from_deal,
+)
 from ._engine.observation import observe_game
 from ._engine.state import GameState
 from .commands import Command
 from .config import GameConfig, GameSeed
+from .positions import RoundDeal
 from .rejections import CommandRejected
 from .seating import (
     Partnership,
@@ -49,6 +54,13 @@ def observe(state: GameState, viewer: Seat) -> PlayerSnapshot:
     return observe_game(state, viewer)
 
 
+def instantiate(
+    position: RoundDeal,
+) -> Ok[GameState] | Rejected:
+    """Create an immutable state from a complete round position."""
+    return create_round_from_deal(position)
+
+
 __all__ = [
     "CommandRejected",
     "GameConfig",
@@ -57,6 +69,7 @@ __all__ = [
     "Partnership",
     "PartnershipId",
     "PartnershipMap",
+    "RoundDeal",
     "Seat",
     "SeatId",
     "SeatMap",
@@ -70,6 +83,7 @@ __all__ = [
     "apply",
     "commands",
     "create",
+    "instantiate",
     "observe",
     "seats",
     "snapshots",
