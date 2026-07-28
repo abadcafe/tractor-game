@@ -7,7 +7,6 @@ from multiprocessing import shared_memory
 
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
-from server.training.returns import ReturnCommit
 from server.training.runtime.shared_rollout_arena.schema import (
     RolloutArenaHeader,
     pack_header,
@@ -19,6 +18,7 @@ from server.training.runtime.shared_rollout_arena.types import (
     RolloutArenaHandle,
     RolloutRoundMetrics,
 )
+from server.training.self_play.returns import ReturnCommit
 
 
 @dataclass(slots=True)

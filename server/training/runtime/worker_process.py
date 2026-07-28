@@ -10,14 +10,12 @@ import torch
 
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
+from server.policy_model.network import ModelConfig
 from server.training.config import TrainConfig
-from server.training.model import ModelConfig
-from server.training.policy import TrainingPolicy
 from server.training.ppo.distributed import (
     PPOUpdatePartition,
     single_update_partition,
 )
-from server.training.runner import SelfPlaySession, TrainingRoundResult
 from server.training.runtime.affinity import apply_cpu_affinity
 from server.training.runtime.async_ipc import AsyncChildControlEndpoint
 from server.training.runtime.config import CpuSet, ExecutionConfig
@@ -67,6 +65,11 @@ from server.training.runtime.shared_rollout_arena import (
 )
 from server.training.runtime.threads import (
     apply_worker_torch_thread_config,
+)
+from server.training.self_play.policy import TrainingPolicy
+from server.training.self_play.session import (
+    SelfPlaySession,
+    TrainingRoundResult,
 )
 from server.training_events import EventContext, StructuredEventSink
 

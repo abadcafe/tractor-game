@@ -9,12 +9,12 @@ from pathlib import Path
 import pytest
 
 from server.foundation.result import Ok, Rejected
+from server.policy_model.network import ModelConfig
 from server.training import TrainingResumeOptions, TrainingStopRequest
-from server.training.config import TrainConfig
-from server.training.model import ModelConfig
-from server.training.torch_checkpoints.load import (
-    read_torch_checkpoint_metadata,
+from server.training.checkpoint import (
+    read_training_checkpoint_metadata,
 )
+from server.training.config import TrainConfig
 from server.training_cli import cli
 from server.training_cli.cli import main
 
@@ -62,7 +62,7 @@ def test_module_cli_init_creates_zero_update_run(
     assert completed.returncode == 0
     checkpoint_path = run_dir / "checkpoints" / "latest.json"
     assert f"checkpoint: {checkpoint_path}" in completed.stdout
-    metadata = read_torch_checkpoint_metadata(checkpoint_path)
+    metadata = read_training_checkpoint_metadata(checkpoint_path)
     assert isinstance(metadata, Ok)
     assert metadata.value.total_updates == 0
     assert metadata.value.model_config == ModelConfig(

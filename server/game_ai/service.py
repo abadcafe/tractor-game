@@ -16,7 +16,7 @@ from .controller import AIController, AIControllerPort
 from .remote import RemoteAIController
 
 if TYPE_CHECKING:
-    from .inference import InferenceRuntime
+    from server.policy_model.inference.runtime import InferenceRuntime
 
 
 class AIService:
@@ -75,7 +75,9 @@ class AIService:
             return Ok(self._runtime)
         if self._load_rejection is not None:
             return self._load_rejection
-        from .inference import InferenceRuntime
+        from server.policy_model.inference.runtime import (
+            InferenceRuntime,
+        )
 
         loaded = InferenceRuntime.load(
             checkpoint_path=config.checkpoint_path,

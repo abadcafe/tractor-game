@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ast
+import subprocess
+import sys
 from pathlib import Path
 
 _SERVER_ROOT = Path(__file__).parents[1] / "server"
@@ -66,6 +68,7 @@ def test_game_runtime_and_bots_follow_dependency_direction() -> None:
         (
             "server.game_bots",
             "server.game_runtime",
+            "server.training",
             "server.training_control",
             "server.training_cli",
             "server.web",
@@ -229,48 +232,86 @@ def test_web_never_imports_training_implementation() -> None:
     )
 
 
-def test_training_model_internals_stay_behind_package_boundary() -> (
-    None
-):
-    imports = _package_imports_outside_subpackage("training", "model")
-    internal_model_imports = {
+def test_policy_model_has_no_application_dependencies() -> None:
+    assert not _matching(
+        _package_imports("policy_model"),
+        (
+            "server.game_ai",
+            "server.game_bots",
+            "server.game_runtime",
+            "server.training",
+            "server.training_artifacts",
+            "server.training_cli",
+            "server.training_control",
+            "server.training_events",
+            "server.training_metrics",
+            "server.web",
+        ),
+    )
+
+
+def test_policy_model_internals_stay_behind_facades() -> None:
+    imports = _imports_outside_package("policy_model")
+    policy_imports = {
         imported
         for imported in imports
-        if imported.startswith("server.training.model.")
+        if imported == "server.policy_model"
+        or imported.startswith("server.policy_model.")
     }
 
-    assert not internal_model_imports
+    assert policy_imports <= {
+        "server.policy_model",
+        "server.policy_model.actions",
+        "server.policy_model.actions.decoding",
+        "server.policy_model.checkpoint",
+        "server.policy_model.inference",
+        "server.policy_model.inference.runtime",
+        "server.policy_model.network",
+        "server.policy_model.observation",
+        "server.policy_model.observation.tensor",
+        "server.policy_model.observation.tokenization",
+        "server.policy_model.value_target",
+    }
+
+
+def test_policy_inference_contracts_import_loads_no_torch() -> None:
+    completed = subprocess.run(
+        (
+            sys.executable,
+            "-c",
+            "import sys; import server.policy_model.inference; "
+            "assert 'torch' not in sys.modules",
+        ),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_policy_inference_runtime_loads_no_training_modules() -> None:
+    completed = subprocess.run(
+        (
+            sys.executable,
+            "-c",
+            "import sys; import server.policy_model.inference.runtime; "
+            "assert not [name for name in sys.modules "
+            "if name == 'server.training' "
+            "or name.startswith('server.training.')]",
+        ),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def _package_imports(package: str) -> set[str]:
     imports: set[str] = set()
     for path in (_SERVER_ROOT / package).rglob("*.py"):
         if path.name.endswith("_tests.py"):
-            continue
-        module = ast.parse(
-            path.read_text(encoding="utf-8"), filename=str(path)
-        )
-        for node in ast.walk(module):
-            if isinstance(node, ast.Import):
-                imports.update(alias.name for alias in node.names)
-            elif (
-                isinstance(node, ast.ImportFrom)
-                and node.module is not None
-            ):
-                imports.add(node.module)
-    return imports
-
-
-def _package_imports_outside_subpackage(
-    package: str, excluded_subpackage: str
-) -> set[str]:
-    imports: set[str] = set()
-    package_root = _SERVER_ROOT / package
-    excluded_root = package_root / excluded_subpackage
-    for path in package_root.rglob("*.py"):
-        if path.name.endswith("_tests.py") or path.is_relative_to(
-            excluded_root
-        ):
             continue
         module = ast.parse(
             path.read_text(encoding="utf-8"), filename=str(path)

@@ -10,12 +10,16 @@ from typing import Protocol
 from server.foundation.result import Ok, Rejected
 from server.game import Seat, commands
 from server.game.snapshots import PlayerSnapshot
-from server.training.legal_actions import build_legal_action_index
-from server.training.observation import build_observation
-from server.training.observation_memory import ObservationMemory
+from server.policy_model.actions import (
+    build_legal_action_space,
+)
+from server.policy_model.inference import PolicyQuery
+from server.policy_model.observation import (
+    ObservationMemory,
+    build_observation,
+)
 
 from .belief import BeliefInference, ParticleBelief
-from .queries import ModelQuery
 from .search import SearchConfig, SearchInference, SearchPlanner
 
 _LOGGER = logging.getLogger(__name__)
@@ -161,15 +165,15 @@ class AIController:
         )
         return Ok(decided.value.command)
 
-    def _root_query(self, snapshot: PlayerSnapshot) -> ModelQuery:
+    def _root_query(self, snapshot: PlayerSnapshot) -> PolicyQuery:
         observation = build_observation(
             viewer=self._seat,
             snapshot=snapshot,
             memory=self._memory.view(),
         )
-        return ModelQuery(
+        return PolicyQuery(
             observation=observation,
-            legal_actions=build_legal_action_index(
+            legal_actions=build_legal_action_space(
                 viewer=self._seat,
                 snapshot=snapshot,
                 query=observation.action_query,

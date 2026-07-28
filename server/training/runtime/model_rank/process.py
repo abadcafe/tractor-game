@@ -10,18 +10,20 @@ import torch
 
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
+from server.policy_model.network import ModelConfig
 from server.training.config import TrainConfig
-from server.training.model import ModelConfig
-from server.training.policy_inference_batch import (
+from server.training.ppo.distributed import (
+    PPOUpdatePartition,
+    single_update_partition,
+)
+from server.training.rollout_inference.batch import (
     PolicyRequestRoute,
     build_completed_policy_responses,
     build_rejected_policy_responses,
     encode_policy_response_batch_wire,
 )
-from server.training.policy_sampling import CompactPolicyDecisionBatch
-from server.training.ppo.distributed import (
-    PPOUpdatePartition,
-    single_update_partition,
+from server.training.rollout_inference.samples import (
+    CompactPolicyDecisionBatch,
 )
 from server.training.runtime.async_ipc import AsyncChildControlEndpoint
 from server.training.runtime.config import ExecutionConfig

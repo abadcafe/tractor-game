@@ -10,16 +10,21 @@ from typing import Protocol
 from server.foundation.result import Ok, Rejected
 from server.game import Seat, commands, instantiate
 from server.game.snapshots import PlayerSnapshot
-from server.training.observation_memory import ObservationMemoryView
-
-from ..actions import physical_command, semantic_action
-from ..queries import (
+from server.policy_model.actions import (
+    physical_command,
+    semantic_action,
+)
+from server.policy_model.inference import (
     ActionSamples,
-    InferenceDrawKey,
-    ModelQuery,
+    PolicyQuery,
     PolicySampleRequest,
     PolicyScoreRequest,
+    SamplingSeed,
 )
+from server.policy_model.observation import (
+    ObservationMemoryView,
+)
+
 from ..simulation import SimulationBranch
 from ._history import (
     ObservedFrame,
@@ -535,13 +540,13 @@ class ParticleBelief:
                     if command is not None
                 )
             )
-        queries: list[ModelQuery] = []
+        queries: list[PolicyQuery] = []
         for _index, particle, actor in hidden:
             observation, legal_actions = particle.branch.model_input(
                 actor
             )
             queries.append(
-                ModelQuery(
+                PolicyQuery(
                     observation=observation,
                     legal_actions=legal_actions,
                     seat=actor,
@@ -552,7 +557,7 @@ class ParticleBelief:
                 PolicySampleRequest(
                     query=query,
                     draws=(
-                        InferenceDrawKey(
+                        SamplingSeed(
                             seed=seed,
                             ordinal=index,
                         ),
@@ -621,7 +626,7 @@ def _score_request(
         return action
     return Ok(
         PolicyScoreRequest(
-            query=ModelQuery(
+            query=PolicyQuery(
                 observation=observation,
                 legal_actions=legal_actions,
                 seat=actor,

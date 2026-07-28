@@ -12,14 +12,17 @@ from pydantic import TypeAdapter
 
 from server.foundation.json_value import JsonObject
 from server.foundation.result import Ok, Rejected
+from server.policy_model.network import ModelConfig
+from server.training.checkpoint import (
+    read_training_checkpoint_metadata,
+)
 from server.training.config import (
     CheckpointPolicy,
     TrainConfig,
 )
-from server.training.model import ModelConfig
+from server.training.lifecycle.run_setup import initialize_training_run
 from server.training.ppo import PPOUpdateStats
 from server.training.ppo.profile import blank_update_profile
-from server.training.run_setup import initialize_training_run
 from server.training.runtime import coordinator as coordinator_module
 from server.training.runtime.checkpoint_state import (
     create_initial_runtime_checkpoint_state,
@@ -42,9 +45,6 @@ from server.training.runtime.training_runtime import (
     open_training_runtime,
 )
 from server.training.stop import TrainingStopRequest
-from server.training.torch_checkpoints.load import (
-    read_torch_checkpoint_metadata,
-)
 from server.training_events import NullEventSink
 from server.training_events.store import (
     database_path,
@@ -135,7 +135,7 @@ def test_run_training_coordinator_spawns_worker_and_commits_progress(
     assert result.value.total_rounds >= 1
     assert result.value.total_samples > 0
     assert result.value.total_updates == 1
-    metadata = read_torch_checkpoint_metadata(
+    metadata = read_training_checkpoint_metadata(
         result.value.checkpoint_path
     )
     assert isinstance(metadata, Ok)

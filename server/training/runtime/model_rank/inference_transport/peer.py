@@ -6,10 +6,10 @@ from dataclasses import dataclass
 
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
-from server.training.policy_inference_batch import (
+from server.training.rollout_inference.batch import (
     PolicyResponseBatchWire,
 )
-from server.training.policy_inference_batch.types import (
+from server.training.rollout_inference.batch.types import (
     PolicyRequestWireFrame,
 )
 from server.training.runtime.async_ipc import AsyncFrameEndpoint

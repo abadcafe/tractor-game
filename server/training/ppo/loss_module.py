@@ -8,8 +8,8 @@ import torch
 from torch import Tensor, nn
 
 from server.foundation import result as _result
+from server.policy_model.network import PolicyValueModel
 from server.training.config import TrainConfig
-from server.training.model import TractorPolicyModel
 from server.training.ppo.evaluation import evaluate_trace_batch
 from server.training.ppo.math import (
     PPOObjectiveConfig,
@@ -63,7 +63,7 @@ class PPOLossModule(nn.Module):
     def __init__(
         self,
         *,
-        model: TractorPolicyModel,
+        model: PolicyValueModel,
         train_config: TrainConfig,
         device: torch.device,
     ) -> None:
@@ -72,7 +72,7 @@ class PPOLossModule(nn.Module):
         self._train_config = train_config
         self._device = device
 
-    def policy_model(self) -> TractorPolicyModel:
+    def policy_model(self) -> PolicyValueModel:
         """Return the owned policy model for inference/checkpointing."""
         return self._model
 

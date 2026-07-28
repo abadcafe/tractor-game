@@ -11,7 +11,7 @@ from torch import Tensor
 
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
-from server.training.policy_sampling import RankReturnTargets
+from server.training.rollout_inference.samples import RankReturnTargets
 from server.training.runtime.shared_rollout_arena.schema import (
     sample_reference_column_views,
     unpack_header,

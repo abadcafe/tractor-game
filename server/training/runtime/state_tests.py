@@ -5,8 +5,9 @@ from __future__ import annotations
 import torch
 
 from server.foundation.result import Ok, Rejected
+from server.policy_model.network import ModelConfig
 from server.training.config import TrainConfig
-from server.training.model import ModelConfig
+from server.training.lifecycle.state import create_training_state
 from server.training.runtime.config import ExecutionConfig
 from server.training.runtime.state import (
     RuntimeTrainingState,
@@ -14,7 +15,6 @@ from server.training.runtime.state import (
     load_runtime_training_state,
     select_canonical_runtime_training_state,
 )
-from server.training.training_state import create_training_state
 
 
 def test_select_canonical_runtime_state_accepts_matching_ranks() -> (

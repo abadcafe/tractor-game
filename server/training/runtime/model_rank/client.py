@@ -11,10 +11,9 @@ import torch
 
 from server.foundation.result import Ok, Rejected
 from server.game import seat_id
-from server.training.legal_actions import LegalActionIndex
-from server.training.observation import Observation
-from server.training.policy import PolicyDecision
-from server.training.policy_inference_batch import (
+from server.policy_model.actions import LegalActionSpace
+from server.policy_model.observation import Observation
+from server.training.rollout_inference.batch import (
     BorrowedPolicyRequestBatch,
     CompletedPolicyResponse,
     DevicePolicyRequestBatch,
@@ -29,11 +28,16 @@ from server.training.policy_inference_batch import (
     decode_policy_response_batch_wire,
     materialize_borrowed_policy_request_batch,
 )
-from server.training.policy_sampling import CompactPolicyDecisionBatch
+from server.training.rollout_inference.randomness import (
+    TrainingDecisionKey,
+)
+from server.training.rollout_inference.samples import (
+    CompactPolicyDecisionBatch,
+)
 from server.training.runtime.model_rank.inference_transport import (
     AsyncPolicyPeer,
 )
-from server.training.sampling import PolicyDecisionKey
+from server.training.self_play.policy import PolicyDecision
 from server.training_events import EventContext, EventSink
 
 type PolicyDecisionResult = Ok[PolicyDecision] | Rejected
@@ -151,7 +155,7 @@ class LocalPolicyBatchTransport:
 
 @dataclass(slots=True)
 class _PendingPolicyRequest:
-    legal_actions: LegalActionIndex
+    legal_actions: LegalActionSpace
     future: asyncio.Future[PolicyDecisionResult]
     inference_batch: _PendingInferenceBatch
 
@@ -170,7 +174,7 @@ class _PendingInferenceBatch:
 class _QueuedPolicyRequest:
     request_id: int
     request: PolicyRequestInput
-    legal_actions: LegalActionIndex
+    legal_actions: LegalActionSpace
     future: asyncio.Future[PolicyDecisionResult]
 
 
@@ -250,8 +254,8 @@ class BatchedPolicyClient:
     async def decide(
         self,
         observation: Observation,
-        legal_actions: LegalActionIndex,
-        decision_key: PolicyDecisionKey,
+        legal_actions: LegalActionSpace,
+        decision_key: TrainingDecisionKey,
     ) -> PolicyDecisionResult:
         """Return one policy decision, batching concurrent requests."""
         loop = asyncio.get_running_loop()

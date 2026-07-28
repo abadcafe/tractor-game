@@ -12,7 +12,9 @@ from server.game.snapshots.tricks import (
     FailedThrowSnapshot,
     TrickSlotSnapshot,
 )
-from server.training.observation_memory import ObservationMemoryView
+from server.policy_model.observation import (
+    ObservationMemoryView,
+)
 
 from ..simulation import SimulationBranch
 

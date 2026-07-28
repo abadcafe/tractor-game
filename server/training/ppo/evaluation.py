@@ -8,16 +8,16 @@ import torch
 from torch import Tensor
 
 from server.foundation import result as _result
-from server.training.model import (
+from server.policy_model.network import (
     EncodedObservation,
-    TractorPolicyModel,
+    PolicyValueModel,
 )
 from server.training.ppo.minibatch import TensorizedPPOMinibatch
 from server.training.ppo.profile import PPOProfileAccumulator
 from server.training.ppo.replay_tensors import (
     PPOReplayTensorBatch,
 )
-from server.training.tensor_finiteness import (
+from server.training.rollout_inference.tensor_validation import (
     NamedTensorCheck,
     reject_if_non_finite,
 )
@@ -43,7 +43,7 @@ class ActionStepBatchEval:
 
 def evaluate_trace_batch(
     *,
-    model: TractorPolicyModel,
+    model: PolicyValueModel,
     minibatch: TensorizedPPOMinibatch,
     device: torch.device,
     profile: PPOProfileAccumulator,
@@ -96,7 +96,7 @@ def evaluate_trace_batch(
 
 def _action_step_batch_eval(
     *,
-    model: TractorPolicyModel,
+    model: PolicyValueModel,
     encoding: EncodedObservation,
     replay: PPOReplayTensorBatch,
     profile: PPOProfileAccumulator,

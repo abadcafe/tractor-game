@@ -8,7 +8,7 @@ import torch
 from torch import Tensor
 
 from server.foundation import result as _result
-from server.training.tensor_finiteness import (
+from server.training.rollout_inference.tensor_validation import (
     NamedTensorCheck,
     reject_if_non_finite,
 )

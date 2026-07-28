@@ -11,16 +11,21 @@ import torch
 
 from server.foundation.result import Ok, Rejected
 from server.game import Seat
-from server.training.legal_actions import (
-    LegalActionIndex,
-    build_legal_action_index,
+from server.policy_model.actions import (
+    MAX_ACTION_STEPS,
+    ActionChoice,
+    ActionTrace,
+    LegalActionSpace,
+    action_choice_id,
+    build_legal_action_space,
 )
-from server.training.observation import (
+from server.policy_model.observation import (
     Observation,
+    ObservationMemoryView,
     build_observation,
 )
-from server.training.observation_memory import ObservationMemoryView
-from server.training.policy_inference_batch import (
+from server.training.ppo import PPOUpdateProfile, PPOUpdateStats
+from server.training.rollout_inference.batch import (
     BorrowedPolicyRequestBatch,
     CompletedPolicyResponse,
     DevicePolicyRequestBatch,
@@ -29,22 +34,24 @@ from server.training.policy_inference_batch import (
     build_completed_policy_responses,
     encode_policy_response_batch_wire,
 )
-from server.training.policy_inference_batch.frame import (
+from server.training.rollout_inference.batch.frame import (
     decode_policy_request_frame_metadata,
 )
-from server.training.policy_inference_batch.schema import (
+from server.training.rollout_inference.batch.schema import (
     max_policy_request_batch_frame_bytes,
 )
-from server.training.policy_inference_batch.types import (
+from server.training.rollout_inference.batch.types import (
     PolicyRequestFrameMetadata,
 )
-from server.training.policy_sampling import (
+from server.training.rollout_inference.randomness import (
+    TrainingDecisionKey,
+)
+from server.training.rollout_inference.samples import (
     CompactActionChoiceBatch,
     CompactActionChoiceIds,
     CompactPolicyDecisionBatch,
     RankReturnTargets,
 )
-from server.training.ppo import PPOUpdateProfile, PPOUpdateStats
 from server.training.runtime.async_ipc import create_async_socket_pair
 from server.training.runtime.model_rank import (
     AsyncRemotePolicyBatchTransport,
@@ -56,15 +63,6 @@ from server.training.runtime.model_rank.inference_transport import (
     AsyncPolicyPeer,
 )
 from server.training.runtime.state import RuntimeTrainingState
-from server.training.sampling import PolicyDecisionKey
-from server.training.semantic_actions import (
-    ActionChoice,
-    ActionTrace,
-)
-from server.training.semantic_actions.choices import (
-    MAX_ACTION_STEPS,
-    action_choice_id,
-)
 from server.training_events import NullEventSink
 from tests.support import card
 from tests.support import snapshot as make_snapshot
@@ -634,22 +632,22 @@ def _observation() -> Observation:
 
 def _legal_actions(
     observation: Observation,
-) -> LegalActionIndex:
+) -> LegalActionSpace:
     snapshot = make_snapshot(
         phase="DEAL_BID",
         awaiting_action="bid",
         hand=[card("hearts", "2", 1)],
         trump_rank="2",
     )
-    return build_legal_action_index(
+    return build_legal_action_space(
         viewer=Seat.A,
         snapshot=snapshot,
         query=observation.action_query,
     )
 
 
-def _decision_key() -> PolicyDecisionKey:
-    return PolicyDecisionKey(
+def _decision_key() -> TrainingDecisionKey:
+    return TrainingDecisionKey(
         base_seed=0,
         policy_version=0,
         rollout_id="rollout-0",

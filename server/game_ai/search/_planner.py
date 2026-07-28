@@ -9,19 +9,19 @@ from typing import Protocol
 from server.foundation.result import Ok, Rejected
 from server.game import Seat, commands
 from server.game.snapshots import PlayerSnapshot
-from server.training.observation import Observation
-
-from ..actions import physical_command
-from ..belief import Particle
-from ..queries import (
+from server.policy_model.actions import physical_command
+from server.policy_model.inference import (
     ActionProposalRequest,
     ActionProposals,
     ActionSamples,
-    InferenceDrawKey,
-    ModelQuery,
+    PolicyQuery,
     PolicySampleRequest,
     ProposedAction,
+    SamplingSeed,
 )
+from server.policy_model.observation import Observation
+
+from ..belief import Particle
 from ._macro_rollout import run_paired_macro_rollouts
 from ._q_transform import transformed_q_values
 from ._schedule import HalvingSchedule
@@ -120,7 +120,7 @@ class SearchPlanner:
     async def propose(
         self,
         *,
-        root_query: ModelQuery,
+        root_query: PolicyQuery,
         decision_seed: int,
     ) -> Ok[ActionProposals] | Rejected:
         """Generate root candidates before hidden-belief work."""
@@ -129,7 +129,7 @@ class SearchPlanner:
                 ActionProposalRequest(
                     query=root_query,
                     candidate_count=self._config.root_candidate_count,
-                    draw=InferenceDrawKey(
+                    draw=SamplingSeed(
                         seed=decision_seed,
                         ordinal=0,
                     ),

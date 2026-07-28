@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from server.training.semantic_actions.choices import ACTION_CHOICE_COUNT
+from server.policy_model.actions import ACTION_CHOICE_COUNT
 
 
 @dataclass(frozen=True, slots=True)

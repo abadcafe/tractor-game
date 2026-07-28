@@ -9,7 +9,6 @@ import pytest
 import torch
 
 from server.foundation.result import Ok, Rejected
-from server.training.returns import ReturnCommit
 from server.training.runtime.shared_rollout_arena import (
     RolloutArenaHandle,
     RolloutSampleTargetReached,
@@ -29,6 +28,7 @@ from server.training.runtime.shared_rollout_arena import (
 from server.training.runtime.shared_rollout_arena.types import (
     RolloutRoundMetrics,
 )
+from server.training.self_play.returns import ReturnCommit
 from server.training.stop import TrainingStopRequest
 
 

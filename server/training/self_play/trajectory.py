@@ -1,0 +1,46 @@
+"""Trajectory records collected by training players."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from server.game import Seat
+from server.policy_model.actions import GeneratedAction
+from server.training.rollout_inference.samples.records import (
+    DecisionHandle,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionStep:
+    """One accepted player decision plus its replay handle."""
+
+    seat: Seat
+    seq: int
+    action: GeneratedAction
+    decision_handle: DecisionHandle
+    choice_count: int
+
+    def __post_init__(self) -> None:
+        assert self.seq >= 0
+        assert self.choice_count > 0
+
+
+def _step_list() -> list[DecisionStep]:
+    return []
+
+
+@dataclass(slots=True)
+class TrajectoryRecorder:
+    """Append-only in-memory decision recorder."""
+
+    _steps: list[DecisionStep] = field(default_factory=_step_list)
+
+    def append(self, step: DecisionStep) -> None:
+        self._steps.append(step)
+
+    def steps(self) -> tuple[DecisionStep, ...]:
+        return tuple(self._steps)
+
+    def clear(self) -> None:
+        self._steps.clear()

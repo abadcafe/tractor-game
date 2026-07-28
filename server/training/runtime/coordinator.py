@@ -10,11 +10,11 @@ from uuid import uuid4
 from server.foundation import result as _result
 from server.foundation.json_value import JsonObject
 from server.foundation.result import Ok, Rejected
+from server.policy_model.network import ModelConfig
 from server.training.config import (
     CheckpointPolicy,
     TrainConfig,
 )
-from server.training.model import ModelConfig
 from server.training.runtime.checkpoint_state import (
     RuntimeCheckpointState,
     load_runtime_checkpoint_state,

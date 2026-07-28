@@ -12,8 +12,8 @@ from typing import Protocol, assert_never
 
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
+from server.policy_model.network import ModelConfig
 from server.training.config import TrainConfig
-from server.training.model import ModelConfig
 from server.training.ppo import PPOUpdateProfile, PPOUpdateStats
 from server.training.runtime.async_ipc import (
     AsyncCoordinatorControlEndpoint,

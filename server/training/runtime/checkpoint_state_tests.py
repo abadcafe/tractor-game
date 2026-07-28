@@ -7,8 +7,8 @@ from pathlib import Path
 import torch
 
 from server.foundation.result import Ok
+from server.policy_model.network import ModelConfig
 from server.training.config import TrainConfig
-from server.training.model import ModelConfig
 from server.training.runtime.checkpoint_state import (
     create_initial_runtime_checkpoint_state,
     load_runtime_checkpoint_state,

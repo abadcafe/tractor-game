@@ -6,15 +6,13 @@ import sys
 from pathlib import Path
 
 from server.foundation.result import Ok
-from server.training.config import TrainConfig
-from server.training.model import ModelConfig
-from server.training.torch_checkpoints.manifest import (
+from server.policy_model.checkpoint import (
+    CheckpointManifest,
+    CheckpointMetadata,
     write_checkpoint_manifest,
 )
-from server.training.torch_checkpoints.schema import (
-    CheckpointManifest,
-    TorchCheckpointMetadata,
-)
+from server.policy_model.network import ModelConfig
+from server.training.config import TrainConfig
 from server.training_artifacts.catalog import (
     read_checkpoint_catalog,
 )
@@ -135,9 +133,9 @@ def _write_checkpoint(
             checkpoint_id=checkpoint_id,
             state_path=state_path,
             state_sha256=hashlib.sha256(state).hexdigest(),
-            metadata=TorchCheckpointMetadata(
+            metadata=CheckpointMetadata(
                 model_config=ModelConfig(),
-                train_config=TrainConfig(),
+                training_config_values=TrainConfig().to_json(),
                 total_rounds=10,
                 total_samples=20,
                 total_updates=2,

@@ -9,9 +9,9 @@ import torch
 from torch import Tensor
 
 from server.foundation import result as _result
-from server.training.model import TractorPolicyModel
+from server.policy_model.network import PolicyValueModel
+from server.training.lifecycle.state import LoadedTrainingState
 from server.training.ppo import PPOTrainer
-from server.training.training_state import LoadedTrainingState
 
 type ModelTensorState = dict[str, Tensor]
 type OptimizerPayload = dict[str, object]
@@ -27,7 +27,7 @@ class RuntimeTrainingState:
 
 def capture_runtime_training_state(
     *,
-    model: TractorPolicyModel,
+    model: PolicyValueModel,
     trainer: PPOTrainer,
 ) -> RuntimeTrainingState:
     """Capture a CPU snapshot of model and trainer state."""

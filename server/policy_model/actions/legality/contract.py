@@ -1,0 +1,44 @@
+"""Legal action space contract shared by policy consumers."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from server.foundation.result import Ok, Rejected
+from server.policy_model._schema.actions import (
+    ActionTrace,
+    InvalidActionRejected,
+)
+from server.policy_model.actions.semantic.values import GeneratedAction
+from server.policy_model.observation.query import ActionQuery
+
+
+class LegalActionSpace:
+    """Rule-complete legal-choice mask for one player decision."""
+
+    @property
+    def query(self) -> ActionQuery:
+        """Return the action query this legal space answers."""
+        raise NotImplementedError
+
+    def decode(
+        self, trace: ActionTrace
+    ) -> Ok[GeneratedAction] | Rejected:
+        """Decode a complete legal trace into a generated action."""
+        raise NotImplementedError
+
+
+@dataclass(frozen=True, slots=True)
+class EmptyLegalActionSpace(LegalActionSpace):
+    """No action is legal because the snapshot awaits nothing."""
+
+    _query: ActionQuery
+
+    @property
+    def query(self) -> ActionQuery:
+        return self._query
+
+    def decode(
+        self, trace: ActionTrace
+    ) -> Ok[GeneratedAction] | Rejected:
+        return InvalidActionRejected("当前没有动作请求")

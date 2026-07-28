@@ -9,7 +9,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from server.foundation import result as _result
-from server.training.model import MIN_ATTENTION_HEAD_DIMENSION
+from server.policy_model.network import MIN_ATTENTION_HEAD_DIMENSION
 from server.training.stop import TrainingStopRequest
 
 type ManagedCheckpointName = Annotated[
@@ -167,9 +167,11 @@ def initialize_run(
     options: TrainingInitOptions,
 ) -> _result.Ok[InitializedRun] | _result.Rejected:
     """Create a portable zero-update checkpoint and event store."""
+    from server.policy_model.network import ModelConfig
     from server.training.config import TrainConfig
-    from server.training.model import ModelConfig
-    from server.training.run_setup import initialize_training_run
+    from server.training.lifecycle.run_setup import (
+        initialize_training_run,
+    )
 
     result = initialize_training_run(
         run_dir=options.run_dir,
@@ -209,9 +211,14 @@ def resume_run(
     stop_request: TrainingStopRequest,
 ) -> _result.Ok[TrainingRunResult] | _result.Rejected:
     """Validate, load, and execute resumed training."""
-    from server.training.resume_config import resolve_resume_options
-    from server.training.resume_setup import (
+    from server.training.lifecycle.resume_config import (
+        resolve_resume_options,
+    )
+    from server.training.lifecycle.resume_setup import (
         canonicalize_resume_timeline,
+    )
+    from server.training.lifecycle.state import (
+        validate_model_rank_runtime,
     )
     from server.training.runtime.affinity import preflight_cpu_affinity
     from server.training.runtime.checkpoint_state import (
@@ -219,9 +226,6 @@ def resume_run(
     )
     from server.training.runtime.coordinator import (
         run_training_coordinator,
-    )
-    from server.training.training_state import (
-        validate_model_rank_runtime,
     )
 
     resolved_result = resolve_resume_options(options)

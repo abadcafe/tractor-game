@@ -10,19 +10,25 @@ import torch
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
 from server.game import Seat
-from server.training.legal_actions import (
-    LegalActionIndex,
-    build_legal_action_index,
+from server.policy_model.actions import (
+    LegalActionSpace,
+    build_legal_action_space,
 )
-from server.training.observation import Observation, build_observation
-from server.training.observation_memory import ObservationMemoryView
-from server.training.policy_inference_batch import (
+from server.policy_model.observation import (
+    Observation,
+    ObservationMemoryView,
+    build_observation,
+)
+from server.training.rollout_inference.batch import (
     PolicyRequestCompiler,
     PolicyRequestInput,
     PolicyRequestRoute,
 )
-from server.training.policy_inference_batch.types import (
+from server.training.rollout_inference.batch.types import (
     PolicyRequestWireFrame,
+)
+from server.training.rollout_inference.randomness import (
+    TrainingDecisionKey,
 )
 from server.training.runtime.async_ipc import (
     AsyncProcessControlLink,
@@ -48,7 +54,6 @@ from server.training.runtime.model_rank.staging import (
     PolicyRequestIngress,
 )
 from server.training.runtime.state import RuntimeTrainingState
-from server.training.sampling import PolicyDecisionKey
 from tests.support import card
 from tests.support import snapshot as make_snapshot
 
@@ -651,22 +656,22 @@ def _observation() -> Observation:
     )
 
 
-def _legal_actions(observation: Observation) -> LegalActionIndex:
+def _legal_actions(observation: Observation) -> LegalActionSpace:
     snapshot = make_snapshot(
         phase="DEAL_BID",
         awaiting_action="bid",
         hand=[card("hearts", "2", 1)],
         trump_rank="2",
     )
-    return build_legal_action_index(
+    return build_legal_action_space(
         viewer=Seat.A,
         snapshot=snapshot,
         query=observation.action_query,
     )
 
 
-def _decision_key(*, policy_version: int) -> PolicyDecisionKey:
-    return PolicyDecisionKey(
+def _decision_key(*, policy_version: int) -> TrainingDecisionKey:
+    return TrainingDecisionKey(
         base_seed=0,
         policy_version=policy_version,
         rollout_id=f"rollout-{policy_version}",

@@ -10,35 +10,37 @@ from torch import Tensor
 
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
-from server.training.observation_structure import STRUCTURE_AXIS_COUNT
-from server.training.packed_observation import (
+from server.policy_model.actions import MAX_ACTION_STEPS
+from server.policy_model.actions.decoding import DeviceActionPlanBatch
+from server.policy_model.observation import (
     MAX_LOSSLESS_OBSERVATION_TOKENS,
+    STRUCTURE_AXIS_COUNT,
 )
-from server.training.policy_inference_batch import (
+from server.policy_model.observation.tensor import (
+    ObservationTensorBatch,
+)
+from server.training.rollout_inference.batch import (
     DevicePolicyRequestBatch,
     PolicyRequestRoute,
 )
-from server.training.policy_inference_batch.device import (
+from server.training.rollout_inference.batch.device import (
     copy_policy_request_host_frame_to_device,
     materialize_policy_request_frame,
     materialize_sampling_thresholds_for_device,
     sampling_threshold_dtype_for_device,
 )
-from server.training.policy_inference_batch.frame import (
+from server.training.rollout_inference.batch.frame import (
     decode_policy_request_frame_metadata,
 )
-from server.training.policy_inference_batch.schema import (
+from server.training.rollout_inference.batch.schema import (
     max_policy_request_batch_frame_bytes,
 )
-from server.training.policy_inference_batch.types import (
+from server.training.rollout_inference.batch.types import (
     PolicyRequestFrameMetadata,
 )
 from server.training.runtime.model_rank.inference_transport import (
     AsyncPolicyPeer,
 )
-from server.training.semantic_action_plan import DeviceActionPlanBatch
-from server.training.semantic_actions.choices import MAX_ACTION_STEPS
-from server.training.tensorize import ObservationTensorBatch
 
 
 @dataclass(frozen=True, slots=True)

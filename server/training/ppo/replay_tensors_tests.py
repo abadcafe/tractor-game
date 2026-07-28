@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import torch
 
+from server.policy_model.actions import ACTION_CHOICE_COUNT
 from server.training.ppo.replay_tensors import PPOReplayTensorBatch
-from server.training.semantic_actions.choices import ACTION_CHOICE_COUNT
 
 
 def test_ppo_replay_records_exact_choice_ids_and_full_legal_masks() -> (

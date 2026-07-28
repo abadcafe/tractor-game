@@ -9,8 +9,8 @@ import torch.distributed as dist
 from torch import Tensor
 
 from server.foundation import result as _result
+from server.policy_model.network import PolicyValueModel
 from server.training.config import TrainConfig
-from server.training.model import TractorPolicyModel
 from server.training.ppo.collectives import (
     all_reduce_max,
     all_reduce_sum,
@@ -43,6 +43,7 @@ from server.training.ppo.profile import (
     PPOProfileAccumulator,
     PPOUpdateProfile,
 )
+from server.training.ppo.shuffle import ShuffleKey, shuffled_indices
 from server.training.ppo.stats import (
     PPOUpdateStats,
     ppo_update_stats_are_finite,
@@ -67,7 +68,6 @@ from server.training.ppo.validation import (
     validation_rejection_reason,
 )
 from server.training.runtime.config import PPOProfileMode
-from server.training.sampling import ShuffleKey, shuffled_indices
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,7 +90,7 @@ class PPOTrainer:
     def __init__(
         self,
         *,
-        model: TractorPolicyModel,
+        model: PolicyValueModel,
         train_config: TrainConfig,
         device: torch.device,
         profile_mode: PPOProfileMode,

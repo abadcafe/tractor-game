@@ -9,22 +9,22 @@ import torch
 
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
+from server.policy_model.network import ModelConfig
+from server.training.checkpoint import (
+    CheckpointSaveResult,
+    load_training_checkpoint,
+    save_training_checkpoint,
+)
 from server.training.config import TrainConfig
-from server.training.model import ModelConfig
+from server.training.lifecycle.state import (
+    LoadedTrainingState,
+    create_training_state,
+)
 from server.training.runtime.config import ExecutionConfig
 from server.training.runtime.state import (
     RuntimeTrainingState,
     capture_runtime_training_state,
     load_runtime_training_state,
-)
-from server.training.torch_checkpoints.load import load_torch_checkpoint
-from server.training.torch_checkpoints.save import (
-    TorchCheckpointSaveResult,
-    save_torch_checkpoint,
-)
-from server.training.training_state import (
-    LoadedTrainingState,
-    create_training_state,
 )
 
 
@@ -67,7 +67,7 @@ def load_runtime_checkpoint_state(
     execution_config: ExecutionConfig,
 ) -> _result.Ok[RuntimeCheckpointState] | _result.Rejected:
     """Load a portable runtime state from a torch checkpoint."""
-    loaded_result = load_torch_checkpoint(
+    loaded_result = load_training_checkpoint(
         path=path,
         model_config=model_config,
         train_config=train_config,
@@ -92,7 +92,7 @@ def save_runtime_checkpoint_state(
     total_samples: int,
     total_updates: int,
     retained_update_count: int,
-) -> _result.Ok[TorchCheckpointSaveResult] | _result.Rejected:
+) -> _result.Ok[CheckpointSaveResult] | _result.Rejected:
     """Persist a portable runtime state as a torch checkpoint."""
     assert retained_update_count >= 0
     assert total_rounds >= 0
@@ -107,7 +107,7 @@ def save_runtime_checkpoint_state(
         total_samples=total_samples,
         total_updates=total_updates,
     )
-    return save_torch_checkpoint(
+    return save_training_checkpoint(
         manifest_paths=manifest_paths,
         model=loaded.model,
         trainer=loaded.trainer,

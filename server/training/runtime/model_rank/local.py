@@ -6,10 +6,10 @@ from typing import Protocol
 
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
-from server.training.policy_sampling import (
+from server.training.ppo import PPOUpdateStats
+from server.training.rollout_inference.samples import (
     RankReturnTargets,
 )
-from server.training.ppo import PPOUpdateStats
 from server.training.runtime.state import RuntimeTrainingState
 
 

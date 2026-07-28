@@ -6,10 +6,12 @@ from dataclasses import dataclass
 
 from torch import Tensor
 
+from server.policy_model.observation.tensor import (
+    ObservationTensorBatch,
+)
 from server.training.ppo.replay_tensors import (
     PPOReplayTensorBatch,
 )
-from server.training.tensorize import ObservationTensorBatch
 
 
 @dataclass(frozen=True, slots=True)

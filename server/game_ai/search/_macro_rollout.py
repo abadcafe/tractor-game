@@ -8,18 +8,18 @@ from typing import Protocol
 from server.foundation.result import Ok, Rejected
 from server.game import Partnership, Seat, partnership_of, seats
 from server.game.snapshots import PlayerSnapshot
-from server.training.observation import Observation
-from server.training.rewards import round_rewards
-
-from ..actions import physical_command
-from ..belief import Particle
-from ..queries import (
+from server.policy_model.actions import physical_command
+from server.policy_model.inference import (
     ActionSamples,
-    InferenceDrawKey,
-    ModelQuery,
+    PolicyQuery,
     PolicySampleRequest,
     ProposedAction,
+    SamplingSeed,
 )
+from server.policy_model.observation import Observation
+from server.policy_model.value_target import round_value_targets
+
+from ..belief import Particle
 from ..simulation import SimulationBranch
 
 
@@ -179,13 +179,13 @@ async def run_paired_macro_rollouts(
             pending_lanes.append(lane)
             requests.append(
                 PolicySampleRequest(
-                    query=ModelQuery(
+                    query=PolicyQuery(
                         observation=observation,
                         legal_actions=legal_actions,
                         seat=actor.value,
                     ),
                     draws=(
-                        InferenceDrawKey(
+                        SamplingSeed(
                             seed=_rollout_seed(
                                 decision_seed=decision_seed,
                                 halving_round=halving_round,
@@ -309,7 +309,7 @@ def _terminal_value(
     after = branch.snapshot(viewer)
     if after.scoring is None:
         return None
-    first, second = round_rewards(
+    first, second = round_value_targets(
         before=root_snapshot,
         after=after,
     )

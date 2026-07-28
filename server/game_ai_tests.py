@@ -21,25 +21,14 @@ from server.game import (
     seats,
 )
 from server.game.rules.cards.faces import FaceCount
-from server.game_ai import (
-    ActionProposalRequest,
-    ActionProposals,
-    ActionSamples,
-    ModelQuery,
-    PolicySampleRequest,
-    PolicyScoreRequest,
-    ProposedAction,
-    SampledAction,
-)
 from server.game_ai.controller import AIController
 from server.game_ai.search import SearchConfig
 from server.game_ai.simulation import SimulationBranch
-from server.training.legal_actions.complete_trace import (
-    trace_for_selection,
+from server.policy_model._schema.actions import (
+    ACTION_CHOICE_COUNT,
 )
-from server.training.observation import Observation, build_observation
-from server.training.observation_memory import ObservationMemory
-from server.training.semantic_action_plan import (
+from server.policy_model.actions import GeneratedAction
+from server.policy_model.actions.decoding import (
     ActionChoiceLogitDecoder,
     ActionSampler,
     action_plan_generation_step_count,
@@ -47,13 +36,27 @@ from server.training.semantic_action_plan import (
     compile_legal_action_frame,
     plan_batch_to_device,
 )
-from server.training.semantic_actions import GeneratedAction
-from server.training.semantic_actions.binding import (
+from server.policy_model.actions.legality.complete_trace import (
+    trace_for_selection,
+)
+from server.policy_model.actions.semantic.binding import (
     bind_generated_action,
 )
-from server.training.semantic_actions.choices import (
-    ACTION_CHOICE_COUNT,
+from server.policy_model.inference import (
+    ActionProposalRequest,
+    ActionProposals,
+    ActionSamples,
+    PolicyQuery,
+    PolicySampleRequest,
+    PolicyScoreRequest,
+    ProposedAction,
+    SampledAction,
 )
+from server.policy_model.observation import (
+    Observation,
+    build_observation,
+)
+from server.policy_model.observation.history import ObservationMemory
 
 
 @dataclass(slots=True)
@@ -335,7 +338,7 @@ def _active_actor(state: GameState) -> Seat:
 
 
 def _single_card_lead(
-    query: ModelQuery,
+    query: PolicyQuery,
     *,
     first: bool,
 ) -> Ok[GeneratedAction] | Rejected:
@@ -350,7 +353,7 @@ def _single_card_lead(
 
 
 def _first_legal_action(
-    query: ModelQuery,
+    query: PolicyQuery,
 ) -> Ok[GeneratedAction] | Rejected:
     frame = compile_legal_action_frame(query.legal_actions)
     steps = action_plan_generation_step_count(frame)

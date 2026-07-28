@@ -10,7 +10,11 @@ from torch import Tensor
 
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
-from server.training.policy_inference_batch import (
+from server.policy_model.actions.decoding import DeviceActionPlanBatch
+from server.policy_model.observation.tensor import (
+    ObservationTensorBatch,
+)
+from server.training.rollout_inference.batch import (
     DevicePolicyRequestBatch,
     PolicyRequestRoute,
 )
@@ -34,8 +38,6 @@ from server.training.runtime.model_rank.staging import (
     ModelRankInferenceBatch,
     PolicyRequestIngress,
 )
-from server.training.semantic_action_plan import DeviceActionPlanBatch
-from server.training.tensorize import ObservationTensorBatch
 
 
 class ModelRankBatchHandler(Protocol):

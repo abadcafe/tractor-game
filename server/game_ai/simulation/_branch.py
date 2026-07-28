@@ -14,14 +14,17 @@ from server.game import (
     observe,
 )
 from server.game.snapshots import PlayerSnapshot
-from server.training.legal_actions import (
-    LegalActionIndex,
-    build_legal_action_index,
+from server.policy_model.actions import (
+    LegalActionSpace,
+    build_legal_action_space,
 )
-from server.training.observation import Observation, build_observation
-from server.training.observation_memory import ObservationMemory
+from server.policy_model.observation import (
+    Observation,
+    ObservationMemory,
+    build_observation,
+)
 
-type ModelInput = tuple[Observation, LegalActionIndex]
+type ModelInput = tuple[Observation, LegalActionSpace]
 
 
 def _snapshot_cache() -> dict[Seat, PlayerSnapshot]:
@@ -113,7 +116,7 @@ class SimulationBranch:
         )
         result = (
             observation,
-            build_legal_action_index(
+            build_legal_action_space(
                 viewer=seat,
                 snapshot=snapshot,
                 query=observation.action_query,

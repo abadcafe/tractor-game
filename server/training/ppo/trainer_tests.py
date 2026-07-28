@@ -11,34 +11,15 @@ from torch import Tensor
 from server.foundation.result import Ok, Rejected
 from server.game import Seat, seats
 from server.game.rules.cards.faces import CardFace, FaceCount
-from server.training.config import TrainConfig
-from server.training.legal_actions import (
-    LegalActionIndex,
-    build_legal_action_index,
+from server.policy_model.actions import (
+    ACTION_CHOICE_COUNT,
+    ActionChoice,
+    ActionTrace,
+    LegalActionSpace,
+    action_choice_id,
+    build_legal_action_space,
 )
-from server.training.model import (
-    ActionTraceScores,
-    EncodedObservation,
-    ModelConfig,
-    TractorPolicyModel,
-)
-from server.training.observation import build_observation
-from server.training.observation_memory import ObservationMemoryView
-from server.training.policy_sampling import (
-    DecisionHandle,
-    RankReturnTargets,
-)
-from server.training.policy_sampling.model_rank_sample_arena import (
-    ModelRankSampleArena,
-)
-from server.training.ppo import (
-    PPOBatchSource,
-    PPOTrainer,
-    PPOUpdateInput,
-    PPOUpdateProfile,
-)
-from server.training.ppo.distributed import PPOUpdatePartition
-from server.training.semantic_action_plan import (
+from server.policy_model.actions.decoding import (
     ActionChoiceLogitDecoder,
     ActionSampleBatch,
     ActionSampler,
@@ -46,23 +27,38 @@ from server.training.semantic_action_plan import (
     compile_legal_action_frame,
     plan_batch_to_device,
 )
-from server.training.semantic_actions import (
-    ActionChoice,
-    ActionTrace,
+from server.policy_model.network import (
+    ActionTraceScores,
+    EncodedObservation,
+    ModelConfig,
+    PolicyValueModel,
 )
-from server.training.semantic_actions.choices import (
-    ACTION_CHOICE_COUNT,
-    action_choice_id,
+from server.policy_model.observation import (
+    ObservationMemoryView,
+    build_observation,
 )
-from server.training.tensorize import (
+from server.policy_model.observation.tensor import (
     ObservationTensorBatch,
     tensorize_observations,
+)
+from server.training.config import TrainConfig
+from server.training.ppo import (
+    PPOBatchSource,
+    PPOTrainer,
+    PPOUpdateInput,
+    PPOUpdateProfile,
+)
+from server.training.ppo.distributed import PPOUpdatePartition
+from server.training.rollout_inference.samples import (
+    DecisionHandle,
+    ModelRankSampleArena,
+    RankReturnTargets,
 )
 from tests.support import card
 from tests.support import snapshot as make_snapshot
 
 
-class CountingTractorPolicyModel(TractorPolicyModel):
+class CountingPolicyValueModel(PolicyValueModel):
     """Policy model that records forward batch sizes for tests."""
 
     def __init__(
@@ -111,7 +107,7 @@ class CountingTractorPolicyModel(TractorPolicyModel):
         )
 
 
-class NonFiniteValueModel(TractorPolicyModel):
+class NonFiniteValueModel(PolicyValueModel):
     """Policy model that produces an infinite value loss."""
 
     def value_estimates(
@@ -173,7 +169,7 @@ def test_update_returns_stats_and_adamw_state() -> None:
         ppo_epochs=1,
         minibatch_size=1,
     )
-    model = TractorPolicyModel(
+    model = PolicyValueModel(
         d_model=model_config.d_model,
         layers=model_config.layers,
         heads=model_config.heads,
@@ -206,7 +202,7 @@ def test_update_batches_minibatch_model_forwards() -> None:
         ppo_epochs=1,
         minibatch_size=4,
     )
-    model = CountingTractorPolicyModel(
+    model = CountingPolicyValueModel(
         d_model=model_config.d_model,
         layers=model_config.layers,
         heads=model_config.heads,
@@ -251,7 +247,7 @@ def test_update_rejects_ddp_without_process_group() -> None:
         ppo_epochs=1,
         minibatch_size=4,
     )
-    model = TractorPolicyModel(
+    model = PolicyValueModel(
         d_model=model_config.d_model,
         layers=model_config.layers,
         heads=model_config.heads,
@@ -282,7 +278,7 @@ def test_update_uses_configured_single_rank_partition() -> None:
         ppo_epochs=1,
         minibatch_size=4,
     )
-    model = CountingTractorPolicyModel(
+    model = CountingPolicyValueModel(
         d_model=model_config.d_model,
         layers=model_config.layers,
         heads=model_config.heads,
@@ -314,7 +310,7 @@ def test_update_rejects_empty_single_rank_input() -> None:
         ppo_epochs=1,
         minibatch_size=4,
     )
-    model = TractorPolicyModel(
+    model = PolicyValueModel(
         d_model=model_config.d_model,
         layers=model_config.layers,
         heads=model_config.heads,
@@ -348,7 +344,7 @@ def test_update_disables_profile_by_default() -> None:
         ppo_epochs=1,
         minibatch_size=4,
     )
-    model = TractorPolicyModel(
+    model = PolicyValueModel(
         d_model=model_config.d_model,
         layers=model_config.layers,
         heads=model_config.heads,
@@ -378,7 +374,7 @@ def test_update_basic_profile_records_only_update_seconds() -> None:
         ppo_epochs=1,
         minibatch_size=4,
     )
-    model = TractorPolicyModel(
+    model = PolicyValueModel(
         d_model=model_config.d_model,
         layers=model_config.layers,
         heads=model_config.heads,
@@ -461,7 +457,7 @@ def test_update_rejects_non_finite_gradients_before_optimizer_step(
         ppo_epochs=1,
         minibatch_size=1,
     )
-    model = TractorPolicyModel(
+    model = PolicyValueModel(
         d_model=model_config.d_model,
         layers=model_config.layers,
         heads=model_config.heads,
@@ -600,7 +596,7 @@ def _store_single_card_decision(
             bid_actions=(), completed_tricks=()
         ),
     )
-    legal_actions = build_legal_action_index(
+    legal_actions = build_legal_action_space(
         viewer=seat,
         snapshot=snapshot,
         query=observation.action_query,
@@ -640,7 +636,7 @@ def _store_single_card_decision(
 
 def _action_sample_for_trace(
     *,
-    legal_actions: LegalActionIndex,
+    legal_actions: LegalActionSpace,
     trace: ActionTrace,
     device: torch.device,
 ) -> ActionSampleBatch:
