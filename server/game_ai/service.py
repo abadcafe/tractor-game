@@ -1,4 +1,4 @@
-"""Application-scoped model ownership and seat controller creation."""
+"""Application-scoped local model or remote controller ownership."""
 
 from __future__ import annotations
 
@@ -6,72 +6,107 @@ import random
 import secrets
 from typing import TYPE_CHECKING
 
+import httpx
+
 from server.foundation.result import Ok, Rejected
 from server.game import Seat
 
-from .config import AIConfig
-from .controller import AIController
-from .model import AIControllerPort, ModelEvaluator
+from .config import AIConfig, LocalAIConfig, RemoteAIConfig
+from .controller import AIController, AIControllerPort
+from .remote import RemoteAIController
 
 if TYPE_CHECKING:
     from .inference import InferenceRuntime
 
 
 class AIService:
-    """Load one checkpoint once and share its immutable model."""
+    """Own exactly one configured AI deployment."""
 
     def __init__(self, config: AIConfig) -> None:
         self._config = config
         self._runtime: InferenceRuntime | None = None
         self._load_rejection: Rejected | None = None
+        self._remote_client: httpx.AsyncClient | None = None
 
     def controller(
         self,
         seat: Seat,
     ) -> Ok[AIControllerPort] | Rejected:
-        """Create one seat-local controller over the shared model."""
-        model_result = self._model_evaluator()
-        if isinstance(model_result, Rejected):
-            return model_result
+        """Create a controller through the configured deployment."""
+        if isinstance(self._config, RemoteAIConfig):
+            return Ok(
+                RemoteAIController(
+                    seat=seat,
+                    client=self._remote_http_client(),
+                )
+            )
+        return self.local_controller(seat)
+
+    def local_controller(
+        self,
+        seat: Seat,
+    ) -> Ok[AIControllerPort] | Rejected:
+        """Create an in-process controller or reject remote mode."""
+        config = self._config
+        if not isinstance(config, LocalAIConfig):
+            return Rejected(
+                reason=(
+                    "AI endpoint cannot host sessions in remote mode"
+                )
+            )
+        runtime_result = self._inference_runtime(config)
+        if isinstance(runtime_result, Rejected):
+            return runtime_result
         return Ok(
             AIController(
                 seat=seat,
-                model=model_result.value,
-                particle_count=self._config.particle_count,
-                direct_samples=self._config.direct_samples,
-                search_config=self._config.search_config(),
+                model=runtime_result.value,
+                particle_count=config.particle_count,
+                search_config=config.search_config(),
                 random_source=random.Random(secrets.randbits(128)),
             )
         )
 
-    def _model_evaluator(
+    def _inference_runtime(
         self,
-    ) -> Ok[ModelEvaluator] | Rejected:
+        config: LocalAIConfig,
+    ) -> Ok[InferenceRuntime] | Rejected:
         if self._runtime is not None:
-            model: ModelEvaluator = self._runtime
-            return Ok(model)
+            return Ok(self._runtime)
         if self._load_rejection is not None:
             return self._load_rejection
         from .inference import InferenceRuntime
 
         loaded = InferenceRuntime.load(
-            checkpoint_path=self._config.checkpoint_path,
-            device_name=self._config.device,
+            checkpoint_path=config.checkpoint_path,
+            device_name=config.device,
         )
         if isinstance(loaded, Rejected):
             self._load_rejection = loaded
             return loaded
         self._runtime = loaded.value
-        model = loaded.value
-        return Ok(model)
+        return Ok(loaded.value)
+
+    def _remote_http_client(self) -> httpx.AsyncClient:
+        config = self._config
+        assert isinstance(config, RemoteAIConfig)
+        if self._remote_client is None:
+            self._remote_client = httpx.AsyncClient(
+                base_url=str(config.endpoint).rstrip("/"),
+                timeout=config.request_timeout_seconds,
+            )
+        return self._remote_client
 
     async def close(self) -> None:
-        """Close the inference runtime if the model was loaded."""
+        """Close the single configured inference transport."""
         runtime = self._runtime
-        if runtime is None:
-            return
-        self._runtime = None
-        await runtime.close()
+        if runtime is not None:
+            self._runtime = None
+            await runtime.close()
+        client = self._remote_client
+        if client is not None:
+            self._remote_client = None
+            await client.aclose()
 
 
 __all__ = ("AIService",)

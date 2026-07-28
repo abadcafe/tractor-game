@@ -1,8 +1,11 @@
-"""Seat-local AI history, belief, and search composition."""
+"""Seat-local belief and policy-improvement composition."""
 
 from __future__ import annotations
 
+import logging
 import random
+import time
+from typing import Protocol
 
 from server.foundation.result import Ok, Rejected
 from server.game import Seat, commands
@@ -11,34 +14,57 @@ from server.training.legal_actions import build_legal_action_index
 from server.training.observation import build_observation
 from server.training.observation_memory import ObservationMemory
 
-from .actions import physical_command
-from .belief import ParticleBelief
-from .model import (
-    ActionDrawKey,
-    ActionSampleRequest,
-    ModelEvaluator,
-    ModelQuery,
-)
-from .search import ParticleSearch, SearchConfig
+from .belief import BeliefInference, ParticleBelief
+from .queries import ModelQuery
+from .search import SearchConfig, SearchInference, SearchPlanner
+
+_LOGGER = logging.getLogger(__name__)
+
+
+class AIControllerPort(Protocol):
+    """Sequenced observation and decision boundary for AI players."""
+
+    def observe(
+        self,
+        *,
+        seq: int,
+        snapshot: PlayerSnapshot,
+        error: str | None,
+    ) -> Ok[None] | Rejected:
+        """Record one complete player observation."""
+        ...
+
+    async def decide(
+        self,
+        *,
+        seq: int,
+        snapshot: PlayerSnapshot,
+    ) -> Ok[commands.Command] | Rejected:
+        """Return one strategic command for the current view."""
+        ...
+
+
+class ControllerInference(
+    BeliefInference,
+    SearchInference,
+    Protocol,
+):
+    """Exact model surface required by one AI controller."""
 
 
 class AIController:
-    """Produce one command from a contiguous seat-local game history."""
+    """Produce commands from one contiguous seat-local game history."""
 
     def __init__(
         self,
         *,
         seat: Seat,
-        model: ModelEvaluator,
+        model: ControllerInference,
         particle_count: int,
-        direct_samples: int,
         search_config: SearchConfig,
         random_source: random.Random,
     ) -> None:
-        assert direct_samples > 0
         self._seat = seat
-        self._model = model
-        self._direct_samples = direct_samples
         self._random = random_source
         self._memory = ObservationMemory()
         self._belief = ParticleBelief(
@@ -47,7 +73,7 @@ class AIController:
             particle_count=particle_count,
             random_source=random_source,
         )
-        self._search = ParticleSearch(
+        self._search = SearchPlanner(
             model=model,
             config=search_config,
         )
@@ -80,86 +106,80 @@ class AIController:
         seq: int,
         snapshot: PlayerSnapshot,
     ) -> Ok[commands.Command] | Rejected:
-        """Run direct model inference or hidden-information search."""
-        action = snapshot.awaiting_action
-        if action not in ("bid", "stir", "discard", "play"):
+        """Run the same policy-improvement pipeline for every action."""
+        if snapshot.awaiting_action not in (
+            "bid",
+            "stir",
+            "discard",
+            "play",
+        ):
             return Rejected(
                 reason="AI has no strategic action to decide"
             )
+        started = time.perf_counter()
+        decision_kind = snapshot.awaiting_action
         decision_seed = self._random.getrandbits(63)
-        if action == "play":
+        root_query = self._root_query(snapshot)
+        proposals = await self._search.propose(
+            root_query=root_query,
+            decision_seed=decision_seed,
+        )
+        if isinstance(proposals, Rejected):
+            return proposals
+        if len(proposals.value.candidates) == 1:
+            decided = self._search.bind_single(
+                candidate=proposals.value.candidates[0],
+                root_snapshot=snapshot,
+            )
+        else:
             particles = await self._belief.synchronize()
             if isinstance(particles, Rejected):
                 return particles
-            searched = await self._search.decide(
+            decided = await self._search.decide(
+                proposals=proposals.value,
                 particles=particles.value,
                 viewer=self._seat,
-                decision_seed=decision_seed,
-            )
-            if isinstance(searched, Rejected):
-                return searched
-            decided: Ok[commands.Command] | Rejected = Ok(
-                searched.value.command
-            )
-        else:
-            synchronized = await self._belief.synchronize()
-            if isinstance(synchronized, Rejected):
-                return synchronized
-            decided = await self._direct_decision(
-                snapshot=snapshot,
+                root_snapshot=snapshot,
                 decision_seed=decision_seed,
             )
         if isinstance(decided, Rejected):
             return decided
-        self._belief.submitted(seq=seq, command=decided.value)
-        return decided
+        self._belief.submitted(seq=seq, command=decided.value.command)
+        statistics = decided.value.statistics
+        _LOGGER.info(
+            "ai.decision kind=%s candidates=%d rounds=%d "
+            "simulations=%d engine_advances=%d policy_rows=%d "
+            "value_rows=%d elapsed_ms=%.3f",
+            decision_kind,
+            statistics.candidate_count,
+            statistics.halving_round_count,
+            statistics.macro_sample_count,
+            statistics.engine_advance_count,
+            statistics.policy_row_count,
+            statistics.value_row_count,
+            (time.perf_counter() - started) * 1000.0,
+        )
+        return Ok(decided.value.command)
 
-    async def _direct_decision(
-        self,
-        *,
-        snapshot: PlayerSnapshot,
-        decision_seed: int,
-    ) -> Ok[commands.Command] | Rejected:
+    def _root_query(self, snapshot: PlayerSnapshot) -> ModelQuery:
         observation = build_observation(
             viewer=self._seat,
             snapshot=snapshot,
             memory=self._memory.view(),
         )
-        legal_actions = build_legal_action_index(
-            viewer=self._seat,
-            snapshot=snapshot,
-            query=observation.action_query,
-        )
-        query = ModelQuery(
+        return ModelQuery(
             observation=observation,
-            legal_actions=legal_actions,
+            legal_actions=build_legal_action_index(
+                viewer=self._seat,
+                snapshot=snapshot,
+                query=observation.action_query,
+            ),
             seat=self._seat,
         )
-        sampled = await self._model.sample(
-            requests=(
-                ActionSampleRequest(
-                    query=query,
-                    draws=tuple(
-                        ActionDrawKey(
-                            seed=decision_seed,
-                            ordinal=index,
-                        )
-                        for index in range(self._direct_samples)
-                    ),
-                ),
-            ),
-        )
-        if isinstance(sampled, Rejected):
-            return sampled
-        assert len(sampled.value) == 1
-        selected = max(
-            sampled.value[0].samples,
-            key=lambda evaluation: evaluation.log_probability,
-        )
-        return physical_command(
-            action=selected.action,
-            hand=snapshot.hand,
-        )
 
 
-__all__ = ("AIController",)
+__all__ = (
+    "AIController",
+    "AIControllerPort",
+    "ControllerInference",
+)

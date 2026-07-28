@@ -328,6 +328,45 @@ class ActionSamplerWorkspace:
             choice_counts=self.choice_counts[:batch_size],
         )
 
+    def fork_state(
+        self,
+        *,
+        parent_rows: Tensor,
+        row_count: int,
+        padded_generation_steps: int,
+    ) -> None:
+        """Replace leading state rows with independent parent copies."""
+        assert parent_rows.shape == (row_count,)
+        assert parent_rows.dtype == torch.long
+        assert 0 < row_count <= self.batch_capacity
+        assert 0 < padded_generation_steps <= MAX_ACTION_STEPS
+        self.selected_counts[:row_count].copy_(
+            self.selected_counts.index_select(0, parent_rows)
+        )
+        self.choice_ids[:row_count, :padded_generation_steps].copy_(
+            self.choice_ids[:, :padded_generation_steps].index_select(
+                0, parent_rows
+            )
+        )
+        self.step_counts[:row_count].copy_(
+            self.step_counts.index_select(0, parent_rows)
+        )
+        self.selected_width[:row_count].copy_(
+            self.selected_width.index_select(0, parent_rows)
+        )
+        self.last_face_indices[:row_count].copy_(
+            self.last_face_indices.index_select(0, parent_rows)
+        )
+        self.selected_suit_codes[:row_count].copy_(
+            self.selected_suit_codes.index_select(0, parent_rows)
+        )
+        self.done[:row_count].copy_(
+            self.done.index_select(0, parent_rows)
+        )
+        self.choice_counts[:row_count].copy_(
+            self.choice_counts.index_select(0, parent_rows)
+        )
+
 
 def _sample_actions(
     *,
@@ -364,7 +403,7 @@ def _sample_actions(
         active_rows = (~state.done) & (
             state.step_counts < generation_step_counts
         )
-        legal = _legal_choices(
+        legal = legal_action_choices(
             workspace=workspace,
             batch=action_batch,
             state=state,
@@ -384,7 +423,7 @@ def _sample_actions(
         workspace.replay_legal_masks[:batch_size, step_index].copy_(
             legal.masks
         )
-        _advance_state(
+        advance_action_state(
             workspace=workspace,
             batch=action_batch,
             selected_choice_ids=sampled.choice_ids,
@@ -456,7 +495,7 @@ def _resolve_forced_actions(
         )
         if not bool(active_rows.any().item()):
             break
-        legal = _legal_choices(
+        legal = legal_action_choices(
             workspace=workspace,
             batch=action_batch,
             state=state,
@@ -469,7 +508,7 @@ def _resolve_forced_actions(
         unique_rows = active_rows & legal.choice_counts.eq(1)
         still_forced = still_forced & (~active_rows | unique_rows)
         selected = legal.masks.to(dtype=torch.long).argmax(dim=1)
-        _advance_state(
+        advance_action_state(
             workspace=workspace,
             batch=action_batch,
             selected_choice_ids=selected,
@@ -519,7 +558,7 @@ def _score_actions(
                 reason="policy action trace continues after termination"
             )
         active_rows = (~state.done) & unfinished_trace
-        legal = _legal_choices(
+        legal = legal_action_choices(
             workspace=workspace,
             batch=action_batch,
             state=state,
@@ -556,7 +595,7 @@ def _score_actions(
                 torch.zeros_like(log_probabilities),
             )
         )
-        _advance_state(
+        advance_action_state(
             workspace=workspace,
             batch=action_batch,
             selected_choice_ids=selected,
@@ -578,7 +617,7 @@ def _score_actions(
     )
 
 
-def _legal_choices(
+def legal_action_choices(
     *,
     workspace: ActionSamplerWorkspace,
     batch: DeviceActionPlanBatch,
@@ -661,7 +700,7 @@ def _flat_active_replay(
     )
 
 
-def _advance_state(
+def advance_action_state(
     *,
     workspace: ActionSamplerWorkspace,
     batch: DeviceActionPlanBatch,

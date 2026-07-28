@@ -1,15 +1,27 @@
 """Hidden-information model inference for Tractor."""
 
-from .config import AIConfig
-from .model import (
-    ActionDrawKey,
-    ActionSampleRequest,
+from .config import (
+    AIConfig,
+    LocalAIConfig,
+    RemoteAIConfig,
+    ai_config_from_env,
+)
+from .controller import AIControllerPort
+from .queries import (
+    ActionProposalRequest,
+    ActionProposals,
     ActionSamples,
-    ActionScoreRequest,
-    AIControllerPort,
-    ModelEvaluator,
+    InferenceDrawKey,
     ModelQuery,
+    PolicySampleRequest,
+    PolicyScoreRequest,
+    ProposedAction,
     SampledAction,
+)
+from .remote import (
+    RemoteDecisionRequest,
+    RemoteDecisionResponse,
+    RemoteSessionRegistry,
 )
 from .service import AIService
 
@@ -17,11 +29,19 @@ __all__ = (
     "AIConfig",
     "AIControllerPort",
     "AIService",
-    "ActionDrawKey",
-    "ActionSampleRequest",
+    "ActionProposalRequest",
+    "ActionProposals",
     "ActionSamples",
-    "ActionScoreRequest",
-    "ModelEvaluator",
+    "InferenceDrawKey",
+    "LocalAIConfig",
     "ModelQuery",
+    "PolicySampleRequest",
+    "PolicyScoreRequest",
+    "ProposedAction",
+    "RemoteAIConfig",
+    "RemoteDecisionRequest",
+    "RemoteDecisionResponse",
+    "RemoteSessionRegistry",
     "SampledAction",
+    "ai_config_from_env",
 )

@@ -12,10 +12,11 @@ from server.foundation.result import Ok
 from server.game import Seat
 from server.game.snapshots import PlayerSnapshot
 from server.game_ai import (
-    ActionDrawKey,
-    ActionSampleRequest,
-    ActionScoreRequest,
+    ActionProposalRequest,
+    InferenceDrawKey,
     ModelQuery,
+    PolicySampleRequest,
+    PolicyScoreRequest,
 )
 from server.game_ai.inference import InferenceRuntime
 from server.training.legal_actions import build_legal_action_index
@@ -26,6 +27,7 @@ from server.training.model import (
 )
 from server.training.observation import Observation, build_observation
 from server.training.observation_memory import ObservationMemoryView
+from server.training.semantic_action_plan import action_trace_choice_ids
 from server.training.tensorize import ObservationTensorBatch
 from tests.support import card, seat_values
 from tests.support import snapshot as make_snapshot
@@ -88,6 +90,14 @@ class _SlowPolicyModel(_CountingPolicyModel):
         return super().encode_observations(observation)
 
 
+class _BrokenPolicyModel(_CountingPolicyModel):
+    def encode_observations(
+        self, observation: ObservationTensorBatch
+    ) -> EncodedObservation:
+        del observation
+        raise AssertionError("broken inference model")
+
+
 async def test_sample_draws_share_encoder_and_root_prefix() -> None:
     model = _CountingPolicyModel()
     runtime = InferenceRuntime.create(
@@ -98,7 +108,7 @@ async def test_sample_draws_share_encoder_and_root_prefix() -> None:
 
     result = await runtime.sample(
         requests=(
-            ActionSampleRequest(
+            PolicySampleRequest(
                 query=query,
                 draws=_draws(seed=42, count=8),
             ),
@@ -114,6 +124,99 @@ async def test_sample_draws_share_encoder_and_root_prefix() -> None:
     assert model.value_call_count == 0
 
 
+async def test_structured_proposals_are_unique_and_reproducible() -> (
+    None
+):
+    model = _CountingPolicyModel()
+    runtime = InferenceRuntime.create(
+        model=model,
+        device=torch.device("cpu"),
+    )
+    query = _bid_query(reveal_is_legal=True)
+    request = ActionProposalRequest(
+        query=query,
+        candidate_count=8,
+        draw=InferenceDrawKey(seed=43, ordinal=0),
+    )
+    first = await runtime.propose(requests=(request,))
+    second = await runtime.propose(requests=(request,))
+    await runtime.close()
+
+    assert isinstance(first, Ok)
+    assert isinstance(second, Ok)
+    first_candidates = first.value[0].candidates
+    second_candidates = second.value[0].candidates
+    assert len(first_candidates) == 2
+    assert tuple(item.action for item in first_candidates) == tuple(
+        item.action for item in second_candidates
+    )
+    assert (
+        len(
+            {
+                tuple(
+                    choice.kind for choice in item.action.trace.choices
+                )
+                for item in first_candidates
+            }
+        )
+        == 2
+    )
+    assert model.encoded_row_counts == [1, 1]
+    assert model.decode_root_counts == [1, 1]
+    assert model.value_call_count == 0
+
+
+async def test_structured_play_proposals_are_unique() -> None:
+    model = _CountingPolicyModel()
+    runtime = InferenceRuntime.create(
+        model=model,
+        device=torch.device("cpu"),
+    )
+    result = await runtime.propose(
+        requests=(
+            ActionProposalRequest(
+                query=_play_query(),
+                candidate_count=16,
+                draw=InferenceDrawKey(seed=45, ordinal=0),
+            ),
+        )
+    )
+    await runtime.close()
+
+    assert isinstance(result, Ok)
+    candidates = result.value[0].candidates
+    trace_ids = tuple(
+        action_trace_choice_ids(candidate.action.trace)
+        for candidate in candidates
+    )
+    assert 2 < len(candidates) <= 16
+    assert len(set(trace_ids)) == len(trace_ids)
+    assert model.encoded_row_counts == [1]
+
+
+async def test_forced_proposal_skips_encoder() -> None:
+    model = _CountingPolicyModel()
+    runtime = InferenceRuntime.create(
+        model=model,
+        device=torch.device("cpu"),
+    )
+    result = await runtime.propose(
+        requests=(
+            ActionProposalRequest(
+                query=_bid_query(reveal_is_legal=False),
+                candidate_count=8,
+                draw=InferenceDrawKey(seed=44, ordinal=0),
+            ),
+        )
+    )
+    await runtime.close()
+
+    assert isinstance(result, Ok)
+    assert len(result.value) == 1
+    assert len(result.value[0].candidates) == 1
+    assert model.encoded_row_counts == []
+
+
 async def test_batch_reordering_preserves_draw_results() -> None:
     model = _CountingPolicyModel()
     runtime = InferenceRuntime.create(
@@ -124,11 +227,11 @@ async def test_batch_reordering_preserves_draw_results() -> None:
     draws = _draws(seed=91, count=8)
 
     grouped = await runtime.sample(
-        requests=(ActionSampleRequest(query=query, draws=draws),)
+        requests=(PolicySampleRequest(query=query, draws=draws),)
     )
     individual = await runtime.sample(
         requests=tuple(
-            ActionSampleRequest(query=query, draws=(draw,))
+            PolicySampleRequest(query=query, draws=(draw,))
             for draw in draws
         )
     )
@@ -165,7 +268,7 @@ async def test_forced_action_skips_encoder_and_value_head() -> None:
 
     sampled = await runtime.sample(
         requests=(
-            ActionSampleRequest(
+            PolicySampleRequest(
                 query=_bid_query(reveal_is_legal=False),
                 draws=_draws(seed=17, count=8),
             ),
@@ -190,9 +293,9 @@ async def test_teacher_forced_score_matches_live_sample() -> None:
     query = _bid_query(reveal_is_legal=True)
     sampled = await runtime.sample(
         requests=(
-            ActionSampleRequest(
+            PolicySampleRequest(
                 query=query,
-                draws=(ActionDrawKey(seed=23, ordinal=0),),
+                draws=(InferenceDrawKey(seed=23, ordinal=0),),
             ),
         )
     )
@@ -200,7 +303,7 @@ async def test_teacher_forced_score_matches_live_sample() -> None:
 
     scored = await runtime.score(
         requests=(
-            ActionScoreRequest(
+            PolicyScoreRequest(
                 query=query,
                 action=sampled.value[0].samples[0].action,
             ),
@@ -238,6 +341,59 @@ async def test_concurrent_values_share_one_runtime_batch() -> None:
     assert model.value_call_count == 1
 
 
+async def test_cpu_inference_splits_rows_at_throughput_knee() -> None:
+    model = _CountingPolicyModel()
+    runtime = InferenceRuntime.create(
+        model=model,
+        device=torch.device("cpu"),
+    )
+    base = _bid_snapshot(reveal_is_legal=True)
+    observations = tuple(
+        build_observation(
+            viewer=Seat.A,
+            snapshot=base.model_copy(update={"defender_points": index}),
+            memory=ObservationMemoryView(
+                bid_actions=(),
+                completed_tricks=(),
+            ),
+        )
+        for index in range(40)
+    )
+
+    result = await runtime.values(observations=observations)
+    await runtime.close()
+
+    assert isinstance(result, Ok)
+    assert len(result.value) == 40
+    assert model.encoded_row_counts == [32, 8]
+    assert model.value_call_count == 2
+
+
+async def test_inference_programming_failure_reaches_every_waiter() -> (
+    None
+):
+    runtime = InferenceRuntime.create(
+        model=_BrokenPolicyModel(),
+        device=torch.device("cpu"),
+    )
+    observation = _bid_observation(reveal_is_legal=True)
+
+    outcomes = await asyncio.gather(
+        runtime.values(observations=(observation,)),
+        runtime.values(observations=(observation,)),
+        return_exceptions=True,
+    )
+    closing = await asyncio.gather(
+        runtime.close(),
+        return_exceptions=True,
+    )
+
+    assert all(
+        isinstance(outcome, AssertionError) for outcome in outcomes
+    )
+    assert isinstance(closing[0], AssertionError)
+
+
 async def test_cancelled_caller_does_not_break_runtime() -> None:
     model = _SlowPolicyModel()
     runtime = InferenceRuntime.create(
@@ -262,9 +418,9 @@ async def test_cancelled_caller_does_not_break_runtime() -> None:
     assert isinstance(resumed, Ok)
 
 
-def _draws(*, seed: int, count: int) -> tuple[ActionDrawKey, ...]:
+def _draws(*, seed: int, count: int) -> tuple[InferenceDrawKey, ...]:
     return tuple(
-        ActionDrawKey(seed=seed, ordinal=index)
+        InferenceDrawKey(seed=seed, ordinal=index)
         for index in range(count)
     )
 
@@ -272,6 +428,37 @@ def _draws(*, seed: int, count: int) -> tuple[ActionDrawKey, ...]:
 def _bid_query(*, reveal_is_legal: bool) -> ModelQuery:
     observation = _bid_observation(reveal_is_legal=reveal_is_legal)
     snapshot = _bid_snapshot(reveal_is_legal=reveal_is_legal)
+    return ModelQuery(
+        observation=observation,
+        legal_actions=build_legal_action_index(
+            viewer=Seat.A,
+            snapshot=snapshot,
+            query=observation.action_query,
+        ),
+        seat=Seat.A,
+    )
+
+
+def _play_query() -> ModelQuery:
+    snapshot = make_snapshot(
+        phase="PLAYING",
+        awaiting_action="play",
+        hand=[
+            card("hearts", "3"),
+            card("hearts", "4"),
+            card("spades", "5"),
+            card("clubs", "6"),
+        ],
+        trump_rank="2",
+    )
+    observation = build_observation(
+        viewer=Seat.A,
+        snapshot=snapshot,
+        memory=ObservationMemoryView(
+            bid_actions=(),
+            completed_tricks=(),
+        ),
+    )
     return ModelQuery(
         observation=observation,
         legal_actions=build_legal_action_index(

@@ -14,7 +14,7 @@ from server.game.snapshots.tricks import (
 )
 from server.training.observation_memory import ObservationMemoryView
 
-from ..branch import EngineBranch
+from ..simulation import SimulationBranch
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,7 +26,9 @@ class ObservedFrame:
     memory: ObservationMemoryView
 
 
-def awaited_actor(branch: EngineBranch) -> Ok[Seat] | Rejected:
+def awaited_actor(
+    branch: SimulationBranch,
+) -> Ok[Seat] | Rejected:
     """Return the single strategic actor in a branch."""
     actors = [
         seat

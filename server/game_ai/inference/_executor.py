@@ -9,16 +9,23 @@ import torch
 from server.foundation.result import Ok, Rejected
 from server.training.model import TractorPolicyModel
 from server.training.observation import Observation
-from server.training.semantic_action_plan import ActionSampler
+from server.training.semantic_action_plan import (
+    ActionProposalSampler,
+    ActionSampler,
+)
 from server.training.torch_checkpoints.load import (
     load_inference_checkpoint,
 )
 
-from ..model import (
-    ActionSampleRequest,
+from ..queries import (
+    ActionProposalRequest,
+    ActionProposals,
     ActionSamples,
-    ActionScoreRequest,
+    PolicySampleRequest,
+    PolicyScoreRequest,
 )
+from ._batches import inference_batch_row_limit
+from ._proposals import propose_actions
 from ._sample import sample_actions
 from ._score import score_actions
 from ._values import estimate_values
@@ -35,8 +42,11 @@ class TorchBatchExecutor:
     ) -> None:
         self._model = model
         self._device = device
+        self._max_batch_rows = inference_batch_row_limit(device.type)
         self._sampler: ActionSampler | None = None
         self._sampler_capacity = 0
+        self._proposal_sampler: ActionProposalSampler | None = None
+        self._proposal_capacity = 0
         self._model.eval()
 
     @classmethod
@@ -63,10 +73,30 @@ class TorchBatchExecutor:
             )
         )
 
+    def propose(
+        self,
+        *,
+        requests: tuple[ActionProposalRequest, ...],
+    ) -> Ok[tuple[ActionProposals, ...]] | Rejected:
+        """Generate unique structured Gumbel candidates."""
+        capacity = max(
+            len(requests),
+            max(request.candidate_count for request in requests),
+        )
+        with torch.inference_mode():
+            return propose_actions(
+                model=self._model,
+                device=self._device,
+                sampler=self._sampler_for(capacity),
+                proposal_sampler=self._proposal_sampler_for(capacity),
+                requests=requests,
+                max_batch_rows=self._max_batch_rows,
+            )
+
     def sample(
         self,
         *,
-        requests: tuple[ActionSampleRequest, ...],
+        requests: tuple[PolicySampleRequest, ...],
     ) -> Ok[tuple[ActionSamples, ...]] | Rejected:
         """Execute one already-composed sample operation."""
         capacity = max(
@@ -79,12 +109,13 @@ class TorchBatchExecutor:
                 device=self._device,
                 sampler=self._sampler_for(capacity),
                 requests=requests,
+                max_batch_rows=self._max_batch_rows,
             )
 
     def score(
         self,
         *,
-        requests: tuple[ActionScoreRequest, ...],
+        requests: tuple[PolicyScoreRequest, ...],
     ) -> Ok[tuple[float, ...]] | Rejected:
         """Execute one already-composed score operation."""
         with torch.inference_mode():
@@ -93,6 +124,7 @@ class TorchBatchExecutor:
                 device=self._device,
                 sampler=self._sampler_for(len(requests)),
                 requests=requests,
+                max_batch_rows=self._max_batch_rows,
             )
 
     def values(
@@ -106,6 +138,7 @@ class TorchBatchExecutor:
                 model=self._model,
                 device=self._device,
                 observations=observations,
+                max_batch_rows=self._max_batch_rows,
             )
 
     def _sampler_for(self, capacity: int) -> ActionSampler:
@@ -117,6 +150,21 @@ class TorchBatchExecutor:
             )
             self._sampler_capacity = capacity
         return self._sampler
+
+    def _proposal_sampler_for(
+        self, capacity: int
+    ) -> ActionProposalSampler:
+        assert capacity > 0
+        if (
+            self._proposal_sampler is None
+            or self._proposal_capacity < capacity
+        ):
+            self._proposal_sampler = ActionProposalSampler.create(
+                candidate_capacity=capacity,
+                device=self._device,
+            )
+            self._proposal_capacity = capacity
+        return self._proposal_sampler
 
 
 def _resolve_device(name: str) -> Ok[torch.device] | Rejected:

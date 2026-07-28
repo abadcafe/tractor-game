@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass
+from typing import Protocol
 
 from server.foundation.result import Ok, Rejected
 from server.game import Seat, commands, instantiate
@@ -12,14 +13,14 @@ from server.game.snapshots import PlayerSnapshot
 from server.training.observation_memory import ObservationMemoryView
 
 from ..actions import physical_command, semantic_action
-from ..branch import EngineBranch
-from ..model import (
-    ActionDrawKey,
-    ActionSampleRequest,
-    ActionScoreRequest,
-    ModelEvaluator,
+from ..queries import (
+    ActionSamples,
+    InferenceDrawKey,
     ModelQuery,
+    PolicySampleRequest,
+    PolicyScoreRequest,
 )
+from ..simulation import SimulationBranch
 from ._history import (
     ObservedFrame,
     awaited_actor,
@@ -34,7 +35,7 @@ from ._worlds import deal_constraints, sample_round_deal
 class Particle:
     """One complete legal hidden world and its posterior weight."""
 
-    branch: EngineBranch
+    branch: SimulationBranch
     weight: float
 
     def __post_init__(self) -> None:
@@ -44,15 +45,35 @@ class Particle:
 
 @dataclass(frozen=True, slots=True)
 class _WeightedBranch:
-    branch: EngineBranch
+    branch: SimulationBranch
     log_weight: float
 
 
 @dataclass(frozen=True, slots=True)
 class _ReplayBranch:
-    branch: EngineBranch
+    branch: SimulationBranch
     log_weight: float
-    pending_scores: tuple[ActionScoreRequest, ...]
+    pending_scores: tuple[PolicyScoreRequest, ...]
+
+
+class BeliefInference(Protocol):
+    """Model operations required only by hidden-world filtering."""
+
+    async def sample(
+        self,
+        *,
+        requests: tuple[PolicySampleRequest, ...],
+    ) -> Ok[tuple[ActionSamples, ...]] | Rejected:
+        """Sample hidden actions under their actor's policy."""
+        ...
+
+    async def score(
+        self,
+        *,
+        requests: tuple[PolicyScoreRequest, ...],
+    ) -> Ok[tuple[float, ...]] | Rejected:
+        """Score observed actions under their actor's policy."""
+        ...
 
 
 class _NoParticleSurvived(Rejected):
@@ -69,7 +90,7 @@ class ParticleBelief:
         self,
         *,
         viewer: Seat,
-        model: ModelEvaluator,
+        model: BeliefInference,
         particle_count: int,
         random_source: random.Random,
     ) -> None:
@@ -139,7 +160,9 @@ class ParticleBelief:
         if not self._frames:
             return Rejected(reason="AI has no active round history")
         if not self._branches:
-            built = await self._build_particles()
+            built = await self._build_particles(
+                target_count=self._particle_count
+            )
             if isinstance(built, Rejected):
                 return built
             self._branches = built.value
@@ -147,7 +170,9 @@ class ParticleBelief:
         elif self._synced_frame_index < len(self._frames) - 1:
             advanced = await self._advance_recorded_frames()
             if isinstance(advanced, _NoParticleSurvived):
-                advanced = await self._build_particles()
+                advanced = await self._build_particles(
+                    target_count=self._particle_count
+                )
             if isinstance(advanced, Rejected):
                 return advanced
             self._branches = advanced.value
@@ -159,10 +184,25 @@ class ParticleBelief:
         if _effective_sample_size(particles) < (
             float(self._particle_count) * 0.5
         ):
-            rebuilt = await self._build_particles()
-            if isinstance(rebuilt, Rejected):
-                return rebuilt
-            self._branches = rebuilt.value
+            replenished = await self._build_particles(
+                target_count=max(1, self._particle_count // 2)
+            )
+            if isinstance(replenished, Rejected):
+                return replenished
+            fresh_count = len(replenished.value)
+            retained_count = self._particle_count - fresh_count
+            self._branches = (
+                *_systematic_resample(
+                    branches=self._branches,
+                    count=retained_count,
+                    random_source=self._random,
+                ),
+                *_systematic_resample(
+                    branches=replenished.value,
+                    count=fresh_count,
+                    random_source=self._random,
+                ),
+            )
             refreshed = _normalize(self._branches)
             if isinstance(refreshed, Rejected):
                 return refreshed
@@ -171,7 +211,10 @@ class ParticleBelief:
 
     async def _build_particles(
         self,
+        *,
+        target_count: int,
     ) -> Ok[tuple[_WeightedBranch, ...]] | Rejected:
+        assert target_count > 0
         constraints_result = deal_constraints(
             viewer=self._viewer,
             frames=tuple(self._frames),
@@ -180,13 +223,10 @@ class ParticleBelief:
             return constraints_result
         constraints = constraints_result.value
         built: list[_WeightedBranch] = []
-        attempt_limit = self._particle_count * 200
+        attempt_limit = target_count * 200
         attempts = 0
-        while (
-            len(built) < self._particle_count
-            and attempts < attempt_limit
-        ):
-            missing = self._particle_count - len(built)
+        while len(built) < target_count and attempts < attempt_limit:
+            missing = target_count - len(built)
             initial: list[_WeightedBranch] = []
             for _index in range(missing):
                 attempts += 1
@@ -199,7 +239,9 @@ class ParticleBelief:
                 state_result = instantiate(deal_result.value)
                 if isinstance(state_result, Rejected):
                     return state_result
-                branch_result = EngineBranch.start(state_result.value)
+                branch_result = SimulationBranch.start(
+                    state_result.value
+                )
                 if isinstance(branch_result, Rejected):
                     return branch_result
                 if (
@@ -221,12 +263,12 @@ class ParticleBelief:
             if isinstance(replayed, Rejected):
                 return replayed
             built.extend(replayed.value[:missing])
-        if len(built) == self._particle_count:
+        if len(built) == target_count:
             return Ok(tuple(built))
         return Rejected(
             reason=(
                 "AI could not construct enough legal hidden worlds "
-                f"({len(built)}/{self._particle_count})"
+                f"({len(built)}/{target_count})"
             )
         )
 
@@ -346,7 +388,7 @@ class ParticleBelief:
             command,
             observed_action,
         ) in pending:
-            request: ActionScoreRequest | None = None
+            request: PolicyScoreRequest | None = None
             if observed_action:
                 request_result = _score_request(
                     branch=particle.branch,
@@ -416,7 +458,7 @@ class ParticleBelief:
     def _transition_command(
         self,
         *,
-        branch: EngineBranch,
+        branch: SimulationBranch,
         previous: ObservedFrame,
         current: ObservedFrame,
     ) -> Ok[tuple[Seat, commands.Command | None, bool]] | Rejected:
@@ -426,7 +468,7 @@ class ParticleBelief:
         actor = actor_result.value
         own = self._submitted.get(previous.seq)
         if actor == self._viewer and own is not None:
-            return Ok((actor, own, True))
+            return Ok((actor, own, False))
         action = branch.snapshot(actor).awaiting_action
         if action == "bid":
             command = bid_command(previous.snapshot, current.snapshot)
@@ -507,10 +549,10 @@ class ParticleBelief:
             )
         sampled = await self._model.sample(
             requests=tuple(
-                ActionSampleRequest(
+                PolicySampleRequest(
                     query=query,
                     draws=(
-                        ActionDrawKey(
+                        InferenceDrawKey(
                             seed=seed,
                             ordinal=index,
                         ),
@@ -565,10 +607,10 @@ class ParticleBelief:
 
 def _score_request(
     *,
-    branch: EngineBranch,
+    branch: SimulationBranch,
     actor: Seat,
     command: commands.Command,
-) -> Ok[ActionScoreRequest] | Rejected:
+) -> Ok[PolicyScoreRequest] | Rejected:
     observation, legal_actions = branch.model_input(actor)
     action = semantic_action(
         command=command,
@@ -578,7 +620,7 @@ def _score_request(
     if isinstance(action, Rejected):
         return action
     return Ok(
-        ActionScoreRequest(
+        PolicyScoreRequest(
             query=ModelQuery(
                 observation=observation,
                 legal_actions=legal_actions,
@@ -624,4 +666,37 @@ def _effective_sample_size(
     )
 
 
-__all__ = ("Particle", "ParticleBelief")
+def _systematic_resample(
+    *,
+    branches: tuple[_WeightedBranch, ...],
+    count: int,
+    random_source: random.Random,
+) -> tuple[_WeightedBranch, ...]:
+    assert branches
+    assert count > 0
+    normalized = _normalize(branches)
+    assert isinstance(normalized, Ok)
+    particles = normalized.value
+    offset = random_source.random() / float(count)
+    positions = tuple(
+        offset + float(index) / float(count) for index in range(count)
+    )
+    result: list[_WeightedBranch] = []
+    source_index = 0
+    cumulative = particles[0].weight
+    for position in positions:
+        while (
+            position > cumulative and source_index < len(particles) - 1
+        ):
+            source_index += 1
+            cumulative += particles[source_index].weight
+        result.append(
+            _WeightedBranch(
+                branch=particles[source_index].branch,
+                log_weight=0.0,
+            )
+        )
+    return tuple(result)
+
+
+__all__ = ("BeliefInference", "Particle", "ParticleBelief")

@@ -1,15 +1,17 @@
-"""Particle rollout search public interface."""
+"""Belief-conditioned root policy improvement."""
 
-from ._search import (
-    ParticleSearch,
+from ._planner import (
     SearchConfig,
     SearchDecision,
+    SearchInference,
+    SearchPlanner,
     SearchStatistics,
 )
 
 __all__ = (
-    "ParticleSearch",
     "SearchConfig",
     "SearchDecision",
+    "SearchInference",
+    "SearchPlanner",
     "SearchStatistics",
 )

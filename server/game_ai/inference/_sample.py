@@ -29,13 +29,13 @@ from server.training.semantic_action_plan import (
 )
 from server.training.tensorize import tensorize_packed_observations
 
-from ..model import (
-    ActionDrawKey,
-    ActionSampleRequest,
+from ..queries import (
     ActionSamples,
+    InferenceDrawKey,
+    PolicySampleRequest,
     SampledAction,
 )
-from ._batches import deduplicate_packed
+from ._batches import attention_batch_groups, deduplicate_packed
 from ._forced import resolve_forced_actions
 
 _FLOAT32_BELOW_ONE = float.fromhex("0x1.fffffep-1")
@@ -46,9 +46,27 @@ def sample_actions(
     model: TractorPolicyModel,
     device: torch.device,
     sampler: ActionSampler,
-    requests: tuple[ActionSampleRequest, ...],
+    requests: tuple[PolicySampleRequest, ...],
+    max_batch_rows: int,
 ) -> Ok[tuple[ActionSamples, ...]] | Rejected:
-    """Sample requests through exact token and action-length batches."""
+    """Sample requests through padding-aware observation batches."""
+    return _execute_actions(
+        model=model,
+        device=device,
+        sampler=sampler,
+        requests=requests,
+        max_batch_rows=max_batch_rows,
+    )
+
+
+def _execute_actions(
+    *,
+    model: TractorPolicyModel,
+    device: torch.device,
+    sampler: ActionSampler,
+    requests: tuple[PolicySampleRequest, ...],
+    max_batch_rows: int,
+) -> Ok[tuple[ActionSamples, ...]] | Rejected:
     assert requests
     plans = tuple(
         compile_legal_action_frame(request.query.legal_actions)
@@ -86,9 +104,10 @@ def sample_actions(
             pack_observation(request.query.observation)
             for request in requests
         )
-        token_groups = _index_groups(
+        token_groups = attention_batch_groups(
+            packed_rows=packed,
             indices=tuple(unforced_indices),
-            values=tuple(item.token_count() for item in packed),
+            max_rows=max_batch_rows,
         )
         for token_group in token_groups:
             sampled = _sample_token_group(
@@ -114,7 +133,7 @@ def _sample_token_group(
     model: TractorPolicyModel,
     device: torch.device,
     sampler: ActionSampler,
-    requests: tuple[ActionSampleRequest, ...],
+    requests: tuple[PolicySampleRequest, ...],
     plans: tuple[ActionPlanFrame, ...],
     packed: tuple[PackedObservation, ...],
     request_indices: tuple[int, ...],
@@ -164,7 +183,7 @@ def _sample_step_group(
     device: torch.device,
     sampler: ActionSampler,
     encoding: EncodedObservation,
-    requests: tuple[ActionSampleRequest, ...],
+    requests: tuple[PolicySampleRequest, ...],
     plans: tuple[ActionPlanFrame, ...],
     source_by_request: dict[int, int],
     request_indices: tuple[int, ...],
@@ -264,9 +283,9 @@ def _sample_step_group(
 
 def _sampling_thresholds(
     *,
-    requests: tuple[ActionSampleRequest, ...],
+    requests: tuple[PolicySampleRequest, ...],
     request_indices: tuple[int, ...],
-    draws: tuple[ActionDrawKey, ...],
+    draws: tuple[InferenceDrawKey, ...],
     generation_steps: int,
     device: torch.device,
 ) -> torch.Tensor:

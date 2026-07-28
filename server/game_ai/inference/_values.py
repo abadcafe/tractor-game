@@ -15,7 +15,7 @@ from server.training.packed_observation import (
 )
 from server.training.tensorize import tensorize_packed_observations
 
-from ._batches import deduplicate_packed, exact_length_groups
+from ._batches import attention_batch_groups, deduplicate_packed
 
 
 def estimate_values(
@@ -23,12 +23,17 @@ def estimate_values(
     model: TractorPolicyModel,
     device: torch.device,
     observations: tuple[Observation, ...],
+    max_batch_rows: int,
 ) -> Ok[tuple[float, ...]] | Rejected:
     """Estimate values without padding or duplicate rows."""
     assert observations
     packed = tuple(pack_observation(item) for item in observations)
     results: list[float | None] = [None for _item in observations]
-    for indices in exact_length_groups(packed):
+    for indices in attention_batch_groups(
+        packed_rows=packed,
+        indices=tuple(range(len(packed))),
+        max_rows=max_batch_rows,
+    ):
         estimated = _estimate_group(
             model=model,
             device=device,

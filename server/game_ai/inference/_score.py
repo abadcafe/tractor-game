@@ -21,8 +21,8 @@ from server.training.semantic_action_plan import (
 )
 from server.training.tensorize import tensorize_packed_observations
 
-from ..model import ActionScoreRequest
-from ._batches import deduplicate_packed
+from ..queries import PolicyScoreRequest
+from ._batches import attention_batch_groups, deduplicate_packed
 from ._forced import resolve_forced_actions
 
 
@@ -31,7 +31,8 @@ def score_actions(
     model: TractorPolicyModel,
     device: torch.device,
     sampler: ActionSampler,
-    requests: tuple[ActionScoreRequest, ...],
+    requests: tuple[PolicyScoreRequest, ...],
+    max_batch_rows: int,
 ) -> Ok[tuple[float, ...]] | Rejected:
     """Score supplied actions without value-head or padding work."""
     assert requests
@@ -83,6 +84,7 @@ def score_actions(
             indices=tuple(unforced_indices),
             packed=packed,
             trace_ids=trace_ids,
+            max_batch_rows=max_batch_rows,
         )
         for group in groups:
             scored = _score_group(
@@ -109,7 +111,7 @@ def _score_group(
     model: TractorPolicyModel,
     device: torch.device,
     sampler: ActionSampler,
-    requests: tuple[ActionScoreRequest, ...],
+    requests: tuple[PolicyScoreRequest, ...],
     plans: tuple[ActionPlanFrame, ...],
     packed: tuple[PackedObservation, ...],
     trace_ids: tuple[tuple[int, ...], ...],
@@ -170,12 +172,20 @@ def _score_groups(
     indices: tuple[int, ...],
     packed: tuple[PackedObservation, ...],
     trace_ids: tuple[tuple[int, ...], ...],
+    max_batch_rows: int,
 ) -> tuple[tuple[int, ...], ...]:
-    groups: dict[tuple[int, int], list[int]] = {}
+    trace_groups: dict[int, list[int]] = {}
     for index in indices:
-        key = (packed[index].token_count(), len(trace_ids[index]))
-        groups.setdefault(key, []).append(index)
-    return tuple(tuple(group) for group in groups.values())
+        trace_groups.setdefault(len(trace_ids[index]), []).append(index)
+    return tuple(
+        group
+        for trace_group in trace_groups.values()
+        for group in attention_batch_groups(
+            packed_rows=packed,
+            indices=tuple(trace_group),
+            max_rows=max_batch_rows,
+        )
+    )
 
 
 def _float_tuple(values: torch.Tensor) -> tuple[float, ...]:

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
+from server.web.ai_api import register_ai_routes
 from server.web.game_api import register_game_routes
 from server.web.lifespan import lifespan_for
 from server.web.state import ServerState
@@ -31,6 +32,7 @@ class WebApplication:
         static_dir = str(Path(__file__).resolve().parents[2] / "static")
 
         register_game_routes(asgi, state)
+        register_ai_routes(asgi, state)
         register_training_routes(asgi, state)
         register_training_event_routes(
             asgi, state, event_stream_lifecycle

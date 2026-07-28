@@ -22,18 +22,23 @@ from server.game import (
 )
 from server.game.rules.cards.faces import FaceCount
 from server.game_ai import (
-    ActionSampleRequest,
+    ActionProposalRequest,
+    ActionProposals,
     ActionSamples,
-    ActionScoreRequest,
     ModelQuery,
+    PolicySampleRequest,
+    PolicyScoreRequest,
+    ProposedAction,
     SampledAction,
 )
 from server.game_ai.controller import AIController
 from server.game_ai.search import SearchConfig
+from server.game_ai.simulation import SimulationBranch
 from server.training.legal_actions.complete_trace import (
     trace_for_selection,
 )
-from server.training.observation import Observation
+from server.training.observation import Observation, build_observation
+from server.training.observation_memory import ObservationMemory
 from server.training.semantic_action_plan import (
     ActionChoiceLogitDecoder,
     ActionSampler,
@@ -80,96 +85,108 @@ def _actions() -> list[GeneratedAction]:
     return []
 
 
-def _sample_request_counts() -> list[tuple[int, ...]]:
-    return []
-
-
-def _score_batch_sizes() -> list[int]:
+def _seats() -> list[Seat]:
     return []
 
 
 @dataclass(slots=True)
-class _SearchBiasedModel:
+class _PolicyImprovementModel:
     root_actions: list[GeneratedAction] = field(
         default_factory=_actions
     )
-    public_score_count: int = 0
-    sample_request_counts: list[tuple[int, ...]] = field(
-        default_factory=_sample_request_counts
-    )
-    score_batch_sizes: list[int] = field(
-        default_factory=_score_batch_sizes
-    )
+    scored_seats: list[Seat] = field(default_factory=_seats)
+    value_call_count: int = 0
+    policy_row_count: int = 0
+
+    async def propose(
+        self,
+        *,
+        requests: tuple[ActionProposalRequest, ...],
+    ) -> Ok[tuple[ActionProposals, ...]] | Rejected:
+        results: list[ActionProposals] = []
+        for request in requests:
+            if (
+                request.query.observation.action_query.kind
+                == "lead_play"
+            ):
+                first = _single_card_lead(
+                    request.query,
+                    first=True,
+                )
+                if isinstance(first, Rejected):
+                    return first
+                second = _single_card_lead(
+                    request.query,
+                    first=False,
+                )
+                if isinstance(second, Rejected):
+                    return second
+                self.root_actions = [first.value, second.value]
+                results.append(
+                    ActionProposals(
+                        candidates=(
+                            ProposedAction(
+                                action=first.value,
+                                log_probability=0.0,
+                                perturbed_root_score=1.0,
+                            ),
+                            ProposedAction(
+                                action=second.value,
+                                log_probability=-1.0,
+                                perturbed_root_score=0.0,
+                            ),
+                        )
+                    )
+                )
+                continue
+            action = _first_legal_action(request.query)
+            if isinstance(action, Rejected):
+                return action
+            results.append(
+                ActionProposals(
+                    candidates=(
+                        ProposedAction(
+                            action=action.value,
+                            log_probability=0.0,
+                            perturbed_root_score=0.0,
+                        ),
+                    )
+                )
+            )
+        return Ok(tuple(results))
 
     async def sample(
         self,
         *,
-        requests: tuple[ActionSampleRequest, ...],
+        requests: tuple[PolicySampleRequest, ...],
     ) -> Ok[tuple[ActionSamples, ...]] | Rejected:
-        assert requests
-        self.sample_request_counts.append(
-            tuple(len(request.draws) for request in requests)
-        )
-        queries = tuple(
-            request.query
-            for request in requests
-            for _draw in request.draws
-        )
-        if (
-            len(queries) == 2
-            and queries[0].observation.action_query.kind == "lead_play"
-            and not self.root_actions
-        ):
-            actions = (
-                _single_card_lead(queries[0], first=True),
-                _single_card_lead(queries[1], first=False),
-            )
-            if isinstance(actions[0], Rejected):
-                return actions[0]
-            if isinstance(actions[1], Rejected):
-                return actions[1]
-            self.root_actions.extend(
-                (actions[0].value, actions[1].value)
-            )
-            return Ok(
-                (
-                    ActionSamples(
-                        samples=(
-                            SampledAction(
-                                action=actions[0].value,
-                                log_probability=10.0,
-                            ),
-                            SampledAction(
-                                action=actions[1].value,
-                                log_probability=0.0,
-                            ),
-                        )
-                    ),
-                )
-            )
+        self.policy_row_count += len(requests)
         groups: list[ActionSamples] = []
         for request in requests:
-            samples: list[SampledAction] = []
-            for _draw in request.draws:
-                action = _first_legal_action(request.query)
-                if isinstance(action, Rejected):
-                    return action
-                samples.append(
-                    SampledAction(
-                        action=action.value,
-                        log_probability=0.0,
+            action = _first_legal_action(request.query)
+            if isinstance(action, Rejected):
+                return action
+            groups.append(
+                ActionSamples(
+                    samples=tuple(
+                        SampledAction(
+                            action=action.value,
+                            log_probability=0.0,
+                        )
+                        for _draw in request.draws
                     )
                 )
-            groups.append(ActionSamples(samples=tuple(samples)))
+            )
         return Ok(tuple(groups))
 
     async def score(
         self,
         *,
-        requests: tuple[ActionScoreRequest, ...],
+        requests: tuple[PolicyScoreRequest, ...],
     ) -> Ok[tuple[float, ...]] | Rejected:
-        self.public_score_count += len(requests)
-        self.score_batch_sizes.append(len(requests))
+        self.scored_seats.extend(
+            request.query.seat for request in requests
+        )
         return Ok(tuple(-0.25 for _request in requests))
 
     async def values(
@@ -178,21 +195,20 @@ class _SearchBiasedModel:
         observations: tuple[Observation, ...],
     ) -> Ok[tuple[float, ...]] | Rejected:
         assert len(observations) == 2
+        self.value_call_count += 1
         return Ok((-1.0, 1.0))
 
 
-async def test_ai_uses_rollout_value_instead_of_argmax() -> None:
+async def test_ai_improves_policy_without_scoring_self() -> None:
     state = _round_start_with_actor(Seat.A)
-    model = _SearchBiasedModel()
+    model = _PolicyImprovementModel()
     controller = AIController(
         seat=Seat.A,
         model=model,
         particle_count=1,
-        direct_samples=1,
         search_config=SearchConfig(
-            candidate_samples=2,
-            rollouts_per_particle=2,
-            rollout_depth=1,
+            root_candidate_count=2,
+            macro_simulation_budget=2,
         ),
         random_source=random.Random(7),
     )
@@ -209,16 +225,17 @@ async def test_ai_uses_rollout_value_instead_of_argmax() -> None:
         actor = _active_actor(state)
         actor_view = observe(state, actor)
         command: commands.Command
-        if actor_view.awaiting_action == "bid":
-            command = commands.PassBid()
-        elif actor_view.awaiting_action == "discard":
-            assert actor == Seat.A
+        if actor == Seat.A:
             decided = await controller.decide(
                 seq=seq,
                 snapshot=current,
             )
             assert isinstance(decided, Ok)
             command = decided.value
+        elif actor_view.awaiting_action == "bid":
+            command = commands.PassBid()
+        elif actor_view.awaiting_action == "discard":
+            assert False
         else:
             assert actor_view.awaiting_action == "stir"
             command = commands.PassStir()
@@ -245,9 +262,53 @@ async def test_ai_uses_rollout_value_instead_of_argmax() -> None:
     )
     assert isinstance(expected, Ok)
     assert decided.value == expected.value
-    assert model.public_score_count >= 100
-    assert max(model.score_batch_sizes) > 1
-    assert (2, 2) in model.sample_request_counts
+    assert model.scored_seats
+    assert Seat.A not in model.scored_seats
+    assert model.value_call_count == 1
+    assert model.policy_row_count >= 6
+
+
+def test_simulation_branch_matches_all_player_observations() -> None:
+    state = _round_start_with_actor(Seat.A)
+    started = SimulationBranch.start(state)
+    assert isinstance(started, Ok)
+    branch = started.value
+    memories = {seat: ObservationMemory() for seat in seats()}
+    for seat in seats():
+        remembered = memories[seat].observe(
+            seq=0,
+            snapshot=observe(state, seat),
+        )
+        assert isinstance(remembered, Ok)
+    seq = 0
+    compared: set[Seat] = set()
+    for _index in range(12):
+        actor = _active_actor(state)
+        actor_view = observe(state, actor)
+        expected = branch.model_input(actor)[0]
+        actual = build_observation(
+            viewer=actor,
+            snapshot=actor_view,
+            memory=memories[actor].view(),
+        )
+        assert expected == actual
+        compared.add(actor)
+        assert actor_view.awaiting_action == "bid"
+        command = commands.PassBid()
+        advanced = apply(state, actor, command)
+        assert isinstance(advanced, Ok)
+        state = advanced.value
+        branched = branch.advance(actor=actor, command=command)
+        assert isinstance(branched, Ok)
+        branch = branched.value
+        seq += 1
+        for seat in seats():
+            remembered = memories[seat].observe(
+                seq=seq,
+                snapshot=observe(state, seat),
+            )
+            assert isinstance(remembered, Ok)
+    assert compared == set(seats())
 
 
 def _round_start_with_actor(actor: Seat) -> GameState:

@@ -11,6 +11,9 @@ from server.training.semantic_action_plan.frame import (
 )
 from server.training.semantic_action_plan.sampler import (
     ActionChoiceLogitDecoder,
+    ActionProposalBatch,
+    ActionProposalLogitDecoder,
+    ActionProposalSampler,
     ActionSampleBatch,
     ActionSampler,
     ActionScoreBatch,
@@ -26,6 +29,9 @@ __all__ = (
     "ACTION_FACE_COUNT",
     "ActionChoiceLogitDecoder",
     "ActionPlanFrame",
+    "ActionProposalBatch",
+    "ActionProposalLogitDecoder",
+    "ActionProposalSampler",
     "ActionSampleBatch",
     "ActionScoreBatch",
     "ActionSampler",

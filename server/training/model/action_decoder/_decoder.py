@@ -125,8 +125,29 @@ class ActionDecodeSession:
         active_rows: Tensor,
     ) -> None:
         """Fork cache state once per distinct selected child prefix."""
+        parent_rows = torch.arange(
+            self._lane_count,
+            dtype=torch.long,
+            device=self._lane_to_prefix.device,
+        )
+        self.fork(
+            parent_rows=parent_rows,
+            selected_choice_ids=selected_choice_ids,
+            active_rows=active_rows,
+        )
+
+    def fork(
+        self,
+        *,
+        parent_rows: Tensor,
+        selected_choice_ids: Tensor,
+        active_rows: Tensor,
+    ) -> None:
+        """Replace lanes with selected children of arbitrary parents."""
+        assert parent_rows.shape == (self._lane_count,)
         assert selected_choice_ids.shape == (self._lane_count,)
         assert active_rows.shape == (self._lane_count,)
+        assert parent_rows.dtype == torch.long
         assert active_rows.dtype == torch.bool
         if not bool(active_rows.any().item()):
             return
@@ -135,8 +156,11 @@ class ActionDecodeSession:
         active_lane_rows = torch.nonzero(
             active_rows, as_tuple=False
         ).squeeze(1)
-        active_parents = self._lane_to_prefix.index_select(
+        selected_parent_lanes = parent_rows.index_select(
             0, active_lane_rows
+        )
+        active_parents = self._lane_to_prefix.index_select(
+            0, selected_parent_lanes
         )
         active_choices = selected_choice_ids.index_select(
             0, active_lane_rows
