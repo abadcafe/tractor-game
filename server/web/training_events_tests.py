@@ -57,7 +57,11 @@ async def test_training_logs_have_rest_history_and_cursor_tail(
     document = page.json()
     assert _is_dict(document)
     events = document["events"]
-    assert isinstance(events, list) and events
+    assert _is_list_of_dict(events) and events
+    rest_entry = events[0]
+    rest_event = rest_entry["event"]
+    assert _is_dict(rest_event)
+    assert rest_event["schema_version"] == 3
     store_id = document["store_id"]
     assert isinstance(store_id, str)
     response = await _read_sse(
@@ -75,6 +79,7 @@ async def test_training_logs_have_rest_history_and_cursor_tail(
     assert event.name == "log"
     message = event.json()
     assert _is_dict(message)
+    assert message == rest_entry
     sequence = message["sequence"]
     assert isinstance(sequence, int)
     assert event.event_id == f"{store_id}:{sequence}"

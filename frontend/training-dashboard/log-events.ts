@@ -1,9 +1,9 @@
 import { EventStreamConnection } from "./event-source.ts";
+import { parseStoreReplacement } from "./contracts/event-store.ts";
 import {
   parseLogEntry,
-  parseStoreReplacement,
   type TrainingLogMessage,
-} from "./types.ts";
+} from "./contracts/training-events.ts";
 
 export interface LogEventTarget {
   readonly runDir: string;

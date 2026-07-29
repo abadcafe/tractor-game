@@ -1,15 +1,19 @@
 import { recordValue } from "../browser/json.ts";
-import type { InitRequest, ResumeRequest } from "./fields.ts";
 import {
   type CheckpointCatalog,
   parseCheckpointCatalog,
+} from "./contracts/checkpoints.ts";
+import {
   parseConfig,
-  parseLogPage,
   parseStopResult,
   type StopResult,
   type TrainingConfig,
+} from "./contracts/control.ts";
+import {
+  parseLogPage,
   type TrainingLogPage,
-} from "./types.ts";
+} from "./contracts/training-events.ts";
+import type { InitRequest, ResumeRequest } from "./fields.ts";
 
 const REPLACEMENT_REQUIRED_STATUS = 412;
 

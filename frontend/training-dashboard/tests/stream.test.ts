@@ -1,13 +1,15 @@
 import { checkpointEventUrl } from "../checkpoint-events.ts";
-import { logEventUrl } from "../log-events.ts";
-import { metricEventUrl } from "../metric-events.ts";
 import {
   parseCheckpointCursor,
+  parseStoreReplacement,
+} from "../contracts/event-store.ts";
+import { parseMetrics } from "../contracts/training-metrics.ts";
+import {
   parseLogEntry,
   parseLogPage,
-  parseMetrics,
-  parseStoreReplacement,
-} from "../types.ts";
+} from "../contracts/training-events.ts";
+import { logEventUrl } from "../log-events.ts";
+import { metricEventUrl } from "../metric-events.ts";
 
 Deno.test("log events resume strictly after the last sequence", () => {
   const url = logEventUrl({
@@ -134,11 +136,43 @@ Deno.test("metrics stream frames are complete snapshots", () => {
   ) throw new Error("Metrics snapshot was not preserved");
 });
 
+Deno.test("metrics parser rejects every non-current schema", () => {
+  for (const schemaVersion of [3, 5]) {
+    let rejected = false;
+    try {
+      parseMetrics({
+        schema_version: schemaVersion,
+        store_id: null,
+        through_sequence: 0,
+        complete: true,
+        dropped_event_count: 0,
+        totals: {},
+        datasets: {
+          throughput: [],
+          optimization: [],
+          ppo_timing: [],
+          rollout: [],
+          rewards: [],
+          inference: [],
+          processes: [],
+        },
+      });
+    } catch {
+      rejected = true;
+    }
+    if (!rejected) {
+      throw new Error(
+        `Accepted training metrics schema ${schemaVersion}`,
+      );
+    }
+  }
+});
+
 Deno.test("structured log parser accepts the terminal event protocol", () => {
   const event = parseLogEntry({
     sequence: 7,
     event: {
-      schema_version: 4,
+      schema_version: 3,
       event: "update",
       recorded_at_ms: 1,
       process: { kind: "coordinator", index: null, pid: 9 },
@@ -151,13 +185,39 @@ Deno.test("structured log parser accepts the terminal event protocol", () => {
   }
 });
 
+Deno.test("structured log parser rejects every non-current schema", () => {
+  for (const schemaVersion of [2, 4]) {
+    let rejected = false;
+    try {
+      parseLogEntry({
+        sequence: 7,
+        event: {
+          schema_version: schemaVersion,
+          event: "update",
+          recorded_at_ms: 1,
+          process: { kind: "coordinator", index: null, pid: 9 },
+          context: {},
+          fields: {},
+        },
+      });
+    } catch {
+      rejected = true;
+    }
+    if (!rejected) {
+      throw new Error(
+        `Accepted training event schema ${schemaVersion}`,
+      );
+    }
+  }
+});
+
 Deno.test("event parser rejects unknown correlation fields", () => {
   let rejected = false;
   try {
     parseLogEntry({
       sequence: 7,
       event: {
-        schema_version: 4,
+        schema_version: 3,
         event: "update",
         recorded_at_ms: 1,
         process: { kind: "coordinator", index: null, pid: 9 },

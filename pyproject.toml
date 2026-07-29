@@ -56,6 +56,6 @@ select = ["E", "F", "W", "I"]
 [tool.pyright]
 pythonVersion = "3.14"
 typeCheckingMode = "strict"
-include = ["server", "tests"]
+include = ["scripts", "server", "tests"]
 venvPath = "."
 venv = ".venv"

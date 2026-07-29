@@ -10,7 +10,10 @@ import { CanvasRenderer } from "echarts/renderers";
 import type { ECharts, EChartsOption, LineSeriesOption } from "echarts";
 
 import { recordValue } from "../browser/json.ts";
-import type { MetricPoint, TrainingMetrics } from "./types.ts";
+import type {
+  MetricPoint,
+  TrainingMetrics,
+} from "./contracts/training-metrics.ts";
 
 use([
   LineChart,

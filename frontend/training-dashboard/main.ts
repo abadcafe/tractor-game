@@ -5,6 +5,7 @@ import {
   stopTraining,
 } from "./api.ts";
 import { CheckpointsDomain } from "./checkpoints-domain.ts";
+import type { CheckpointManifest } from "./contracts/checkpoints.ts";
 import {
   INIT_FIELDS,
   INIT_GROUPS,
@@ -25,7 +26,6 @@ import {
   ProcessStatus,
 } from "./process-status.ts";
 import { DashboardSelection } from "./selection.ts";
-import type { CheckpointManifest } from "./types.ts";
 
 type ViewName = "process" | "metrics" | "logs" | "checkpoints";
 

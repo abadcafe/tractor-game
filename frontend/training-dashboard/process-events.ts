@@ -1,5 +1,8 @@
+import {
+  parseProcessState,
+  type ProcessState,
+} from "./contracts/process.ts";
 import { EventStreamConnection } from "./event-source.ts";
-import { parseProcessState, type ProcessState } from "./types.ts";
 
 export interface ProcessEventHandlers {
   readonly onSnapshot: (snapshot: ProcessState) => void;

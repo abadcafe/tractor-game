@@ -8,6 +8,13 @@ from server.training_events.contract import (
     ProcessIdentity,
     ProcessKind,
 )
+from server.training_events.envelope import (
+    TRAINING_EVENT_SCHEMA_VERSION,
+    TrainingEvent,
+    TrainingEventContext,
+    TrainingEventProcess,
+    TrainingEventSchemaVersion,
+)
 from server.training_events.queries import (
     TrainingLogHistoryPage,
     TrainingLogRecord,
@@ -31,6 +38,11 @@ __all__ = [
     "PROCESS_KINDS",
     "ProcessKind",
     "StructuredEventSink",
+    "TRAINING_EVENT_SCHEMA_VERSION",
+    "TrainingEvent",
+    "TrainingEventContext",
+    "TrainingEventProcess",
+    "TrainingEventSchemaVersion",
     "TrainingLogHistoryPage",
     "TrainingLogRecord",
     "TrainingLogTail",

@@ -3,8 +3,8 @@ import { CheckpointEventStream } from "./checkpoint-events.ts";
 import type {
   CheckpointCatalog,
   CheckpointManifest,
-  JsonPrimitive,
-} from "./types.ts";
+} from "./contracts/checkpoints.ts";
+import type { JsonPrimitive } from "./contracts/json.ts";
 
 export interface CheckpointsDomainCallbacks {
   readonly reportError: (message: string) => void;

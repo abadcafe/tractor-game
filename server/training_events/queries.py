@@ -9,7 +9,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from server.foundation import result as _result
-from server.foundation.json_value import JsonObject
+from server.training_events.envelope import TrainingEvent
 from server.training_events.store import open_reader, training_store_id
 
 
@@ -17,7 +17,7 @@ class TrainingLogRecord(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     sequence: int = Field(gt=0)
-    event: JsonObject
+    event: TrainingEvent
 
 
 class TrainingLogHistoryPage(BaseModel):

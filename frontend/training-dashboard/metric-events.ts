@@ -1,5 +1,8 @@
+import {
+  parseMetrics,
+  type TrainingMetrics,
+} from "./contracts/training-metrics.ts";
 import { EventStreamConnection } from "./event-source.ts";
-import { parseMetrics, type TrainingMetrics } from "./types.ts";
 
 export interface MetricEventTarget {
   readonly runDir: string;

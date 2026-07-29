@@ -1,5 +1,5 @@
+import { parseProcessState } from "../contracts/process.ts";
 import { processEventUrl } from "../process-events.ts";
-import { parseProcessState } from "../types.ts";
 
 Deno.test("process events are scoped only by canonical run directory", () => {
   const value = processEventUrl("/tmp/run with spaces");

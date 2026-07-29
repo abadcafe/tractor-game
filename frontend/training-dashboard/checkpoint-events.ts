@@ -1,8 +1,8 @@
-import { EventStreamConnection } from "./event-source.ts";
 import {
   type CheckpointStreamMessage,
   parseCheckpointCursor,
-} from "./types.ts";
+} from "./contracts/event-store.ts";
+import { EventStreamConnection } from "./event-source.ts";
 
 export interface CheckpointEventHandlers {
   readonly onMessage: (value: CheckpointStreamMessage) => void;

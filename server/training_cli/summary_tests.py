@@ -17,7 +17,8 @@ from server.training_control.process_inspection import (
     ProcessDetails,
     ProcessSnapshot,
 )
-from server.training_metrics.queries import (
+from server.training_metrics import (
+    TRAINING_METRICS_SCHEMA_VERSION,
     MetricDatasets,
     TrainingMetrics,
 )
@@ -96,6 +97,7 @@ def test_text_summary_uses_injected_time_for_process_uptime(
             ),
         ),
         metrics=TrainingMetrics(
+            schema_version=TRAINING_METRICS_SCHEMA_VERSION,
             store_id="a" * 32,
             through_sequence=10,
             complete=False,

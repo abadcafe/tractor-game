@@ -8,7 +8,7 @@ from server.foundation.json_value import JsonObject
 from server.foundation.result import Ok, Rejected
 from server.training_events.store import (
     APPLICATION_ID,
-    SCHEMA_VERSION,
+    TRAINING_EVENT_STORE_SCHEMA_VERSION,
     database_path,
     initialize_database,
     open_reader,
@@ -33,8 +33,8 @@ def test_initialize_database_creates_strict_schema(
             "ORDER BY name"
         ).fetchall()
     assert application_id == (APPLICATION_ID,)
-    assert user_version == (SCHEMA_VERSION,)
-    assert SCHEMA_VERSION == 4
+    assert user_version == (TRAINING_EVENT_STORE_SCHEMA_VERSION,)
+    assert TRAINING_EVENT_STORE_SCHEMA_VERSION == 4
     assert tables == [
         ("sqlite_sequence",),
         ("training_log_store",),
@@ -119,7 +119,10 @@ def test_initialize_database_rejects_fake_v3_without_store(
     with sqlite3.connect(database_path(tmp_path)) as connection:
         connection.execute("CREATE TABLE training_logs(value TEXT)")
         connection.execute(f"PRAGMA application_id = {APPLICATION_ID}")
-        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        connection.execute(
+            "PRAGMA user_version = "
+            f"{TRAINING_EVENT_STORE_SCHEMA_VERSION}"
+        )
 
     result = initialize_database(tmp_path)
 

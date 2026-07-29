@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import math
 import os
 import queue
@@ -20,6 +19,12 @@ from server.training_events.contract import (
     EventContext,
     EventName,
     ProcessIdentity,
+)
+from server.training_events.envelope import (
+    TRAINING_EVENT_SCHEMA_VERSION,
+    TrainingEvent,
+    TrainingEventContext,
+    TrainingEventProcess,
 )
 from server.training_events.store import open_writer
 
@@ -251,25 +256,33 @@ def _writer_state(run_dir: Path) -> _WriterState:
 
 
 def _serialize_event(event: _PendingEvent) -> str:
-    payload: JsonObject = {
-        "schema_version": 3,
-        "event": event.event_type,
-        "recorded_at_ms": event.recorded_at_ms,
-        "process": {
-            "kind": event.process.kind,
-            "index": event.process.index,
-            "pid": os.getpid(),
-        },
-        "context": _context_json(event.context),
-        "fields": event.fields,
-    }
-    if event.error is not None:
-        payload["error"] = event.error
-    return json.dumps(
-        payload,
-        separators=(",", ":"),
-        sort_keys=True,
-        allow_nan=False,
+    return TrainingEvent(
+        schema_version=TRAINING_EVENT_SCHEMA_VERSION,
+        event=event.event_type,
+        recorded_at_ms=event.recorded_at_ms,
+        process=TrainingEventProcess(
+            kind=event.process.kind,
+            index=event.process.index,
+            pid=os.getpid(),
+        ),
+        context=_persisted_context(event.context),
+        fields=event.fields,
+        error=event.error,
+    ).model_dump_json()
+
+
+def _persisted_context(context: EventContext) -> TrainingEventContext:
+    return TrainingEventContext(
+        policy_version=context.policy_version,
+        rollout_id=context.rollout_id,
+        worker_index=context.worker_index,
+        model_rank_index=context.model_rank_index,
+        game_env_index=context.game_env_index,
+        episode_id=context.episode_id,
+        seat=context.seat,
+        decision_index=context.decision_index,
+        request_id=context.request_id,
+        batch_id=context.batch_id,
     )
 
 

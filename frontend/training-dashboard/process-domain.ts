@@ -3,7 +3,7 @@ import type {
   ProcessDetails,
   ProcessSnapshot,
   ProcessState,
-} from "./types.ts";
+} from "./contracts/process.ts";
 
 export interface ProcessDomainCallbacks {
   readonly reportError: (message: string) => void;

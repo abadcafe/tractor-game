@@ -7,12 +7,8 @@ import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
     TypeAdapter,
     ValidationError,
 )
@@ -20,6 +16,13 @@ from pydantic import (
 from server.foundation import result as _result
 from server.foundation.json_value import JsonObject
 from server.training_events.store import open_reader, training_store_id
+from server.training_metrics.contract import (
+    TRAINING_METRICS_SCHEMA_VERSION,
+    MetricDatasets,
+    MetricPoint,
+    MetricsCursor,
+    TrainingMetrics,
+)
 
 _JSON_OBJECT_ADAPTER: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
 _METRICS_CURSOR_QUERY = (
@@ -28,55 +31,6 @@ _METRICS_CURSOR_QUERY = (
     "('update', 'training', 'logging.drop', 'rollout', "
     "'sampling', 'inference.batch')"
 )
-
-
-class MetricPoint(BaseModel):
-    """Chart point keyed by committed log sequence."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    sequence: int = Field(gt=0)
-    update: int | None = Field(default=None, ge=0)
-    elapsed_seconds: float = Field(ge=0.0)
-    recorded_at_ms: int = Field(ge=0)
-    values: JsonObject
-
-
-class MetricDatasets(BaseModel):
-    """Chart-oriented metric series."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    throughput: tuple[MetricPoint, ...]
-    optimization: tuple[MetricPoint, ...]
-    ppo_timing: tuple[MetricPoint, ...]
-    rollout: tuple[MetricPoint, ...]
-    rewards: tuple[MetricPoint, ...]
-    inference: tuple[MetricPoint, ...]
-    processes: tuple[MetricPoint, ...]
-
-
-class TrainingMetrics(BaseModel):
-    """Consistent full-run read snapshot consumed by Metrics."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    schema_version: Literal[4] = 4
-    store_id: str | None
-    through_sequence: int = Field(ge=0)
-    complete: bool
-    dropped_event_count: int = Field(ge=0)
-    totals: JsonObject
-    datasets: MetricDatasets
-
-
-class MetricsCursor(BaseModel):
-    """Store-aware cursor for Metrics-relevant persisted events."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    store_id: str | None
-    through_sequence: int = Field(ge=0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +148,7 @@ def query_training_metrics(
     totals = _metric_totals(recent_updates)
     return _result.Ok(
         value=TrainingMetrics(
+            schema_version=TRAINING_METRICS_SCHEMA_VERSION,
             store_id=store_id,
             through_sequence=through_sequence,
             complete=dropped == 0,
@@ -616,6 +571,7 @@ def _metrics_through_sequence(connection: sqlite3.Connection) -> int:
 
 def _empty_metrics(*, through_sequence: int = 0) -> TrainingMetrics:
     return TrainingMetrics(
+        schema_version=TRAINING_METRICS_SCHEMA_VERSION,
         store_id=None,
         through_sequence=through_sequence,
         complete=True,

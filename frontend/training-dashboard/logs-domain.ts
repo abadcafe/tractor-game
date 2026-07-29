@@ -1,10 +1,10 @@
 import { fetchLogPage } from "./api.ts";
-import { LogEventStream, type LogEventTarget } from "./log-events.ts";
 import type {
   TrainingEvent,
   TrainingLogEntry,
   TrainingLogMessage,
-} from "./types.ts";
+} from "./contracts/training-events.ts";
+import { LogEventStream, type LogEventTarget } from "./log-events.ts";
 
 const PAGE_SIZE = 200;
 const DOM_LIMIT = 1000;

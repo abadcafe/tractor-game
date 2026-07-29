@@ -1,9 +1,10 @@
 import { DashboardCharts, type MetricAxis } from "./charts.ts";
+import type { JsonPrimitive } from "./contracts/json.ts";
+import type { TrainingMetrics } from "./contracts/training-metrics.ts";
 import {
   MetricEventStream,
   type MetricEventTarget,
 } from "./metric-events.ts";
-import type { JsonPrimitive, TrainingMetrics } from "./types.ts";
 
 export interface MetricsDomainCallbacks {
   readonly reportError: (message: string) => void;

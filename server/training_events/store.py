@@ -7,12 +7,19 @@ from pathlib import Path
 from uuid import uuid4
 
 from server.foundation import result as _result
+from server.training_events.contract import EVENT_NAMES, PROCESS_KINDS
+from server.training_events.envelope import (
+    TRAINING_EVENT_SCHEMA_VERSION,
+)
 
 DATABASE_FILENAME = "training.sqlite3"
 APPLICATION_ID = 0x54524149
-SCHEMA_VERSION = 4
+TRAINING_EVENT_STORE_SCHEMA_VERSION = 4
 
-_CREATE_SCHEMA = """
+_EVENT_NAMES_SQL = ", ".join(f"'{name}'" for name in EVENT_NAMES)
+_PROCESS_KINDS_SQL = ", ".join(f"'{kind}'" for kind in PROCESS_KINDS)
+
+_CREATE_SCHEMA = f"""
 CREATE TABLE training_log_store (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     store_id TEXT NOT NULL CHECK (
@@ -49,7 +56,9 @@ CREATE TABLE training_logs (
     ) STORED,
     CHECK (
         json_type(event_json, '$.schema_version') IS 'integer'
-        AND json_extract(event_json, '$.schema_version') = 3
+        AND json_extract(
+            event_json, '$.schema_version'
+        ) = {TRAINING_EVENT_SCHEMA_VERSION}
     ),
     CHECK (json_type(event_json, '$.recorded_at_ms') IS 'integer'),
     CHECK (json_type(event_json, '$.process') IS 'object'),
@@ -122,15 +131,9 @@ CREATE TABLE training_logs (
     CHECK (json_type(event_json, '$.outcome') IS NULL),
     CHECK (json_type(event_json, '$.session_id') IS NULL),
     CHECK (length(event_type) > 0),
-    CHECK (event_type IN (
-        'initialize', 'training', 'process.start', 'process.stop',
-        'rollout', 'sampling', 'round', 'update', 'update.rank',
-        'checkpoint', 'inference.batch', 'decision', 'logging.drop'
-    )),
+    CHECK (event_type IN ({_EVENT_NAMES_SQL})),
     CHECK (length(process_kind) > 0),
-    CHECK (process_kind IN (
-        'initializer', 'coordinator', 'worker', 'model_rank'
-    )),
+    CHECK (process_kind IN ({_PROCESS_KINDS_SQL})),
     CHECK (process_index IS NULL OR process_index >= 0),
     CHECK (policy_version IS NULL OR policy_version >= 0),
     CHECK (rollout_id IS NULL OR length(rollout_id) > 0),
@@ -199,12 +202,13 @@ def initialize_database(
                 f"PRAGMA application_id = {APPLICATION_ID}"
             )
             connection.execute(
-                f"PRAGMA user_version = {SCHEMA_VERSION}"
+                "PRAGMA user_version = "
+                f"{TRAINING_EVENT_STORE_SCHEMA_VERSION}"
             )
             connection.commit()
         elif (
             application_id != APPLICATION_ID
-            or user_version != SCHEMA_VERSION
+            or user_version != TRAINING_EVENT_STORE_SCHEMA_VERSION
         ):
             return _result.Rejected(
                 reason=f"unsupported training database schema: {path}"
@@ -261,7 +265,7 @@ def open_reader(
         )
     if (
         application_id != APPLICATION_ID
-        or user_version != SCHEMA_VERSION
+        or user_version != TRAINING_EVENT_STORE_SCHEMA_VERSION
         or not _schema_is_complete(connection)
     ):
         connection.close()
