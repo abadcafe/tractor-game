@@ -3,10 +3,31 @@
 一个包含纯函数游戏状态机、自对战训练、训练监控和模型推理玩家的
 拖拉机项目。
 
-服务器唯一启动入口：
+## PyTorch 后端
+
+安装时必须明确选择且只选择一个 PyTorch 后端：
 
 ```bash
-uv run python -m server.web --host 127.0.0.1 --port 8000
+# macOS MPS
+uv sync --extra training-mps
+
+# Linux CPU
+uv sync --extra training-cpu
+
+# Linux CUDA
+uv sync --extra training-cuda
+```
+
+`training-mps` 和 `training-cuda` 使用 PyPI 上对应平台的官方
+PyTorch wheel；`training-cpu` 使用 PyTorch 官方 CPU-only
+wheel。三个 extra 互斥。
+
+服务器唯一启动入口；`<training-backend>` 必须替换为上述三个 extra
+之一：
+
+```bash
+uv run --extra <training-backend> python -m server.web \
+  --host 127.0.0.1 --port 8000
 ```
 
 游戏大厅可用两类自动玩家：

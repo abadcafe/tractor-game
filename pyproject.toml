@@ -11,11 +11,18 @@ dependencies = [
     "httpx>=0.27.0",
     "psutil>=7.0.0",
     "numpy",
-    "torch>=2.12.1",
 ]
 
 [project.optional-dependencies]
-training = []
+training-mps = [
+    "torch==2.12.1; sys_platform == 'darwin'",
+]
+training-cpu = [
+    "torch==2.12.1; sys_platform == 'linux'",
+]
+training-cuda = [
+    "torch==2.12.1; sys_platform == 'linux'",
+]
 dev = [
     "playwright",
     "pytest>=8.0.0,<9.0.0",
@@ -25,13 +32,31 @@ dev = [
     "pyright",
 ]
 
+[tool.uv]
+conflicts = [
+    [
+        { extra = "training-mps" },
+        { extra = "training-cpu" },
+        { extra = "training-cuda" },
+    ],
+]
+
+[[tool.uv.index]]
+name = "pytorch-default"
+url = "https://pypi.org/simple"
+explicit = true
+
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cpu" }
+torch = [
+    { index = "pytorch-default", extra = "training-mps" },
+    { index = "pytorch-cpu", extra = "training-cpu" },
+    { index = "pytorch-default", extra = "training-cuda" },
+]
 
 [tool.pytest.ini_options]
 testpaths = [

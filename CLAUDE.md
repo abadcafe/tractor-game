@@ -20,11 +20,16 @@
 - 优先使用 `Pydantic` 而不是 `cast`
 - 必须通过 `ruff format --check` 和 `ruff check`，**0 errors, 0 warnings**
 - 必须通过 `pyright` **strict 模式**，**0 errors, 0 warnings**
-- 全量验证必须包含所有依赖：
-  - `uv run --extra dev --extra training ruff format --check`
-  - `uv run --extra dev --extra training ruff check`
-  - `uv run --extra dev --extra training pyright`
-  - `uv run --extra dev --extra training pytest`
+- 全量验证必须包含所有依赖，并且按验证机器明确选择且只选择一个
+  PyTorch 后端 extra：
+  - macOS MPS：`training-mps`
+  - Linux CPU：`training-cpu`
+  - Linux CUDA：`training-cuda`
+- 以下命令中的 `<training-backend>` 必须替换为当前机器的后端：
+  - `uv run --extra dev --extra <training-backend> ruff format --check`
+  - `uv run --extra dev --extra <training-backend> ruff check`
+  - `uv run --extra dev --extra <training-backend> pyright`
+  - `uv run --extra dev --extra <training-backend> pytest`
 
 ### 3. 错误处理
 
@@ -39,7 +44,8 @@
 - **Frontend**: TypeScript, 原生 DOM（无框架）
 - **Game Logic**: 纯函数状态机（SM），不可变状态模式
 - **Testing**: pytest, pytest-asyncio
-- **Training**: PyTorch（可选依赖 `training` extra，仅训练/全量验证安装）
+- **Training**: PyTorch（必须从 `training-mps`、`training-cpu`、
+  `training-cuda` 中明确选择一个后端）
 
 ## 启动游戏
 
