@@ -15,10 +15,9 @@ class TrainConfig:
     seed: int = 0
     learning_rate: float = 0.0003
     ppo_clip: float = 0.2
-    value_clip: float = 0.2
     entropy_coef: float = 0.01
-    value_coef: float = 0.5
-    max_grad_norm: float = 0.5
+    policy_max_grad_norm: float = 0.5
+    action_value_max_grad_norm: float = 0.5
     ppo_epochs: int = 4
     minibatch_size: int = 64
     adam_beta1: float = 0.9
@@ -31,14 +30,12 @@ class TrainConfig:
         assert self.learning_rate > 0.0
         assert _is_finite(self.ppo_clip)
         assert 0.0 < self.ppo_clip <= 1.0
-        assert _is_finite(self.value_clip)
-        assert self.value_clip > 0.0
         assert _is_finite(self.entropy_coef)
         assert self.entropy_coef >= 0.0
-        assert _is_finite(self.value_coef)
-        assert self.value_coef >= 0.0
-        assert _is_finite(self.max_grad_norm)
-        assert self.max_grad_norm >= 0.0
+        assert _is_finite(self.policy_max_grad_norm)
+        assert self.policy_max_grad_norm >= 0.0
+        assert _is_finite(self.action_value_max_grad_norm)
+        assert self.action_value_max_grad_norm >= 0.0
         assert self.ppo_epochs > 0
         assert self.minibatch_size > 0
         assert _is_finite(self.adam_beta1)
@@ -53,10 +50,11 @@ class TrainConfig:
             "seed": self.seed,
             "learning_rate": self.learning_rate,
             "ppo_clip": self.ppo_clip,
-            "value_clip": self.value_clip,
             "entropy_coef": self.entropy_coef,
-            "value_coef": self.value_coef,
-            "max_grad_norm": self.max_grad_norm,
+            "policy_max_grad_norm": self.policy_max_grad_norm,
+            "action_value_max_grad_norm": (
+                self.action_value_max_grad_norm
+            ),
             "ppo_epochs": self.ppo_epochs,
             "minibatch_size": self.minibatch_size,
             "adam_beta1": self.adam_beta1,
@@ -66,14 +64,30 @@ class TrainConfig:
 
     @classmethod
     def from_json(cls, data: JsonObject) -> TrainConfig:
+        assert set(data) == {
+            "seed",
+            "learning_rate",
+            "ppo_clip",
+            "entropy_coef",
+            "policy_max_grad_norm",
+            "action_value_max_grad_norm",
+            "ppo_epochs",
+            "minibatch_size",
+            "adam_beta1",
+            "adam_beta2",
+            "weight_decay",
+        }
         return cls(
             seed=_int_json_field(data, "seed"),
             learning_rate=_float_json_field(data, "learning_rate"),
             ppo_clip=_float_json_field(data, "ppo_clip"),
-            value_clip=_float_json_field(data, "value_clip"),
             entropy_coef=_float_json_field(data, "entropy_coef"),
-            value_coef=_float_json_field(data, "value_coef"),
-            max_grad_norm=_float_json_field(data, "max_grad_norm"),
+            policy_max_grad_norm=_float_json_field(
+                data, "policy_max_grad_norm"
+            ),
+            action_value_max_grad_norm=_float_json_field(
+                data, "action_value_max_grad_norm"
+            ),
             ppo_epochs=_int_json_field(data, "ppo_epochs"),
             minibatch_size=_int_json_field(data, "minibatch_size"),
             adam_beta1=_float_json_field(data, "adam_beta1"),

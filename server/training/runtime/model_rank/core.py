@@ -51,7 +51,6 @@ class ModelReplica:
     """Own model, optimizer, and device-local PPO operations."""
 
     state: LoadedTrainingState
-    model_config: ModelConfig
     train_config: TrainConfig
     execution_config: ExecutionConfig
     device: torch.device
@@ -73,7 +72,6 @@ class ModelReplica:
         """Run batched policy inference on this core's device."""
         return sample_policy_batch_into_arena(
             model=self.state.model,
-            config=self.model_config,
             device=self.device,
             requests=requests,
             sampler=self.sampler,
@@ -148,7 +146,6 @@ def create_model_replica(
     )
     return ModelReplica(
         state=state,
-        model_config=model_config,
         train_config=train_config,
         execution_config=execution_config,
         device=device,

@@ -11,6 +11,7 @@ from server.game.snapshots.review import ScoringSnapshot
 from server.policy_model.actions import LegalActionSpace
 from server.policy_model.observation import Observation
 from server.policy_model.observation.tokenization import ActionToken
+from server.policy_model.return_target import round_return_targets
 from server.training.rollout_inference.randomness import (
     TrainingDecisionKey,
 )
@@ -20,7 +21,6 @@ from server.training.self_play.policy import (
 )
 from server.training.self_play.session import (
     SelfPlaySession,
-    round_value_targets,
 )
 from tests.support import partnership_levels, snapshot
 
@@ -109,7 +109,7 @@ async def test_session_plays_consecutive_rounds_without_runtime() -> (
     )
 
 
-def test_round_value_targets_use_completed_round_facts() -> None:
+def test_round_return_targets_use_completed_round_facts() -> None:
     before = snapshot(
         declarer=Seat.A,
         partnership_levels=partnership_levels("10", "10"),
@@ -129,7 +129,7 @@ def test_round_value_targets_use_completed_round_facts() -> None:
     )
 
     first_partnership_reward, second_partnership_reward = (
-        round_value_targets(
+        round_return_targets(
             before=before,
             after=after,
         )
@@ -139,9 +139,7 @@ def test_round_value_targets_use_completed_round_facts() -> None:
     assert abs(second_partnership_reward - 2.375) < 1e-9
 
 
-def test_round_value_targets_map_game_winner_to_terminal_progress() -> (
-    None
-):
+def test_round_return_targets_map_winner_to_terminal_progress() -> None:
     before = snapshot(
         declarer=Seat.B,
         partnership_levels=partnership_levels("A", "A"),
@@ -161,7 +159,7 @@ def test_round_value_targets_map_game_winner_to_terminal_progress() -> (
         partnership_levels=partnership_levels("A", "A"),
     )
 
-    assert round_value_targets(before=before, after=after) == (
+    assert round_return_targets(before=before, after=after) == (
         -1.0,
         1.0,
     )
@@ -182,7 +180,7 @@ async def test_session_rejects_policy_timeout() -> None:
     assert "training round timed out" in result.reason
 
 
-def test_round_value_targets_use_scoring_winner_at_threshold() -> None:
+def test_round_return_targets_use_scoring_winner_at_threshold() -> None:
     before = snapshot(
         declarer=Seat.B,
         partnership_levels=partnership_levels("10", "10"),
@@ -201,13 +199,13 @@ def test_round_value_targets_use_scoring_winner_at_threshold() -> None:
         partnership_levels=partnership_levels("10", "10"),
     )
 
-    assert round_value_targets(before=before, after=after) == (
+    assert round_return_targets(before=before, after=after) == (
         1.0,
         -1.0,
     )
 
 
-def test_round_value_targets_count_defender_stage_progress() -> None:
+def test_round_return_targets_count_defender_stage_progress() -> None:
     before = snapshot(
         declarer=Seat.A,
         partnership_levels=partnership_levels("10", "10"),
@@ -226,13 +224,13 @@ def test_round_value_targets_count_defender_stage_progress() -> None:
         partnership_levels=partnership_levels("10", "J"),
     )
 
-    assert round_value_targets(before=before, after=after) == (
+    assert round_return_targets(before=before, after=after) == (
         -2.0,
         2.0,
     )
 
 
-def test_value_target_uses_after_declarer_when_before_is_unset() -> (
+def test_return_target_uses_after_declarer_when_before_is_unset() -> (
     None
 ):
     before = snapshot(
@@ -255,14 +253,14 @@ def test_value_target_uses_after_declarer_when_before_is_unset() -> (
         partnership_levels=partnership_levels("10", "J"),
     )
 
-    first_partnership, second_partnership = round_value_targets(
+    first_partnership, second_partnership = round_return_targets(
         before=before, after=after
     )
     assert abs(first_partnership - -2.375) < 1e-9
     assert abs(second_partnership - 2.375) < 1e-9
 
 
-def test_round_value_targets_map_first_partnership_terminal_win() -> (
+def test_round_return_targets_map_first_partnership_terminal_win() -> (
     None
 ):
     before = snapshot(
@@ -284,7 +282,7 @@ def test_round_value_targets_map_first_partnership_terminal_win() -> (
         partnership_levels=partnership_levels("A", "A"),
     )
 
-    assert round_value_targets(before=before, after=after) == (
+    assert round_return_targets(before=before, after=after) == (
         1.0,
         -1.0,
     )

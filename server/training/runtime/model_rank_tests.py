@@ -685,7 +685,7 @@ def _runtime_state() -> RuntimeTrainingState:
 def _ppo_update_stats() -> PPOUpdateStats:
     return PPOUpdateStats(
         policy_loss=0.0,
-        value_loss=0.0,
+        action_value_loss=0.0,
         entropy=0.0,
         total_loss=0.0,
         approx_kl=0.0,
@@ -694,8 +694,9 @@ def _ppo_update_stats() -> PPOUpdateStats:
             update_seconds=0.0,
             minibatch_loss_seconds=0.0,
             observation_batch_seconds=0.0,
-            observation_encode_seconds=0.0,
-            value_head_seconds=0.0,
+            policy_observation_encode_seconds=0.0,
+            action_value_observation_encode_seconds=0.0,
+            action_value_decode_seconds=0.0,
             action_decode_seconds=0.0,
             action_distribution_seconds=0.0,
             backward_seconds=0.0,

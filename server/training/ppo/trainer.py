@@ -9,7 +9,7 @@ import torch.distributed as dist
 from torch import Tensor
 
 from server.foundation import result as _result
-from server.policy_model.network import PolicyValueModel
+from server.policy_model.network import PolicyActionModel
 from server.training.config import TrainConfig
 from server.training.ppo.collectives import (
     all_reduce_max,
@@ -55,12 +55,12 @@ from server.training.ppo.sync import (
 )
 from server.training.ppo.update_input import PPOUpdateInput
 from server.training.ppo.validation import (
+    PPO_ACTION_VALUE_LOSS_NONFINITE,
     PPO_APPROX_KL_NONFINITE,
     PPO_CLIP_FRACTION_NONFINITE,
     PPO_ENTROPY_NONFINITE,
     PPO_POLICY_LOSS_NONFINITE,
     PPO_TOTAL_LOSS_NONFINITE,
-    PPO_VALUE_LOSS_NONFINITE,
     TensorValidationCheck,
     combine_validation_codes,
     gradient_validation_code,
@@ -90,7 +90,7 @@ class PPOTrainer:
     def __init__(
         self,
         *,
-        model: PolicyValueModel,
+        model: PolicyActionModel,
         train_config: TrainConfig,
         device: torch.device,
         profile_mode: PPOProfileMode,
@@ -206,7 +206,9 @@ class PPOTrainer:
         stat_count = torch.zeros(
             (), dtype=torch.float32, device=self.device
         )
-        parameters = tuple(self.model.parameters())
+        policy_parameters = self.model.policy_parameters()
+        action_value_parameters = self.model.action_value_parameters()
+        parameters = (*policy_parameters, *action_value_parameters)
         for epoch in range(self.train_config.ppo_epochs):
             local_epoch_schedule = _local_epoch_schedule(
                 prepared_batch=prepared_batch,
@@ -298,8 +300,14 @@ class PPOTrainer:
                 )
                 gradient_code = gradient_validation_code(parameters)
                 clip_grad_norm_on_device(
-                    parameters,
-                    max_norm=self.train_config.max_grad_norm,
+                    policy_parameters,
+                    max_norm=(self.train_config.policy_max_grad_norm),
+                )
+                clip_grad_norm_on_device(
+                    action_value_parameters,
+                    max_norm=(
+                        self.train_config.action_value_max_grad_norm
+                    ),
                 )
                 gradient_code = combine_validation_codes(
                     gradient_code,
@@ -587,7 +595,7 @@ def _loss_stat_tensor(loss: MinibatchLoss) -> Tensor:
     return torch.stack(
         (
             loss.policy_loss.detach(),
-            loss.value_loss.detach(),
+            loss.action_value_loss.detach(),
             loss.entropy.detach(),
             loss.total_loss.detach(),
             loss.approx_kl.detach(),
@@ -624,7 +632,7 @@ def _finalize_update_stats(
     return _result.Ok(
         value=PPOUpdateStats(
             policy_loss=_float_tensor(means[0]),
-            value_loss=_float_tensor(means[1]),
+            action_value_loss=_float_tensor(means[1]),
             entropy=_float_tensor(means[2]),
             total_loss=_float_tensor(means[3]),
             approx_kl=_float_tensor(means[4]),
@@ -642,8 +650,8 @@ def _loss_validation_code(loss: MinibatchLoss) -> Tensor:
                 code=PPO_POLICY_LOSS_NONFINITE,
             ),
             TensorValidationCheck(
-                tensor=loss.value_loss,
-                code=PPO_VALUE_LOSS_NONFINITE,
+                tensor=loss.action_value_loss,
+                code=PPO_ACTION_VALUE_LOSS_NONFINITE,
             ),
             TensorValidationCheck(
                 tensor=loss.entropy,

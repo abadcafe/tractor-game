@@ -27,6 +27,7 @@ class TrainingInitOptions(BaseModel):
     d_model: int = Field(default=128, gt=0)
     layers: int = Field(default=3, gt=0)
     heads: int = Field(default=4, gt=0)
+    action_value_layers: int = Field(default=2, gt=0)
     seed: int = Field(default=0, ge=0)
     learning_rate: float = Field(
         default=0.0003, gt=0.0, allow_inf_nan=False
@@ -34,12 +35,13 @@ class TrainingInitOptions(BaseModel):
     ppo_clip: float = Field(
         default=0.2, gt=0.0, le=1.0, allow_inf_nan=False
     )
-    value_clip: float = Field(default=0.2, gt=0.0, allow_inf_nan=False)
     entropy_coef: float = Field(
         default=0.01, ge=0.0, allow_inf_nan=False
     )
-    value_coef: float = Field(default=0.5, ge=0.0, allow_inf_nan=False)
-    max_grad_norm: float = Field(
+    policy_max_grad_norm: float = Field(
+        default=0.5, ge=0.0, allow_inf_nan=False
+    )
+    action_value_max_grad_norm: float = Field(
         default=0.5, ge=0.0, allow_inf_nan=False
     )
     ppo_epochs: int = Field(default=4, gt=0)
@@ -106,16 +108,13 @@ class TrainingResumeOptions(BaseModel):
     ppo_clip: float | None = Field(
         default=None, gt=0.0, le=1.0, allow_inf_nan=False
     )
-    value_clip: float | None = Field(
-        default=None, gt=0.0, allow_inf_nan=False
-    )
     entropy_coef: float | None = Field(
         default=None, ge=0.0, allow_inf_nan=False
     )
-    value_coef: float | None = Field(
+    policy_max_grad_norm: float | None = Field(
         default=None, ge=0.0, allow_inf_nan=False
     )
-    max_grad_norm: float | None = Field(
+    action_value_max_grad_norm: float | None = Field(
         default=None, ge=0.0, allow_inf_nan=False
     )
     ppo_epochs: int | None = Field(default=None, gt=0)
@@ -179,15 +178,17 @@ def initialize_run(
             d_model=options.d_model,
             layers=options.layers,
             heads=options.heads,
+            action_value_layers=options.action_value_layers,
         ),
         train_config=TrainConfig(
             seed=options.seed,
             learning_rate=options.learning_rate,
             ppo_clip=options.ppo_clip,
-            value_clip=options.value_clip,
             entropy_coef=options.entropy_coef,
-            value_coef=options.value_coef,
-            max_grad_norm=options.max_grad_norm,
+            policy_max_grad_norm=options.policy_max_grad_norm,
+            action_value_max_grad_norm=(
+                options.action_value_max_grad_norm
+            ),
             ppo_epochs=options.ppo_epochs,
             minibatch_size=options.minibatch_size,
             adam_beta1=options.adam_beta1,

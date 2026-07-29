@@ -113,6 +113,22 @@ def read_checkpoint_manifest(
         return checkpoint_corruption(
             path, "manifest root is not an object"
         )
+    expected_fields = {
+        "schema_version",
+        "checkpoint_id",
+        "state_path",
+        "state_sha256",
+        "model_config",
+        "train_config",
+        "total_rounds",
+        "total_samples",
+        "total_updates",
+    }
+    if not set(loaded).issubset(expected_fields):
+        return checkpoint_corruption(
+            path,
+            "manifest fields do not match the current schema",
+        )
     schema_version_result = _json_int_field(
         loaded, "schema_version", path
     )

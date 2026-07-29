@@ -14,20 +14,13 @@ from server.policy_model.actions.decoding import (
 from server.policy_model.checkpoint import (
     load_policy_checkpoint,
 )
-from server.policy_model.network import PolicyValueModel
-from server.policy_model.observation import Observation
+from server.policy_model.network import PolicyActionModel
 
 from ._batches import inference_batch_row_limit
-from ._proposals import propose_actions
-from ._sample import sample_actions
-from ._score import score_actions
-from ._values import estimate_values
+from ._decide import decide_actions
 from .contracts import (
-    ActionProposalRequest,
-    ActionProposals,
-    ActionSamples,
-    PolicySampleRequest,
-    PolicyScoreRequest,
+    ActionDecision,
+    ActionDecisionRequest,
 )
 
 
@@ -37,7 +30,7 @@ class TorchBatchExecutor:
     def __init__(
         self,
         *,
-        model: PolicyValueModel,
+        model: PolicyActionModel,
         device: torch.device,
     ) -> None:
         self._model = model
@@ -73,71 +66,23 @@ class TorchBatchExecutor:
             )
         )
 
-    def propose(
+    def decide(
         self,
         *,
-        requests: tuple[ActionProposalRequest, ...],
-    ) -> Ok[tuple[ActionProposals, ...]] | Rejected:
-        """Generate unique structured Gumbel candidates."""
+        requests: tuple[ActionDecisionRequest, ...],
+    ) -> Ok[tuple[ActionDecision, ...]] | Rejected:
+        """Select candidates with complete-action Q."""
         capacity = max(
             len(requests),
             max(request.candidate_count for request in requests),
         )
         with torch.inference_mode():
-            return propose_actions(
+            return decide_actions(
                 model=self._model,
                 device=self._device,
                 sampler=self._sampler_for(capacity),
                 proposal_sampler=self._proposal_sampler_for(capacity),
                 requests=requests,
-                max_batch_rows=self._max_batch_rows,
-            )
-
-    def sample(
-        self,
-        *,
-        requests: tuple[PolicySampleRequest, ...],
-    ) -> Ok[tuple[ActionSamples, ...]] | Rejected:
-        """Execute one already-composed sample operation."""
-        capacity = max(
-            len(requests),
-            sum(len(request.draws) for request in requests),
-        )
-        with torch.inference_mode():
-            return sample_actions(
-                model=self._model,
-                device=self._device,
-                sampler=self._sampler_for(capacity),
-                requests=requests,
-                max_batch_rows=self._max_batch_rows,
-            )
-
-    def score(
-        self,
-        *,
-        requests: tuple[PolicyScoreRequest, ...],
-    ) -> Ok[tuple[float, ...]] | Rejected:
-        """Execute one already-composed score operation."""
-        with torch.inference_mode():
-            return score_actions(
-                model=self._model,
-                device=self._device,
-                sampler=self._sampler_for(len(requests)),
-                requests=requests,
-                max_batch_rows=self._max_batch_rows,
-            )
-
-    def values(
-        self,
-        *,
-        observations: tuple[Observation, ...],
-    ) -> Ok[tuple[float, ...]] | Rejected:
-        """Execute one already-composed value operation."""
-        with torch.inference_mode():
-            return estimate_values(
-                model=self._model,
-                device=self._device,
-                observations=observations,
                 max_batch_rows=self._max_batch_rows,
             )
 

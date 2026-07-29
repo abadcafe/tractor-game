@@ -86,7 +86,6 @@ class PolicySampleColumns:
     step_counts: Tensor
     choice_counts: Tensor
     old_log_probabilities: Tensor
-    old_values: Tensor
 
     def __post_init__(self) -> None:
         batch_size, max_steps = self.choice_ids_padded.shape
@@ -101,7 +100,6 @@ class PolicySampleColumns:
         assert self.step_counts.shape == (batch_size,)
         assert self.choice_counts.shape == (batch_size,)
         assert self.old_log_probabilities.shape == (batch_size,)
-        assert self.old_values.shape == (batch_size,)
         assert (
             int(self.observation_batch.category_ids.shape[0])
             == batch_size

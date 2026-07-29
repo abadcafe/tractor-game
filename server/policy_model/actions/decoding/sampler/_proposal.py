@@ -53,7 +53,6 @@ class ActionProposalBatch:
 
     choice_ids_padded: Tensor
     step_counts: Tensor
-    log_probabilities: Tensor
     perturbed_root_scores: Tensor
 
     def __post_init__(self) -> None:
@@ -61,7 +60,6 @@ class ActionProposalBatch:
         assert row_count > 0
         assert 0 < step_capacity <= MAX_ACTION_STEPS
         assert self.step_counts.shape == (row_count,)
-        assert self.log_probabilities.shape == (row_count,)
         assert self.perturbed_root_scores.shape == (row_count,)
         assert self.choice_ids_padded.dtype == torch.long
         assert self.step_counts.dtype == torch.long
@@ -323,9 +321,6 @@ class ActionProposalSampler:
                     :beam_count, :generation_steps
                 ].clone(),
                 step_counts=final_state.step_counts[
-                    :beam_count
-                ].clone(),
-                log_probabilities=prefix_log_probabilities[
                     :beam_count
                 ].clone(),
                 perturbed_root_scores=prefix_scores[

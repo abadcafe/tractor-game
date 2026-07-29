@@ -9,7 +9,7 @@ from server.policy_model.actions import LegalActionSpace
 from server.policy_model.actions.decoding import (
     ActionSampler,
 )
-from server.policy_model.network import ModelConfig, PolicyValueModel
+from server.policy_model.network import PolicyActionModel
 from server.policy_model.observation import Observation
 from server.training.rollout_inference.batch import (
     PolicyRequestCompiler,
@@ -37,12 +37,10 @@ class TorchTrainingPolicy:
     def __init__(
         self,
         *,
-        model: PolicyValueModel,
-        config: ModelConfig,
+        model: PolicyActionModel,
         device: torch.device,
     ) -> None:
         self.model = model
-        self.config = config
         self.device = device
         self.sample_arena = ModelRankSampleArena(
             model_rank_index=0,
@@ -84,7 +82,6 @@ class TorchTrainingPolicy:
             return request_result
         decision_result = sample_policy_batch_into_arena(
             model=self.model,
-            config=self.config,
             device=self.device,
             requests=request_result.value,
             sampler=self.sampler,

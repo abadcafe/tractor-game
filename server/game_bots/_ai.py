@@ -11,7 +11,7 @@ from ._policy import DecisionCommand, DecisionRequest
 
 
 class AIPolicy:
-    """Drive a seat with isolated model belief and search state."""
+    """Drive a seat with one model-backed decision controller."""
 
     def __init__(self, controller: AIControllerPort) -> None:
         self._controller = controller

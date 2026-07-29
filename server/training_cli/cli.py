@@ -128,13 +128,17 @@ def _add_init_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--d-model", type=int, default=128)
     parser.add_argument("--layers", type=int, default=3)
     parser.add_argument("--heads", type=int, default=4)
+    parser.add_argument("--action-value-layers", type=int, default=2)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--learning-rate", type=float, default=0.0003)
     parser.add_argument("--ppo-clip", type=float, default=0.2)
-    parser.add_argument("--value-clip", type=float, default=0.2)
     parser.add_argument("--entropy-coef", type=float, default=0.01)
-    parser.add_argument("--value-coef", type=float, default=0.5)
-    parser.add_argument("--max-grad-norm", type=float, default=0.5)
+    parser.add_argument(
+        "--policy-max-grad-norm", type=float, default=0.5
+    )
+    parser.add_argument(
+        "--action-value-max-grad-norm", type=float, default=0.5
+    )
     parser.add_argument("--ppo-epochs", type=int, default=4)
     parser.add_argument("--minibatch-size", type=int, default=64)
     parser.add_argument("--adam-beta1", type=float, default=0.9)
@@ -172,10 +176,9 @@ def _add_resume_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--game-envs-per-worker", type=int)
     parser.add_argument("--samples-per-update", type=int)
     parser.add_argument("--ppo-clip", type=float)
-    parser.add_argument("--value-clip", type=float)
     parser.add_argument("--entropy-coef", type=float)
-    parser.add_argument("--value-coef", type=float)
-    parser.add_argument("--max-grad-norm", type=float)
+    parser.add_argument("--policy-max-grad-norm", type=float)
+    parser.add_argument("--action-value-max-grad-norm", type=float)
     parser.add_argument("--ppo-epochs", type=int)
     parser.add_argument("--minibatch-size", type=int)
     parser.add_argument("--adam-beta1", type=float)

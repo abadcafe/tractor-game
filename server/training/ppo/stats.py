@@ -16,7 +16,7 @@ class PPOUpdateStats:
     """Scalar loss stats for metrics."""
 
     policy_loss: float
-    value_loss: float
+    action_value_loss: float
     entropy: float
     total_loss: float
     approx_kl: float
@@ -28,7 +28,7 @@ def ppo_update_stats_are_finite(stats: PPOUpdateStats) -> bool:
     """Return whether all scalar PPO diagnostics are finite."""
     return (
         math.isfinite(stats.policy_loss)
-        and math.isfinite(stats.value_loss)
+        and math.isfinite(stats.action_value_loss)
         and math.isfinite(stats.entropy)
         and math.isfinite(stats.total_loss)
         and math.isfinite(stats.approx_kl)

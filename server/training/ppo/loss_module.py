@@ -8,7 +8,7 @@ import torch
 from torch import Tensor, nn
 
 from server.foundation import result as _result
-from server.policy_model.network import PolicyValueModel
+from server.policy_model.network import PolicyActionModel
 from server.training.config import TrainConfig
 from server.training.ppo.evaluation import evaluate_trace_batch
 from server.training.ppo.math import (
@@ -28,7 +28,7 @@ class MinibatchLoss:
     """Loss tensors and diagnostics for one optimizer step."""
 
     policy_loss: Tensor
-    value_loss: Tensor
+    action_value_loss: Tensor
     entropy: Tensor
     total_loss: Tensor
     approx_kl: Tensor
@@ -63,7 +63,7 @@ class PPOLossModule(nn.Module):
     def __init__(
         self,
         *,
-        model: PolicyValueModel,
+        model: PolicyActionModel,
         train_config: TrainConfig,
         device: torch.device,
     ) -> None:
@@ -72,7 +72,7 @@ class PPOLossModule(nn.Module):
         self._train_config = train_config
         self._device = device
 
-    def policy_model(self) -> PolicyValueModel:
+    def policy_model(self) -> PolicyActionModel:
         """Return the owned policy model for inference/checkpointing."""
         return self._model
 
@@ -87,7 +87,7 @@ class PPOLossModule(nn.Module):
             return _loss_tensors(
                 MinibatchLoss(
                     policy_loss=zero,
-                    value_loss=zero,
+                    action_value_loss=zero,
                     entropy=zero,
                     total_loss=zero,
                     approx_kl=zero,
@@ -106,7 +106,7 @@ class PPOLossModule(nn.Module):
             return _loss_tensors(
                 MinibatchLoss(
                     policy_loss=zero,
-                    value_loss=zero,
+                    action_value_loss=zero,
                     entropy=zero,
                     total_loss=zero,
                     approx_kl=zero,
@@ -124,21 +124,18 @@ class PPOLossModule(nn.Module):
             old_log_probabilities=minibatch.old_log_probabilities,
             new_log_probabilities=evaluated.log_probabilities,
             advantages=minibatch.advantages,
-            old_values=minibatch.old_values,
-            new_values=evaluated.values,
             return_values=minibatch.return_values,
+            action_values=evaluated.action_values,
             entropies=evaluated.entropies,
             config=PPOObjectiveConfig(
                 ppo_clip=self._train_config.ppo_clip,
-                value_clip=self._train_config.value_clip,
-                value_coef=self._train_config.value_coef,
                 entropy_coef=self._train_config.entropy_coef,
             ),
         )
         return _loss_tensors(
             MinibatchLoss(
                 policy_loss=objective.policy_loss,
-                value_loss=objective.value_loss,
+                action_value_loss=objective.action_value_loss,
                 entropy=objective.entropy,
                 total_loss=objective.total_loss,
                 approx_kl=objective.approx_kl,
@@ -161,7 +158,7 @@ def _loss_tensors(
 ) -> PPOLossForwardTensors:
     return (
         loss.policy_loss,
-        loss.value_loss,
+        loss.action_value_loss,
         loss.entropy,
         loss.total_loss,
         loss.approx_kl,
@@ -176,7 +173,7 @@ def loss_forward_output_from_tensors(
     """Convert DDP-visible loss tensors back to trainer output."""
     loss = MinibatchLoss(
         policy_loss=tensors[0],
-        value_loss=tensors[1],
+        action_value_loss=tensors[1],
         entropy=tensors[2],
         total_loss=tensors[3],
         approx_kl=tensors[4],

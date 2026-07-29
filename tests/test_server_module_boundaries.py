@@ -270,7 +270,7 @@ def test_policy_model_internals_stay_behind_facades() -> None:
         "server.policy_model.observation",
         "server.policy_model.observation.tensor",
         "server.policy_model.observation.tokenization",
-        "server.policy_model.value_target",
+        "server.policy_model.return_target",
     }
 
 

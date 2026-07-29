@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TypeGuard, cast
 
+import torch
 from torch import Tensor
 
 from server.foundation import result as _result
@@ -22,6 +23,25 @@ def train_config_from_json(
     path: Path,
 ) -> _result.Ok[TrainConfig] | _result.Rejected:
     """Parse and validate train config from checkpoint JSON."""
+    expected_fields = {
+        "seed",
+        "learning_rate",
+        "ppo_clip",
+        "entropy_coef",
+        "policy_max_grad_norm",
+        "action_value_max_grad_norm",
+        "ppo_epochs",
+        "minibatch_size",
+        "adam_beta1",
+        "adam_beta2",
+        "weight_decay",
+    }
+    if not set(data).issubset(expected_fields):
+        return checkpoint_corruption(
+            path,
+            "manifest train_config fields do not match "
+            "the current schema",
+        )
     seed = _json_int_field(
         data, "seed", path, label="train_config.seed"
     )
@@ -40,26 +60,27 @@ def train_config_from_json(
     )
     if isinstance(ppo_clip, _result.Rejected):
         return ppo_clip
-    value_clip = _json_float_field(
-        data, "value_clip", path, label="train_config.value_clip"
-    )
-    if isinstance(value_clip, _result.Rejected):
-        return value_clip
     entropy_coef = _json_float_field(
         data, "entropy_coef", path, label="train_config.entropy_coef"
     )
     if isinstance(entropy_coef, _result.Rejected):
         return entropy_coef
-    value_coef = _json_float_field(
-        data, "value_coef", path, label="train_config.value_coef"
+    policy_max_grad_norm = _json_float_field(
+        data,
+        "policy_max_grad_norm",
+        path,
+        label="train_config.policy_max_grad_norm",
     )
-    if isinstance(value_coef, _result.Rejected):
-        return value_coef
-    max_grad_norm = _json_float_field(
-        data, "max_grad_norm", path, label="train_config.max_grad_norm"
+    if isinstance(policy_max_grad_norm, _result.Rejected):
+        return policy_max_grad_norm
+    action_value_max_grad_norm = _json_float_field(
+        data,
+        "action_value_max_grad_norm",
+        path,
+        label="train_config.action_value_max_grad_norm",
     )
-    if isinstance(max_grad_norm, _result.Rejected):
-        return max_grad_norm
+    if isinstance(action_value_max_grad_norm, _result.Rejected):
+        return action_value_max_grad_norm
     ppo_epochs = _json_int_field(
         data, "ppo_epochs", path, label="train_config.ppo_epochs"
     )
@@ -93,10 +114,9 @@ def train_config_from_json(
         seed=seed.value,
         learning_rate=learning_rate.value,
         ppo_clip=ppo_clip.value,
-        value_clip=value_clip.value,
         entropy_coef=entropy_coef.value,
-        value_coef=value_coef.value,
-        max_grad_norm=max_grad_norm.value,
+        policy_max_grad_norm=policy_max_grad_norm.value,
+        action_value_max_grad_norm=(action_value_max_grad_norm.value),
         ppo_epochs=ppo_epochs.value,
         minibatch_size=minibatch_size.value,
         adam_beta1=adam_beta1.value,
@@ -110,10 +130,11 @@ def train_config_from_json(
             seed=seed.value,
             learning_rate=learning_rate.value,
             ppo_clip=ppo_clip.value,
-            value_clip=value_clip.value,
             entropy_coef=entropy_coef.value,
-            value_coef=value_coef.value,
-            max_grad_norm=max_grad_norm.value,
+            policy_max_grad_norm=policy_max_grad_norm.value,
+            action_value_max_grad_norm=(
+                action_value_max_grad_norm.value
+            ),
             ppo_epochs=ppo_epochs.value,
             minibatch_size=minibatch_size.value,
             adam_beta1=adam_beta1.value,
@@ -133,6 +154,18 @@ def validate_optimizer_state_payload(
     payload_state: dict[object, object] = {
         key: value for key, value in state.items()
     }
+    expected_fields = {
+        "kind",
+        "step_count",
+        "exp_avgs",
+        "exp_avg_sqs",
+    }
+    if not set(payload_state).issubset(expected_fields):
+        return checkpoint_corruption(
+            path,
+            "state payload optimizer_state fields do not match "
+            "the current schema",
+        )
     kind = _payload_str_field(
         payload_state, "kind", path, label="optimizer_state.kind"
     )
@@ -186,6 +219,12 @@ def validate_optimizer_state_payload(
     for index, parameter in enumerate(parameters):
         exp_avg = exp_avgs.value[index]
         exp_avg_sq = exp_avg_sqs.value[index]
+        if (exp_avg is None) != (exp_avg_sq is None):
+            return checkpoint_corruption(
+                path,
+                "state payload optimizer moments must be present "
+                "as pairs",
+            )
         if exp_avg is not None:
             exp_avg_validation = _validate_optimizer_tensor(
                 path=path,
@@ -213,10 +252,9 @@ def _validate_train_config_values(
     seed: int,
     learning_rate: float,
     ppo_clip: float,
-    value_clip: float,
     entropy_coef: float,
-    value_coef: float,
-    max_grad_norm: float,
+    policy_max_grad_norm: float,
+    action_value_max_grad_norm: float,
     ppo_epochs: int,
     minibatch_size: int,
     adam_beta1: float,
@@ -236,21 +274,20 @@ def _validate_train_config_values(
             path,
             "manifest train_config.ppo_clip must be > 0 and <= 1",
         )
-    if value_clip <= 0.0:
-        return checkpoint_corruption(
-            path, "manifest train_config.value_clip must be > 0"
-        )
     if entropy_coef < 0.0:
         return checkpoint_corruption(
             path, "manifest train_config.entropy_coef must be >= 0"
         )
-    if value_coef < 0.0:
+    if policy_max_grad_norm < 0.0:
         return checkpoint_corruption(
-            path, "manifest train_config.value_coef must be >= 0"
+            path,
+            "manifest train_config.policy_max_grad_norm must be >= 0",
         )
-    if max_grad_norm < 0.0:
+    if action_value_max_grad_norm < 0.0:
         return checkpoint_corruption(
-            path, "manifest train_config.max_grad_norm must be >= 0"
+            path,
+            "manifest train_config.action_value_max_grad_norm "
+            "must be >= 0",
         )
     if ppo_epochs <= 0:
         return checkpoint_corruption(
@@ -295,6 +332,11 @@ def _validate_optimizer_tensor(
             path,
             f"state payload {label} tensor dtype does not match "
             "model parameter",
+        )
+    if not bool(torch.isfinite(value).all().item()):
+        return checkpoint_corruption(
+            path,
+            f"state payload {label} tensor must be finite",
         )
     return _result.Ok(value=None)
 

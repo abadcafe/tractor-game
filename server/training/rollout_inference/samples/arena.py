@@ -47,7 +47,6 @@ class ArenaPPOBatchSource:
     row_indices: Tensor
     step_counts: Tensor
     old_log_probabilities: Tensor
-    old_values: Tensor
     return_values: Tensor
     raw_advantages: Tensor
     max_step_count: int
@@ -96,7 +95,6 @@ class ModelRankSampleArena:
     _choice_ids: Tensor | None = None
     _flat_legal_choice_masks: Tensor | None = None
     _old_log_probabilities: Tensor | None = None
-    _old_values: Tensor | None = None
 
     def __post_init__(self) -> None:
         assert self.model_rank_index >= 0
@@ -112,7 +110,6 @@ class ModelRankSampleArena:
         policy_versions: tuple[int, ...],
         observation_batch: ObservationTensorBatch,
         action_sample: ActionSampleBatch,
-        old_values: Tensor,
     ) -> ModelRankDecisionBatchResult:
         sample_count = len(policy_versions)
         assert sample_count > 0
@@ -134,7 +131,6 @@ class ModelRankSampleArena:
         self._validate_sample(
             observation=observation_batch,
             sample=action_sample,
-            old_values=old_values,
             sample_count=sample_count,
         )
         start = self._row_count
@@ -167,7 +163,6 @@ class ModelRankSampleArena:
         self._old_log_probabilities_tensor()[rows].copy_(
             action_sample.log_probabilities
         )
-        self._old_values_tensor()[rows].copy_(old_values)
         self._row_count = end
         self._step_count = step_end
         step_counts = _int_tuple(action_sample.step_counts)
@@ -206,7 +201,6 @@ class ModelRankSampleArena:
         )
         if isinstance(valid, Rejected):
             return valid
-        old_values = self._old_values_tensor().index_select(0, rows)
         return_values = returns.return_values.to(
             dtype=torch.float32, device=self.device
         )
@@ -221,9 +215,8 @@ class ModelRankSampleArena:
                 row_indices=rows,
                 step_counts=steps,
                 old_log_probabilities=old_log_probabilities,
-                old_values=old_values,
                 return_values=return_values,
-                raw_advantages=return_values - old_values,
+                raw_advantages=return_values,
                 max_step_count=returns.max_step_count,
             )
         )
@@ -299,7 +292,6 @@ class ModelRankSampleArena:
             old_log_probabilities=source.old_log_probabilities.index_select(
                 0, indices
             ),
-            old_values=source.old_values.index_select(0, indices),
             advantages=advantages.index_select(0, indices),
             return_values=source.return_values.index_select(0, indices),
             local_count=local_count,
@@ -393,9 +385,6 @@ class ModelRankSampleArena:
         self._old_log_probabilities = _zeros(
             (row_capacity,), torch.float32, self.device
         )
-        self._old_values = _zeros(
-            (row_capacity,), torch.float32, self.device
-        )
 
     def _write_observation(
         self, *, rows: slice, source: ObservationTensorBatch
@@ -461,13 +450,11 @@ class ModelRankSampleArena:
         *,
         observation: ObservationTensorBatch,
         sample: ActionSampleBatch,
-        old_values: Tensor,
         sample_count: int,
     ) -> None:
         assert int(observation.category_ids.shape[0]) == sample_count
         assert int(sample.choice_ids_padded.shape[0]) == sample_count
         assert sample.legal_choice_masks.shape[1] == ACTION_CHOICE_COUNT
-        assert old_values.shape == (sample_count,)
 
     def _validate_return_rows(
         self,
@@ -541,9 +528,6 @@ class ModelRankSampleArena:
         self._old_log_probabilities = _grow_first_dimension(
             self._old_log_probabilities_tensor(), capacity
         )
-        self._old_values = _grow_first_dimension(
-            self._old_values_tensor(), capacity
-        )
         self._capacity = capacity
 
     def _grow_steps(self, capacity: int) -> None:
@@ -608,9 +592,6 @@ class ModelRankSampleArena:
 
     def _old_log_probabilities_tensor(self) -> Tensor:
         return _present(self._old_log_probabilities)
-
-    def _old_values_tensor(self) -> Tensor:
-        return _present(self._old_values)
 
 
 def _single_policy_version(

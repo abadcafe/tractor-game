@@ -21,8 +21,7 @@ from server.policy_model.actions.decoding import ActionSampler
 from server.policy_model.network import (
     ActionDecodeSession,
     EncodedObservation,
-    ModelConfig,
-    PolicyValueModel,
+    PolicyActionModel,
 )
 from server.policy_model.observation import (
     Observation,
@@ -59,7 +58,6 @@ def test_batch_sampling_scores_the_fixed_legal_choice_mask() -> None:
 
     result = sample_policy_batch(
         model=model,
-        config=_model_config(),
         device=torch.device("cpu"),
         requests=_request_batch(observation, legal),
         sampler=_sampler(batch_size=1),
@@ -85,7 +83,6 @@ async def test_policy_rejects_non_finite_choice_logits() -> None:
 
     result = await TorchTrainingPolicy(
         model=_FixedChoiceModel(choice_logits=logits),
-        config=_model_config(),
         device=torch.device("cpu"),
     ).decide(observation, legal, _decision_key())
 
@@ -104,7 +101,6 @@ async def test_policy_uses_one_observation_encoding_for_the_trace() -> (
 
     decision = await TorchTrainingPolicy(
         model=model,
-        config=_model_config(),
         device=torch.device("cpu"),
     ).decide(observation, legal, _decision_key())
 
@@ -137,7 +133,6 @@ async def test_policy_does_not_use_torch_multinomial(
         model=_FixedChoiceModel(
             choice_logits=torch.zeros(ACTION_CHOICE_COUNT)
         ),
-        config=_model_config(),
         device=torch.device("cpu"),
     ).decide(observation, legal, _decision_key())
 
@@ -154,7 +149,6 @@ def test_batch_sampling_encodes_multiple_observations_together() -> (
 
     result = sample_policy_batch(
         model=model,
-        config=_model_config(),
         device=torch.device("cpu"),
         requests=_request_batch(observation, legal, batch_size=2),
         sampler=_sampler(batch_size=2),
@@ -167,7 +161,7 @@ def test_batch_sampling_encodes_multiple_observations_together() -> (
     assert model.score_batch_sizes == [2]
 
 
-class _FixedChoiceModel(PolicyValueModel):
+class _FixedChoiceModel(PolicyActionModel):
     def __init__(self, *, choice_logits: Tensor) -> None:
         super().__init__(d_model=8, layers=1, heads=1)
         assert choice_logits.shape == (ACTION_CHOICE_COUNT,)
@@ -175,11 +169,11 @@ class _FixedChoiceModel(PolicyValueModel):
         self.encode_calls = 0
         self.score_batch_sizes: list[int] = []
 
-    def encode_observations(
+    def encode_policy_observations(
         self, observation: ObservationTensorBatch
     ) -> EncodedObservation:
         self.encode_calls += 1
-        return super().encode_observations(observation)
+        return super().encode_policy_observations(observation)
 
     def begin_action_decode_session(
         self,
@@ -313,7 +307,3 @@ def _sampler(*, batch_size: int) -> ActionSampler:
     return ActionSampler.create(
         batch_capacity=batch_size, device=torch.device("cpu")
     )
-
-
-def _model_config() -> ModelConfig:
-    return ModelConfig(d_model=8, layers=1, heads=1)

@@ -1,4 +1,4 @@
-"""Asynchronous single-owner inference runtime for the current model."""
+"""Asynchronous single-owner runtime for production decisions."""
 
 from __future__ import annotations
 
@@ -11,47 +11,19 @@ from pathlib import Path
 import torch
 
 from server.foundation.result import Ok, Rejected
-from server.policy_model.network import PolicyValueModel
-from server.policy_model.observation import Observation
+from server.policy_model.network import PolicyActionModel
 
 from ._cpu import cpu_execution_plan, initialize_cpu_worker
 from ._executor import TorchBatchExecutor
-from .contracts import (
-    ActionProposalRequest,
-    ActionProposals,
-    ActionSamples,
-    PolicySampleRequest,
-    PolicyScoreRequest,
-)
+from .contracts import ActionDecision, ActionDecisionRequest
 
-type SampleResult = Ok[tuple[ActionSamples, ...]] | Rejected
-type ProposalResult = Ok[tuple[ActionProposals, ...]] | Rejected
-type ScoreResult = Ok[tuple[float, ...]] | Rejected
-type ValueResult = Ok[tuple[float, ...]] | Rejected
+type DecisionResult = Ok[tuple[ActionDecision, ...]] | Rejected
 
 
 @dataclass(frozen=True, slots=True)
-class _ProposalCall:
-    requests: tuple[ActionProposalRequest, ...]
-    future: asyncio.Future[ProposalResult]
-
-
-@dataclass(frozen=True, slots=True)
-class _SampleCall:
-    requests: tuple[PolicySampleRequest, ...]
-    future: asyncio.Future[SampleResult]
-
-
-@dataclass(frozen=True, slots=True)
-class _ScoreCall:
-    requests: tuple[PolicyScoreRequest, ...]
-    future: asyncio.Future[ScoreResult]
-
-
-@dataclass(frozen=True, slots=True)
-class _ValueCall:
-    observations: tuple[Observation, ...]
-    future: asyncio.Future[ValueResult]
+class _DecisionCall:
+    requests: tuple[ActionDecisionRequest, ...]
+    future: asyncio.Future[DecisionResult]
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,13 +31,11 @@ class _StopCall:
     future: asyncio.Future[None]
 
 
-type _InferenceCall = (
-    _ProposalCall | _SampleCall | _ScoreCall | _ValueCall | _StopCall
-)
+type _InferenceCall = _DecisionCall | _StopCall
 
 
 class InferenceRuntime:
-    """Batch concurrent requests around one model-owning worker."""
+    """Batch concurrent decisions around one model-owning worker."""
 
     def __init__(self, executor: TorchBatchExecutor) -> None:
         self._executor = executor
@@ -88,7 +58,7 @@ class InferenceRuntime:
         checkpoint_path: Path,
         device_name: str,
     ) -> Ok[InferenceRuntime] | Rejected:
-        """Load the current checkpoint into a new runtime."""
+        """Load the exact current checkpoint into a new runtime."""
         executor = TorchBatchExecutor.load(
             checkpoint_path=checkpoint_path,
             device_name=device_name,
@@ -101,91 +71,32 @@ class InferenceRuntime:
     def create(
         cls,
         *,
-        model: PolicyValueModel,
+        model: PolicyActionModel,
         device: torch.device,
     ) -> InferenceRuntime:
         """Create a runtime from an already constructed model."""
-        return cls(
-            TorchBatchExecutor(
-                model=model,
-                device=device,
-            )
-        )
+        return cls(TorchBatchExecutor(model=model, device=device))
 
-    async def propose(
+    async def decide(
         self,
         *,
-        requests: tuple[ActionProposalRequest, ...],
-    ) -> ProposalResult:
-        """Schedule structured no-replacement root proposals."""
+        requests: tuple[ActionDecisionRequest, ...],
+    ) -> DecisionResult:
+        """Schedule complete policy-improvement decisions."""
         assert requests
         self._raise_dispatcher_failure()
         if self._closed:
             return Rejected(reason="AI inference runtime is closed")
         loop = asyncio.get_running_loop()
-        future: asyncio.Future[ProposalResult] = loop.create_future()
+        future: asyncio.Future[DecisionResult] = loop.create_future()
         self._start_dispatcher()
         self._queue.put_nowait(
-            _ProposalCall(requests=requests, future=future)
-        )
-        return await future
-
-    async def sample(
-        self,
-        *,
-        requests: tuple[PolicySampleRequest, ...],
-    ) -> SampleResult:
-        """Schedule explicit action draws."""
-        assert requests
-        self._raise_dispatcher_failure()
-        if self._closed:
-            return Rejected(reason="AI inference runtime is closed")
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[SampleResult] = loop.create_future()
-        self._start_dispatcher()
-        self._queue.put_nowait(
-            _SampleCall(requests=requests, future=future)
-        )
-        return await future
-
-    async def score(
-        self,
-        *,
-        requests: tuple[PolicyScoreRequest, ...],
-    ) -> ScoreResult:
-        """Schedule teacher-forced action scores."""
-        assert requests
-        self._raise_dispatcher_failure()
-        if self._closed:
-            return Rejected(reason="AI inference runtime is closed")
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[ScoreResult] = loop.create_future()
-        self._start_dispatcher()
-        self._queue.put_nowait(
-            _ScoreCall(requests=requests, future=future)
-        )
-        return await future
-
-    async def values(
-        self,
-        *,
-        observations: tuple[Observation, ...],
-    ) -> ValueResult:
-        """Schedule observation value estimates."""
-        assert observations
-        self._raise_dispatcher_failure()
-        if self._closed:
-            return Rejected(reason="AI inference runtime is closed")
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[ValueResult] = loop.create_future()
-        self._start_dispatcher()
-        self._queue.put_nowait(
-            _ValueCall(observations=observations, future=future)
+            _DecisionCall(requests=requests, future=future)
         )
         return await future
 
     async def close(self) -> None:
-        """Drain queued work and stop the model-owning worker."""
+        """Drain queued decisions and stop the model-owning worker."""
         if self._closed:
             return
         self._closed = True
@@ -233,45 +144,31 @@ class InferenceRuntime:
             while not self._queue.empty():
                 calls.append(self._queue.get_nowait())
             self._active_calls = tuple(calls)
-            sample_calls = tuple(
-                call for call in calls if isinstance(call, _SampleCall)
-            )
-            proposal_calls = tuple(
+            decisions = tuple(
                 call
                 for call in calls
-                if isinstance(call, _ProposalCall)
-            )
-            score_calls = tuple(
-                call for call in calls if isinstance(call, _ScoreCall)
-            )
-            value_calls = tuple(
-                call for call in calls if isinstance(call, _ValueCall)
+                if isinstance(call, _DecisionCall)
             )
             stopping.extend(
                 call for call in calls if isinstance(call, _StopCall)
             )
-            if proposal_calls:
-                await self._execute_proposals(proposal_calls)
-            if sample_calls:
-                await self._execute_samples(sample_calls)
-            if score_calls:
-                await self._execute_scores(score_calls)
-            if value_calls:
-                await self._execute_values(value_calls)
+            if decisions:
+                await self._execute_decisions(decisions)
         for call in stopping:
             if not call.future.cancelled():
                 call.future.set_result(None)
         self._active_calls = ()
 
-    async def _execute_proposals(
-        self, calls: tuple[_ProposalCall, ...]
+    async def _execute_decisions(
+        self,
+        calls: tuple[_DecisionCall, ...],
     ) -> None:
         requests = tuple(
             request for call in calls for request in call.requests
         )
         loop = asyncio.get_running_loop()
         operation = functools.partial(
-            self._executor.propose,
+            self._executor.decide,
             requests=requests,
         )
         result = await loop.run_in_executor(self._pool, operation)
@@ -288,85 +185,11 @@ class InferenceRuntime:
             offset = end
         assert offset == len(result.value)
 
-    async def _execute_samples(
-        self, calls: tuple[_SampleCall, ...]
-    ) -> None:
-        requests = tuple(
-            request for call in calls for request in call.requests
-        )
-        loop = asyncio.get_running_loop()
-        operation = functools.partial(
-            self._executor.sample,
-            requests=requests,
-        )
-        result = await loop.run_in_executor(self._pool, operation)
-        if isinstance(result, Rejected):
-            for call in calls:
-                if not call.future.cancelled():
-                    call.future.set_result(result)
-            return
-        offset = 0
-        for call in calls:
-            end = offset + len(call.requests)
-            if not call.future.cancelled():
-                call.future.set_result(Ok(result.value[offset:end]))
-            offset = end
-        assert offset == len(result.value)
 
-    async def _execute_scores(
-        self, calls: tuple[_ScoreCall, ...]
-    ) -> None:
-        requests = tuple(
-            request for call in calls for request in call.requests
-        )
-        loop = asyncio.get_running_loop()
-        operation = functools.partial(
-            self._executor.score,
-            requests=requests,
-        )
-        result = await loop.run_in_executor(self._pool, operation)
-        if isinstance(result, Rejected):
-            for call in calls:
-                if not call.future.cancelled():
-                    call.future.set_result(result)
-            return
-        offset = 0
-        for call in calls:
-            end = offset + len(call.requests)
-            if not call.future.cancelled():
-                call.future.set_result(Ok(result.value[offset:end]))
-            offset = end
-        assert offset == len(result.value)
-
-    async def _execute_values(
-        self, calls: tuple[_ValueCall, ...]
-    ) -> None:
-        observations = tuple(
-            observation
-            for call in calls
-            for observation in call.observations
-        )
-        loop = asyncio.get_running_loop()
-        operation = functools.partial(
-            self._executor.values,
-            observations=observations,
-        )
-        result = await loop.run_in_executor(self._pool, operation)
-        if isinstance(result, Rejected):
-            for call in calls:
-                if not call.future.cancelled():
-                    call.future.set_result(result)
-            return
-        offset = 0
-        for call in calls:
-            end = offset + len(call.observations)
-            if not call.future.cancelled():
-                call.future.set_result(Ok(result.value[offset:end]))
-            offset = end
-        assert offset == len(result.value)
-
-
-def _fail_call(call: _InferenceCall, failure: BaseException) -> None:
+def _fail_call(
+    call: _InferenceCall,
+    failure: BaseException,
+) -> None:
     if not call.future.done():
         call.future.set_exception(failure)
 

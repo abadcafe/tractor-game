@@ -13,8 +13,6 @@ class PPOObjectiveConfig:
     """Scalar coefficients for clipped PPO objective calculation."""
 
     ppo_clip: float
-    value_clip: float
-    value_coef: float
     entropy_coef: float
 
 
@@ -23,7 +21,7 @@ class PPOObjectiveTensors:
     """Loss tensors and diagnostics for a minibatch."""
 
     policy_loss: Tensor
-    value_loss: Tensor
+    action_value_loss: Tensor
     entropy: Tensor
     total_loss: Tensor
     approx_kl: Tensor
@@ -35,9 +33,8 @@ def clipped_ppo_objective(
     old_log_probabilities: Tensor,
     new_log_probabilities: Tensor,
     advantages: Tensor,
-    old_values: Tensor,
-    new_values: Tensor,
     return_values: Tensor,
+    action_values: Tensor,
     entropies: Tensor,
     config: PPOObjectiveConfig,
 ) -> PPOObjectiveTensors:
@@ -52,36 +49,21 @@ def clipped_ppo_objective(
         ratio * advantages,
         clipped_ratio * advantages,
     ).mean()
-    value_clipped = old_values + torch.clamp(
-        new_values - old_values,
-        -config.value_clip,
-        config.value_clip,
+    action_value_loss = nn.functional.mse_loss(
+        action_values,
+        return_values,
     )
-    value_loss = torch.maximum(
-        nn.functional.mse_loss(
-            new_values,
-            return_values,
-            reduction="none",
-        ),
-        nn.functional.mse_loss(
-            value_clipped,
-            return_values,
-            reduction="none",
-        ),
-    ).mean()
     entropy = entropies.mean()
     approx_kl = old_log_probabilities - new_log_probabilities
     clip_fraction = (
         ratio.sub(1.0).abs().gt(config.ppo_clip).to(dtype=torch.float32)
     )
     total_loss = (
-        policy_loss
-        + config.value_coef * value_loss
-        - config.entropy_coef * entropy
+        policy_loss + action_value_loss - config.entropy_coef * entropy
     )
     return PPOObjectiveTensors(
         policy_loss=policy_loss,
-        value_loss=value_loss,
+        action_value_loss=action_value_loss,
         entropy=entropy,
         total_loss=total_loss,
         approx_kl=approx_kl.mean(),

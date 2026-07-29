@@ -58,12 +58,8 @@ class EncodedObservation:
         """Device shared by all tensors in this encoding."""
         return self._memory.device
 
-    def value_context(self) -> Tensor:
-        """Return contextual query state for the value head."""
-        return self._observation_context
-
     def action_decoder_inputs(self) -> ActionDecoderInputs:
-        """Return the tensor view consumed by action decoding."""
+        """Return the tensor view consumed by model decoders."""
         return ActionDecoderInputs(
             memory=self._memory,
             memory_padding_mask=self._memory_padding_mask,

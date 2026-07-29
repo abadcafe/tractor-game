@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from dataclasses import dataclass
 
 import torch
 
@@ -19,7 +20,8 @@ from server.policy_model.actions.decoding import (
     compile_legal_action_frame,
     plan_batch_to_device,
 )
-from server.policy_model.network import PolicyValueModel
+from server.policy_model.actions.semantic.values import GeneratedAction
+from server.policy_model.network import PolicyActionModel
 from server.policy_model.observation.packing import pack_observation
 from server.policy_model.observation.tensor_batch import (
     tensorize_packed_observations,
@@ -27,18 +29,47 @@ from server.policy_model.observation.tensor_batch import (
 
 from ._batches import attention_batch_groups, deduplicate_packed
 from ._forced import resolve_forced_actions
-from .contracts import (
-    ActionProposalRequest,
-    ActionProposals,
-    ProposedAction,
-)
+from .contracts import PolicyQuery, SamplingSeed
 
 _U64_SCALE = 1.0 / float(1 << 64)
 
 
+@dataclass(frozen=True, slots=True)
+class ProposedAction:
+    """One unique root action from structured Gumbel Top-k."""
+
+    action: GeneratedAction
+    perturbed_root_score: float
+
+    def __post_init__(self) -> None:
+        assert math.isfinite(self.perturbed_root_score)
+
+
+@dataclass(frozen=True, slots=True)
+class ActionProposals:
+    """Ordered unique root candidates from one proposal request."""
+
+    candidates: tuple[ProposedAction, ...]
+
+    def __post_init__(self) -> None:
+        assert self.candidates
+
+
+@dataclass(frozen=True, slots=True)
+class ActionProposalRequest:
+    """Structured no-replacement proposal request."""
+
+    query: PolicyQuery
+    candidate_count: int
+    draw: SamplingSeed
+
+    def __post_init__(self) -> None:
+        assert self.candidate_count > 0
+
+
 def propose_actions(
     *,
-    model: PolicyValueModel,
+    model: PolicyActionModel,
     device: torch.device,
     sampler: ActionSampler,
     proposal_sampler: ActionProposalSampler,
@@ -73,7 +104,6 @@ def propose_actions(
             candidates=(
                 ProposedAction(
                     action=action,
-                    log_probability=0.0,
                     perturbed_root_score=0.0,
                 ),
             )
@@ -91,7 +121,7 @@ def propose_actions(
             packed_rows = deduplicate_packed(
                 tuple(packed[index] for index in group)
             )
-            encoding = model.encode_observations(
+            encoding = model.encode_policy_observations(
                 tensorize_packed_observations(
                     observations=packed_rows.unique,
                     device=device,
@@ -171,9 +201,6 @@ def propose_actions(
                     step_counts=(
                         proposed.value.step_counts.detach().cpu()
                     ),
-                    log_probabilities=(
-                        proposed.value.log_probabilities.detach().cpu()
-                    ),
                     perturbed_scores=(
                         proposed.value.perturbed_root_scores.detach().cpu()
                     ),
@@ -190,7 +217,6 @@ def _decode_proposals(
     request: ActionProposalRequest,
     choice_ids: torch.Tensor,
     step_counts: torch.Tensor,
-    log_probabilities: torch.Tensor,
     perturbed_scores: torch.Tensor,
 ) -> Ok[ActionProposals] | Rejected:
     candidates: list[ProposedAction] = []
@@ -211,9 +237,6 @@ def _decode_proposals(
         candidates.append(
             ProposedAction(
                 action=action.value,
-                log_probability=float(
-                    log_probabilities[row_index].item()
-                ),
                 perturbed_root_score=float(
                     perturbed_scores[row_index].item()
                 ),
@@ -242,4 +265,9 @@ def _gumbel(
     return -math.log(-math.log(uniform))
 
 
-__all__ = ("propose_actions",)
+__all__ = (
+    "ActionProposalRequest",
+    "ActionProposals",
+    "ProposedAction",
+    "propose_actions",
+)

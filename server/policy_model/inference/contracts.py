@@ -1,11 +1,10 @@
-"""Strongly typed model queries shared by AI consumers and inference."""
+"""Strongly typed production decision contracts."""
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
 
-from server.game import Seat
 from server.policy_model.actions import GeneratedAction
 from server.policy_model.actions.legality import LegalActionSpace
 from server.policy_model.observation import Observation
@@ -17,7 +16,9 @@ class PolicyQuery:
 
     observation: Observation
     legal_actions: LegalActionSpace
-    seat: Seat
+
+    def __post_init__(self) -> None:
+        assert self.legal_actions.query == self.observation.action_query
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,89 +34,37 @@ class SamplingSeed:
 
 
 @dataclass(frozen=True, slots=True)
-class SampledAction:
-    """One sampled legal semantic action and its policy probability."""
-
-    action: GeneratedAction
-    log_probability: float
-
-    def __post_init__(self) -> None:
-        assert math.isfinite(self.log_probability)
-
-
-@dataclass(frozen=True, slots=True)
-class ActionSamples:
-    """Samples returned for one model query in draw-key order."""
-
-    samples: tuple[SampledAction, ...]
-
-    def __post_init__(self) -> None:
-        assert self.samples
-
-
-@dataclass(frozen=True, slots=True)
-class PolicySampleRequest:
-    """One model query paired with explicit independent draws."""
-
-    query: PolicyQuery
-    draws: tuple[SamplingSeed, ...]
-
-    def __post_init__(self) -> None:
-        assert self.draws
-        assert len(set(self.draws)) == len(self.draws)
-
-
-@dataclass(frozen=True, slots=True)
-class PolicyScoreRequest:
-    """One supplied action to score in its originating query."""
-
-    query: PolicyQuery
-    action: GeneratedAction
-
-
-@dataclass(frozen=True, slots=True)
-class ProposedAction:
-    """One unique root action from structured Gumbel Top-k."""
-
-    action: GeneratedAction
-    log_probability: float
-    perturbed_root_score: float
-
-    def __post_init__(self) -> None:
-        assert math.isfinite(self.log_probability)
-        assert math.isfinite(self.perturbed_root_score)
-
-
-@dataclass(frozen=True, slots=True)
-class ActionProposals:
-    """Ordered unique root candidates from one proposal request."""
-
-    candidates: tuple[ProposedAction, ...]
-
-    def __post_init__(self) -> None:
-        assert self.candidates
-
-
-@dataclass(frozen=True, slots=True)
-class ActionProposalRequest:
-    """Structured no-replacement proposal request."""
+class ActionDecisionRequest:
+    """One complete policy-improvement decision."""
 
     query: PolicyQuery
     candidate_count: int
+    action_value_temperature: float
     draw: SamplingSeed
 
     def __post_init__(self) -> None:
         assert self.candidate_count > 0
+        assert math.isfinite(self.action_value_temperature)
+        assert self.action_value_temperature > 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class ActionDecision:
+    """The selected legal action and decision diagnostics."""
+
+    action: GeneratedAction
+    candidate_count: int
+    selected_action_value: float | None
+
+    def __post_init__(self) -> None:
+        assert self.candidate_count > 0
+        if self.selected_action_value is not None:
+            assert math.isfinite(self.selected_action_value)
 
 
 __all__ = (
-    "ActionProposalRequest",
-    "ActionProposals",
-    "ActionSamples",
-    "SamplingSeed",
+    "ActionDecision",
+    "ActionDecisionRequest",
     "PolicyQuery",
-    "PolicySampleRequest",
-    "PolicyScoreRequest",
-    "ProposedAction",
-    "SampledAction",
+    "SamplingSeed",
 )

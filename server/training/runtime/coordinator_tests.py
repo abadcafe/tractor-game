@@ -437,7 +437,7 @@ def _rollout_snapshot(
 def _update_stats() -> PPOUpdateStats:
     return PPOUpdateStats(
         policy_loss=1.0,
-        value_loss=2.0,
+        action_value_loss=2.0,
         entropy=3.0,
         total_loss=4.0,
         approx_kl=5.0,

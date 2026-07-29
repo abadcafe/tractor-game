@@ -22,7 +22,6 @@ class TensorizedPPOMinibatch:
     replay: PPOReplayTensorBatch | None
     sample_indices: Tensor
     old_log_probabilities: Tensor
-    old_values: Tensor
     advantages: Tensor
     return_values: Tensor
     local_count: int
@@ -37,7 +36,6 @@ class TensorizedPPOMinibatch:
         assert (
             int(self.old_log_probabilities.shape[0]) == self.local_count
         )
-        assert int(self.old_values.shape[0]) == self.local_count
         assert int(self.advantages.shape[0]) == self.local_count
         assert int(self.return_values.shape[0]) == self.local_count
         if self.local_count == 0:

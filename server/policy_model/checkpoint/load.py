@@ -29,14 +29,14 @@ from server.policy_model.checkpoint.schema import (
     checkpoint_corruption,
     sha256_checkpoint_file,
 )
-from server.policy_model.network import ModelConfig, PolicyValueModel
+from server.policy_model.network import ModelConfig, PolicyActionModel
 
 
 @dataclass(frozen=True, slots=True)
 class LoadedPolicyCheckpoint:
     """Current model state restored for policy inference."""
 
-    model: PolicyValueModel
+    model: PolicyActionModel
     model_config: ModelConfig
     metadata: CheckpointMetadata
 
@@ -171,15 +171,16 @@ def restore_policy_model(
     *,
     checkpoint: CheckpointSnapshot,
     device: torch.device,
-) -> _result.Ok[PolicyValueModel] | _result.Rejected:
+) -> _result.Ok[PolicyActionModel] | _result.Rejected:
     """Restore a policy model without changing the caller's CPU RNG."""
     model_config = checkpoint.manifest.metadata.model_config
     cpu_rng_state = torch.random.get_rng_state()
     try:
-        model = PolicyValueModel(
+        model = PolicyActionModel(
             d_model=model_config.d_model,
             layers=model_config.layers,
             heads=model_config.heads,
+            action_value_layers=model_config.action_value_layers,
         )
         model.to(device)
     finally:

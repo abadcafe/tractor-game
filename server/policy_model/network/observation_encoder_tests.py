@@ -42,12 +42,10 @@ def test_encoder_returns_query_and_all_card_candidates() -> None:
 
     assert encoded.batch_size == 1
     assert encoded.device == torch.device("cpu")
-    assert encoded.value_context().shape == (1, 16)
-    assert (
-        encoded.action_decoder_inputs().card_choice_embeddings.shape
-        == (
-            1,
-            108,
-            16,
-        )
+    inputs = encoded.action_decoder_inputs()
+    assert inputs.observation_context.shape == (1, 16)
+    assert inputs.card_choice_embeddings.shape == (
+        1,
+        108,
+        16,
     )

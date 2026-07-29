@@ -18,7 +18,12 @@ def model_config_from_json(
     path: Path,
 ) -> _result.Ok[ModelConfig] | _result.Rejected:
     """Parse and validate model config from checkpoint JSON."""
-    if set(data) != {"d_model", "layers", "heads"}:
+    if set(data) != {
+        "d_model",
+        "layers",
+        "heads",
+        "action_value_layers",
+    }:
         return checkpoint_corruption(
             path,
             "manifest model_config fields do not match "
@@ -39,10 +44,22 @@ def model_config_from_json(
     )
     if isinstance(heads, _result.Rejected):
         return heads
+    action_value_layers = _json_int_field(
+        data,
+        "action_value_layers",
+        path,
+        label="model_config.action_value_layers",
+    )
+    if isinstance(action_value_layers, _result.Rejected):
+        return action_value_layers
     for label, value in (
         ("model_config.d_model", d_model.value),
         ("model_config.layers", layers.value),
         ("model_config.heads", heads.value),
+        (
+            "model_config.action_value_layers",
+            action_value_layers.value,
+        ),
     ):
         if value <= 0:
             return checkpoint_corruption(
@@ -66,6 +83,7 @@ def model_config_from_json(
             d_model=d_model.value,
             layers=layers.value,
             heads=heads.value,
+            action_value_layers=action_value_layers.value,
         )
     )
 

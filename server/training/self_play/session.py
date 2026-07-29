@@ -21,7 +21,7 @@ from server.game import (
     seats,
 )
 from server.game.snapshots import PlayerSnapshot
-from server.policy_model.value_target import round_value_targets
+from server.policy_model.return_target import round_return_targets
 from server.training.self_play.actor import (
     SelfPlayActor,
     TrainingDecision,
@@ -118,7 +118,7 @@ class SelfPlaySession:
         if isinstance(final_result, _result.Rejected):
             return final_result
         final_snapshot = final_result.value
-        first_reward, second_reward = round_value_targets(
+        first_reward, second_reward = round_return_targets(
             before=before,
             after=final_snapshot,
         )
@@ -320,5 +320,4 @@ __all__ = (
     "SelfPlaySession",
     "TrainingRoundResult",
     "play_training_round",
-    "round_value_targets",
 )

@@ -32,10 +32,9 @@ CHECKPOINTS_DIR_NAME = "checkpoints"
 class TrainConfigOverrides:
     learning_rate: float | None = None
     ppo_clip: float | None = None
-    value_clip: float | None = None
     entropy_coef: float | None = None
-    value_coef: float | None = None
-    max_grad_norm: float | None = None
+    policy_max_grad_norm: float | None = None
+    action_value_max_grad_norm: float | None = None
     ppo_epochs: int | None = None
     minibatch_size: int | None = None
     adam_beta1: float | None = None
@@ -199,10 +198,9 @@ def _train_overrides(
     return TrainConfigOverrides(
         learning_rate=request.learning_rate,
         ppo_clip=request.ppo_clip,
-        value_clip=request.value_clip,
         entropy_coef=request.entropy_coef,
-        value_coef=request.value_coef,
-        max_grad_norm=request.max_grad_norm,
+        policy_max_grad_norm=request.policy_max_grad_norm,
+        action_value_max_grad_norm=(request.action_value_max_grad_norm),
         ppo_epochs=request.ppo_epochs,
         minibatch_size=request.minibatch_size,
         adam_beta1=request.adam_beta1,
@@ -220,13 +218,16 @@ def _override_train_config(
             overrides.learning_rate, base.learning_rate
         ),
         ppo_clip=_or_base(overrides.ppo_clip, base.ppo_clip),
-        value_clip=_or_base(overrides.value_clip, base.value_clip),
         entropy_coef=_or_base(
             overrides.entropy_coef, base.entropy_coef
         ),
-        value_coef=_or_base(overrides.value_coef, base.value_coef),
-        max_grad_norm=_or_base(
-            overrides.max_grad_norm, base.max_grad_norm
+        policy_max_grad_norm=_or_base(
+            overrides.policy_max_grad_norm,
+            base.policy_max_grad_norm,
+        ),
+        action_value_max_grad_norm=_or_base(
+            overrides.action_value_max_grad_norm,
+            base.action_value_max_grad_norm,
         ),
         ppo_epochs=_or_base(overrides.ppo_epochs, base.ppo_epochs),
         minibatch_size=_or_base(

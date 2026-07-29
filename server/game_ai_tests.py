@@ -1,4 +1,4 @@
-"""Black-box tests for the trained-model AI player boundary."""
+"""Black-box tests for the trained-model AI controller."""
 
 from __future__ import annotations
 
@@ -9,24 +9,9 @@ import torch
 from torch import Tensor
 
 from server.foundation.result import Ok, Rejected
-from server.game import (
-    GameConfig,
-    GameSeed,
-    GameState,
-    Seat,
-    apply,
-    commands,
-    create,
-    observe,
-    seats,
-)
-from server.game.rules.cards.faces import FaceCount
+from server.game import Seat, commands
 from server.game_ai.controller import AIController
-from server.game_ai.search import SearchConfig
-from server.game_ai.simulation import SimulationBranch
-from server.policy_model._schema.actions import (
-    ACTION_CHOICE_COUNT,
-)
+from server.policy_model._schema.actions import ACTION_CHOICE_COUNT
 from server.policy_model.actions import GeneratedAction
 from server.policy_model.actions.decoding import (
     ActionChoiceLogitDecoder,
@@ -36,27 +21,13 @@ from server.policy_model.actions.decoding import (
     compile_legal_action_frame,
     plan_batch_to_device,
 )
-from server.policy_model.actions.legality.complete_trace import (
-    trace_for_selection,
-)
-from server.policy_model.actions.semantic.binding import (
-    bind_generated_action,
-)
 from server.policy_model.inference import (
-    ActionProposalRequest,
-    ActionProposals,
-    ActionSamples,
+    ActionDecision,
+    ActionDecisionRequest,
     PolicyQuery,
-    PolicySampleRequest,
-    PolicyScoreRequest,
-    ProposedAction,
-    SampledAction,
 )
-from server.policy_model.observation import (
-    Observation,
-    build_observation,
-)
-from server.policy_model.observation.history import ObservationMemory
+from tests.support import card
+from tests.support import snapshot as make_snapshot
 
 
 @dataclass(slots=True)
@@ -84,272 +55,121 @@ class _ZeroDecoder(ActionChoiceLogitDecoder):
         assert active_rows.shape == (self.batch_size,)
 
 
-def _actions() -> list[GeneratedAction]:
-    return []
-
-
-def _seats() -> list[Seat]:
+def _requests() -> list[ActionDecisionRequest]:
     return []
 
 
 @dataclass(slots=True)
-class _PolicyImprovementModel:
-    root_actions: list[GeneratedAction] = field(
-        default_factory=_actions
+class _DecisionModel:
+    requests: list[ActionDecisionRequest] = field(
+        default_factory=_requests
     )
-    scored_seats: list[Seat] = field(default_factory=_seats)
-    value_call_count: int = 0
-    policy_row_count: int = 0
 
-    async def propose(
+    async def decide(
         self,
         *,
-        requests: tuple[ActionProposalRequest, ...],
-    ) -> Ok[tuple[ActionProposals, ...]] | Rejected:
-        results: list[ActionProposals] = []
-        for request in requests:
-            if (
-                request.query.observation.action_query.kind
-                == "lead_play"
-            ):
-                first = _single_card_lead(
-                    request.query,
-                    first=True,
-                )
-                if isinstance(first, Rejected):
-                    return first
-                second = _single_card_lead(
-                    request.query,
-                    first=False,
-                )
-                if isinstance(second, Rejected):
-                    return second
-                self.root_actions = [first.value, second.value]
-                results.append(
-                    ActionProposals(
-                        candidates=(
-                            ProposedAction(
-                                action=first.value,
-                                log_probability=0.0,
-                                perturbed_root_score=1.0,
-                            ),
-                            ProposedAction(
-                                action=second.value,
-                                log_probability=-1.0,
-                                perturbed_root_score=0.0,
-                            ),
-                        )
-                    )
-                )
-                continue
-            action = _first_legal_action(request.query)
-            if isinstance(action, Rejected):
-                return action
-            results.append(
-                ActionProposals(
-                    candidates=(
-                        ProposedAction(
-                            action=action.value,
-                            log_probability=0.0,
-                            perturbed_root_score=0.0,
-                        ),
-                    )
-                )
-            )
-        return Ok(tuple(results))
-
-    async def sample(
-        self,
-        *,
-        requests: tuple[PolicySampleRequest, ...],
-    ) -> Ok[tuple[ActionSamples, ...]] | Rejected:
-        self.policy_row_count += len(requests)
-        groups: list[ActionSamples] = []
+        requests: tuple[ActionDecisionRequest, ...],
+    ) -> Ok[tuple[ActionDecision, ...]] | Rejected:
+        self.requests.extend(requests)
+        decisions: list[ActionDecision] = []
         for request in requests:
             action = _first_legal_action(request.query)
             if isinstance(action, Rejected):
                 return action
-            groups.append(
-                ActionSamples(
-                    samples=tuple(
-                        SampledAction(
-                            action=action.value,
-                            log_probability=0.0,
-                        )
-                        for _draw in request.draws
-                    )
+            decisions.append(
+                ActionDecision(
+                    action=action.value,
+                    candidate_count=request.candidate_count,
+                    selected_action_value=0.25,
                 )
             )
-        return Ok(tuple(groups))
-
-    async def score(
-        self,
-        *,
-        requests: tuple[PolicyScoreRequest, ...],
-    ) -> Ok[tuple[float, ...]] | Rejected:
-        self.scored_seats.extend(
-            request.query.seat for request in requests
-        )
-        return Ok(tuple(-0.25 for _request in requests))
-
-    async def values(
-        self,
-        *,
-        observations: tuple[Observation, ...],
-    ) -> Ok[tuple[float, ...]] | Rejected:
-        assert len(observations) == 2
-        self.value_call_count += 1
-        return Ok((-1.0, 1.0))
+        return Ok(tuple(decisions))
 
 
-async def test_ai_improves_policy_without_scoring_self() -> None:
-    state = _round_start_with_actor(Seat.A)
-    model = _PolicyImprovementModel()
+async def test_ai_controller_builds_one_direct_model_decision() -> None:
+    model = _DecisionModel()
     controller = AIController(
         seat=Seat.A,
         model=model,
-        particle_count=1,
-        search_config=SearchConfig(
-            root_candidate_count=2,
-            macro_simulation_budget=2,
-        ),
+        candidate_count=12,
+        action_value_temperature=0.75,
         random_source=random.Random(7),
     )
-    seq = 0
-    current = observe(state, Seat.A)
+    snapshot = make_snapshot(
+        phase="DEAL_BID",
+        awaiting_action="bid",
+        hand=[
+            card("hearts", "2"),
+        ],
+        trump_rank="2",
+    )
     observed = controller.observe(
-        seq=seq,
-        snapshot=current,
+        seq=0,
+        snapshot=snapshot,
         error=None,
     )
     assert isinstance(observed, Ok)
 
-    while current.awaiting_action != "play":
-        actor = _active_actor(state)
-        actor_view = observe(state, actor)
-        command: commands.Command
-        if actor == Seat.A:
-            decided = await controller.decide(
-                seq=seq,
-                snapshot=current,
-            )
-            assert isinstance(decided, Ok)
-            command = decided.value
-        elif actor_view.awaiting_action == "bid":
-            command = commands.PassBid()
-        elif actor_view.awaiting_action == "discard":
-            assert False
-        else:
-            assert actor_view.awaiting_action == "stir"
-            command = commands.PassStir()
-        advanced = apply(state, actor, command)
-        assert isinstance(advanced, Ok)
-        state = advanced.value
-        seq += 1
-        current = observe(state, Seat.A)
-        observed = controller.observe(
-            seq=seq,
-            snapshot=current,
-            error=None,
-        )
-        assert isinstance(observed, Ok)
-
-    decided = await controller.decide(seq=seq, snapshot=current)
+    decided = await controller.decide(seq=0, snapshot=snapshot)
 
     assert isinstance(decided, Ok)
-    assert isinstance(decided.value, commands.Play)
-    assert len(model.root_actions) == 2
-    expected = bind_generated_action(
-        model.root_actions[1],
-        current.hand,
+    assert isinstance(
+        decided.value,
+        commands.PassBid | commands.RevealBid,
     )
-    assert isinstance(expected, Ok)
-    assert decided.value == expected.value
-    assert model.scored_seats
-    assert Seat.A not in model.scored_seats
-    assert model.value_call_count == 1
-    assert model.policy_row_count >= 6
+    assert len(model.requests) == 1
+    request = model.requests[0]
+    assert request.candidate_count == 12
+    assert request.action_value_temperature == 0.75
+    assert request.draw.ordinal == 0
 
 
-def test_simulation_branch_matches_all_player_observations() -> None:
-    state = _round_start_with_actor(Seat.A)
-    started = SimulationBranch.start(state)
-    assert isinstance(started, Ok)
-    branch = started.value
-    memories = {seat: ObservationMemory() for seat in seats()}
-    for seat in seats():
-        remembered = memories[seat].observe(
-            seq=0,
-            snapshot=observe(state, seat),
-        )
-        assert isinstance(remembered, Ok)
-    seq = 0
-    compared: set[Seat] = set()
-    for _index in range(12):
-        actor = _active_actor(state)
-        actor_view = observe(state, actor)
-        expected = branch.model_input(actor)[0]
-        actual = build_observation(
-            viewer=actor,
-            snapshot=actor_view,
-            memory=memories[actor].view(),
-        )
-        assert expected == actual
-        compared.add(actor)
-        assert actor_view.awaiting_action == "bid"
-        command = commands.PassBid()
-        advanced = apply(state, actor, command)
-        assert isinstance(advanced, Ok)
-        state = advanced.value
-        branched = branch.advance(actor=actor, command=command)
-        assert isinstance(branched, Ok)
-        branch = branched.value
-        seq += 1
-        for seat in seats():
-            remembered = memories[seat].observe(
-                seq=seq,
-                snapshot=observe(state, seat),
-            )
-            assert isinstance(remembered, Ok)
-    assert compared == set(seats())
-
-
-def _round_start_with_actor(actor: Seat) -> GameState:
-    for seed_value in range(100):
-        state = create(GameConfig(), GameSeed(seed_value))
-        for seat in seats():
-            confirmed = apply(state, seat, commands.ConfirmRound())
-            assert isinstance(confirmed, Ok)
-            state = confirmed.value
-        if observe(state, actor).awaiting_action == "bid":
-            return state
-    assert False
-
-
-def _active_actor(state: GameState) -> Seat:
-    active = [
-        seat
-        for seat in seats()
-        if observe(state, seat).awaiting_action
-        in ("bid", "discard", "stir", "play")
-    ]
-    assert len(active) == 1
-    return active[0]
-
-
-def _single_card_lead(
-    query: PolicyQuery,
-    *,
-    first: bool,
-) -> Ok[GeneratedAction] | Rejected:
-    faces = query.observation.hand_faces
-    assert faces
-    face = faces[0] if first else faces[-1]
-    trace = trace_for_selection(
-        (FaceCount(face.face, 1),),
-        include_finish=True,
+async def test_ai_controller_rejects_non_strategic_view() -> None:
+    controller = AIController(
+        seat=Seat.A,
+        model=_DecisionModel(),
+        candidate_count=4,
+        action_value_temperature=1.0,
+        random_source=random.Random(3),
     )
-    return query.legal_actions.decode(trace)
+    snapshot = make_snapshot(
+        phase="WAITING",
+        awaiting_action="next_round",
+    )
+
+    decided = await controller.decide(seq=0, snapshot=snapshot)
+
+    assert isinstance(decided, Rejected)
+    assert decided.reason == "AI has no strategic action to decide"
+
+
+def test_ai_controller_requires_contiguous_observations() -> None:
+    controller = AIController(
+        seat=Seat.A,
+        model=_DecisionModel(),
+        candidate_count=4,
+        action_value_temperature=1.0,
+        random_source=random.Random(3),
+    )
+    snapshot = make_snapshot(
+        phase="DEAL_BID",
+        awaiting_action="bid",
+        hand=[card("hearts", "2")],
+        trump_rank="2",
+    )
+    first = controller.observe(
+        seq=0,
+        snapshot=snapshot,
+        error=None,
+    )
+    skipped = controller.observe(
+        seq=2,
+        snapshot=snapshot,
+        error=None,
+    )
+
+    assert isinstance(first, Ok)
+    assert isinstance(skipped, Rejected)
 
 
 def _first_legal_action(

@@ -69,6 +69,17 @@ def read_checkpoint_payload(
     if isinstance(loaded_result, _result.Rejected):
         return loaded_result
     loaded = loaded_result.value
+    expected_fields = {
+        "schema_version",
+        "checkpoint_id",
+        "model_state",
+        "optimizer_state",
+    }
+    if not set(loaded).issubset(expected_fields):
+        return checkpoint_corruption(
+            path,
+            "state payload fields do not match the current schema",
+        )
     schema_version_result = _payload_int_field(
         loaded, "schema_version", path
     )

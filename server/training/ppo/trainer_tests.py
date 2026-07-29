@@ -31,7 +31,7 @@ from server.policy_model.network import (
     ActionTraceScores,
     EncodedObservation,
     ModelConfig,
-    PolicyValueModel,
+    PolicyActionModel,
 )
 from server.policy_model.observation import (
     ObservationMemoryView,
@@ -58,7 +58,7 @@ from tests.support import card
 from tests.support import snapshot as make_snapshot
 
 
-class CountingPolicyValueModel(PolicyValueModel):
+class CountingPolicyActionModel(PolicyActionModel):
     """Policy model that records forward batch sizes for tests."""
 
     def __init__(
@@ -78,7 +78,7 @@ class CountingPolicyValueModel(PolicyValueModel):
         self.score_prefix_widths: list[int] = []
         self.training_modes: list[bool] = []
 
-    def encode_observations(
+    def encode_policy_observations(
         self,
         observation: ObservationTensorBatch,
     ) -> EncodedObservation:
@@ -86,7 +86,7 @@ class CountingPolicyValueModel(PolicyValueModel):
         self.encode_batch_sizes.append(
             int(observation.category_ids.shape[0])
         )
-        return super().encode_observations(observation)
+        return super().encode_policy_observations(observation)
 
     def score_action_traces(
         self,
@@ -107,14 +107,23 @@ class CountingPolicyValueModel(PolicyValueModel):
         )
 
 
-class NonFiniteValueModel(PolicyValueModel):
-    """Policy model that produces an infinite value loss."""
+class NonFiniteValueModel(PolicyActionModel):
+    """Policy model that produces an infinite action-value loss."""
 
-    def value_estimates(
+    def action_values(
         self,
         encoding: EncodedObservation,
+        *,
+        source_rows: Tensor,
+        choice_ids_padded: Tensor,
+        step_counts: Tensor,
     ) -> Tensor:
-        values = super().value_estimates(encoding)
+        values = super().action_values(
+            encoding,
+            source_rows=source_rows,
+            choice_ids_padded=choice_ids_padded,
+            step_counts=step_counts,
+        )
         return torch.full_like(values, torch.inf)
 
 
@@ -169,7 +178,7 @@ def test_update_returns_stats_and_adamw_state() -> None:
         ppo_epochs=1,
         minibatch_size=1,
     )
-    model = PolicyValueModel(
+    model = PolicyActionModel(
         d_model=model_config.d_model,
         layers=model_config.layers,
         heads=model_config.heads,
@@ -202,7 +211,7 @@ def test_update_batches_minibatch_model_forwards() -> None:
         ppo_epochs=1,
         minibatch_size=4,
     )
-    model = CountingPolicyValueModel(
+    model = CountingPolicyActionModel(
         d_model=model_config.d_model,
         layers=model_config.layers,
         heads=model_config.heads,
@@ -247,7 +256,7 @@ def test_update_rejects_ddp_without_process_group() -> None:
         ppo_epochs=1,
         minibatch_size=4,
     )
-    model = PolicyValueModel(
+    model = PolicyActionModel(
         d_model=model_config.d_model,
         layers=model_config.layers,
         heads=model_config.heads,
@@ -278,7 +287,7 @@ def test_update_uses_configured_single_rank_partition() -> None:
         ppo_epochs=1,
         minibatch_size=4,
     )
-    model = CountingPolicyValueModel(
+    model = CountingPolicyActionModel(
         d_model=model_config.d_model,
         layers=model_config.layers,
         heads=model_config.heads,
@@ -310,7 +319,7 @@ def test_update_rejects_empty_single_rank_input() -> None:
         ppo_epochs=1,
         minibatch_size=4,
     )
-    model = PolicyValueModel(
+    model = PolicyActionModel(
         d_model=model_config.d_model,
         layers=model_config.layers,
         heads=model_config.heads,
@@ -344,7 +353,7 @@ def test_update_disables_profile_by_default() -> None:
         ppo_epochs=1,
         minibatch_size=4,
     )
-    model = PolicyValueModel(
+    model = PolicyActionModel(
         d_model=model_config.d_model,
         layers=model_config.layers,
         heads=model_config.heads,
@@ -374,7 +383,7 @@ def test_update_basic_profile_records_only_update_seconds() -> None:
         ppo_epochs=1,
         minibatch_size=4,
     )
-    model = PolicyValueModel(
+    model = PolicyActionModel(
         d_model=model_config.d_model,
         layers=model_config.layers,
         heads=model_config.heads,
@@ -393,8 +402,9 @@ def test_update_basic_profile_records_only_update_seconds() -> None:
     assert profile.update_seconds > 0.0
     assert profile.minibatch_loss_seconds == 0.0
     assert profile.observation_batch_seconds == 0.0
-    assert profile.observation_encode_seconds == 0.0
-    assert profile.value_head_seconds == 0.0
+    assert profile.policy_observation_encode_seconds == 0.0
+    assert profile.action_value_observation_encode_seconds == 0.0
+    assert profile.action_value_decode_seconds == 0.0
     assert profile.action_decode_seconds == 0.0
     assert profile.action_distribution_seconds == 0.0
     assert profile.backward_seconds == 0.0
@@ -437,7 +447,7 @@ def test_update_rejects_non_finite_loss_before_optimizer_step() -> None:
     result = trainer.update(_single_card_update_input(count=1))
 
     assert isinstance(result, Rejected)
-    assert "PPO value_loss must be finite" in result.reason
+    assert "PPO action_value_loss must be finite" in result.reason
     assert trainer.optimizer_state()["step_count"] == 0
     for index, parameter in enumerate(model.parameters()):
         assert torch.equal(parameter.detach(), before[index])
@@ -457,7 +467,7 @@ def test_update_rejects_non_finite_gradients_before_optimizer_step(
         ppo_epochs=1,
         minibatch_size=1,
     )
-    model = PolicyValueModel(
+    model = PolicyActionModel(
         d_model=model_config.d_model,
         layers=model_config.layers,
         heads=model_config.heads,
@@ -563,8 +573,9 @@ def _assert_profile_zero(profile: PPOUpdateProfile) -> None:
     assert profile.update_seconds == 0.0
     assert profile.minibatch_loss_seconds == 0.0
     assert profile.observation_batch_seconds == 0.0
-    assert profile.observation_encode_seconds == 0.0
-    assert profile.value_head_seconds == 0.0
+    assert profile.policy_observation_encode_seconds == 0.0
+    assert profile.action_value_observation_encode_seconds == 0.0
+    assert profile.action_value_decode_seconds == 0.0
     assert profile.action_decode_seconds == 0.0
     assert profile.action_distribution_seconds == 0.0
     assert profile.backward_seconds == 0.0
@@ -621,9 +632,6 @@ def _store_single_card_decision(
         policy_versions=(0,),
         observation_batch=observation_batch,
         action_sample=action_sample,
-        old_values=torch.zeros(
-            (1,), dtype=torch.float32, device=device
-        ),
     )
     assert isinstance(stored, Ok)
     assert stored.value.row_count() == 1

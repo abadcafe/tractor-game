@@ -16,11 +16,13 @@ class ModelConfig:
     d_model: int = 128
     layers: int = 3
     heads: int = 4
+    action_value_layers: int = 2
 
     def __post_init__(self) -> None:
         assert self.d_model > 0
         assert self.layers > 0
         assert self.heads > 0
+        assert self.action_value_layers > 0
         assert self.d_model % self.heads == 0
         assert (
             self.d_model // self.heads >= MIN_ATTENTION_HEAD_DIMENSION
@@ -31,15 +33,24 @@ class ModelConfig:
             "d_model": self.d_model,
             "layers": self.layers,
             "heads": self.heads,
+            "action_value_layers": self.action_value_layers,
         }
 
     @classmethod
     def from_json(cls, data: JsonObject) -> ModelConfig:
-        assert set(data) == {"d_model", "layers", "heads"}
+        assert set(data) == {
+            "d_model",
+            "layers",
+            "heads",
+            "action_value_layers",
+        }
         return cls(
             d_model=_int_json_field(data, "d_model"),
             layers=_int_json_field(data, "layers"),
             heads=_int_json_field(data, "heads"),
+            action_value_layers=_int_json_field(
+                data, "action_value_layers"
+            ),
         )
 
 

@@ -33,9 +33,6 @@ def test_sample_arena_materializes_variable_active_steps() -> None:
         policy_versions=(7, 7, 7),
         observation_batch=_observation_batch(device=device),
         action_sample=action_sample,
-        old_values=torch.tensor(
-            (0.1, 0.2, 0.3), dtype=torch.float32, device=device
-        ),
     )
     assert isinstance(stored, Ok)
     assert stored.value.choice_counts == (2, 3, 4)

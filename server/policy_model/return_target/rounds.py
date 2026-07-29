@@ -1,18 +1,18 @@
-"""Torch-free completed-round policy value targets."""
+"""Torch-free completed-round return targets."""
 
 from __future__ import annotations
 
 from server.game import Partnership, partnership_of
 from server.game.rules.progression import TerminalProgress
 from server.game.snapshots import PlayerSnapshot
-from server.policy_model.value_target.progress import (
+from server.policy_model.return_target.progress import (
     PartnershipProgress,
     RoundScore,
     zero_sum_rewards,
 )
 
 
-def round_value_targets(
+def round_return_targets(
     *,
     before: PlayerSnapshot,
     after: PlayerSnapshot,
@@ -67,4 +67,4 @@ def round_value_targets(
     )
 
 
-__all__ = ("round_value_targets",)
+__all__ = ("round_return_targets",)

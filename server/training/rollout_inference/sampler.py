@@ -8,7 +8,7 @@ from server.foundation.result import Ok, Rejected
 from server.policy_model.actions.decoding import (
     ActionSampler,
 )
-from server.policy_model.network import ModelConfig, PolicyValueModel
+from server.policy_model.network import PolicyActionModel
 from server.training.rollout_inference.batch import (
     DevicePolicyRequestBatch,
 )
@@ -16,10 +16,6 @@ from server.training.rollout_inference.samples import (
     CompactPolicyDecisionBatch,
     ModelRankSampleArena,
     PolicySampleColumns,
-)
-from server.training.rollout_inference.tensor_validation import (
-    NamedTensorCheck,
-    reject_if_non_finite,
 )
 
 type PolicySamplingResult = Ok[PolicySampleColumns] | Rejected
@@ -30,8 +26,7 @@ type PolicySamplingDecisionResult = (
 
 def sample_policy_batch(
     *,
-    model: PolicyValueModel,
-    config: ModelConfig,
+    model: PolicyActionModel,
     device: torch.device,
     requests: DevicePolicyRequestBatch,
     sampler: ActionSampler,
@@ -40,19 +35,7 @@ def sample_policy_batch(
     model.eval()
     with torch.no_grad():
         observation_batch = requests.observation_batch
-        encoding = model.encode_observations(observation_batch)
-        values = model.value_estimates(encoding)
-        value_check = reject_if_non_finite(
-            (
-                NamedTensorCheck(
-                    tensor=values,
-                    reason="policy value estimate must be finite",
-                ),
-            )
-        )
-        if isinstance(value_check, Rejected):
-            return value_check
-
+        encoding = model.encode_policy_observations(observation_batch)
         logit_decoder = model.begin_action_decode_session(
             encoding,
             source_rows=torch.arange(
@@ -83,15 +66,13 @@ def sample_policy_batch(
                 step_counts=action.step_counts,
                 choice_counts=action.choice_counts,
                 old_log_probabilities=action.log_probabilities,
-                old_values=values,
             )
         )
 
 
 def sample_policy_batch_into_arena(
     *,
-    model: PolicyValueModel,
-    config: ModelConfig,
+    model: PolicyActionModel,
     device: torch.device,
     requests: DevicePolicyRequestBatch,
     sampler: ActionSampler,
@@ -101,19 +82,7 @@ def sample_policy_batch_into_arena(
     model.eval()
     with torch.no_grad():
         observation_batch = requests.observation_batch
-        encoding = model.encode_observations(observation_batch)
-        values = model.value_estimates(encoding)
-        value_check = reject_if_non_finite(
-            (
-                NamedTensorCheck(
-                    tensor=values,
-                    reason="policy value estimate must be finite",
-                ),
-            )
-        )
-        if isinstance(value_check, Rejected):
-            return value_check
-
+        encoding = model.encode_policy_observations(observation_batch)
         logit_decoder = model.begin_action_decode_session(
             encoding,
             source_rows=torch.arange(
@@ -132,9 +101,9 @@ def sample_policy_batch_into_arena(
         )
         if isinstance(action_result, Rejected):
             return action_result
+        action = action_result.value
         return sample_arena.store_sampled_result(
             policy_versions=requests.policy_versions,
             observation_batch=observation_batch,
-            action_sample=action_result.value,
-            old_values=values,
+            action_sample=action,
         )

@@ -1,4 +1,4 @@
-"""Complete Tractor policy/value model composition."""
+"""Complete Tractor policy and action-value model composition."""
 
 from __future__ import annotations
 
@@ -13,11 +13,12 @@ from .action_decoder import (
     ActionDecodeSession,
     ActionTraceScores,
 )
+from .action_value import CompleteActionEncoder
 from .observation_encoder import EncodedObservation, ObservationEncoder
 
 
-class PolicyValueModel(nn.Module):
-    """Compose observation, action, and value modules."""
+class PolicyActionModel(nn.Module):
+    """Compose independent policy and complete-action value branches."""
 
     def __init__(
         self,
@@ -25,11 +26,13 @@ class PolicyValueModel(nn.Module):
         d_model: int,
         layers: int,
         heads: int,
+        action_value_layers: int = 2,
     ) -> None:
         super().__init__()
         assert d_model > 0
         assert d_model % heads == 0
-        self._observation_encoder = ObservationEncoder(
+        assert action_value_layers > 0
+        self._policy_observation_encoder = ObservationEncoder(
             d_model=d_model,
             layers=layers,
             heads=heads,
@@ -38,17 +41,52 @@ class PolicyValueModel(nn.Module):
             d_model=d_model,
             heads=heads,
         )
-        self._value_head = nn.Linear(d_model, 1)
+        self._action_value_observation_encoder = ObservationEncoder(
+            d_model=d_model,
+            layers=layers,
+            heads=heads,
+        )
+        self._complete_action_encoder = CompleteActionEncoder(
+            d_model=d_model,
+            heads=heads,
+            layers=action_value_layers,
+        )
+        self._action_value_head = nn.Sequential(
+            nn.LayerNorm(d_model * 2),
+            nn.Linear(d_model * 2, d_model * 2),
+            nn.GELU(),
+            nn.Linear(d_model * 2, 1),
+        )
 
-    def encode_observations(
+    def encode_policy_observations(
         self, observation: ObservationTensorBatch
     ) -> EncodedObservation:
-        """Encode observations once for both model heads."""
-        return self._observation_encoder(observation)
+        """Encode observations for autoregressive policy decoding."""
+        return self._policy_observation_encoder(observation)
 
-    def value_estimates(self, encoding: EncodedObservation) -> Tensor:
-        """Estimate values from contextual query state."""
-        return self._value_head(encoding.value_context()).squeeze(-1)
+    def encode_action_value_observations(
+        self, observation: ObservationTensorBatch
+    ) -> EncodedObservation:
+        """Encode observations through the independent value branch."""
+        return self._action_value_observation_encoder(observation)
+
+    def action_values(
+        self,
+        encoding: EncodedObservation,
+        *,
+        source_rows: Tensor,
+        choice_ids_padded: Tensor,
+        step_counts: Tensor,
+    ) -> Tensor:
+        """Evaluate complete semantic action traces."""
+        return self._action_value_head(
+            self._complete_action_encoder(
+                encoding,
+                source_rows=source_rows,
+                choice_ids_padded=choice_ids_padded,
+                step_counts=step_counts,
+            )
+        ).squeeze(-1)
 
     def score_action_traces(
         self,
@@ -80,5 +118,20 @@ class PolicyValueModel(nn.Module):
             max_steps=max_steps,
         )
 
+    def policy_parameters(self) -> tuple[nn.Parameter, ...]:
+        """Return exactly the parameters owned by the policy branch."""
+        return (
+            *tuple(self._policy_observation_encoder.parameters()),
+            *tuple(self._action_decoder.parameters()),
+        )
 
-__all__ = ("PolicyValueModel",)
+    def action_value_parameters(self) -> tuple[nn.Parameter, ...]:
+        """Return parameters owned by the complete-action branch."""
+        return (
+            *tuple(self._action_value_observation_encoder.parameters()),
+            *tuple(self._complete_action_encoder.parameters()),
+            *tuple(self._action_value_head.parameters()),
+        )
+
+
+__all__ = ("PolicyActionModel",)

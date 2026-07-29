@@ -126,7 +126,7 @@ export interface StoreReplacement {
 }
 
 export interface TrainingEvent {
-  readonly schema_version: 3;
+  readonly schema_version: 4;
   readonly event: TrainingEventName;
   readonly recorded_at_ms: number;
   readonly process: EventProcess;
@@ -250,12 +250,12 @@ export function parseCheckpointCatalog(
 
 export function parseMetrics(value: unknown): TrainingMetrics {
   const record = requiredRecord(value, "training metrics");
-  if (record.schema_version !== 3) {
+  if (record.schema_version !== 4) {
     throw new Error("Unsupported training metrics schema");
   }
   const datasets = requiredRecord(record.datasets, "metric datasets");
   return {
-    schema_version: 3,
+    schema_version: 4,
     store_id: nullableStoreId(record.store_id),
     through_sequence: nonNegativeInteger(
       record.through_sequence,
@@ -509,7 +509,7 @@ function parseEvent(value: unknown): TrainingEvent {
     ],
     "training event",
   );
-  if (record.schema_version !== 3) {
+  if (record.schema_version !== 4) {
     throw new Error("Unsupported training event schema");
   }
   const error = record.error === undefined
@@ -520,7 +520,7 @@ function parseEvent(value: unknown): TrainingEvent {
     throw new Error(`Unknown training event: ${event}`);
   }
   return {
-    schema_version: 3,
+    schema_version: 4,
     event,
     recorded_at_ms: nonNegativeInteger(
       record.recorded_at_ms,

@@ -1,4 +1,4 @@
-"""Seat-local belief and policy-improvement composition."""
+"""Seat-local model decision controller."""
 
 from __future__ import annotations
 
@@ -12,15 +12,18 @@ from server.game import Seat, commands
 from server.game.snapshots import PlayerSnapshot
 from server.policy_model.actions import (
     build_legal_action_space,
+    physical_command,
 )
-from server.policy_model.inference import PolicyQuery
+from server.policy_model.inference import (
+    ActionDecision,
+    ActionDecisionRequest,
+    PolicyQuery,
+    SamplingSeed,
+)
 from server.policy_model.observation import (
     ObservationMemory,
     build_observation,
 )
-
-from .belief import BeliefInference, ParticleBelief
-from .search import SearchConfig, SearchInference, SearchPlanner
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,12 +51,16 @@ class AIControllerPort(Protocol):
         ...
 
 
-class ControllerInference(
-    BeliefInference,
-    SearchInference,
-    Protocol,
-):
-    """Exact model surface required by one AI controller."""
+class ControllerInference(Protocol):
+    """The single model operation needed by an AI controller."""
+
+    async def decide(
+        self,
+        *,
+        requests: tuple[ActionDecisionRequest, ...],
+    ) -> Ok[tuple[ActionDecision, ...]] | Rejected:
+        """Evaluate complete policy-improvement decisions."""
+        ...
 
 
 class AIController:
@@ -64,23 +71,18 @@ class AIController:
         *,
         seat: Seat,
         model: ControllerInference,
-        particle_count: int,
-        search_config: SearchConfig,
+        candidate_count: int,
+        action_value_temperature: float,
         random_source: random.Random,
     ) -> None:
+        assert candidate_count > 0
+        assert action_value_temperature > 0.0
         self._seat = seat
+        self._model = model
+        self._candidate_count = candidate_count
+        self._action_value_temperature = action_value_temperature
         self._random = random_source
         self._memory = ObservationMemory()
-        self._belief = ParticleBelief(
-            viewer=seat,
-            model=model,
-            particle_count=particle_count,
-            random_source=random_source,
-        )
-        self._search = SearchPlanner(
-            model=model,
-            config=search_config,
-        )
 
     def observe(
         self,
@@ -97,12 +99,7 @@ class AIController:
         )
         if isinstance(remembered, Rejected):
             return remembered
-        return self._belief.record(
-            seq=seq,
-            snapshot=snapshot,
-            memory=remembered.value,
-            error=error,
-        )
+        return Ok(None)
 
     async def decide(
         self,
@@ -110,7 +107,7 @@ class AIController:
         seq: int,
         snapshot: PlayerSnapshot,
     ) -> Ok[commands.Command] | Rejected:
-        """Run the same policy-improvement pipeline for every action."""
+        """Select one action directly from policy proposals and Q."""
         if snapshot.awaiting_action not in (
             "bid",
             "stir",
@@ -121,49 +118,44 @@ class AIController:
                 reason="AI has no strategic action to decide"
             )
         started = time.perf_counter()
-        decision_kind = snapshot.awaiting_action
-        decision_seed = self._random.getrandbits(63)
-        root_query = self._root_query(snapshot)
-        proposals = await self._search.propose(
-            root_query=root_query,
-            decision_seed=decision_seed,
+        decided = await self._model.decide(
+            requests=(
+                ActionDecisionRequest(
+                    query=self._root_query(snapshot),
+                    candidate_count=self._candidate_count,
+                    action_value_temperature=(
+                        self._action_value_temperature
+                    ),
+                    draw=SamplingSeed(
+                        seed=self._random.getrandbits(63),
+                        ordinal=seq,
+                    ),
+                ),
+            )
         )
-        if isinstance(proposals, Rejected):
-            return proposals
-        if len(proposals.value.candidates) == 1:
-            decided = self._search.bind_single(
-                candidate=proposals.value.candidates[0],
-                root_snapshot=snapshot,
-            )
-        else:
-            particles = await self._belief.synchronize()
-            if isinstance(particles, Rejected):
-                return particles
-            decided = await self._search.decide(
-                proposals=proposals.value,
-                particles=particles.value,
-                viewer=self._seat,
-                root_snapshot=snapshot,
-                decision_seed=decision_seed,
-            )
         if isinstance(decided, Rejected):
             return decided
-        self._belief.submitted(seq=seq, command=decided.value.command)
-        statistics = decided.value.statistics
+        assert len(decided.value) == 1
+        decision = decided.value[0]
+        command = physical_command(
+            action=decision.action,
+            hand=snapshot.hand,
+        )
+        if isinstance(command, Rejected):
+            return command
         _LOGGER.info(
-            "ai.decision kind=%s candidates=%d rounds=%d "
-            "simulations=%d engine_advances=%d policy_rows=%d "
-            "value_rows=%d elapsed_ms=%.3f",
-            decision_kind,
-            statistics.candidate_count,
-            statistics.halving_round_count,
-            statistics.macro_sample_count,
-            statistics.engine_advance_count,
-            statistics.policy_row_count,
-            statistics.value_row_count,
+            "ai.decision kind=%s candidates=%d action_value=%s "
+            "elapsed_ms=%.3f",
+            snapshot.awaiting_action,
+            decision.candidate_count,
+            (
+                "not_evaluated"
+                if decision.selected_action_value is None
+                else f"{decision.selected_action_value:.6f}"
+            ),
             (time.perf_counter() - started) * 1000.0,
         )
-        return Ok(decided.value.command)
+        return command
 
     def _root_query(self, snapshot: PlayerSnapshot) -> PolicyQuery:
         observation = build_observation(
@@ -178,7 +170,6 @@ class AIController:
                 snapshot=snapshot,
                 query=observation.action_query,
             ),
-            seat=self._seat,
         )
 
 

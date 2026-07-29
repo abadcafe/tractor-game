@@ -24,7 +24,7 @@ from server.policy_model.checkpoint import save as _checkpoint_save
 from server.policy_model.checkpoint.load import (
     load_policy_checkpoint as _load_policy_checkpoint,
 )
-from server.policy_model.network import ModelConfig, PolicyValueModel
+from server.policy_model.network import ModelConfig, PolicyActionModel
 from server.training.checkpoint import (
     TrainingCheckpointMetadata,
 )
@@ -714,7 +714,7 @@ def test_torch_checkpoint_state_payload_is_weights_only_safe(
     )
 
     assert isinstance(loaded, dict)
-    assert loaded["schema_version"] == 23
+    assert loaded["schema_version"] == 24
     assert isinstance(loaded["checkpoint_id"], str)
     assert "model_config" not in loaded
     assert "train_config" not in loaded
@@ -1155,6 +1155,7 @@ def test_torch_checkpoint_read_rejects_unknown_model_config_fields(
         "d_model": 8,
         "layers": 1,
         "heads": 1,
+        "action_value_layers": 2,
         "unexpected": True,
     }
     _write_json_object(path, manifest)
@@ -1165,6 +1166,68 @@ def test_torch_checkpoint_read_rejects_unknown_model_config_fields(
     assert "checkpoint corruption:" in result.reason
     assert (
         "manifest model_config fields do not match the current schema"
+        in result.reason
+    )
+
+
+def test_torch_checkpoint_rejects_unknown_manifest_field(
+    tmp_path: Path,
+) -> None:
+    _model_config, _train_config, path = _saved_checkpoint(tmp_path)
+    manifest = _read_json_object(path)
+    manifest["unexpected"] = True
+    _write_json_object(path, manifest)
+
+    result = _read_metadata(path)
+
+    assert isinstance(result, Rejected)
+    assert (
+        "manifest fields do not match the current schema"
+        in result.reason
+    )
+
+
+def test_torch_checkpoint_rejects_unknown_train_config_field(
+    tmp_path: Path,
+) -> None:
+    _model_config, _train_config, path = _saved_checkpoint(tmp_path)
+    manifest = _read_json_object(path)
+    raw_train_config = manifest["train_config"]
+    assert _is_object_dict(raw_train_config)
+    train_config = dict(raw_train_config)
+    train_config["unexpected"] = True
+    manifest["train_config"] = train_config
+    _write_json_object(path, manifest)
+
+    result = _read_metadata(path)
+
+    assert isinstance(result, Rejected)
+    assert (
+        "manifest train_config fields do not match the current schema"
+        in result.reason
+    )
+
+
+def test_torch_checkpoint_rejects_unknown_state_payload_field(
+    tmp_path: Path,
+) -> None:
+    model_config, train_config, path = _saved_checkpoint(tmp_path)
+    state_path = _single_state_path(path)
+    payload = _load_state_payload(state_path)
+    payload["unexpected"] = True
+    _write_state_payload(path, state_path, payload)
+
+    result = _load_training_checkpoint(
+        path=path,
+        model_config=model_config,
+        train_config=train_config,
+        execution_config=ExecutionConfig(),
+        device=torch.device("cpu"),
+    )
+
+    assert isinstance(result, Rejected)
+    assert (
+        "state payload fields do not match the current schema"
         in result.reason
     )
 
@@ -1675,16 +1738,23 @@ def test_torch_checkpoint_load_rejects_optimizer_dtype_mismatch(
     optimizer_payload = payload["optimizer_state"]
     assert _is_object_dict(optimizer_payload)
     exp_avgs = optimizer_payload["exp_avgs"]
+    exp_avg_sqs = optimizer_payload["exp_avg_sqs"]
     assert _is_object_list(exp_avgs)
+    assert _is_object_list(exp_avg_sqs)
     first_parameter = next(iter(state.model.parameters()))
     updated_exp_avgs = list(exp_avgs)
+    updated_exp_avg_sqs = list(exp_avg_sqs)
     updated_exp_avgs[0] = torch.ones(
         first_parameter.shape, dtype=torch.int64
+    )
+    updated_exp_avg_sqs[0] = torch.ones(
+        first_parameter.shape, dtype=first_parameter.dtype
     )
     updated_optimizer_payload: dict[object, object] = dict(
         optimizer_payload
     )
     updated_optimizer_payload["exp_avgs"] = updated_exp_avgs
+    updated_optimizer_payload["exp_avg_sqs"] = updated_exp_avg_sqs
     payload["optimizer_state"] = updated_optimizer_payload
     _write_state_payload(path, state_path, payload)
 
@@ -1953,7 +2023,7 @@ def test_resolve_execution_config_overrides_process_defaults() -> None:
 def save_training_checkpoint(
     *,
     manifest_paths: tuple[Path, ...],
-    model: PolicyValueModel,
+    model: PolicyActionModel,
     trainer: PPOTrainer,
     model_config: ModelConfig,
     train_config: TrainConfig,
@@ -2149,7 +2219,7 @@ def _is_object_list(value: object) -> TypeGuard[list[object]]:
 
 
 def _model_parameters(
-    model: PolicyValueModel,
+    model: PolicyActionModel,
 ) -> tuple[torch.Tensor, ...]:
     return tuple(
         parameter.detach().cpu().clone()

@@ -16,7 +16,7 @@ from server.policy_model.checkpoint import (
     restore_policy_model,
     save_checkpoint,
 )
-from server.policy_model.network import ModelConfig, PolicyValueModel
+from server.policy_model.network import ModelConfig, PolicyActionModel
 from server.training.checkpoint.validation import (
     train_config_from_json,
     validate_optimizer_state_payload,
@@ -114,7 +114,7 @@ def load_training_checkpoint(
 def save_training_checkpoint(
     *,
     manifest_paths: tuple[Path, ...],
-    model: PolicyValueModel,
+    model: PolicyActionModel,
     trainer: PPOTrainer,
     model_config: ModelConfig,
     train_config: TrainConfig,

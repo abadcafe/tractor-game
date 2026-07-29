@@ -1,4 +1,4 @@
-"""Zero-sum policy value targets from required-level progress."""
+"""Zero-sum terminal returns from required-level progress."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ class PartnershipProgress:
 
 @dataclass(frozen=True, slots=True)
 class RoundScore:
-    """Completed-round score context for continuous value targets."""
+    """Completed-round score context for continuous returns."""
 
     declarer_partnership: Partnership
     total_defender_points: int

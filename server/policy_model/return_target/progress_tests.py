@@ -5,7 +5,7 @@ from __future__ import annotations
 from server.game import Partnership
 from server.game.rules.cards import Rank
 from server.game.rules.progression import TerminalProgress
-from server.policy_model.value_target.progress import (
+from server.policy_model.return_target.progress import (
     PartnershipProgress,
     RoundScore,
     continuous_progress_delta,

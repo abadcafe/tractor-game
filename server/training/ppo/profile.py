@@ -15,8 +15,9 @@ from server.training.runtime.config import PPOProfileMode
 type _ProfileField = Literal[
     "minibatch_loss_seconds",
     "observation_batch_seconds",
-    "observation_encode_seconds",
-    "value_head_seconds",
+    "policy_observation_encode_seconds",
+    "action_value_observation_encode_seconds",
+    "action_value_decode_seconds",
     "action_decode_seconds",
     "action_distribution_seconds",
     "backward_seconds",
@@ -31,8 +32,9 @@ class PPOUpdateProfile:
     update_seconds: float
     minibatch_loss_seconds: float
     observation_batch_seconds: float
-    observation_encode_seconds: float
-    value_head_seconds: float
+    policy_observation_encode_seconds: float
+    action_value_observation_encode_seconds: float
+    action_value_decode_seconds: float
     action_decode_seconds: float
     action_distribution_seconds: float
     backward_seconds: float
@@ -51,8 +53,9 @@ def ppo_update_profile_is_finite(profile: PPOUpdateProfile) -> bool:
         profile.update_seconds,
         profile.minibatch_loss_seconds,
         profile.observation_batch_seconds,
-        profile.observation_encode_seconds,
-        profile.value_head_seconds,
+        profile.policy_observation_encode_seconds,
+        profile.action_value_observation_encode_seconds,
+        profile.action_value_decode_seconds,
         profile.action_decode_seconds,
         profile.action_distribution_seconds,
         profile.backward_seconds,
@@ -81,8 +84,9 @@ def blank_update_profile(*, update_seconds: float) -> PPOUpdateProfile:
         update_seconds=update_seconds,
         minibatch_loss_seconds=0.0,
         observation_batch_seconds=0.0,
-        observation_encode_seconds=0.0,
-        value_head_seconds=0.0,
+        policy_observation_encode_seconds=0.0,
+        action_value_observation_encode_seconds=0.0,
+        action_value_decode_seconds=0.0,
         action_decode_seconds=0.0,
         action_distribution_seconds=0.0,
         backward_seconds=0.0,
@@ -129,8 +133,9 @@ class PPOProfileAccumulator:
     update_start: _ProfileMark
     minibatch_loss_seconds: float = 0.0
     observation_batch_seconds: float = 0.0
-    observation_encode_seconds: float = 0.0
-    value_head_seconds: float = 0.0
+    policy_observation_encode_seconds: float = 0.0
+    action_value_observation_encode_seconds: float = 0.0
+    action_value_decode_seconds: float = 0.0
     action_decode_seconds: float = 0.0
     action_distribution_seconds: float = 0.0
     backward_seconds: float = 0.0
@@ -247,8 +252,13 @@ class PPOProfileAccumulator:
             update_seconds=update_seconds,
             minibatch_loss_seconds=self.minibatch_loss_seconds,
             observation_batch_seconds=self.observation_batch_seconds,
-            observation_encode_seconds=self.observation_encode_seconds,
-            value_head_seconds=self.value_head_seconds,
+            policy_observation_encode_seconds=(
+                self.policy_observation_encode_seconds
+            ),
+            action_value_observation_encode_seconds=(
+                self.action_value_observation_encode_seconds
+            ),
+            action_value_decode_seconds=self.action_value_decode_seconds,
             action_decode_seconds=self.action_decode_seconds,
             action_distribution_seconds=(
                 self.action_distribution_seconds
@@ -290,11 +300,14 @@ class PPOProfileAccumulator:
         if field_name == "observation_batch_seconds":
             self.observation_batch_seconds += seconds
             return
-        if field_name == "observation_encode_seconds":
-            self.observation_encode_seconds += seconds
+        if field_name == "policy_observation_encode_seconds":
+            self.policy_observation_encode_seconds += seconds
             return
-        if field_name == "value_head_seconds":
-            self.value_head_seconds += seconds
+        if field_name == "action_value_observation_encode_seconds":
+            self.action_value_observation_encode_seconds += seconds
+            return
+        if field_name == "action_value_decode_seconds":
+            self.action_value_decode_seconds += seconds
             return
         if field_name == "action_decode_seconds":
             self.action_decode_seconds += seconds

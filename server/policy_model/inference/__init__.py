@@ -1,25 +1,15 @@
-"""Torch-free query and result contracts for model inference."""
+"""Torch-free production decision contracts."""
 
 from .contracts import (
-    ActionProposalRequest,
-    ActionProposals,
-    ActionSamples,
+    ActionDecision,
+    ActionDecisionRequest,
     PolicyQuery,
-    PolicySampleRequest,
-    PolicyScoreRequest,
-    ProposedAction,
-    SampledAction,
     SamplingSeed,
 )
 
 __all__ = (
-    "ActionProposalRequest",
-    "ActionProposals",
-    "ActionSamples",
+    "ActionDecision",
+    "ActionDecisionRequest",
     "PolicyQuery",
-    "PolicySampleRequest",
-    "PolicyScoreRequest",
-    "ProposedAction",
-    "SampledAction",
     "SamplingSeed",
 )

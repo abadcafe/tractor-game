@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import torch
 
 from server.foundation import result as _result
-from server.policy_model.network import ModelConfig, PolicyValueModel
+from server.policy_model.network import ModelConfig, PolicyActionModel
 from server.training.config import TrainConfig
 from server.training.ppo import PPOTrainer
 from server.training.ppo.distributed import PPOUpdatePartition
@@ -19,7 +19,7 @@ from server.training.runtime.seeding import seed_training_rng
 class LoadedTrainingState:
     """Loaded model/trainer state and progress counters."""
 
-    model: PolicyValueModel
+    model: PolicyActionModel
     trainer: PPOTrainer
     total_rounds: int
     total_samples: int
@@ -66,12 +66,13 @@ def validate_model_rank_runtime(
 
 def create_model(
     config: ModelConfig, device: torch.device
-) -> PolicyValueModel:
+) -> PolicyActionModel:
     """Create a model on the requested device."""
-    model = PolicyValueModel(
+    model = PolicyActionModel(
         d_model=config.d_model,
         layers=config.layers,
         heads=config.heads,
+        action_value_layers=config.action_value_layers,
     )
     return model.to(device)
 

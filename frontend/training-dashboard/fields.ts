@@ -13,13 +13,13 @@ export interface InitRequest {
   d_model: number;
   layers: number;
   heads: number;
+  action_value_layers: number;
   seed: number;
   learning_rate: number;
   ppo_clip: number;
-  value_clip: number;
   entropy_coef: number;
-  value_coef: number;
-  max_grad_norm: number;
+  policy_max_grad_norm: number;
+  action_value_max_grad_norm: number;
   ppo_epochs: number;
   minibatch_size: number;
   adam_beta1: number;
@@ -47,10 +47,9 @@ export interface ResumeRequest {
   game_envs_per_worker: number | null;
   samples_per_update: number | null;
   ppo_clip: number | null;
-  value_clip: number | null;
   entropy_coef: number | null;
-  value_coef: number | null;
-  max_grad_norm: number | null;
+  policy_max_grad_norm: number | null;
+  action_value_max_grad_norm: number | null;
   ppo_epochs: number | null;
   minibatch_size: number | null;
   adam_beta1: number | null;
@@ -138,15 +137,6 @@ const optimizationFields = (
     "1",
   ),
   number(
-    "value_clip",
-    "Value clip",
-    "Optimization",
-    optional ? "" : "0.2",
-    "0.000001",
-    "any",
-    optional,
-  ),
-  number(
     "entropy_coef",
     "Entropy coefficient",
     "Optimization",
@@ -156,8 +146,8 @@ const optimizationFields = (
     optional,
   ),
   number(
-    "value_coef",
-    "Value coefficient",
+    "policy_max_grad_norm",
+    "Policy maximum gradient norm",
     "Optimization",
     optional ? "" : "0.5",
     "0",
@@ -165,8 +155,8 @@ const optimizationFields = (
     optional,
   ),
   number(
-    "max_grad_norm",
-    "Maximum gradient norm",
+    "action_value_max_grad_norm",
+    "Action value maximum gradient norm",
     "Optimization",
     optional ? "" : "0.5",
     "0",
@@ -231,6 +221,15 @@ export const INIT_FIELDS: readonly TrainingField[] = [
   number("d_model", "Model width", "Model", "128", "8", "1", false),
   number("layers", "Transformer layers", "Model", "3", "1", "1", false),
   number("heads", "Attention heads", "Model", "4", "1", "1", false),
+  number(
+    "action_value_layers",
+    "Action value layers",
+    "Model",
+    "2",
+    "1",
+    "1",
+    false,
+  ),
   number("seed", "Seed", "Model", "0", "0", "1", false),
   ...optimizationFields(false),
 ];
@@ -373,13 +372,19 @@ export function initRequestFromForm(
     d_model: requiredNumber(form, "d_model"),
     layers: requiredNumber(form, "layers"),
     heads: requiredNumber(form, "heads"),
+    action_value_layers: requiredNumber(form, "action_value_layers"),
     seed: requiredNumber(form, "seed"),
     learning_rate: requiredNumber(form, "learning_rate"),
     ppo_clip: requiredNumber(form, "ppo_clip"),
-    value_clip: requiredNumber(form, "value_clip"),
     entropy_coef: requiredNumber(form, "entropy_coef"),
-    value_coef: requiredNumber(form, "value_coef"),
-    max_grad_norm: requiredNumber(form, "max_grad_norm"),
+    policy_max_grad_norm: requiredNumber(
+      form,
+      "policy_max_grad_norm",
+    ),
+    action_value_max_grad_norm: requiredNumber(
+      form,
+      "action_value_max_grad_norm",
+    ),
     ppo_epochs: requiredNumber(form, "ppo_epochs"),
     minibatch_size: requiredNumber(form, "minibatch_size"),
     adam_beta1: requiredNumber(form, "adam_beta1"),
@@ -446,10 +451,15 @@ export function resumeRequestFromForm(
     game_envs_per_worker: optionalNumber(form, "game_envs_per_worker"),
     samples_per_update: optionalNumber(form, "samples_per_update"),
     ppo_clip: optionalNumber(form, "ppo_clip"),
-    value_clip: optionalNumber(form, "value_clip"),
     entropy_coef: optionalNumber(form, "entropy_coef"),
-    value_coef: optionalNumber(form, "value_coef"),
-    max_grad_norm: optionalNumber(form, "max_grad_norm"),
+    policy_max_grad_norm: optionalNumber(
+      form,
+      "policy_max_grad_norm",
+    ),
+    action_value_max_grad_norm: optionalNumber(
+      form,
+      "action_value_max_grad_norm",
+    ),
     ppo_epochs: optionalNumber(form, "ppo_epochs"),
     minibatch_size: optionalNumber(form, "minibatch_size"),
     adam_beta1: optionalNumber(form, "adam_beta1"),

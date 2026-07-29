@@ -1,9 +1,8 @@
-"""Black-box tests for the asynchronous inference runtime."""
+"""Black-box tests for the production decision runtime."""
 
 from __future__ import annotations
 
 import asyncio
-import math
 import time
 
 import torch
@@ -11,22 +10,19 @@ import torch
 from server.foundation.result import Ok
 from server.game import Seat
 from server.game.snapshots import PlayerSnapshot
-from server.policy_model.actions.decoding import action_trace_choice_ids
+from server.policy_model._schema.actions import PASS_CHOICE_ID
 from server.policy_model.actions.legality import (
     build_legal_action_space,
 )
 from server.policy_model.inference import (
-    ActionProposalRequest,
+    ActionDecisionRequest,
     PolicyQuery,
-    PolicySampleRequest,
-    PolicyScoreRequest,
     SamplingSeed,
 )
 from server.policy_model.inference.runtime import InferenceRuntime
 from server.policy_model.network import (
-    ActionDecodeSession,
     EncodedObservation,
-    PolicyValueModel,
+    PolicyActionModel,
 )
 from server.policy_model.observation import (
     Observation,
@@ -42,354 +38,228 @@ from tests.support import card, seat_values
 from tests.support import snapshot as make_snapshot
 
 
-class _CountingPolicyModel(PolicyValueModel):
-    encoded_row_counts: list[int]
-    decode_root_counts: list[int]
-    value_call_count: int
+class _CountingModel(PolicyActionModel):
+    policy_row_counts: list[int]
+    action_value_row_counts: list[int]
+    action_counts: list[int]
 
     def __init__(self) -> None:
-        super().__init__(d_model=16, layers=1, heads=2)
-        self.encoded_row_counts = []
-        self.decode_root_counts = []
-        self.value_call_count = 0
+        super().__init__(
+            d_model=16,
+            layers=1,
+            heads=2,
+            action_value_layers=1,
+        )
+        self.policy_row_counts = []
+        self.action_value_row_counts = []
+        self.action_counts = []
 
-    def encode_observations(
-        self, observation: ObservationTensorBatch
+    def encode_policy_observations(
+        self,
+        observation: ObservationTensorBatch,
     ) -> EncodedObservation:
-        self.encoded_row_counts.append(
+        self.policy_row_counts.append(
             int(observation.category_ids.shape[0])
         )
-        return super().encode_observations(observation)
+        return super().encode_policy_observations(observation)
 
-    def begin_action_decode_session(
+    def encode_action_value_observations(
+        self,
+        observation: ObservationTensorBatch,
+    ) -> EncodedObservation:
+        self.action_value_row_counts.append(
+            int(observation.category_ids.shape[0])
+        )
+        return super().encode_action_value_observations(observation)
+
+    def action_values(
         self,
         encoding: EncodedObservation,
         *,
         source_rows: torch.Tensor,
-        max_steps: int,
-    ) -> ActionDecodeSession:
-        session = super().begin_action_decode_session(
+        choice_ids_padded: torch.Tensor,
+        step_counts: torch.Tensor,
+    ) -> torch.Tensor:
+        self.action_counts.append(int(step_counts.shape[0]))
+        return super().action_values(
             encoding,
             source_rows=source_rows,
-            max_steps=max_steps,
+            choice_ids_padded=choice_ids_padded,
+            step_counts=step_counts,
         )
-        self.decode_root_counts.append(session.unique_prefix_count)
-        return session
-
-    def value_estimates(
-        self, encoding: EncodedObservation
-    ) -> torch.Tensor:
-        self.value_call_count += 1
-        return super().value_estimates(encoding)
 
 
-class _SlowPolicyModel(_CountingPolicyModel):
+class _SlowModel(_CountingModel):
     delay_next_encode: bool
 
     def __init__(self) -> None:
         super().__init__()
         self.delay_next_encode = True
 
-    def encode_observations(
-        self, observation: ObservationTensorBatch
+    def encode_policy_observations(
+        self,
+        observation: ObservationTensorBatch,
     ) -> EncodedObservation:
         if self.delay_next_encode:
             self.delay_next_encode = False
             time.sleep(0.05)
-        return super().encode_observations(observation)
+        return super().encode_policy_observations(observation)
 
 
-class _BrokenPolicyModel(_CountingPolicyModel):
-    def encode_observations(
-        self, observation: ObservationTensorBatch
+class _BrokenModel(_CountingModel):
+    def encode_policy_observations(
+        self,
+        observation: ObservationTensorBatch,
     ) -> EncodedObservation:
         del observation
         raise AssertionError("broken inference model")
 
 
-async def test_sample_draws_share_encoder_and_root_prefix() -> None:
-    model = _CountingPolicyModel()
+class _PreferRevealModel(_CountingModel):
+    def action_values(
+        self,
+        encoding: EncodedObservation,
+        *,
+        source_rows: torch.Tensor,
+        choice_ids_padded: torch.Tensor,
+        step_counts: torch.Tensor,
+    ) -> torch.Tensor:
+        del encoding, source_rows, step_counts
+        return (
+            choice_ids_padded[:, 0]
+            .ne(PASS_CHOICE_ID)
+            .to(dtype=torch.float32)
+            .mul(1000.0)
+        )
+
+
+async def test_decision_batches_policy_and_action_value_work() -> None:
+    model = _CountingModel()
     runtime = InferenceRuntime.create(
         model=model,
         device=torch.device("cpu"),
     )
     query = _bid_query(reveal_is_legal=True)
 
-    result = await runtime.sample(
-        requests=(
-            PolicySampleRequest(
-                query=query,
-                draws=_draws(seed=42, count=8),
-            ),
-        )
+    result = await runtime.decide(
+        requests=(_request(query=query, seed=42),)
     )
     await runtime.close()
 
     assert isinstance(result, Ok)
     assert len(result.value) == 1
-    assert len(result.value[0].samples) == 8
-    assert model.encoded_row_counts == [1]
-    assert model.decode_root_counts == [1]
-    assert model.value_call_count == 0
+    decision = result.value[0]
+    decoded = query.legal_actions.decode(decision.action.trace)
+    assert isinstance(decoded, Ok)
+    assert decoded.value == decision.action
+    assert decision.candidate_count == 2
+    assert decision.selected_action_value is not None
+    assert model.policy_row_counts == [1]
+    assert model.action_value_row_counts == [1]
+    assert model.action_counts == [2]
 
 
-async def test_structured_proposals_are_unique_and_reproducible() -> (
-    None
-):
-    model = _CountingPolicyModel()
+async def test_same_seed_produces_same_decision() -> None:
+    model = _CountingModel()
     runtime = InferenceRuntime.create(
         model=model,
         device=torch.device("cpu"),
     )
-    query = _bid_query(reveal_is_legal=True)
-    request = ActionProposalRequest(
-        query=query,
+    request = _request(
+        query=_play_query(),
+        seed=73,
         candidate_count=8,
-        draw=SamplingSeed(seed=43, ordinal=0),
     )
-    first = await runtime.propose(requests=(request,))
-    second = await runtime.propose(requests=(request,))
+
+    first = await runtime.decide(requests=(request,))
+    second = await runtime.decide(requests=(request,))
     await runtime.close()
 
     assert isinstance(first, Ok)
     assert isinstance(second, Ok)
-    first_candidates = first.value[0].candidates
-    second_candidates = second.value[0].candidates
-    assert len(first_candidates) == 2
-    assert tuple(item.action for item in first_candidates) == tuple(
-        item.action for item in second_candidates
-    )
-    assert (
-        len(
-            {
-                tuple(
-                    choice.kind for choice in item.action.trace.choices
-                )
-                for item in first_candidates
-            }
-        )
-        == 2
-    )
-    assert model.encoded_row_counts == [1, 1]
-    assert model.decode_root_counts == [1, 1]
-    assert model.value_call_count == 0
+    assert first.value == second.value
+    assert 1 < first.value[0].candidate_count <= 8
 
 
-async def test_structured_play_proposals_are_unique() -> None:
-    model = _CountingPolicyModel()
+async def test_action_value_can_improve_over_policy_perturbation() -> (
+    None
+):
     runtime = InferenceRuntime.create(
-        model=model,
+        model=_PreferRevealModel(),
         device=torch.device("cpu"),
     )
-    result = await runtime.propose(
+
+    result = await runtime.decide(
         requests=(
-            ActionProposalRequest(
-                query=_play_query(),
-                candidate_count=16,
-                draw=SamplingSeed(seed=45, ordinal=0),
+            _request(
+                query=_bid_query(reveal_is_legal=True),
+                seed=81,
             ),
         )
     )
     await runtime.close()
 
     assert isinstance(result, Ok)
-    candidates = result.value[0].candidates
-    trace_ids = tuple(
-        action_trace_choice_ids(candidate.action.trace)
-        for candidate in candidates
-    )
-    assert 2 < len(candidates) <= 16
-    assert len(set(trace_ids)) == len(trace_ids)
-    assert model.encoded_row_counts == [1]
+    assert not result.value[0].action.is_pass
+    assert result.value[0].selected_action_value == 1000.0
 
 
-async def test_forced_proposal_skips_encoder() -> None:
-    model = _CountingPolicyModel()
+async def test_forced_decision_skips_both_model_branches() -> None:
+    model = _CountingModel()
     runtime = InferenceRuntime.create(
         model=model,
         device=torch.device("cpu"),
     )
-    result = await runtime.propose(
+
+    result = await runtime.decide(
         requests=(
-            ActionProposalRequest(
+            _request(
                 query=_bid_query(reveal_is_legal=False),
-                candidate_count=8,
-                draw=SamplingSeed(seed=44, ordinal=0),
+                seed=44,
             ),
         )
     )
     await runtime.close()
 
     assert isinstance(result, Ok)
-    assert len(result.value) == 1
-    assert len(result.value[0].candidates) == 1
-    assert model.encoded_row_counts == []
+    assert result.value[0].candidate_count == 1
+    assert result.value[0].selected_action_value is None
+    assert model.policy_row_counts == []
+    assert model.action_value_row_counts == []
+    assert model.action_counts == []
 
 
-async def test_batch_reordering_preserves_draw_results() -> None:
-    model = _CountingPolicyModel()
+async def test_concurrent_decisions_share_observation_batches() -> None:
+    model = _CountingModel()
     runtime = InferenceRuntime.create(
         model=model,
         device=torch.device("cpu"),
     )
     query = _bid_query(reveal_is_legal=True)
-    draws = _draws(seed=91, count=8)
-
-    grouped = await runtime.sample(
-        requests=(PolicySampleRequest(query=query, draws=draws),)
-    )
-    individual = await runtime.sample(
-        requests=tuple(
-            PolicySampleRequest(query=query, draws=(draw,))
-            for draw in draws
-        )
-    )
-    await runtime.close()
-
-    assert isinstance(grouped, Ok)
-    assert isinstance(individual, Ok)
-    grouped_samples = grouped.value[0].samples
-    individual_samples = tuple(
-        group.samples[0] for group in individual.value
-    )
-    assert tuple(item.action for item in grouped_samples) == tuple(
-        item.action for item in individual_samples
-    )
-    for grouped_item, individual_item in zip(
-        grouped_samples,
-        individual_samples,
-        strict=True,
-    ):
-        assert math.isclose(
-            grouped_item.log_probability,
-            individual_item.log_probability,
-            rel_tol=1e-6,
-            abs_tol=1e-6,
-        )
-
-
-async def test_forced_action_skips_encoder_and_value_head() -> None:
-    model = _CountingPolicyModel()
-    runtime = InferenceRuntime.create(
-        model=model,
-        device=torch.device("cpu"),
-    )
-
-    sampled = await runtime.sample(
-        requests=(
-            PolicySampleRequest(
-                query=_bid_query(reveal_is_legal=False),
-                draws=_draws(seed=17, count=8),
-            ),
-        )
-    )
-    await runtime.close()
-
-    assert isinstance(sampled, Ok)
-    assert all(
-        item.log_probability == 0.0 for item in sampled.value[0].samples
-    )
-    assert model.encoded_row_counts == []
-    assert model.value_call_count == 0
-
-
-async def test_teacher_forced_score_matches_live_sample() -> None:
-    model = _CountingPolicyModel()
-    runtime = InferenceRuntime.create(
-        model=model,
-        device=torch.device("cpu"),
-    )
-    query = _bid_query(reveal_is_legal=True)
-    sampled = await runtime.sample(
-        requests=(
-            PolicySampleRequest(
-                query=query,
-                draws=(SamplingSeed(seed=23, ordinal=0),),
-            ),
-        )
-    )
-    assert isinstance(sampled, Ok)
-
-    scored = await runtime.score(
-        requests=(
-            PolicyScoreRequest(
-                query=query,
-                action=sampled.value[0].samples[0].action,
-            ),
-        )
-    )
-    await runtime.close()
-
-    assert isinstance(scored, Ok)
-    assert math.isclose(
-        scored.value[0],
-        sampled.value[0].samples[0].log_probability,
-        rel_tol=1e-6,
-        abs_tol=1e-6,
-    )
-    assert model.value_call_count == 0
-
-
-async def test_concurrent_values_share_one_runtime_batch() -> None:
-    model = _CountingPolicyModel()
-    runtime = InferenceRuntime.create(
-        model=model,
-        device=torch.device("cpu"),
-    )
-    observation = _bid_observation(reveal_is_legal=True)
 
     first, second = await asyncio.gather(
-        runtime.values(observations=(observation,)),
-        runtime.values(observations=(observation,)),
+        runtime.decide(requests=(_request(query=query, seed=91),)),
+        runtime.decide(requests=(_request(query=query, seed=92),)),
     )
     await runtime.close()
 
     assert isinstance(first, Ok)
     assert isinstance(second, Ok)
-    assert model.encoded_row_counts == [1]
-    assert model.value_call_count == 1
+    assert model.policy_row_counts == [1]
+    assert model.action_value_row_counts == [1]
+    assert model.action_counts == [4]
 
 
-async def test_cpu_inference_splits_rows_at_throughput_knee() -> None:
-    model = _CountingPolicyModel()
+async def test_programming_failure_reaches_every_waiter() -> None:
     runtime = InferenceRuntime.create(
-        model=model,
+        model=_BrokenModel(),
         device=torch.device("cpu"),
     )
-    base = _bid_snapshot(reveal_is_legal=True)
-    observations = tuple(
-        build_observation(
-            viewer=Seat.A,
-            snapshot=base.model_copy(update={"defender_points": index}),
-            memory=ObservationMemoryView(
-                bid_actions=(),
-                completed_tricks=(),
-            ),
-        )
-        for index in range(40)
-    )
-
-    result = await runtime.values(observations=observations)
-    await runtime.close()
-
-    assert isinstance(result, Ok)
-    assert len(result.value) == 40
-    assert model.encoded_row_counts == [32, 8]
-    assert model.value_call_count == 2
-
-
-async def test_inference_programming_failure_reaches_every_waiter() -> (
-    None
-):
-    runtime = InferenceRuntime.create(
-        model=_BrokenPolicyModel(),
-        device=torch.device("cpu"),
-    )
-    observation = _bid_observation(reveal_is_legal=True)
+    query = _bid_query(reveal_is_legal=True)
 
     outcomes = await asyncio.gather(
-        runtime.values(observations=(observation,)),
-        runtime.values(observations=(observation,)),
+        runtime.decide(requests=(_request(query=query, seed=1),)),
+        runtime.decide(requests=(_request(query=query, seed=2),)),
         return_exceptions=True,
     )
     closing = await asyncio.gather(
@@ -404,14 +274,14 @@ async def test_inference_programming_failure_reaches_every_waiter() -> (
 
 
 async def test_cancelled_caller_does_not_break_runtime() -> None:
-    model = _SlowPolicyModel()
+    model = _SlowModel()
     runtime = InferenceRuntime.create(
         model=model,
         device=torch.device("cpu"),
     )
-    observation = _bid_observation(reveal_is_legal=True)
+    query = _bid_query(reveal_is_legal=True)
     pending = asyncio.create_task(
-        runtime.values(observations=(observation,))
+        runtime.decide(requests=(_request(query=query, seed=7),))
     )
     await asyncio.sleep(0)
     pending.cancel()
@@ -420,16 +290,26 @@ async def test_cancelled_caller_does_not_break_runtime() -> None:
         pending,
         return_exceptions=True,
     )
-    resumed = await runtime.values(observations=(observation,))
+    resumed = await runtime.decide(
+        requests=(_request(query=query, seed=8),)
+    )
     await runtime.close()
 
     assert isinstance(cancellation[0], asyncio.CancelledError)
     assert isinstance(resumed, Ok)
 
 
-def _draws(*, seed: int, count: int) -> tuple[SamplingSeed, ...]:
-    return tuple(
-        SamplingSeed(seed=seed, ordinal=index) for index in range(count)
+def _request(
+    *,
+    query: PolicyQuery,
+    seed: int,
+    candidate_count: int = 8,
+) -> ActionDecisionRequest:
+    return ActionDecisionRequest(
+        query=query,
+        candidate_count=candidate_count,
+        action_value_temperature=1.0,
+        draw=SamplingSeed(seed=seed, ordinal=0),
     )
 
 
@@ -443,7 +323,6 @@ def _bid_query(*, reveal_is_legal: bool) -> PolicyQuery:
             snapshot=snapshot,
             query=observation.action_query,
         ),
-        seat=Seat.A,
     )
 
 
@@ -474,7 +353,6 @@ def _play_query() -> PolicyQuery:
             snapshot=snapshot,
             query=observation.action_query,
         ),
-        seat=Seat.A,
     )
 
 
