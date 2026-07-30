@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 from torch import Tensor
@@ -24,8 +24,10 @@ from server.policy_model.observation.tensor import (
 )
 from server.training.ppo.minibatch import TensorizedPPOMinibatch
 from server.training.ppo.replay_tensors import PPOReplayTensorBatch
+from server.training.rollout_inference.samples.materializer import (
+    PolicyDecisionMaterializer,
+)
 from server.training.rollout_inference.samples.records import (
-    CompactActionChoiceBatch,
     CompactPolicyDecisionBatch,
     RankReturnTargets,
 )
@@ -95,9 +97,15 @@ class ModelRankSampleArena:
     _choice_ids: Tensor | None = None
     _flat_legal_choice_masks: Tensor | None = None
     _old_log_probabilities: Tensor | None = None
+    _decision_materializer: PolicyDecisionMaterializer = field(
+        init=False
+    )
 
     def __post_init__(self) -> None:
         assert self.model_rank_index >= 0
+        self._decision_materializer = PolicyDecisionMaterializer(
+            device=self.device
+        )
 
     def clear(self) -> None:
         self._row_count = 0
@@ -165,17 +173,14 @@ class ModelRankSampleArena:
         )
         self._row_count = end
         self._step_count = step_end
-        step_counts = _int_tuple(action_sample.step_counts)
         return Ok(
-            value=CompactPolicyDecisionBatch(
+            value=self._decision_materializer.materialize(
                 model_rank_index=self.model_rank_index,
                 policy_versions=policy_versions,
-                row_indices=tuple(range(start, end)),
-                choice_counts=_int_tuple(action_sample.choice_counts),
-                action_choice_batch=CompactActionChoiceBatch.from_cpu_tensor(
-                    choice_ids=action_sample.choice_ids_padded.detach().cpu(),
-                    choice_counts=step_counts,
-                ),
+                row_start=start,
+                choice_ids_padded=action_sample.choice_ids_padded,
+                step_counts=action_sample.step_counts,
+                choice_counts=action_sample.choice_counts,
             )
         )
 
@@ -638,14 +643,6 @@ def _present(value: Tensor | None) -> Tensor:
 def _tensor_bool(value: Tensor) -> bool:
     assert value.shape == ()
     return bool(value.detach().cpu().item())
-
-
-def _int_tuple(values: Tensor) -> tuple[int, ...]:
-    assert values.ndim == 1
-    return tuple(
-        int(values[index].detach().cpu().item())
-        for index in range(int(values.shape[0]))
-    )
 
 
 __all__ = ("ArenaPPOBatchSource", "ModelRankSampleArena")
