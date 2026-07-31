@@ -19,12 +19,12 @@ from server.training_control.process_inspection import (
     ProcessInspector,
     ProcessSnapshot,
 )
-from server.training_metrics.queries import (
-    TrainingMetrics,
-    query_training_metrics,
+from server.training_metrics import (
+    TrainingMetricSummary,
+    query_training_metric_summary,
 )
 
-SUMMARY_SCHEMA_VERSION = 4
+SUMMARY_SCHEMA_VERSION = 5
 
 
 class TrainingSummary(BaseModel):
@@ -32,10 +32,10 @@ class TrainingSummary(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    schema_version: Literal[4] = SUMMARY_SCHEMA_VERSION
+    schema_version: Literal[5] = SUMMARY_SCHEMA_VERSION
     run_dir: Path
     process: ProcessSnapshot | None
-    metrics: TrainingMetrics
+    metrics: TrainingMetricSummary
     checkpoints: CheckpointCatalog
 
 
@@ -47,9 +47,7 @@ def build_training_summary(
     process_result = ProcessInspector().inspect(canonical)
     if isinstance(process_result, _result.Rejected):
         return process_result
-    metrics_result = query_training_metrics(
-        canonical, update_limit=500, series_points=500
-    )
+    metrics_result = query_training_metric_summary(canonical)
     if isinstance(metrics_result, _result.Rejected):
         return metrics_result
     checkpoint_result = read_checkpoint_catalog(canonical)

@@ -52,6 +52,18 @@ class TrainingMetrics(BaseModel):
     datasets: MetricDatasets
 
 
+class TrainingMetricSummary(BaseModel):
+    """Latest scalar metrics consumed by one-shot status commands."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    store_id: str | None
+    through_sequence: int = Field(ge=0)
+    complete: bool
+    dropped_event_count: int = Field(ge=0)
+    totals: JsonObject
+
+
 class MetricsCursor(BaseModel):
     """Store-aware cursor for Metrics-relevant persisted events."""
 
@@ -66,6 +78,7 @@ __all__ = (
     "MetricDatasets",
     "MetricPoint",
     "MetricsCursor",
+    "TrainingMetricSummary",
     "TrainingMetrics",
     "TrainingMetricsSchemaVersion",
 )

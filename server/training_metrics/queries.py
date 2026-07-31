@@ -22,6 +22,7 @@ from server.training_metrics.contract import (
     MetricPoint,
     MetricsCursor,
     TrainingMetrics,
+    TrainingMetricSummary,
 )
 
 _JSON_OBJECT_ADAPTER: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
@@ -41,6 +42,48 @@ class _Event:
     policy_version: int | None
     context: JsonObject
     fields: JsonObject
+
+
+def query_training_metric_summary(
+    run_dir: Path,
+) -> _result.Ok[TrainingMetricSummary] | _result.Rejected:
+    """Read latest scalar metrics without projecting chart series."""
+    opened = open_reader(run_dir)
+    if isinstance(opened, _result.Rejected):
+        return opened
+    connection = opened.value
+    if connection is None:
+        return _result.Ok(value=_empty_metric_summary())
+    try:
+        connection.execute("BEGIN")
+        store_id = training_store_id(connection)
+        through_sequence = _metrics_through_sequence(connection)
+        dropped = _scalar_int(
+            connection,
+            "SELECT coalesce(sum(json_extract(event_json, "
+            "'$.fields.count')), 0) FROM training_logs "
+            "WHERE event_type = 'logging.drop'",
+        )
+        latest_update = _latest_event(connection, event_type="update")
+        connection.commit()
+    except sqlite3.Error, ValidationError, ValueError:
+        connection.rollback()
+        return _result.Rejected(
+            reason="training metric summary query failed"
+        )
+    finally:
+        connection.close()
+    return _result.Ok(
+        value=TrainingMetricSummary(
+            store_id=store_id,
+            through_sequence=through_sequence,
+            complete=dropped == 0,
+            dropped_event_count=dropped,
+            totals={}
+            if latest_update is None
+            else _metric_totals((latest_update,)),
+        )
+    )
 
 
 def query_training_metrics(
@@ -219,46 +262,52 @@ def _events(
         + " ORDER BY sequence",
         parameters,
     ).fetchall()
-    events: list[_Event] = []
-    for (
-        sequence,
-        recorded_at_ms,
-        process_index,
-        policy_version,
-        raw,
-    ) in rows:
-        if not isinstance(sequence, int) or not isinstance(
-            recorded_at_ms, int
-        ):
-            raise ValueError("invalid event dimensions")
-        if process_index is not None and not isinstance(
-            process_index, int
-        ):
-            raise ValueError("invalid process index")
-        if policy_version is not None and not isinstance(
-            policy_version, int
-        ):
-            raise ValueError("invalid policy version")
-        if not isinstance(raw, str):
-            raise ValueError("invalid event json")
-        payload = _JSON_OBJECT_ADAPTER.validate_json(raw)
-        context = payload.get("context")
-        fields = payload.get("fields")
-        if not isinstance(context, dict) or not isinstance(
-            fields, dict
-        ):
-            raise ValueError("invalid event body")
-        events.append(
-            _Event(
-                sequence=sequence,
-                recorded_at_ms=recorded_at_ms,
-                process_index=process_index,
-                policy_version=policy_version,
-                context=context,
-                fields=fields,
-            )
-        )
-    return tuple(events)
+    return tuple(_event_from_row(row) for row in rows)
+
+
+def _latest_event(
+    connection: sqlite3.Connection, *, event_type: str
+) -> _Event | None:
+    row = connection.execute(
+        "SELECT sequence, recorded_at_ms, process_index, "
+        "policy_version, event_json FROM training_logs "
+        "WHERE event_type = ? "
+        "AND json_type(event_json, '$.error') IS NULL "
+        "ORDER BY sequence DESC LIMIT 1",
+        (event_type,),
+    ).fetchone()
+    return None if row is None else _event_from_row(row)
+
+
+def _event_from_row(row: tuple[object, ...]) -> _Event:
+    if len(row) != 5:
+        raise ValueError("invalid event row")
+    sequence, recorded_at_ms, process_index, policy_version, raw = row
+    if not isinstance(sequence, int) or not isinstance(
+        recorded_at_ms, int
+    ):
+        raise ValueError("invalid event dimensions")
+    if process_index is not None and not isinstance(process_index, int):
+        raise ValueError("invalid process index")
+    if policy_version is not None and not isinstance(
+        policy_version, int
+    ):
+        raise ValueError("invalid policy version")
+    if not isinstance(raw, str):
+        raise ValueError("invalid event json")
+    payload = _JSON_OBJECT_ADAPTER.validate_json(raw)
+    context = payload.get("context")
+    fields = payload.get("fields")
+    if not isinstance(context, dict) or not isinstance(fields, dict):
+        raise ValueError("invalid event body")
+    return _Event(
+        sequence=sequence,
+        recorded_at_ms=recorded_at_ms,
+        process_index=process_index,
+        policy_version=policy_version,
+        context=context,
+        fields=fields,
+    )
 
 
 def _pending_rollout_ids(connection: sqlite3.Connection) -> set[str]:
@@ -586,4 +635,14 @@ def _empty_metrics(*, through_sequence: int = 0) -> TrainingMetrics:
             inference=(),
             processes=(),
         ),
+    )
+
+
+def _empty_metric_summary() -> TrainingMetricSummary:
+    return TrainingMetricSummary(
+        store_id=None,
+        through_sequence=0,
+        complete=True,
+        dropped_event_count=0,
+        totals={},
     )

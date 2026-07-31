@@ -14,6 +14,7 @@ from server.training_events import (
 from server.training_events.store import initialize_database
 from server.training_metrics.queries import (
     query_metrics_cursor,
+    query_training_metric_summary,
     query_training_metrics,
 )
 
@@ -126,6 +127,49 @@ def test_metrics_join_late_cross_process_events_by_rollout_id(
     process = result.value.datasets.processes[0]
     assert process.values["completed_rounds"] == 4.0
     assert process.values["decision_count"] == 16.0
+
+
+def test_metric_summary_projects_latest_update_without_series(
+    tmp_path: Path,
+) -> None:
+    initialized = initialize_database(tmp_path)
+    assert isinstance(initialized, Ok)
+    sink = StructuredEventSink(
+        run_dir=tmp_path,
+        process=ProcessIdentity(kind="coordinator"),
+    )
+    sink.emit(
+        "update",
+        context=EventContext(policy_version=0, rollout_id="rollout-a"),
+        fields={"total_updates": 1, "total_samples": 32},
+    )
+    sink.emit(
+        "inference.batch",
+        context=EventContext(policy_version=1, rollout_id="rollout-b"),
+        fields={"batch_size": 4},
+    )
+    sink.emit(
+        "update",
+        context=EventContext(policy_version=1, rollout_id="rollout-b"),
+        fields={
+            "total_updates": 2,
+            "total_samples": 64,
+            "process_samples_per_second": 16.0,
+        },
+    )
+    sink.emit("logging.drop", fields={"count": 2})
+    sink.close()
+
+    result = query_training_metric_summary(tmp_path)
+
+    assert isinstance(result, Ok)
+    assert result.value.store_id is not None
+    assert result.value.through_sequence == 4
+    assert result.value.complete is False
+    assert result.value.dropped_event_count == 2
+    assert result.value.totals["total_updates"] == 2
+    assert result.value.totals["total_samples"] == 64
+    assert result.value.totals["samples_per_second"] == 16.0
 
 
 def test_metrics_project_live_inference_before_first_update(

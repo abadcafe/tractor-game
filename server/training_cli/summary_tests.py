@@ -18,9 +18,7 @@ from server.training_control.process_inspection import (
     ProcessSnapshot,
 )
 from server.training_metrics import (
-    TRAINING_METRICS_SCHEMA_VERSION,
-    MetricDatasets,
-    TrainingMetrics,
+    TrainingMetricSummary,
 )
 
 
@@ -29,7 +27,7 @@ def test_summary_composes_empty_domain_models(tmp_path: Path) -> None:
 
     assert completed.returncode == 0
     parsed = _parse_summary(completed.stdout)
-    assert parsed.schema_version == 4
+    assert parsed.schema_version == 5
     assert parsed.process is None
     assert parsed.metrics.through_sequence == 0
     assert parsed.checkpoints.manifests == ()
@@ -73,15 +71,6 @@ def test_summary_composes_metrics_and_checkpoint_catalog(
 def test_text_summary_uses_injected_time_for_process_uptime(
     tmp_path: Path,
 ) -> None:
-    datasets = MetricDatasets(
-        throughput=(),
-        optimization=(),
-        ppo_timing=(),
-        rollout=(),
-        rewards=(),
-        inference=(),
-        processes=(),
-    )
     summary = TrainingSummary(
         run_dir=tmp_path,
         process=ProcessSnapshot(
@@ -96,14 +85,12 @@ def test_text_summary_uses_injected_time_for_process_uptime(
                 unix_session_id=123,
             ),
         ),
-        metrics=TrainingMetrics(
-            schema_version=TRAINING_METRICS_SCHEMA_VERSION,
+        metrics=TrainingMetricSummary(
             store_id="a" * 32,
             through_sequence=10,
             complete=False,
             dropped_event_count=2,
             totals={"updates": 3},
-            datasets=datasets,
         ),
         checkpoints=CheckpointCatalog(
             checkpoint_directory=tmp_path / "checkpoints",
@@ -134,6 +121,27 @@ def test_summary_import_and_query_do_not_load_torch(
             "build_training_summary(pathlib.Path(sys.argv[1])); "
             "assert 'torch' not in sys.modules",
             str(tmp_path),
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_summary_cli_does_not_load_torch(tmp_path: Path) -> None:
+    completed = subprocess.run(
+        (
+            sys.executable,
+            "-c",
+            "import runpy, sys; "
+            "sys.argv = ['server.training_cli', '--run-dir', "
+            "sys.argv[1], 'summary', '--format', 'json']; "
+            "runpy.run_module('server.training_cli', "
+            "run_name='__main__'); "
+            "assert 'torch' not in sys.modules",
+            str(tmp_path / "missing"),
         ),
         capture_output=True,
         text=True,

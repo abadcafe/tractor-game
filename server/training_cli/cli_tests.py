@@ -8,29 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from server.foundation.result import Ok, Rejected
+from server.foundation.result import Ok
 from server.policy_model.network import ModelConfig
-from server.training import TrainingResumeOptions, TrainingStopRequest
 from server.training.checkpoint import (
     read_training_checkpoint_metadata,
 )
 from server.training.config import TrainConfig
-from server.training_cli import cli
 from server.training_cli.cli import main
-
-
-class _CapturingTrainingService:
-    def __init__(self, captured: list[int]) -> None:
-        self._captured = captured
-
-    def resume(
-        self,
-        options: TrainingResumeOptions,
-        stop_request: TrainingStopRequest,
-    ) -> Rejected:
-        assert not stop_request.is_requested()
-        self._captured.append(options.checkpoint_every_updates)
-        return Rejected(reason="captured CLI options")
 
 
 def test_module_cli_init_creates_zero_update_run(
@@ -126,31 +110,26 @@ def test_cli_init_rejects_attention_head_too_narrow(
     assert "Traceback" not in completed.stderr
 
 
-def test_cli_owns_checkpoint_interval_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: list[int] = []
+def test_cli_owns_checkpoint_interval_default() -> None:
+    completed = subprocess.run(
+        (
+            sys.executable,
+            "-m",
+            "server.training_cli",
+            "resume",
+            "--help",
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
 
-    def fake_service() -> _CapturingTrainingService:
-        return _CapturingTrainingService(captured)
-
-    monkeypatch.setattr(cli, "TrainingService", fake_service)
-    exit_code: int | str | None = None
-    try:
-        main(
-            (
-                "--run-dir",
-                "training_runs",
-                "resume",
-                "latest.json",
-            ),
-            stop_request=TrainingStopRequest(),
-        )
-    except SystemExit as error:
-        exit_code = error.code
-
-    assert exit_code == 2
-    assert captured == [5]
+    assert completed.returncode == 0
+    assert (
+        "--checkpoint-every-updates CHECKPOINT_EVERY_UPDATES"
+        in completed.stdout
+    )
+    assert "(default: 5)" in " ".join(completed.stdout.split())
 
 
 def test_main_requires_one_subcommand(

@@ -5,22 +5,22 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import ValidationError
 
 from server.foundation import result as _result
-from server.training import (
-    TrainingInitOptions,
-    TrainingResumeOptions,
-    TrainingService,
-    TrainingStopRequest,
-    training_stop_signals,
-)
 from server.training_cli.summary import (
     build_training_summary,
     format_training_summary,
 )
+
+if TYPE_CHECKING:
+    from server.training import (
+        TrainingInitOptions,
+        TrainingResumeOptions,
+        TrainingStopRequest,
+    )
 
 type SummaryFormat = Literal["text", "json"]
 
@@ -38,6 +38,8 @@ def main(
     assert isinstance(run_dir, Path)
     try:
         if command == "init":
+            from server.training import TrainingInitOptions
+
             _execute_init(
                 parser,
                 TrainingInitOptions.model_validate(
@@ -46,6 +48,12 @@ def main(
             )
             return
         if command == "resume":
+            from server.training import (
+                TrainingResumeOptions,
+                TrainingStopRequest,
+                training_stop_signals,
+            )
+
             options = TrainingResumeOptions.model_validate(
                 {"run_dir": run_dir, **values}
             )
@@ -71,6 +79,8 @@ def main(
 def _execute_init(
     parser: argparse.ArgumentParser, options: TrainingInitOptions
 ) -> None:
+    from server.training import TrainingService
+
     result = TrainingService().initialize(options)
     if isinstance(result, _result.Rejected):
         parser.error(result.reason)
@@ -82,6 +92,8 @@ def _execute_resume(
     options: TrainingResumeOptions,
     stop_request: TrainingStopRequest,
 ) -> None:
+    from server.training import TrainingService
+
     result = TrainingService().resume(options, stop_request)
     if isinstance(result, _result.Rejected):
         parser.error(result.reason)
@@ -158,7 +170,10 @@ def _add_resume_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-samples", type=int, default=0)
     parser.add_argument("--learning-rate", type=float, default=None)
     parser.add_argument(
-        "--checkpoint-every-updates", type=int, default=5
+        "--checkpoint-every-updates",
+        type=int,
+        default=5,
+        help="save a periodic checkpoint every N updates (default: 5)",
     )
     parser.add_argument(
         "--checkpoint-retention-updates", type=int, default=5
