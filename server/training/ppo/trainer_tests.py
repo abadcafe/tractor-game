@@ -43,7 +43,6 @@ from server.policy_model.observation.tensor import (
 )
 from server.training.config import TrainConfig
 from server.training.ppo import (
-    PPOBatchSource,
     PPOTrainer,
     PPOUpdateInput,
     PPOUpdateProfile,
@@ -53,6 +52,9 @@ from server.training.rollout_inference.samples import (
     DecisionHandle,
     ModelRankSampleArena,
     RankReturnTargets,
+)
+from server.training.rollout_inference.samples.arena import (
+    ArenaPPOBatchSource,
 )
 from tests.support import card
 from tests.support import snapshot as make_snapshot
@@ -197,6 +199,45 @@ def test_update_returns_stats_and_adamw_state() -> None:
     assert stats.total_loss >= 0.0
     assert state["kind"] == "ppo_adamw"
     assert state["step_count"] == 1
+
+
+def test_update_handles_clipped_policy_ratio_above_float32_range(
+) -> None:
+    device = torch.device("cpu")
+    model_config = ModelConfig(
+        d_model=8,
+        layers=1,
+        heads=1,
+    )
+    train_config = TrainConfig(
+        learning_rate=0.0003,
+        ppo_epochs=1,
+        minibatch_size=2,
+    )
+    model = PolicyActionModel(
+        d_model=model_config.d_model,
+        layers=model_config.layers,
+        heads=model_config.heads,
+    ).to(device)
+    trainer = PPOTrainer(
+        model=model,
+        train_config=train_config,
+        device=device,
+        profile_mode="off",
+    )
+    batch = _single_card_batch(count=2)
+    batch.old_log_probabilities[0] = -100.0
+
+    update_result = trainer.update(
+        PPOUpdateInput(policy_version=0, local_batch=batch)
+    )
+
+    assert isinstance(update_result, Ok)
+    assert trainer.optimizer_state()["step_count"] == 1
+    assert all(
+        bool(torch.isfinite(parameter).all().item())
+        for parameter in model.parameters()
+    )
 
 
 def test_update_batches_minibatch_model_forwards() -> None:
@@ -529,7 +570,7 @@ def test_arena_minibatch_selects_exact_fixed_choice_replay() -> None:
     )
 
 
-def _single_card_batch(*, count: int) -> PPOBatchSource:
+def _single_card_batch(*, count: int) -> ArenaPPOBatchSource:
     assert count > 0
     device = torch.device("cpu")
     store = ModelRankSampleArena(model_rank_index=0, device=device)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import torch
@@ -39,25 +40,27 @@ def clipped_ppo_objective(
     config: PPOObjectiveConfig,
 ) -> PPOObjectiveTensors:
     """Calculate clipped PPO policy/value losses and diagnostics."""
-    ratio = torch.exp(new_log_probabilities - old_log_probabilities)
-    clipped_ratio = torch.clamp(
-        ratio,
-        1.0 - config.ppo_clip,
-        1.0 + config.ppo_clip,
+    log_ratio = new_log_probabilities - old_log_probabilities
+    lower_log_ratio, upper_log_ratio = _log_ratio_bounds(
+        reference=log_ratio,
+        ppo_clip=config.ppo_clip,
     )
-    policy_loss = -torch.minimum(
-        ratio * advantages,
-        clipped_ratio * advantages,
-    ).mean()
+    # Select the active clipped-PPO branch before exponentiation.
+    effective_log_ratio = torch.where(
+        advantages >= 0.0,
+        torch.minimum(log_ratio, upper_log_ratio),
+        torch.maximum(log_ratio, lower_log_ratio),
+    )
+    policy_loss = -(torch.exp(effective_log_ratio) * advantages).mean()
     action_value_loss = nn.functional.mse_loss(
         action_values,
         return_values,
     )
     entropy = entropies.mean()
-    approx_kl = old_log_probabilities - new_log_probabilities
+    approx_kl = -log_ratio
     clip_fraction = (
-        ratio.sub(1.0).abs().gt(config.ppo_clip).to(dtype=torch.float32)
-    )
+        (log_ratio < lower_log_ratio) | (log_ratio > upper_log_ratio)
+    ).to(dtype=torch.float32)
     total_loss = (
         policy_loss + action_value_loss - config.entropy_coef * entropy
     )
@@ -68,4 +71,17 @@ def clipped_ppo_objective(
         total_loss=total_loss,
         approx_kl=approx_kl.mean(),
         clip_fraction=clip_fraction.mean(),
+    )
+
+
+def _log_ratio_bounds(
+    *, reference: Tensor, ppo_clip: float
+) -> tuple[Tensor, Tensor]:
+    assert 0.0 < ppo_clip <= 1.0
+    lower = (
+        -math.inf if ppo_clip == 1.0 else math.log1p(-ppo_clip)
+    )
+    return (
+        reference.new_tensor(lower),
+        reference.new_tensor(math.log1p(ppo_clip)),
     )
