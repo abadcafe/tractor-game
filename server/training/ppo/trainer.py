@@ -24,6 +24,7 @@ from server.training.ppo.distributed import (
 )
 from server.training.ppo.gradients import (
     clip_grad_norm_on_device,
+    non_finite_gradient_reason,
 )
 from server.training.ppo.loss_module import (
     MinibatchLoss,
@@ -209,6 +210,14 @@ class PPOTrainer:
         policy_parameters = self.model.policy_parameters()
         action_value_parameters = self.model.action_value_parameters()
         parameters = (*policy_parameters, *action_value_parameters)
+        parameter_names = {
+            id(parameter): name
+            for name, parameter in self.model.named_parameters()
+        }
+        named_parameters = tuple(
+            (parameter_names[id(parameter)], parameter)
+            for parameter in parameters
+        )
         for epoch in range(self.train_config.ppo_epochs):
             local_epoch_schedule = _local_epoch_schedule(
                 prepared_batch=prepared_batch,
@@ -298,7 +307,9 @@ class PPOTrainer:
                 profile.record_elapsed(
                     "backward_seconds", backward_start
                 )
-                gradient_code = gradient_validation_code(parameters)
+                preclip_gradient_code = gradient_validation_code(
+                    parameters
+                )
                 clip_grad_norm_on_device(
                     policy_parameters,
                     max_norm=(self.train_config.policy_max_grad_norm),
@@ -310,7 +321,7 @@ class PPOTrainer:
                     ),
                 )
                 gradient_code = combine_validation_codes(
-                    gradient_code,
+                    preclip_gradient_code,
                     gradient_validation_code(parameters),
                 )
                 gradient_code_result = _sync_validation_code(
@@ -326,9 +337,31 @@ class PPOTrainer:
                     )
                 )
                 if clipped_gradient_rejection is not None:
+                    stage = (
+                        "before clipping"
+                        if validation_rejection_reason(
+                            preclip_gradient_code
+                        )
+                        is not None
+                        else "after clipping"
+                    )
+                    detailed_reason = non_finite_gradient_reason(
+                        named_parameters,
+                        stage=stage,
+                    )
                     self.model.zero_grad(set_to_none=True)
                     return _result.Rejected(
-                        reason=clipped_gradient_rejection
+                        reason=(
+                            clipped_gradient_rejection
+                            if detailed_reason is None
+                            else (
+                                f"{detailed_reason}, "
+                                f"policy_version="
+                                f"{update_input.policy_version}, "
+                                f"epoch={epoch}, "
+                                f"minibatch_step={step_index}"
+                            )
+                        )
                     )
                 optimizer_start = profile.mark()
                 self.optimizer.step()

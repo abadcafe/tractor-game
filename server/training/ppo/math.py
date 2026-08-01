@@ -51,7 +51,11 @@ def clipped_ppo_objective(
         torch.minimum(log_ratio, upper_log_ratio),
         torch.maximum(log_ratio, lower_log_ratio),
     )
-    policy_loss = -(torch.exp(effective_log_ratio) * advantages).mean()
+    effective_ratio = _stable_effective_ratio(
+        effective_log_ratio,
+        upper_log_ratio=upper_log_ratio,
+    )
+    policy_loss = -(effective_ratio * advantages).mean()
     action_value_loss = nn.functional.mse_loss(
         action_values,
         return_values,
@@ -85,3 +89,21 @@ def _log_ratio_bounds(
         reference.new_tensor(lower),
         reference.new_tensor(math.log1p(ppo_clip)),
     )
+
+
+def _stable_effective_ratio(
+    effective_log_ratio: Tensor, *, upper_log_ratio: Tensor
+) -> Tensor:
+    """Exponentiate with a C1 linear tail beyond the trust region."""
+    above_upper = effective_log_ratio > upper_log_ratio
+    upper_excess = torch.where(
+        above_upper,
+        effective_log_ratio - upper_log_ratio,
+        torch.zeros_like(effective_log_ratio),
+    )
+    bounded_log_ratio = torch.where(
+        above_upper,
+        upper_log_ratio,
+        effective_log_ratio,
+    )
+    return torch.exp(bounded_log_ratio) * (1.0 + upper_excess)

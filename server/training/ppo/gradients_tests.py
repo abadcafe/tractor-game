@@ -8,6 +8,7 @@ from torch import Tensor
 from server.foundation.result import Ok, Rejected
 from server.training.ppo.gradients import (
     clip_grad_norm_on_device,
+    non_finite_gradient_reason,
     reject_if_gradients_non_finite,
 )
 
@@ -31,6 +32,26 @@ def test_reject_if_gradients_non_finite_rejects_nan_gradient() -> None:
 
     assert isinstance(result, Rejected)
     assert result.reason == "PPO gradients must be finite"
+
+
+def test_non_finite_gradient_reason_identifies_parameter_and_values(
+) -> None:
+    first = torch.tensor([1.0], requires_grad=True)
+    first.grad = torch.tensor([0.5])
+    second = torch.tensor([1.0, 2.0, 3.0], requires_grad=True)
+    second.grad = torch.tensor([torch.nan, torch.inf, -torch.inf])
+
+    reason = non_finite_gradient_reason(
+        (("first", first), ("second", second)),
+        stage="before clipping",
+    )
+
+    assert reason is not None
+    assert "before clipping" in reason
+    assert "parameter=second" in reason
+    assert "nan_count=1" in reason
+    assert "positive_inf_count=1" in reason
+    assert "negative_inf_count=1" in reason
 
 
 def test_clip_grad_norm_on_device_preserves_small_norm() -> None:
@@ -84,6 +105,34 @@ def test_clip_grad_norm_on_device_ignores_missing_gradients() -> None:
         first.grad, torch.tensor([3.0 * expected_scale])
     )
     assert second.grad is None
+
+
+def test_clip_grad_norm_on_device_scales_huge_finite_gradient() -> None:
+    parameter = _parameter_with_gradient(
+        torch.tensor([1.0]), torch.tensor([1.0e20])
+    )
+
+    clip_grad_norm_on_device((parameter,), max_norm=0.5)
+
+    assert parameter.grad is not None
+    assert torch.allclose(parameter.grad, torch.tensor([0.5]))
+
+
+def test_clip_grad_norm_on_device_preserves_non_finite_gradient(
+) -> None:
+    finite = _parameter_with_gradient(
+        torch.tensor([1.0]), torch.tensor([2.0])
+    )
+    non_finite = _parameter_with_gradient(
+        torch.tensor([2.0]), torch.tensor([torch.inf])
+    )
+
+    clip_grad_norm_on_device((finite, non_finite), max_norm=0.5)
+
+    assert finite.grad is not None
+    assert non_finite.grad is not None
+    assert torch.equal(finite.grad, torch.tensor([2.0]))
+    assert torch.equal(non_finite.grad, torch.tensor([torch.inf]))
 
 
 def _parameter_with_gradient(value: Tensor, gradient: Tensor) -> Tensor:

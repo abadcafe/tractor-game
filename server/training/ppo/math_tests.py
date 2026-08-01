@@ -74,7 +74,7 @@ def test_clipped_ppo_objective_clips_policy_ratio() -> None:
 
 def test_clipped_ppo_objective_matches_ratio_space_gradients() -> None:
     old_log_probabilities = torch.full((6,), -1.0)
-    log_ratio = torch.tensor((-1.0, -0.1, 0.1, 1.0, -1.0, 1.0))
+    log_ratio = torch.tensor((-1.0, -0.1, 0.1, 1.0, -1.0, 0.1))
     advantages = torch.tensor((1.0, 1.0, 1.0, 1.0, -1.0, -1.0))
     stable_new = (old_log_probabilities + log_ratio).requires_grad_()
     reference_new = stable_new.detach().clone().requires_grad_()
@@ -147,6 +147,38 @@ def test_clipped_ppo_objective_avoids_clipped_exp_overflow() -> None:
         new_log_probabilities.grad,
         torch.zeros(1),
     )
+
+
+def test_clipped_ppo_objective_stabilizes_adverse_exp_tail() -> None:
+    new_log_probabilities = torch.zeros(1, requires_grad=True)
+    ppo_clip = 0.2
+
+    objective = clipped_ppo_objective(
+        old_log_probabilities=torch.tensor((-100.0,)),
+        new_log_probabilities=new_log_probabilities,
+        advantages=torch.tensor((-1.0,)),
+        action_values=torch.zeros(1),
+        return_values=torch.zeros(1),
+        entropies=torch.zeros(1),
+        config=PPOObjectiveConfig(
+            ppo_clip=ppo_clip,
+            entropy_coef=0.0,
+        ),
+    )
+    upper_log_ratio = torch.log1p(torch.tensor(ppo_clip))
+    expected_loss = (1.0 + ppo_clip) * (
+        1.0 + 100.0 - upper_log_ratio
+    )
+
+    torch.autograd.backward(objective.total_loss)
+
+    assert torch.allclose(objective.policy_loss, expected_loss)
+    assert new_log_probabilities.grad is not None
+    assert torch.allclose(
+        new_log_probabilities.grad,
+        torch.tensor((1.0 + ppo_clip,)),
+    )
+    assert bool(torch.isfinite(new_log_probabilities.grad).all().item())
 
 
 def test_clipped_ppo_objective_handles_extreme_zero_advantage() -> None:

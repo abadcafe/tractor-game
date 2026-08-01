@@ -226,7 +226,7 @@ def test_update_handles_clipped_policy_ratio_above_float32_range(
         profile_mode="off",
     )
     batch = _single_card_batch(count=2)
-    batch.old_log_probabilities[0] = -100.0
+    batch.old_log_probabilities.fill_(-100.0)
 
     update_result = trainer.update(
         PPOUpdateInput(policy_version=0, local_batch=batch)
@@ -534,7 +534,14 @@ def test_update_rejects_non_finite_gradients_before_optimizer_step(
     result = trainer.update(_single_card_update_input(count=1))
 
     assert isinstance(result, Rejected)
-    assert "PPO gradients must be finite" in result.reason
+    assert (
+        "PPO gradients must be finite before clipping" in result.reason
+    )
+    assert "parameter=_policy_observation_encoder" in result.reason
+    assert "nan_count=" in result.reason
+    assert "policy_version=0" in result.reason
+    assert "epoch=0" in result.reason
+    assert "minibatch_step=0" in result.reason
     assert trainer.optimizer_state()["step_count"] == 0
     for index, parameter in enumerate(model.parameters()):
         assert torch.equal(parameter.detach(), before[index])
