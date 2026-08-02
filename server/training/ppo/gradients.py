@@ -70,9 +70,26 @@ def non_finite_gradient_reason(
             f"nan_count={nan_count}, "
             f"positive_inf_count={positive_inf_count}, "
             f"negative_inf_count={negative_inf_count}, "
-            f"max_abs_finite={max_abs_finite}"
+            f"max_abs_finite={max_abs_finite}, "
+            f"parameter_state={_parameter_state(parameter)}"
         )
     return None
+
+
+def _parameter_state(parameter: Tensor) -> str:
+    detached = parameter.detach()
+    finite = torch.isfinite(detached)
+    if bool(finite.all().cpu().item()):
+        return "finite"
+    return (
+        "nonfinite("
+        f"nan_count={int(torch.isnan(detached).sum().cpu().item())},"
+        f"positive_inf_count="
+        f"{int(torch.isposinf(detached).sum().cpu().item())},"
+        f"negative_inf_count="
+        f"{int(torch.isneginf(detached).sum().cpu().item())}"
+        ")"
+    )
 
 
 def clip_grad_norm_on_device(
@@ -88,9 +105,7 @@ def clip_grad_norm_on_device(
     device = gradients[0].device
     assert all(gradient.device == device for gradient in gradients)
     accumulation_dtype = _norm_accumulation_dtype(gradients)
-    max_abs = torch.zeros(
-        (), dtype=accumulation_dtype, device=device
-    )
+    max_abs = torch.zeros((), dtype=accumulation_dtype, device=device)
     for gradient in gradients:
         detached = gradient.detach().to(dtype=accumulation_dtype)
         max_abs = torch.maximum(
@@ -107,9 +122,9 @@ def clip_grad_norm_on_device(
     for gradient in gradients:
         detached = gradient.detach().to(dtype=accumulation_dtype)
         scaled = detached / scale
-        scaled_squared_norm = scaled_squared_norm + (
-            scaled * scaled
-        ).sum()
+        scaled_squared_norm = (
+            scaled_squared_norm + (scaled * scaled).sum()
+        )
     max_norm_tensor = torch.tensor(
         max_norm, dtype=accumulation_dtype, device=device
     )

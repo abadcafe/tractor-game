@@ -349,6 +349,11 @@ class PPOTrainer:
                         named_parameters,
                         stage=stage,
                     )
+                    policy_loss_value = _float_tensor(loss.policy_loss)
+                    action_value_loss_value = _float_tensor(
+                        loss.action_value_loss
+                    )
+                    entropy_value = _float_tensor(loss.entropy)
                     self.model.zero_grad(set_to_none=True)
                     return _result.Rejected(
                         reason=(
@@ -356,6 +361,10 @@ class PPOTrainer:
                             if detailed_reason is None
                             else (
                                 f"{detailed_reason}, "
+                                f"policy_loss={policy_loss_value}, "
+                                f"action_value_loss="
+                                f"{action_value_loss_value}, "
+                                f"entropy={entropy_value}, "
                                 f"policy_version="
                                 f"{update_input.policy_version}, "
                                 f"epoch={epoch}, "

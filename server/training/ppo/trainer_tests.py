@@ -201,8 +201,9 @@ def test_update_returns_stats_and_adamw_state() -> None:
     assert state["step_count"] == 1
 
 
-def test_update_handles_clipped_policy_ratio_above_float32_range(
-) -> None:
+def test_update_handles_clipped_policy_ratio_above_float32_range() -> (
+    None
+):
     device = torch.device("cpu")
     model_config = ModelConfig(
         d_model=8,
@@ -539,6 +540,10 @@ def test_update_rejects_non_finite_gradients_before_optimizer_step(
     )
     assert "parameter=_policy_observation_encoder" in result.reason
     assert "nan_count=" in result.reason
+    assert "parameter_state=finite" in result.reason
+    assert "policy_loss=" in result.reason
+    assert "action_value_loss=" in result.reason
+    assert "entropy=" in result.reason
     assert "policy_version=0" in result.reason
     assert "epoch=0" in result.reason
     assert "minibatch_step=0" in result.reason

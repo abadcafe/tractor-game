@@ -1771,6 +1771,92 @@ def test_torch_checkpoint_load_rejects_optimizer_dtype_mismatch(
     assert "optimizer_state.exp_avgs tensor dtype" in result.reason
 
 
+def test_torch_checkpoint_load_rejects_negative_optimizer_second_moment(
+    tmp_path: Path,
+) -> None:
+    model_config, train_config, path = _saved_checkpoint(tmp_path)
+    state_path = _single_state_path(path)
+    payload = _load_state_payload(state_path)
+    optimizer_payload = payload["optimizer_state"]
+    assert _is_object_dict(optimizer_payload)
+    exp_avgs = optimizer_payload["exp_avgs"]
+    exp_avg_sqs = optimizer_payload["exp_avg_sqs"]
+    assert _is_object_list(exp_avgs)
+    assert _is_object_list(exp_avg_sqs)
+    model_state = payload["model_state"]
+    assert _is_object_dict(model_state)
+    first_parameter = next(
+        value
+        for value in model_state.values()
+        if isinstance(value, torch.Tensor)
+    )
+    updated_exp_avgs = list(exp_avgs)
+    updated_exp_avg_sqs = list(exp_avg_sqs)
+    updated_exp_avgs[0] = torch.zeros_like(first_parameter)
+    updated_exp_avg_sqs[0] = -torch.ones_like(first_parameter)
+    updated_optimizer_payload: dict[object, object] = dict(
+        optimizer_payload
+    )
+    updated_optimizer_payload["exp_avgs"] = updated_exp_avgs
+    updated_optimizer_payload["exp_avg_sqs"] = updated_exp_avg_sqs
+    payload["optimizer_state"] = updated_optimizer_payload
+    _write_state_payload(path, state_path, payload)
+
+    result = _load_training_checkpoint(
+        path=path,
+        model_config=model_config,
+        train_config=train_config,
+        execution_config=ExecutionConfig(),
+        device=torch.device("cpu"),
+    )
+
+    assert isinstance(result, Rejected)
+    assert "checkpoint corruption:" in result.reason
+    assert (
+        "optimizer_state.exp_avg_sqs tensor must be non-negative"
+        in (result.reason)
+    )
+
+
+def test_torch_checkpoint_load_rejects_non_finite_model_parameter(
+    tmp_path: Path,
+) -> None:
+    model_config, train_config, path = _saved_checkpoint(tmp_path)
+    state_path = _single_state_path(path)
+    payload = _load_state_payload(state_path)
+    model_state = payload["model_state"]
+    assert _is_object_dict(model_state)
+    parameter_name = next(
+        name
+        for name, value in model_state.items()
+        if isinstance(name, str)
+        and isinstance(value, torch.Tensor)
+        and value.is_floating_point()
+    )
+    parameter = model_state[parameter_name]
+    assert isinstance(parameter, torch.Tensor)
+    updated_parameter = parameter.clone()
+    updated_parameter.view(-1)[0] = torch.nan
+    updated_model_state: dict[object, object] = dict(model_state)
+    updated_model_state[parameter_name] = updated_parameter
+    payload["model_state"] = updated_model_state
+    _write_state_payload(path, state_path, payload)
+
+    result = _load_training_checkpoint(
+        path=path,
+        model_config=model_config,
+        train_config=train_config,
+        execution_config=ExecutionConfig(),
+        device=torch.device("cpu"),
+    )
+
+    assert isinstance(result, Rejected)
+    assert "checkpoint corruption:" in result.reason
+    assert f"model parameter {parameter_name} must be finite" in (
+        result.reason
+    )
+
+
 def test_torch_checkpoint_load_does_not_restore_global_rng_state(
     tmp_path: Path,
 ) -> None:

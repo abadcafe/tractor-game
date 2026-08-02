@@ -124,10 +124,18 @@ def save_training_checkpoint(
     retained_update_count: int,
 ) -> _result.Ok[CheckpointSaveResult] | _result.Rejected:
     """Persist the training-owned state through the neutral codec."""
+    optimizer_state = trainer.optimizer_state()
+    optimizer_check = validate_optimizer_state_payload(
+        state=optimizer_state,
+        parameters=tuple(model.parameters()),
+        path=manifest_paths[0],
+    )
+    if isinstance(optimizer_check, _result.Rejected):
+        return optimizer_check
     return save_checkpoint(
         manifest_paths=manifest_paths,
         model_state=model.state_dict(),
-        optimizer_state=trainer.optimizer_state(),
+        optimizer_state=optimizer_state,
         metadata=CheckpointMetadata(
             model_config=model_config,
             training_config_values=train_config.to_json(),

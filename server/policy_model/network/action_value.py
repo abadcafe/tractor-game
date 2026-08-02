@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import torch
 from torch import Tensor, nn
+from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from server.policy_model._schema.actions import (
     ACTION_CHOICE_COUNT,
@@ -197,23 +198,51 @@ class _CompleteActionBlock(nn.Module):
         memory_padding_mask: Tensor,
     ) -> Tensor:
         """Contextualize action states with visible information."""
-        self_attended, _weights = self._self_attention(
-            sequence,
-            sequence,
-            sequence,
+        self_attended = _stable_training_attention(
+            attention=self._self_attention,
+            query=sequence,
+            key=sequence,
+            value=sequence,
             key_padding_mask=sequence_padding_mask,
-            need_weights=False,
         )
         hidden = self._norm1(sequence + self_attended)
-        cross_attended, _weights = self._cross_attention(
-            hidden,
-            memory,
-            memory,
+        cross_attended = _stable_training_attention(
+            attention=self._cross_attention,
+            query=hidden,
+            key=memory,
+            value=memory,
             key_padding_mask=memory_padding_mask,
-            need_weights=False,
         )
         hidden = self._norm2(hidden + cross_attended)
         return self._norm3(hidden + self._feed_forward(hidden))
+
+
+def _stable_training_attention(
+    *,
+    attention: nn.MultiheadAttention,
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    key_padding_mask: Tensor,
+) -> Tensor:
+    if not torch.is_grad_enabled():
+        attended, _weights = attention(
+            query,
+            key,
+            value,
+            key_padding_mask=key_padding_mask,
+            need_weights=False,
+        )
+        return attended
+    with sdpa_kernel(SDPBackend.MATH):
+        attended, _weights = attention(
+            query,
+            key,
+            value,
+            key_padding_mask=key_padding_mask,
+            need_weights=False,
+        )
+    return attended
 
 
 def _select_inputs(

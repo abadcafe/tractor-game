@@ -34,8 +34,7 @@ def test_reject_if_gradients_non_finite_rejects_nan_gradient() -> None:
     assert result.reason == "PPO gradients must be finite"
 
 
-def test_non_finite_gradient_reason_identifies_parameter_and_values(
-) -> None:
+def test_gradient_reason_reports_parameter_and_values() -> None:
     first = torch.tensor([1.0], requires_grad=True)
     first.grad = torch.tensor([0.5])
     second = torch.tensor([1.0, 2.0, 3.0], requires_grad=True)
@@ -52,6 +51,23 @@ def test_non_finite_gradient_reason_identifies_parameter_and_values(
     assert "nan_count=1" in reason
     assert "positive_inf_count=1" in reason
     assert "negative_inf_count=1" in reason
+    assert "parameter_state=finite" in reason
+
+
+def test_gradient_reason_reports_non_finite_parameter() -> None:
+    parameter = torch.tensor([torch.nan, 2.0], requires_grad=True)
+    parameter.grad = torch.tensor([torch.nan, 0.5])
+
+    reason = non_finite_gradient_reason(
+        (("weight", parameter),),
+        stage="before clipping",
+    )
+
+    assert reason is not None
+    assert (
+        "parameter_state=nonfinite(nan_count=1,positive_inf_count=0,"
+        "negative_inf_count=0)" in reason
+    )
 
 
 def test_clip_grad_norm_on_device_preserves_small_norm() -> None:
@@ -118,8 +134,9 @@ def test_clip_grad_norm_on_device_scales_huge_finite_gradient() -> None:
     assert torch.allclose(parameter.grad, torch.tensor([0.5]))
 
 
-def test_clip_grad_norm_on_device_preserves_non_finite_gradient(
-) -> None:
+def test_clip_grad_norm_on_device_preserves_non_finite_gradient() -> (
+    None
+):
     finite = _parameter_with_gradient(
         torch.tensor([1.0]), torch.tensor([2.0])
     )

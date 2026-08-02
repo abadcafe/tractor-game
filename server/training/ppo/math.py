@@ -82,9 +82,7 @@ def _log_ratio_bounds(
     *, reference: Tensor, ppo_clip: float
 ) -> tuple[Tensor, Tensor]:
     assert 0.0 < ppo_clip <= 1.0
-    lower = (
-        -math.inf if ppo_clip == 1.0 else math.log1p(-ppo_clip)
-    )
+    lower = -math.inf if ppo_clip == 1.0 else math.log1p(-ppo_clip)
     return (
         reference.new_tensor(lower),
         reference.new_tensor(math.log1p(ppo_clip)),

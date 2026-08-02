@@ -235,7 +235,7 @@ def validate_optimizer_state_payload(
             if isinstance(exp_avg_validation, _result.Rejected):
                 return exp_avg_validation
         if exp_avg_sq is not None:
-            exp_avg_sq_validation = _validate_optimizer_tensor(
+            exp_avg_sq_validation = _validate_optimizer_second_moment(
                 path=path,
                 label="optimizer_state.exp_avg_sqs",
                 value=exp_avg_sq,
@@ -337,6 +337,29 @@ def _validate_optimizer_tensor(
         return checkpoint_corruption(
             path,
             f"state payload {label} tensor must be finite",
+        )
+    return _result.Ok(value=None)
+
+
+def _validate_optimizer_second_moment(
+    *,
+    path: Path,
+    label: str,
+    value: Tensor,
+    parameter: Tensor,
+) -> _result.Ok[None] | _result.Rejected:
+    tensor_validation = _validate_optimizer_tensor(
+        path=path,
+        label=label,
+        value=value,
+        parameter=parameter,
+    )
+    if isinstance(tensor_validation, _result.Rejected):
+        return tensor_validation
+    if bool((value < 0.0).any().item()):
+        return checkpoint_corruption(
+            path,
+            f"state payload {label} tensor must be non-negative",
         )
     return _result.Ok(value=None)
 

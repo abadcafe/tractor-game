@@ -186,6 +186,45 @@ def test_action_value_reads_last_choice_and_ignores_padding() -> None:
     assert not torch.allclose(values[0], values[2])
 
 
+def test_action_value_padding_gradients_are_finite() -> None:
+    device = torch.device("cpu")
+    model = PolicyActionModel(d_model=16, layers=1, heads=2)
+    batch = tensorize_observation(
+        observation=_bid_observation(), device=device
+    )
+    encoding = model.encode_action_value_observations(batch)
+    choices = torch.tensor(
+        (
+            (PASS_CHOICE_ID, PASS_CHOICE_ID, PASS_CHOICE_ID),
+            (CARD_CHOICE_BASE_ID, PASS_CHOICE_ID, PASS_CHOICE_ID),
+            (
+                CARD_CHOICE_BASE_ID,
+                CARD_CHOICE_BASE_ID + 2,
+                PASS_CHOICE_ID,
+            ),
+        ),
+        dtype=torch.long,
+        device=device,
+    )
+
+    values = model.action_values(
+        encoding,
+        source_rows=torch.zeros(3, dtype=torch.long, device=device),
+        choice_ids_padded=choices,
+        step_counts=torch.tensor(
+            (1, 2, 3), dtype=torch.long, device=device
+        ),
+    )
+    torch.autograd.backward(values.square().mean())
+
+    assert bool(torch.isfinite(values).all().item())
+    assert all(
+        parameter.grad is not None
+        and bool(torch.isfinite(parameter.grad).all().item())
+        for parameter in model.action_value_parameters()
+    )
+
+
 def test_live_query_seed_matches_teacher_forced_scoring() -> None:
     device = torch.device("cpu")
     model = PolicyActionModel(d_model=16, layers=1, heads=2)

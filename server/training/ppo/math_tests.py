@@ -91,9 +91,7 @@ def test_clipped_ppo_objective_matches_ratio_space_gradients() -> None:
             entropy_coef=0.0,
         ),
     )
-    reference_ratio = torch.exp(
-        reference_new - old_log_probabilities
-    )
+    reference_ratio = torch.exp(reference_new - old_log_probabilities)
     reference_loss = -torch.minimum(
         reference_ratio * advantages,
         torch.clamp(reference_ratio, 0.8, 1.2) * advantages,
@@ -166,9 +164,7 @@ def test_clipped_ppo_objective_stabilizes_adverse_exp_tail() -> None:
         ),
     )
     upper_log_ratio = torch.log1p(torch.tensor(ppo_clip))
-    expected_loss = (1.0 + ppo_clip) * (
-        1.0 + 100.0 - upper_log_ratio
-    )
+    expected_loss = (1.0 + ppo_clip) * (1.0 + 100.0 - upper_log_ratio)
 
     torch.autograd.backward(objective.total_loss)
 

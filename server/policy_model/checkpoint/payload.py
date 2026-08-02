@@ -36,6 +36,12 @@ def write_checkpoint_payload(
     optimizer_state: dict[str, object],
 ) -> _result.Ok[None] | _result.Rejected:
     """Atomically write one immutable state payload."""
+    model_state_check = _validate_model_state_tensors(
+        model_state=model_state,
+        path=path,
+    )
+    if isinstance(model_state_check, _result.Rejected):
+        return model_state_check
     tmp_state_path = path.with_suffix(f"{path.suffix}.tmp")
     payload: dict[str, object] = {
         "schema_version": CHECKPOINT_SCHEMA_VERSION,
@@ -100,6 +106,12 @@ def read_checkpoint_payload(
     )
     if isinstance(model_state_result, _result.Rejected):
         return model_state_result
+    model_state_check = _validate_model_state_tensors(
+        model_state=model_state_result.value,
+        path=path,
+    )
+    if isinstance(model_state_check, _result.Rejected):
+        return model_state_check
     optimizer_state_result = _payload_str_object_dict_field(
         loaded, "optimizer_state", path
     )
@@ -112,6 +124,19 @@ def read_checkpoint_payload(
             optimizer_state=optimizer_state_result.value,
         )
     )
+
+
+def _validate_model_state_tensors(
+    *, model_state: Mapping[str, Tensor], path: Path
+) -> _result.Ok[None] | _result.Rejected:
+    for name, tensor in model_state.items():
+        if bool(torch.isfinite(tensor).all().detach().cpu().item()):
+            continue
+        return checkpoint_corruption(
+            path,
+            f"model parameter {name} must be finite",
+        )
+    return _result.Ok(value=None)
 
 
 def _load_checkpoint_payload(
