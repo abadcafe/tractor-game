@@ -125,14 +125,23 @@ def clip_grad_norm_on_device(
         scaled_squared_norm = (
             scaled_squared_norm + (scaled * scaled).sum()
         )
+    scaled_norm = torch.sqrt(scaled_squared_norm)
+    finite_positive_norm = torch.isfinite(scaled_norm) & (
+        scaled_norm > 0.0
+    )
+    safe_scaled_norm = torch.where(
+        finite_positive_norm,
+        scaled_norm,
+        torch.ones_like(scaled_norm),
+    )
     max_norm_tensor = torch.tensor(
         max_norm, dtype=accumulation_dtype, device=device
     )
-    clip_coef = (max_norm_tensor / scale) / (
-        torch.sqrt(scaled_squared_norm) + 0.000001 / scale
+    clip_coef = (max_norm_tensor / safe_scaled_norm) / (
+        scale + 0.000001 / safe_scaled_norm
     )
     bounded_clip_coef = torch.where(
-        finite_max,
+        finite_max & (max_abs > 0.0) & finite_positive_norm,
         torch.clamp(clip_coef, max=1.0),
         torch.ones_like(clip_coef),
     )

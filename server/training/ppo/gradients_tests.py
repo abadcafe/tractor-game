@@ -86,6 +86,33 @@ def test_clip_grad_norm_on_device_preserves_small_norm() -> None:
     assert torch.equal(second.grad, torch.tensor([4.0]))
 
 
+def test_clip_grad_norm_on_device_preserves_tiny_finite_norm() -> None:
+    parameter = _parameter_with_gradient(
+        torch.tensor([1.0, 2.0]),
+        torch.tensor([1.0e-40, 0.0], dtype=torch.float32),
+    )
+
+    clip_grad_norm_on_device((parameter,), max_norm=0.5)
+
+    assert parameter.grad is not None
+    assert torch.isfinite(parameter.grad).all()
+    assert torch.equal(
+        parameter.grad,
+        torch.tensor([1.0e-40, 0.0], dtype=torch.float32),
+    )
+
+
+def test_clip_grad_norm_on_device_preserves_zero_norm() -> None:
+    parameter = _parameter_with_gradient(
+        torch.tensor([1.0, 2.0]), torch.zeros((2,), dtype=torch.float32)
+    )
+
+    clip_grad_norm_on_device((parameter,), max_norm=0.5)
+
+    assert parameter.grad is not None
+    assert torch.equal(parameter.grad, torch.zeros((2,)))
+
+
 def test_clip_grad_norm_on_device_scales_global_norm() -> None:
     first = _parameter_with_gradient(
         torch.tensor([1.0]), torch.tensor([3.0])
@@ -132,6 +159,21 @@ def test_clip_grad_norm_on_device_scales_huge_finite_gradient() -> None:
 
     assert parameter.grad is not None
     assert torch.allclose(parameter.grad, torch.tensor([0.5]))
+
+
+def test_clip_grad_norm_on_device_scales_mixed_extreme_gradients() -> (
+    None
+):
+    parameter = _parameter_with_gradient(
+        torch.tensor([1.0, 2.0]),
+        torch.tensor([torch.finfo(torch.float32).max, 1.0e-40]),
+    )
+
+    clip_grad_norm_on_device((parameter,), max_norm=0.5)
+
+    assert parameter.grad is not None
+    assert torch.isfinite(parameter.grad).all()
+    assert torch.allclose(parameter.grad, torch.tensor([0.5, 0.0]))
 
 
 def test_clip_grad_norm_on_device_preserves_non_finite_gradient() -> (
