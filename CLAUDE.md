@@ -15,11 +15,10 @@
 
 - **所有 Python 代码**（包括 `*_tests.py`）必须有完整的类型注解
 - 必须使用 `type` 类型别名语法和泛型函数语法
-- 禁止 `Any`、禁止裸 `list` / `dict` / `tuple`（必须写泛型参数如 `list[str]`）
 - 禁止使用 `# pyright: ignore` 和 `# type: ignore` 等方式掩盖错误
 - 优先使用 `Pydantic` 而不是 `cast`
 - 必须通过 `ruff format --check` 和 `ruff check`，**0 errors, 0 warnings**
-- 必须通过 `pyright` **strict 模式**，**0 errors, 0 warnings**
+- 必须通过 `basedpyright`，**0 errors, 0 warnings**
 - 全量验证必须包含所有依赖，并且按验证机器明确选择且只选择一个
   PyTorch 后端 extra：
   - macOS MPS：`training-mps`
@@ -28,7 +27,7 @@
 - 以下命令中的 `<training-backend>` 必须替换为当前机器的后端：
   - `uv run --extra dev --extra <training-backend> ruff format --check`
   - `uv run --extra dev --extra <training-backend> ruff check`
-  - `uv run --extra dev --extra <training-backend> pyright`
+  - `uv run --extra dev --extra <training-backend> basedpyright`
   - `uv run --extra dev --extra <training-backend> pytest`
 
 ### 3. 错误处理
@@ -44,8 +43,7 @@
 - **Frontend**: TypeScript, 原生 DOM（无框架）
 - **Game Logic**: 纯函数状态机（SM），不可变状态模式
 - **Testing**: pytest, pytest-asyncio
-- **Training**: PyTorch（必须从 `training-mps`、`training-cpu`、
-  `training-cuda` 中明确选择一个后端）
+- **Training**: PyTorch（必须从 `training-mps`、`training-cpu`、`training-cuda` 中明确选择一个后端）
 
 ## 启动游戏
 
