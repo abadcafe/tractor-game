@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import random
 from dataclasses import dataclass, field
 
@@ -28,6 +29,15 @@ from server.policy_model.inference import (
 )
 from tests.support import card
 from tests.support import snapshot as make_snapshot
+
+
+class _RecordHandler(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
 
 
 @dataclass(slots=True)
@@ -122,6 +132,46 @@ async def test_ai_controller_builds_one_direct_model_decision() -> None:
     assert request.candidate_count == 12
     assert request.action_value_temperature == 0.75
     assert request.draw.ordinal == 0
+
+
+async def test_ai_controller_logs_successful_decision_at_debug() -> (
+    None
+):
+    controller = AIController(
+        seat=Seat.A,
+        model=_DecisionModel(),
+        candidate_count=12,
+        action_value_temperature=0.75,
+        random_source=random.Random(7),
+    )
+    snapshot = make_snapshot(
+        phase="DEAL_BID",
+        awaiting_action="bid",
+        hand=[card("hearts", "2")],
+        trump_rank="2",
+    )
+    observed = controller.observe(
+        seq=0,
+        snapshot=snapshot,
+        error=None,
+    )
+    assert isinstance(observed, Ok)
+    logger = logging.getLogger("server.game_ai.controller")
+    previous_level = logger.level
+    handler = _RecordHandler()
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    try:
+        decided = await controller.decide(seq=0, snapshot=snapshot)
+    finally:
+        logger.removeHandler(handler)
+        logger.setLevel(previous_level)
+
+    assert isinstance(decided, Ok)
+    assert len(handler.records) == 1
+    record = handler.records[0]
+    assert record.levelno == logging.DEBUG
+    assert record.getMessage().startswith("ai.decision kind=bid ")
 
 
 async def test_ai_controller_rejects_non_strategic_view() -> None:

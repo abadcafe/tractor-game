@@ -143,7 +143,7 @@ class AIController:
         )
         if isinstance(command, Rejected):
             return command
-        _LOGGER.info(
+        _LOGGER.debug(
             "ai.decision kind=%s candidates=%d action_value=%s "
             "elapsed_ms=%.3f",
             snapshot.awaiting_action,
