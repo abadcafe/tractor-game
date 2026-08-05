@@ -78,7 +78,7 @@ class _BroadcastSender:
             gate.entered_count += 1
             if gate.entered_count == gate.target_count:
                 gate.all_entered.set()
-            await gate.release.wait()
+            _ = await gate.release.wait()
         self.sent_commands.append(command)
         if self.rejection is not None:
             return self.rejection
@@ -203,7 +203,7 @@ async def test_broadcast_control_commands_sends_concurrently() -> None:
             command=_broadcast_command,
         )
     )
-    await asyncio.wait_for(gate.all_entered.wait(), timeout=1.0)
+    _ = await asyncio.wait_for(gate.all_entered.wait(), timeout=1.0)
     assert gate.entered_count == 3
     gate.release.set()
     result = await task

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass
+from typing import final
 
 from server.foundation import result as _result
 from server.game import (
@@ -51,6 +52,7 @@ class TrainingRoundResult:
     game_over: bool
 
 
+@final
 class SelfPlaySession:
     """A long-lived pure game used for consecutive training rounds."""
 
@@ -227,9 +229,9 @@ class SelfPlaySession:
             if isinstance(accepted, _result.Rejected):
                 raise AssertionError(
                     "training legal action was rejected: "
-                    f"seat={actor.value}, seq={self._seq}, "
-                    f"error={accepted.reason}, "
-                    f"action={decision.step.action!r}"
+                    + f"seat={actor.value}, seq={self._seq}, "
+                    + f"error={accepted.reason}, "
+                    + f"action={decision.step.action!r}"
                 )
             self_play_actor.accept(decision)
 
@@ -282,7 +284,7 @@ async def _decide_before(
     done, _ = await asyncio.wait((task,), timeout=seconds)
     if done:
         return task.result()
-    task.cancel()
+    _ = task.cancel()
     try:
         await task
     except asyncio.CancelledError:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -24,7 +24,9 @@ def _is_none(value: object) -> bool:
 class TrainingEventProcess(BaseModel):
     """Exact process identity persisted with one event."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     kind: ProcessKind
     index: int | None = Field(ge=0)
@@ -34,7 +36,9 @@ class TrainingEventProcess(BaseModel):
 class TrainingEventContext(BaseModel):
     """Exact optional correlation dimensions persisted with an event."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     policy_version: int | None = Field(
         default=None,
@@ -99,7 +103,9 @@ class TrainingEventContext(BaseModel):
 class TrainingEvent(BaseModel):
     """One exact current-version event shared by storage and HTTP."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     schema_version: TrainingEventSchemaVersion
     event: EventName

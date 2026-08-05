@@ -45,7 +45,7 @@ def test_training_event_rejects_non_current_schema() -> None:
     for schema_version in (2, 4):
         rejected = False
         try:
-            TrainingEvent.model_validate(
+            _ = TrainingEvent.model_validate(
                 {
                     "schema_version": schema_version,
                     "event": "update",
@@ -67,7 +67,7 @@ def test_training_event_rejects_non_current_schema() -> None:
 def test_training_event_rejects_unknown_envelope_field() -> None:
     rejected = False
     try:
-        TrainingEvent.model_validate(
+        _ = TrainingEvent.model_validate(
             {
                 "schema_version": 3,
                 "event": "update",
@@ -116,7 +116,7 @@ def test_training_event_rejects_missing_required_envelope_fields() -> (
             payload["process"] = process
         rejected = False
         try:
-            TrainingEvent.model_validate(payload)
+            _ = TrainingEvent.model_validate(payload)
         except ValidationError:
             rejected = True
         assert rejected

@@ -114,6 +114,7 @@ class _RejectingFactory:
         seat: Seat,
         policy_name: BotPolicyName,
     ) -> Ok[Player] | Rejected:
+        _ = seat
         self.create_count += 1
         if self.create_count == 2:
             return Rejected("checkpoint unavailable")
@@ -371,7 +372,7 @@ async def test_connect_replaces_transport_but_not_human_player() -> (
     room = _room()
     owner = _user()
     first = _Transport()
-    await _start_room(room, user=owner, transport=first)
+    _ = await _start_room(room, user=owner, transport=first)
     second = _Transport()
 
     connected = await room.connect_seat(
@@ -390,7 +391,7 @@ async def test_receive_accepts_only_current_transport() -> None:
     room = _room()
     owner = _user()
     stale = _Transport()
-    await _start_room(room, user=owner, transport=stale)
+    _ = await _start_room(room, user=owner, transport=stale)
     current = _Transport()
     connected = await room.connect_seat(
         seat=Seat.A,
@@ -425,7 +426,7 @@ async def test_disconnect_ignores_stale_transport() -> None:
     room = _room()
     owner = _user()
     stale = _Transport()
-    await _start_room(room, user=owner, transport=stale)
+    _ = await _start_room(room, user=owner, transport=stale)
     current = _Transport()
     connected = await room.connect_seat(
         seat=Seat.A,

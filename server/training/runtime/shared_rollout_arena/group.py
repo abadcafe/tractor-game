@@ -119,7 +119,7 @@ def wait_rollout_sample_target_or_stop(
     assert timeout_seconds > 0.0
     deadline = time.monotonic() + timeout_seconds
     progress_condition = group.handles[0].progress_condition
-    progress_condition.acquire()
+    _ = progress_condition.acquire()
     try:
         while True:
             snapshot_result = snapshot_rollout_arenas(
@@ -143,7 +143,7 @@ def wait_rollout_sample_target_or_stop(
                 return Rejected(
                     reason="rollout sample target timed out"
                 )
-            progress_condition.wait(
+            _ = progress_condition.wait(
                 min(remaining, _STOP_CHECK_INTERVAL_SECONDS)
             )
     finally:
@@ -177,7 +177,7 @@ def snapshot_rollout_arenas(
     for handle, segment in zip(
         group.handles, group.segments, strict=True
     ):
-        handle.lock.acquire()
+        _ = handle.lock.acquire()
         try:
             header = unpack_header(_segment_buffer(segment))
         finally:
@@ -198,12 +198,12 @@ def reset_rollout_arenas(
     """Reset every arena to accept a new policy version."""
     assert policy_version >= 0
     progress_condition = group.handles[0].progress_condition
-    progress_condition.acquire()
+    _ = progress_condition.acquire()
     try:
         for handle, segment in zip(
             group.handles, group.segments, strict=True
         ):
-            handle.lock.acquire()
+            _ = handle.lock.acquire()
             try:
                 _write_empty_header(
                     segment=segment,

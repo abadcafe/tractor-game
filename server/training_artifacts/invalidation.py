@@ -4,15 +4,23 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from typing import ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from server.foundation import result as _result
 from server.training_events.store import open_reader, training_store_id
 
+_OPTIONAL_SQL_ROW: TypeAdapter[tuple[object, ...] | None] = TypeAdapter(
+    tuple[object, ...] | None,
+    config=ConfigDict(strict=True),
+)
+
 
 class CheckpointInvalidation(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     store_id: str | None
     through_sequence: int = Field(ge=0)
@@ -34,10 +42,12 @@ def query_checkpoint_invalidation(
         )
     try:
         store_id = training_store_id(connection)
-        row = connection.execute(
-            "SELECT coalesce(max(sequence), 0) FROM training_logs "
-            "WHERE event_type IN ('initialize', 'checkpoint')"
-        ).fetchone()
+        row = _OPTIONAL_SQL_ROW.validate_python(
+            connection.execute(
+                "SELECT coalesce(max(sequence), 0) FROM training_logs "
+                + "WHERE event_type IN ('initialize', 'checkpoint')"
+            ).fetchone()
+        )
     except sqlite3.Error:
         return _result.Rejected(
             reason="checkpoint invalidation query failed"

@@ -33,7 +33,7 @@ class BidCardSuitMismatchRejected(Rejected):
     def __init__(self, card_suit: Suit, declared_suit: Suit) -> None:
         super().__init__(
             f"牌花色 {effective_suit_name(card_suit)} 与声明花色"
-            f"{effective_suit_name(declared_suit)} 不一致"
+            + f"{effective_suit_name(declared_suit)} 不一致"
         )
 
 
@@ -48,7 +48,7 @@ class BidCardsCountMismatchRejected(Rejected):
     ) -> None:
         super().__init__(
             f"牌张数量 {actual_card_count} 与声明数量 "
-            f"{declared_count} 不一致"
+            + f"{declared_count} 不一致"
         )
 
 

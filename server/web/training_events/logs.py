@@ -8,7 +8,7 @@ import time
 from collections.abc import AsyncGenerator
 from functools import partial
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, ClassVar
 
 from anyio import to_thread
 from fastapi import FastAPI, Query, Request
@@ -38,7 +38,9 @@ type _StoreId = Annotated[str, Query(pattern=r"^[0-9a-f]{32}$")]
 class StoreReplacement(BaseModel):
     """The selected run now refers to a different event store."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     store_id: str | None
 

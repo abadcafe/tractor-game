@@ -148,7 +148,7 @@ def test_each_loss_reaches_only_its_owned_branch() -> None:
 def test_action_value_reads_last_choice_and_ignores_padding() -> None:
     device = torch.device("cpu")
     model = PolicyActionModel(d_model=16, layers=1, heads=2)
-    model.eval()
+    _ = model.eval()
     batch = tensorize_observation(
         observation=_bid_observation(), device=device
     )
@@ -228,7 +228,7 @@ def test_action_value_padding_gradients_are_finite() -> None:
 def test_live_query_seed_matches_teacher_forced_scoring() -> None:
     device = torch.device("cpu")
     model = PolicyActionModel(d_model=16, layers=1, heads=2)
-    model.eval()
+    _ = model.eval()
     batch = tensorize_observation(
         observation=_bid_observation(), device=device
     )

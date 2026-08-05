@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import final
 
 import torch
 
@@ -24,6 +25,7 @@ from .contracts import (
 )
 
 
+@final
 class TorchBatchExecutor:
     """Own one model and all mutable device sampling workspaces."""
 
@@ -40,7 +42,7 @@ class TorchBatchExecutor:
         self._sampler_capacity = 0
         self._proposal_sampler: ActionProposalSampler | None = None
         self._proposal_capacity = 0
-        self._model.eval()
+        _ = self._model.eval()
 
     @classmethod
     def load(

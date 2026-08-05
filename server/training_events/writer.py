@@ -153,7 +153,7 @@ class _WriterState:
             ]
         rows = [(_serialize_event(event),) for event in emitted]
         try:
-            connection.executemany(
+            _ = connection.executemany(
                 "INSERT INTO training_logs(event_json) VALUES (?)", rows
             )
             connection.commit()
@@ -241,7 +241,7 @@ class NullEventSink:
         error: str | None = None,
     ) -> None:
         assert event_type in EVENT_NAMES
-        _validate_event(fields=fields, context=context, error=error)
+        _ = _validate_event(fields=fields, context=context, error=error)
 
 
 def _writer_state(run_dir: Path) -> _WriterState:
@@ -323,7 +323,7 @@ def _validate_event(
 ) -> JsonObject:
     assert error is None or (error.strip() == error and error)
     if context is not None:
-        _context_json(context)
+        _ = _context_json(context)
     emitted_fields = fields or {}
     assert not {
         "reason",

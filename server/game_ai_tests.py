@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import random
 from dataclasses import dataclass, field
+from typing import override
 
 import torch
 from torch import Tensor
@@ -36,6 +37,7 @@ class _RecordHandler(logging.Handler):
         super().__init__()
         self.records: list[logging.LogRecord] = []
 
+    @override
     def emit(self, record: logging.LogRecord) -> None:
         self.records.append(record)
 
@@ -44,6 +46,7 @@ class _RecordHandler(logging.Handler):
 class _ZeroDecoder(ActionChoiceLogitDecoder):
     batch_size: int
 
+    @override
     def next_choice_logits(
         self,
         active_rows: Tensor,
@@ -56,6 +59,7 @@ class _ZeroDecoder(ActionChoiceLogitDecoder):
             dtype=torch.float32,
         )
 
+    @override
     def advance(
         self,
         selected_choice_ids: Tensor,

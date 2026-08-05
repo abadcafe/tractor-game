@@ -323,7 +323,7 @@ class BatchedPolicyClient:
             return result
         except asyncio.CancelledError:
             await self._cancel_request(request_id=request_id)
-            future.cancel()
+            _ = future.cancel()
             raise
         finally:
             if future.cancelled():
@@ -627,7 +627,7 @@ class BatchedPolicyClient:
                 pending.future.set_result(rejection)
             pending.inference_batch.error = reason
             self._finish_inference_request(pending)
-            self._in_flight.pop(request_id, None)
+            _ = self._in_flight.pop(request_id, None)
         self._event().set()
 
     def _validate_response_routes(

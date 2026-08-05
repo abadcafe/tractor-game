@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from typing import final
 
 from server.foundation.result import Ok, Rejected
 from server.game import commands
@@ -13,6 +14,7 @@ from server.game_runtime.player import PlayerView
 from ._policy import DecisionCommand, DecisionRequest
 
 
+@final
 class AutoPolicy:
     """Choose one rule-legal command without external services."""
 

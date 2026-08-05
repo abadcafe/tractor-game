@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, override
 
 from server.foundation.result import Ok, Rejected
 from server.game.rules.cards import Card
@@ -35,6 +35,7 @@ class CompleteTraceLegalActionSpace(LegalActionSpace):
     _actions: tuple[GeneratedAction, ...]
 
     @property
+    @override
     def query(self) -> ActionQuery:
         return self._query
 
@@ -43,6 +44,7 @@ class CompleteTraceLegalActionSpace(LegalActionSpace):
         """Return the closed complete action set."""
         return self._actions
 
+    @override
     def decode(
         self, trace: ActionTrace
     ) -> Ok[GeneratedAction] | Rejected:

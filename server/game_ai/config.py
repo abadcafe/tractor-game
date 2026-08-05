@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
@@ -14,7 +14,9 @@ type AIDevice = Literal["cpu", "cuda", "mps"]
 class LocalAIConfig(BaseModel):
     """Checkpoint and direct policy-improvement configuration."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     mode: Literal["local"] = "local"
     checkpoint_path: Path
@@ -26,7 +28,9 @@ class LocalAIConfig(BaseModel):
 class RemoteAIConfig(BaseModel):
     """Whole-controller endpoint hosted with accelerated inference."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     mode: Literal["remote"] = "remote"
     endpoint: HttpUrl

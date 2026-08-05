@@ -9,11 +9,25 @@ import struct
 from collections.abc import Buffer
 from dataclasses import dataclass, field
 
+from pydantic import ConfigDict, TypeAdapter
+
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
 
 _FRAME_HEADER_BYTES = 8
 _DEFAULT_MAX_FRAME_BYTES = 2_147_483_647
+_FRAME_SIZE = struct.Struct(">Q")
+_FRAME_SIZE_VALUES = TypeAdapter(
+    tuple[int],
+    config=ConfigDict(strict=True),
+)
+
+
+def _decode_frame_size(data: bytes) -> int:
+    values = _FRAME_SIZE_VALUES.validate_python(
+        _FRAME_SIZE.unpack(data)
+    )
+    return values[0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,7 +105,7 @@ class AsyncFrameEndpoint:
         )
         if isinstance(header_result, Rejected):
             return header_result
-        payload_size = struct.unpack(">Q", header_result.value)[0]
+        payload_size = _decode_frame_size(header_result.value)
         if payload_size > self.max_frame_bytes:
             return Rejected(reason="async IPC frame exceeds limit")
         if payload_size > buffer.nbytes:
@@ -141,7 +155,7 @@ class AsyncFrameEndpoint:
                 reason=f"async IPC readability wait failed: {exc}"
             )
         finally:
-            loop.remove_reader(self.socket.fileno())
+            _ = loop.remove_reader(self.socket.fileno())
         return Ok(value=True)
 
     def close(self) -> None:
@@ -166,7 +180,7 @@ class AsyncFrameEndpoint:
         )
         if isinstance(header_result, Rejected):
             return header_result
-        payload_size = struct.unpack(">Q", header_result.value)[0]
+        payload_size = _decode_frame_size(header_result.value)
         if payload_size > self.max_frame_bytes:
             return Rejected(reason="async IPC frame exceeds limit")
         payload_result = await self._read_exact_bytes(payload_size)
@@ -273,7 +287,7 @@ async def wait_readable_frames(
         return Rejected(reason=f"async IPC input wait failed: {exc}")
     finally:
         for endpoint in endpoints:
-            loop.remove_reader(endpoint.socket.fileno())
+            _ = loop.remove_reader(endpoint.socket.fileno())
     return Ok(
         value=tuple(
             endpoint for endpoint in endpoints if endpoint.is_readable()

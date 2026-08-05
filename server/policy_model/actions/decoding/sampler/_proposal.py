@@ -303,8 +303,8 @@ class ActionProposalSampler:
                 )
             else:
                 assert not bool(active_selected.any().item())
-            prefix_log_probabilities.fill_(-torch.inf)
-            prefix_scores.fill_(-torch.inf)
+            _ = prefix_log_probabilities.fill_(-torch.inf)
+            _ = prefix_scores.fill_(-torch.inf)
             prefix_log_probabilities[:next_count] = (
                 selected_log_probabilities
             )

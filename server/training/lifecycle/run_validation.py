@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import ClassVar
 
 import torch
 from pydantic import BaseModel, ConfigDict, Field
@@ -30,7 +31,9 @@ from server.training_events.store import (
 class ValidatedTrainingRun(BaseModel):
     """Fully validated internal persisted training state."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     checkpoint_id: str
     checkpoint_path: Path

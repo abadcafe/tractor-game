@@ -200,6 +200,7 @@ async def _run_synchronized_training(
     runtime: TrainingRuntime,
     stop_request: TrainingStopRequest,
 ) -> _result.Ok[TrainingLoopResult] | _result.Rejected:
+    _ = runtime_id
     start = time.monotonic()
     total_rounds = state.total_rounds
     total_samples = state.total_samples

@@ -9,10 +9,15 @@ import sys
 from multiprocessing.connection import Connection
 from multiprocessing.context import SpawnContext
 from multiprocessing.process import BaseProcess
+from typing import override
+
+from pydantic import ConfigDict, TypeAdapter
 
 from server.training.runtime.process_signals import (
     start_child_process_ignoring_terminal_interrupt,
 )
+
+_BOOLEAN = TypeAdapter(bool, config=ConfigDict(strict=True))
 
 
 class _StartFailure(Exception):
@@ -20,6 +25,7 @@ class _StartFailure(Exception):
 
 
 class _StartFailureProcess(BaseProcess):
+    @override
     def start(self) -> None:
         raise _StartFailure
 
@@ -72,7 +78,7 @@ def test_start_child_process_ignores_sigint_and_restores_parent() -> (
 
         assert signal.getsignal(signal.SIGINT) == previous
         assert reader.poll(5.0)
-        received = reader.recv()
+        received = _BOOLEAN.validate_python(reader.recv())
         process.join(timeout=5.0)
         assert received is True
         assert process.exitcode == 0

@@ -2,19 +2,33 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from pathlib import Path
+from typing import ClassVar
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+)
 
 from server.foundation import result as _result
 from server.training_events.envelope import TrainingEvent
 from server.training_events.store import open_reader, training_store_id
 
+type _SqlRow = tuple[object, object]
+_SQL_ROWS = TypeAdapter(
+    list[_SqlRow],
+    config=ConfigDict(strict=True),
+)
+
 
 class TrainingLogRecord(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     sequence: int = Field(gt=0)
     event: TrainingEvent
@@ -23,7 +37,9 @@ class TrainingLogRecord(BaseModel):
 class TrainingLogHistoryPage(BaseModel):
     """Newest-first cursor page serialized in chronological order."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     store_id: str | None
     events: tuple[TrainingLogRecord, ...]
@@ -33,7 +49,9 @@ class TrainingLogHistoryPage(BaseModel):
 class TrainingLogTail(BaseModel):
     """One chronological tail batch from an immutable log store."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     store_id: str | None
     events: tuple[TrainingLogRecord, ...]
@@ -67,17 +85,22 @@ def query_training_log_history(
     try:
         store_id = training_store_id(connection)
         if before_sequence is None:
-            rows = connection.execute(
-                "SELECT sequence, event_json FROM training_logs "
-                "ORDER BY sequence DESC LIMIT ?",
-                (limit + 1,),
-            ).fetchall()
+            rows = _SQL_ROWS.validate_python(
+                connection.execute(
+                    "SELECT sequence, event_json FROM training_logs "
+                    + "ORDER BY sequence DESC LIMIT ?",
+                    (limit + 1,),
+                ).fetchall()
+            )
         else:
-            rows = connection.execute(
-                "SELECT sequence, event_json FROM training_logs "
-                "WHERE sequence < ? ORDER BY sequence DESC LIMIT ?",
-                (before_sequence, limit + 1),
-            ).fetchall()
+            rows = _SQL_ROWS.validate_python(
+                connection.execute(
+                    "SELECT sequence, event_json FROM training_logs "
+                    + "WHERE sequence < ? "
+                    + "ORDER BY sequence DESC LIMIT ?",
+                    (before_sequence, limit + 1),
+                ).fetchall()
+            )
     except sqlite3.Error:
         return _result.Rejected(reason="training logs query failed")
     finally:
@@ -121,11 +144,13 @@ def query_training_log_tail(
         )
     try:
         store_id = training_store_id(connection)
-        rows = connection.execute(
-            "SELECT sequence, event_json FROM training_logs "
-            "WHERE sequence > ? ORDER BY sequence LIMIT ?",
-            (after_sequence, limit),
-        ).fetchall()
+        rows = _SQL_ROWS.validate_python(
+            connection.execute(
+                "SELECT sequence, event_json FROM training_logs "
+                + "WHERE sequence > ? ORDER BY sequence LIMIT ?",
+                (after_sequence, limit),
+            ).fetchall()
+        )
     except sqlite3.Error:
         return _result.Rejected(reason="training logs query failed")
     finally:
@@ -148,14 +173,12 @@ def _parse_records(
                 event_json, str
             ):
                 raise ValueError
-            decoded = json.loads(event_json)
-            if not isinstance(decoded, dict):
-                raise ValueError
             records.append(
-                TrainingLogRecord.model_validate(
-                    {"sequence": sequence, "event": decoded}
+                TrainingLogRecord(
+                    sequence=sequence,
+                    event=TrainingEvent.model_validate_json(event_json),
                 )
             )
-    except json.JSONDecodeError, ValidationError, ValueError:
+    except ValidationError, ValueError:
         return _result.Rejected(reason="training log event is invalid")
     return _result.Ok(value=tuple(records))

@@ -6,6 +6,7 @@ import struct
 from dataclasses import dataclass
 
 import torch
+from pydantic import ConfigDict, TypeAdapter
 from torch import Tensor
 
 from server.policy_model.actions import (
@@ -17,6 +18,10 @@ from server.policy_model.observation.tensor import (
 )
 
 _CHOICE_ID = struct.Struct("<q")
+_I64_VALUES = TypeAdapter(
+    tuple[int, ...],
+    config=ConfigDict(strict=True),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,8 +60,9 @@ class CompactActionChoiceIds:
         return self.count
 
     def to_tuple(self) -> tuple[int, ...]:
-        values = struct.unpack(f"<{self.count}q", self.encoded_i64)
-        return tuple(int(value) for value in values)
+        return _I64_VALUES.validate_python(
+            struct.unpack(f"<{self.count}q", self.encoded_i64)
+        )
 
 
 @dataclass(frozen=True, slots=True)

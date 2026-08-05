@@ -11,6 +11,7 @@ from pathlib import Path
 
 from torch import Tensor
 
+import server.policy_model.checkpoint.manifest as checkpoint_manifest
 from server.checkpoint_contract import (
     CHECKPOINT_OBJECTS_DIR,
     CHECKPOINT_STATE_FILENAME,
@@ -19,7 +20,6 @@ from server.foundation import result as _result
 from server.policy_model.checkpoint.manifest import (
     checkpoint_dir_from_manifest_paths,
     managed_update_number_from_manifest_path,
-    write_checkpoint_manifest,
 )
 from server.policy_model.checkpoint.payload import (
     write_checkpoint_payload,
@@ -134,7 +134,7 @@ def save_checkpoint(
         _discard_state_object(state_path)
         return pruning_preflight_result
     for manifest_path in manifest_paths:
-        manifest_result = write_checkpoint_manifest(
+        manifest_result = checkpoint_manifest.write_checkpoint_manifest(
             path=manifest_path, manifest=manifest
         )
         if isinstance(manifest_result, _result.Rejected):
@@ -202,7 +202,7 @@ def _restore_manifest_backups(
             f"{backup.path.suffix}.rollback"
         )
         try:
-            tmp_path.write_bytes(backup.content)
+            _ = tmp_path.write_bytes(backup.content)
             os.replace(tmp_path, backup.path)
         except OSError:
             _discard_file(tmp_path)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import warnings
 from pathlib import Path
+from typing import final
 
 import torch
 import torch.distributed as dist
@@ -44,6 +45,7 @@ def test_all_reduce_max_preserves_input_without_warning(
     assert not caught
 
 
+@final
 class _SingleRankProcessGroup:
     def __init__(self, rendezvous_path: Path) -> None:
         self._rendezvous_path = rendezvous_path

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import override
 
 from server.foundation.result import Ok, Rejected
 from server.game.rules.cards.faces import face_count_width
@@ -29,9 +30,11 @@ class DiscardLegalActionSpace(LegalActionSpace):
     _query: ActionQuery
 
     @property
+    @override
     def query(self) -> ActionQuery:
         return self._query
 
+    @override
     def decode(
         self, trace: ActionTrace
     ) -> Ok[GeneratedAction] | Rejected:

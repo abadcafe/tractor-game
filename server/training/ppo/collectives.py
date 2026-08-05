@@ -12,8 +12,10 @@ class _AllReduceInPlace(Protocol):
     def __call__(self, tensor: Tensor, op: object) -> None: ...
 
 
-_all_reduce_object: object = getattr(dist, "all_reduce")
-_all_reduce_in_place = cast(_AllReduceInPlace, _all_reduce_object)
+_all_reduce_in_place = cast(
+    _AllReduceInPlace,
+    cast(object, dist.all_reduce),
+)
 
 
 def all_reduce_sum(tensor: Tensor) -> Tensor:

@@ -40,6 +40,15 @@ from server.training.runtime.model_rank.staging import (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class _RowRange:
+    start: int
+    stop: int
+
+    def as_slice(self) -> slice:
+        return slice(self.start, self.stop)
+
+
 class ModelRankBatchHandler(Protocol):
     """Process one inference batch inside a data-plane transfer."""
 
@@ -300,25 +309,21 @@ def _select_staged_rows(
 
 
 def _slice_staged_rows(
-    *, batch: ModelRankInferenceBatch, row_slice: slice
+    *, batch: ModelRankInferenceBatch, row_slice: _RowRange
 ) -> ModelRankInferenceBatch:
-    rows = tuple(
-        range(
-            _slice_start(row_slice),
-            _slice_stop(row_slice),
-        )
-    )
+    rows = tuple(range(row_slice.start, row_slice.stop))
+    selection = row_slice.as_slice()
     padded_generation_steps = _selected_padded_generation_steps(
         batch.generation_step_counts, rows=rows
     )
     return ModelRankInferenceBatch(
-        routes=batch.routes[row_slice],
+        routes=batch.routes[selection],
         device_batch=_slice_device_request_rows(
             batch.device_batch,
-            row_slice=row_slice,
+            row_slice=selection,
             padded_generation_steps=padded_generation_steps,
         ),
-        generation_step_counts=batch.generation_step_counts[row_slice],
+        generation_step_counts=batch.generation_step_counts[selection],
         wire_byte_count=batch.wire_byte_count,
         recv_seconds=batch.recv_seconds,
         h2d_seconds=batch.h2d_seconds,
@@ -333,7 +338,7 @@ def _rows_cover_batch(
     return rows == tuple(range(batch.batch_size()))
 
 
-def _contiguous_row_slice(rows: tuple[int, ...]) -> slice | None:
+def _contiguous_row_slice(rows: tuple[int, ...]) -> _RowRange | None:
     assert rows
     start = rows[0]
     previous = start
@@ -341,17 +346,7 @@ def _contiguous_row_slice(rows: tuple[int, ...]) -> slice | None:
         if row != previous + 1:
             return None
         previous = row
-    return slice(start, previous + 1)
-
-
-def _slice_start(row_slice: slice) -> int:
-    assert isinstance(row_slice.start, int)
-    return row_slice.start
-
-
-def _slice_stop(row_slice: slice) -> int:
-    assert isinstance(row_slice.stop, int)
-    return row_slice.stop
+    return _RowRange(start=start, stop=previous + 1)
 
 
 def _select_device_request_rows(

@@ -28,7 +28,7 @@ def lifespan_for(
             yield
         finally:
             event_stream_lifecycle.close()
-            task.cancel()
+            _ = task.cancel()
             await state.close()
             try:
                 await task

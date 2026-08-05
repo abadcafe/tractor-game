@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import MutableMapping
-from typing import Protocol, TypeGuard, cast
+from typing import Protocol, TypeGuard, cast, final
 
 import torch
 from torch import Tensor
@@ -17,6 +17,7 @@ class _TorchAdamW(Protocol):
     def step(self) -> object | None: ...
 
 
+@final
 class PPOOptimizer:
     """AdamW optimizer with portable checkpoint state."""
 
@@ -39,20 +40,23 @@ class PPOOptimizer:
         self._step_count = 0
         self._optimizer = cast(
             _TorchAdamW,
-            torch.optim.AdamW(
-                list(parameters),
-                lr=learning_rate,
-                betas=(beta1, beta2),
-                eps=eps,
-                weight_decay=weight_decay,
-                foreach=True,
+            cast(
+                object,
+                torch.optim.AdamW(
+                    list(parameters),
+                    lr=learning_rate,
+                    betas=(beta1, beta2),
+                    eps=eps,
+                    weight_decay=weight_decay,
+                    foreach=True,
+                ),
             ),
         )
 
     def step(self) -> None:
         """Apply one AdamW update."""
         self._step_count += 1
-        self._optimizer.step()
+        _ = self._optimizer.step()
 
     def state_dict(self) -> dict[str, object]:
         """Return a torch-saveable optimizer state payload."""

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import struct
+from typing import final
+
+from pydantic import ConfigDict, TypeAdapter
 
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
@@ -12,10 +15,12 @@ from server.policy_model.actions.decoding import (
 )
 from server.training.rollout_inference.batch.response_types import (
     CompletedPolicyResponse,
-    PolicyRequestRoute,
     PolicyResponse,
     PolicyResponseBatchWire,
     RejectedPolicyResponse,
+)
+from server.training.rollout_inference.batch.types import (
+    PolicyRequestRoute,
 )
 from server.training.rollout_inference.samples import (
     CompactActionChoiceIds,
@@ -27,6 +32,10 @@ from server.training.self_play.policy import PolicyDecision
 WIRE_RESPONSE_BATCH_MAGIC = 0x5452504F4C4F4333
 
 _I64 = struct.Struct("<q")
+_I64_VALUE = TypeAdapter(
+    tuple[int],
+    config=ConfigDict(strict=True),
+)
 _STATUS_COMPLETED = 1
 _STATUS_REJECTED = 2
 _HEADER_WORD_COUNT = 5
@@ -220,6 +229,7 @@ def decode_policy_response(
     )
 
 
+@final
 class _ResponseLayout:
     """Byte offsets for one decoded columnar response frame."""
 
@@ -529,5 +539,4 @@ def _read_i64_column(
 
 
 def _read_i64_at(data: bytes, offset: int) -> int:
-    values = _I64.unpack_from(data, offset)
-    return int(values[0])
+    return _I64_VALUE.validate_python(_I64.unpack_from(data, offset))[0]

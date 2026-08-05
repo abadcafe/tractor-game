@@ -183,7 +183,7 @@ def _write_artifacts() -> int:
     try:
         for path, content in generated_artifacts():
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
+            _ = path.write_text(content, encoding="utf-8")
     except OSError as error:
         print(f"contract generation failed: {error}", file=sys.stderr)
         return 1
@@ -216,8 +216,8 @@ def main(arguments: tuple[str, ...]) -> int:
         return _check_artifacts()
     print(
         "usage: python -m "
-        "scripts.generate_training_dashboard_contracts "
-        "--write|--check"
+        + "scripts.generate_training_dashboard_contracts "
+        + "--write|--check"
     )
     return 2
 

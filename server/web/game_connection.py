@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+from typing import final, override
 
 from fastapi import WebSocket, WebSocketDisconnect
+from pydantic import TypeAdapter
 
 from server.foundation.result import Rejected
 from server.game import Seat
@@ -19,14 +21,17 @@ from server.game_runtime.player import (
 from .game_wire import encode_state, read_frame
 
 logger = logging.getLogger(__name__)
+_DYNAMIC_OBJECT = TypeAdapter(object)
 
 
+@final
 class WebSocketTransport(HumanTransport):
     """Encode runtime deliveries onto one WebSocket."""
 
     def __init__(self, websocket: WebSocket) -> None:
         self._websocket = websocket
 
+    @override
     async def send(self, view: PlayerView) -> None:
         message = encode_state(
             viewer=view.viewer,
@@ -41,6 +46,7 @@ class WebSocketTransport(HumanTransport):
         except WebSocketDisconnect, OSError:
             logger.debug("game websocket send failed")
 
+    @override
     async def close(self, reason: ConnectionCloseReason) -> None:
         try:
             await self._websocket.close(
@@ -75,7 +81,9 @@ async def handle_game_connection(
     try:
         while True:
             try:
-                raw = await websocket.receive_json()
+                raw = _DYNAMIC_OBJECT.validate_python(
+                    await websocket.receive_json()
+                )
             except WebSocketDisconnect, OSError:
                 return
             frame = read_frame(raw)

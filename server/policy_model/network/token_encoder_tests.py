@@ -19,7 +19,7 @@ def test_card_token_and_candidate_paths_share_semantic_shape() -> None:
     counts = torch.ones((1, 1))
     rule_values = torch.tensor((((5.0, 0.25),),))
 
-    encoded_token = encoder(
+    encoded_token = encoder.forward(
         category_ids=category_ids,
         scalar_values=counts,
         card_rule_values=rule_values,

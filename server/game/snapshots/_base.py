@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -29,4 +29,6 @@ type PartnershipLevels = PartnershipMap[Rank]
 class SnapshotModel(BaseModel):
     """Immutable strict base for domain snapshots."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        frozen=True, extra="forbid"
+    )

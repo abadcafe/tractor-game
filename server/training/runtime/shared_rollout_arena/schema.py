@@ -5,9 +5,40 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass
 
+from pydantic import ConfigDict, TypeAdapter
+
 HEADER_STRUCT = struct.Struct("<qqqqqqqqqqqqddd")
 _I64 = struct.Struct("<q")
 _F32 = struct.Struct("<f")
+type _HeaderValues = tuple[
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    float,
+    float,
+    float,
+]
+_HEADER_VALUES: TypeAdapter[_HeaderValues] = TypeAdapter(
+    _HeaderValues,
+    config=ConfigDict(strict=True),
+)
+_I64_VALUES = TypeAdapter(
+    tuple[int, ...],
+    config=ConfigDict(strict=True),
+)
+_F32_VALUES = TypeAdapter(
+    tuple[float, ...],
+    config=ConfigDict(strict=True),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,7 +216,9 @@ def pack_header(
 
 def unpack_header(buffer: memoryview) -> RolloutArenaHeader:
     """Read one header from a shared memory buffer."""
-    values = HEADER_STRUCT.unpack_from(buffer, 0)
+    values = _HEADER_VALUES.validate_python(
+        HEADER_STRUCT.unpack_from(buffer, 0)
+    )
     return RolloutArenaHeader(
         policy_version=values[0],
         sample_count=values[1],
@@ -318,8 +351,9 @@ def _unpack_i64_values(
 ) -> tuple[int, ...]:
     if count == 0:
         return ()
-    values = struct.unpack_from(f"<{count}q", buffer, offset)
-    return tuple(int(value) for value in values)
+    return _I64_VALUES.validate_python(
+        struct.unpack_from(f"<{count}q", buffer, offset)
+    )
 
 
 def _unpack_f32_values(
@@ -327,8 +361,9 @@ def _unpack_f32_values(
 ) -> tuple[float, ...]:
     if count == 0:
         return ()
-    values = struct.unpack_from(f"<{count}f", buffer, offset)
-    return tuple(float(value) for value in values)
+    return _F32_VALUES.validate_python(
+        struct.unpack_from(f"<{count}f", buffer, offset)
+    )
 
 
 def _column_view(

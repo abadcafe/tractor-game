@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import final, override
+
 import torch
 from torch import Tensor, nn
 
@@ -28,9 +30,12 @@ from server.policy_model._schema.encoding import (
     VARIANT_INDEX,
 )
 
+from ._module_call import call_tensor
+
 TOKEN_FAMILY_COUNT: int = 6
 
 
+@final
 class TypedTokenEncoder(nn.Module):
     """Encode five closed families without learned NONE ids."""
 
@@ -81,6 +86,7 @@ class TypedTokenEncoder(nn.Module):
         )
         self._actor_features: Tensor = actor_features
 
+    @override
     def forward(
         self,
         *,
@@ -95,23 +101,38 @@ class TypedTokenEncoder(nn.Module):
         rank_ids = category_ids[:, :, RANK_INDEX]
         suit_ids = category_ids[:, :, SUIT_INDEX]
         base = (
-            self._family(family_ids)
-            + self._variant(category_ids[:, :, VARIANT_INDEX])
-            + self._action_kind(category_ids[:, :, ACTION_KIND_INDEX])
-            + self._state(category_ids[:, :, STATE_INDEX])
-            + self._disposition(category_ids[:, :, DISPOSITION_INDEX])
-            + self._trick_position(
-                category_ids[:, :, TRICK_POSITION_INDEX]
+            call_tensor(self._family, family_ids)
+            + call_tensor(
+                self._variant, category_ids[:, :, VARIANT_INDEX]
             )
-            + self._payload_role(category_ids[:, :, PAYLOAD_ROLE_INDEX])
+            + call_tensor(
+                self._action_kind,
+                category_ids[:, :, ACTION_KIND_INDEX],
+            )
+            + call_tensor(self._state, category_ids[:, :, STATE_INDEX])
+            + call_tensor(
+                self._disposition,
+                category_ids[:, :, DISPOSITION_INDEX],
+            )
+            + call_tensor(
+                self._trick_position,
+                category_ids[:, :, TRICK_POSITION_INDEX],
+            )
+            + call_tensor(
+                self._payload_role,
+                category_ids[:, :, PAYLOAD_ROLE_INDEX],
+            )
         )
         base = base + self._actor_vectors(actor_ids)
         card_mask = family_ids.eq(5).unsqueeze(-1)
         non_card = ~card_mask
         base = base + non_card * (
-            self._rank(rank_ids) + self._suit(suit_ids)
+            call_tensor(self._rank, rank_ids)
+            + call_tensor(self._suit, suit_ids)
         )
-        scalar = self._scalar_projection(scalar_values.unsqueeze(-1))
+        scalar = call_tensor(
+            self._scalar_projection, scalar_values.unsqueeze(-1)
+        )
         base = base + non_card * scalar
         card_values = self._encode_cards(
             suit_ids=suit_ids,
@@ -121,12 +142,13 @@ class TypedTokenEncoder(nn.Module):
             rule_values=card_rule_values,
         )
         base = base + card_mask * card_values
-        encoded = torch.zeros_like(base)
+        encoded: Tensor = torch.zeros_like(base)
         for family_id, adapter in enumerate(
             self._family_adapters, start=1
         ):
             mask = family_ids.eq(family_id).unsqueeze(-1)
-            encoded = encoded + mask * adapter(base)
+            adapted = call_tensor(adapter, base)
+            encoded = encoded + mask * adapted
         return encoded
 
     def encode_card_candidates(
@@ -149,7 +171,7 @@ class TypedTokenEncoder(nn.Module):
 
     def _actor_vectors(self, actor_ids: Tensor) -> Tensor:
         features = self._actor_features[actor_ids]
-        vectors = self._actor_mlp(features)
+        vectors = call_tensor(self._actor_mlp, features)
         return vectors * actor_ids.ne(0).unsqueeze(-1)
 
     def _encode_cards(
@@ -163,27 +185,32 @@ class TypedTokenEncoder(nn.Module):
     ) -> Tensor:
         point_values = rule_values[..., 0:1]
         strength_values = rule_values[..., 1:2]
-        face = self._face_mlp(
+        face = call_tensor(
+            self._face_mlp,
             torch.cat(
                 (
-                    self._suit(suit_ids),
-                    self._rank(rank_ids),
+                    call_tensor(self._suit, suit_ids),
+                    call_tensor(self._rank, rank_ids),
                     point_values,
                 ),
                 dim=-1,
-            )
+            ),
         )
-        return self._card_mlp(
+        encoded = call_tensor(
+            self._card_mlp,
             torch.cat(
                 (
                     face,
                     counts.unsqueeze(-1) / 2.0,
-                    self._effective_suit(effective_suit_ids),
+                    call_tensor(
+                        self._effective_suit, effective_suit_ids
+                    ),
                     strength_values,
                 ),
                 dim=-1,
-            )
+            ),
         )
+        return encoded
 
 
 def _embedding(size: int, d_model: int) -> nn.Embedding:

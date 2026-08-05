@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -11,7 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field
 class TrainingControlConfig(BaseModel):
     """Validated server configuration, independent of training state."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     default_run_dir: Path
     stop_timeout_seconds: float = Field(gt=0.0)

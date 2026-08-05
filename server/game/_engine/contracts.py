@@ -1,6 +1,6 @@
 """Derive round contracts from declarations and team levels."""
 
-from server.game.rules import bidding
+import server.game.rules.bidding as bidding
 from server.game.rules.cards import Rank, Suit
 from server.game.seating import Partnership, Seat, partnership_of
 

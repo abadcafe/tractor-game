@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from functools import partial
+from typing import final, override
 
 from server.foundation.result import Ok
 from server.game import (
@@ -28,6 +29,7 @@ from .player import (
 __all__ = ("Session",)
 
 
+@final
 class Session:
     """Own game state, sequence gating, and personalized views."""
 
@@ -123,6 +125,7 @@ class Session:
         )
 
 
+@final
 class _SeatPort(PlayerPort):
     """Seat-bound capability backed by one Session."""
 
@@ -135,9 +138,11 @@ class _SeatPort(PlayerPort):
         self._request_view = request_view
         self._submit = submit
 
+    @override
     async def request_view(self) -> None:
         await self._request_view()
 
+    @override
     async def submit(
         self,
         seq: int,

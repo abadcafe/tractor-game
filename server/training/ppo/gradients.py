@@ -147,7 +147,9 @@ def clip_grad_norm_on_device(
     )
     with torch.no_grad():
         for gradient in gradients:
-            gradient.mul_(bounded_clip_coef.to(dtype=gradient.dtype))
+            _ = gradient.mul_(
+                bounded_clip_coef.to(dtype=gradient.dtype)
+            )
 
 
 def _gradients(parameters: tuple[Tensor, ...]) -> tuple[Tensor, ...]:

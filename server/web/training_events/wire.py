@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
-from typing import Literal
+from typing import ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict
 from starlette.responses import StreamingResponse
@@ -32,7 +32,9 @@ _HEADERS: dict[str, str] = {
 class RejectedEvent(BaseModel):
     """Terminal stream rejection sent before closing the response."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     error: str
 

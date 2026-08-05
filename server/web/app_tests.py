@@ -8,6 +8,9 @@ from server.web.application_test_client import (
 from server.web.application_test_client import (
     is_dict as _is_dict,
 )
+from server.web.application_test_client import (
+    json_object_from as _json_object_from,
+)
 
 pytest_plugins: tuple[str, ...] = (
     "server.web.application_test_fixtures",
@@ -20,6 +23,6 @@ async def test_health_endpoint(
 ) -> None:
     response = await client.get("/health")
     assert response.status_code == 200
-    data = response.json()
+    data = _json_object_from(response)
     assert _is_dict(data)
     assert data["status"] == "ok"

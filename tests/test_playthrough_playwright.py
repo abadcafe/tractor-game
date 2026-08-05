@@ -23,14 +23,16 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from http.client import HTTPResponse
 from itertools import combinations
 from pathlib import Path
-from typing import Literal, Protocol, TextIO, TypeGuard, cast
+from typing import Literal, Protocol, TextIO, TypeGuard, cast, final
 from urllib.error import URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 import pytest
+from pydantic import TypeAdapter, ValidationError
 
 type JsonPrimitive = str | int | float | bool | None
 type JsonValue = JsonPrimitive | list[JsonValue] | dict[str, JsonValue]
@@ -41,6 +43,9 @@ type WirePartnership = Literal["first", "second"]
 type UiActionKind = Literal[
     "bid", "next_round", "stir_pass", "discard", "play"
 ]
+
+_JSON_OBJECT: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
+_JSON_LIST: TypeAdapter[list[JsonValue]] = TypeAdapter(list[JsonValue])
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "test-results" / "playthrough"
@@ -458,13 +463,13 @@ class ManagedServer:
             if self.process.poll() is None:
                 self.process.terminate()
                 try:
-                    self.process.wait(timeout=5)
+                    _ = self.process.wait(timeout=5)
                 except subprocess.TimeoutExpired as error:
                     self.process.kill()
-                    self.process.wait(timeout=5)
+                    _ = self.process.wait(timeout=5)
                     raise AssertionError(
                         "production web server did not stop after "
-                        "SIGTERM"
+                        + "SIGTERM"
                     ) from error
         finally:
             self.log_file.close()
@@ -486,7 +491,10 @@ def utc_now() -> str:
 def load_playwright_module() -> PlaywrightModuleLike:
     return cast(
         PlaywrightModuleLike,
-        importlib.import_module("playwright.sync_api"),
+        cast(
+            object,
+            importlib.import_module("playwright.sync_api"),
+        ),
     )
 
 
@@ -514,22 +522,16 @@ def is_request(value: object) -> TypeGuard[RequestLike]:
 
 def parse_json_object(raw: str) -> JsonObject | None:
     try:
-        parsed: object = json.loads(raw)
-    except json.JSONDecodeError:
+        return _JSON_OBJECT.validate_json(raw)
+    except ValidationError:
         return None
-    if isinstance(parsed, dict):
-        return cast(JsonObject, parsed)
-    return None
 
 
 def parse_json_list(raw: str) -> list[JsonValue]:
     try:
-        parsed: object = json.loads(raw)
-    except json.JSONDecodeError:
+        return _JSON_LIST.validate_json(raw)
+    except ValidationError:
         return []
-    if isinstance(parsed, list):
-        return cast(list[JsonValue], parsed)
-    return []
 
 
 def json_string_list(values: Sequence[str]) -> list[JsonValue]:
@@ -883,7 +885,7 @@ def click_clear_selection_if_available(page: PageLike) -> None:
         CLEAR_SELECTION_BUTTON,
         ensure_ascii=False,
     )
-    page.evaluate(
+    _ = page.evaluate(
         f"""() => {{
           const name = {encoded_name};
           const button = Array.from(
@@ -1083,7 +1085,7 @@ def slug(value: str) -> str:
 
 def run_build(config: Config, recorder: Recorder) -> None:
     recorder.event("build", "deno task build")
-    subprocess.run(
+    _ = subprocess.run(
         ["deno", "task", "build"],
         cwd=config.project_root,
         check=True,
@@ -1092,8 +1094,9 @@ def run_build(config: Config, recorder: Recorder) -> None:
 
 def server_ready(server_url: str) -> bool:
     try:
-        with urlopen(
-            Request(f"{server_url}/docs"), timeout=1
+        with cast(
+            HTTPResponse,
+            urlopen(Request(f"{server_url}/docs"), timeout=1),
         ) as response:
             return response.status == 200
     except OSError, URLError, TimeoutError:
@@ -1112,12 +1115,12 @@ def prepare_playthrough_game(
 
     attached = post_json(
         f"{server_url}/api/game/{quote(game_id)}/seat/"
-        f"{HUMAN_SEAT}?user_id={quote(user_id)}"
+        + f"{HUMAN_SEAT}?user_id={quote(user_id)}"
     )
     assert attached.get("ok") is True
     filled = post_json(
         f"{server_url}/api/game/{quote(game_id)}/bots"
-        f"?policy=auto&user_id={quote(user_id)}"
+        + f"?policy=auto&user_id={quote(user_id)}"
     )
     assert filled.get("ok") is True
 
@@ -1134,7 +1137,10 @@ def prepare_playthrough_game(
 
 def post_json(url: str) -> JsonObject:
     """POST to one public setup endpoint and decode its JSON object."""
-    with urlopen(Request(url, method="POST"), timeout=5) as response:
+    with cast(
+        HTTPResponse,
+        urlopen(Request(url, method="POST"), timeout=5),
+    ) as response:
         assert response.status in (200, 201)
         payload = response.read().decode("utf-8")
     value = parse_json_object(payload)
@@ -1175,7 +1181,7 @@ def start_server(config: Config, recorder: Recorder) -> ManagedServer:
             managed.stop()
             raise SystemExit(
                 "production web server exited early with code "
-                f"{process.returncode}"
+                + f"{process.returncode}"
             )
         if server_ready(config.server_url):
             recorder.event("server", f"ready at {config.server_url}")
@@ -1215,7 +1221,7 @@ def configured_cdp_url(
 
 def setup_browser(config: Config, recorder: Recorder) -> BrowserSession:
     if sys.platform.startswith("linux"):
-        os.environ.setdefault("DISPLAY", ":0")
+        _ = os.environ.setdefault("DISPLAY", ":0")
 
     playwright = load_playwright_module().sync_playwright().start()
     cdp_url = configured_cdp_url(config, recorder)
@@ -1326,7 +1332,7 @@ def run_playthrough(config: Config) -> None:
             recorder,
         )
         recorder.event("navigation", player_url)
-        page.goto(player_url, wait_until="domcontentloaded")
+        _ = page.goto(player_url, wait_until="domcontentloaded")
 
         initial_state = wait_for_initial_state(
             page, timeout_seconds=30, recorder=recorder
@@ -1338,13 +1344,13 @@ def run_playthrough(config: Config) -> None:
             recorder.bug(
                 "initial_state_timeout",
                 "browser did not receive a state message within 30"
-                "seconds",
+                + "seconds",
                 "critical",
                 screenshot=screenshot,
             )
             return
 
-        take_screenshot(
+        _ = take_screenshot(
             page, config.output_dir, "initial_state", recorder
         )
         initial_payload = object_field(initial_state, "state")
@@ -1394,7 +1400,7 @@ def run_playthrough(config: Config) -> None:
                 recorder.bug(
                     "timeout",
                     f"game did not finish within {config.max_seconds}"
-                    f"seconds",
+                    + "seconds",
                     "critical",
                     phase=last_phase,
                     screenshot=screenshot,
@@ -1492,7 +1498,7 @@ def run_playthrough(config: Config) -> None:
                         "defender_points": defender_points,
                     },
                 )
-                take_screenshot(
+                _ = take_screenshot(
                     page,
                     config.output_dir,
                     f"phase_{phase}_{int(elapsed)}",
@@ -1509,7 +1515,7 @@ def run_playthrough(config: Config) -> None:
                 recorder.bug(
                     "phase_stuck",
                     f"phase {phase} did not change for"
-                    f"{phase_stuck_seconds} seconds",
+                    + f"{phase_stuck_seconds} seconds",
                     "critical",
                     phase=phase,
                     screenshot=screenshot,
@@ -1517,7 +1523,7 @@ def run_playthrough(config: Config) -> None:
                 break
 
             if time.monotonic() - last_screenshot_time > 30:
-                take_screenshot(
+                _ = take_screenshot(
                     page,
                     config.output_dir,
                     f"tick_{int(elapsed)}",
@@ -1527,7 +1533,7 @@ def run_playthrough(config: Config) -> None:
 
             if state.get("winning_partnership") is not None:
                 game_completed = True
-                take_screenshot(
+                _ = take_screenshot(
                     page, config.output_dir, "game_over", recorder
                 )
                 recorder.event(
@@ -1561,7 +1567,7 @@ def run_playthrough(config: Config) -> None:
         recorder.event(
             "summary",
             f"actions={action_count}, rounds={len(rounds)},"
-            f"bugs={len(recorder.bugs)}",
+            + f"bugs={len(recorder.bugs)}",
         )
     finally:
         browser_event_log: list[JsonValue] = []
@@ -1627,7 +1633,7 @@ def write_reports(
         "rounds": [entry.to_json() for entry in rounds],
         "final_state": final_state,
     }
-    report_path.write_text(
+    _ = report_path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
@@ -1652,21 +1658,21 @@ def write_reports(
                 "## Rounds",
                 "",
                 "| Round | First partnership |"
-                " Second partnership | Winner |"
-                " Defender points | Bottom bonus |"
-                " Total defender points |",
+                + " Second partnership | Winner |"
+                + " Defender points | Bottom bonus |"
+                + " Total defender points |",
                 "| --- | --- | --- | --- | --- | --- | --- |",
             ]
         )
         for entry in rounds:
             markdown_lines.append(
                 f"| {entry.index} |"
-                f" {entry.first_before}->{entry.first_after} |"
-                f" {entry.second_before}->{entry.second_after} |"
-                f" {entry.winning_partnership} |"
-                f" {entry.defender_points} |"
-                f" {entry.bottom_card_bonus} |"
-                f" {entry.total_defender_points} |"
+                + f" {entry.first_before}->{entry.first_after} |"
+                + f" {entry.second_before}->{entry.second_after} |"
+                + f" {entry.winning_partnership} |"
+                + f" {entry.defender_points} |"
+                + f" {entry.bottom_card_bonus} |"
+                + f" {entry.total_defender_points} |"
             )
         markdown_lines.append("")
 
@@ -1675,7 +1681,7 @@ def write_reports(
         for index, bug in enumerate(recorder.bugs, start=1):
             markdown_lines.append(
                 f"{index}. [{bug.severity}] {bug.category}:"
-                f"{bug.description}"
+                + f"{bug.description}"
             )
             if bug.phase is not None:
                 markdown_lines.append(f"   Phase: {bug.phase}")
@@ -1688,7 +1694,7 @@ def write_reports(
             "No bugs recorded by the playthrough runner."
         )
     markdown_lines.append("")
-    markdown_path.write_text(
+    _ = markdown_path.write_text(
         "\n".join(markdown_lines), encoding="utf-8"
     )
     print(f"Report written to {markdown_path}", flush=True)
@@ -2028,6 +2034,7 @@ class _SetupPage:
         return
 
 
+@final
 class _SetupContext:
     def __init__(self) -> None:
         self.scripts: list[str] = []
@@ -2043,6 +2050,7 @@ class _SetupContext:
         return
 
 
+@final
 class _SetupBrowser:
     def __init__(self, *, with_existing_context: bool = False) -> None:
         self.context = _SetupContext()
@@ -2063,6 +2071,7 @@ class _SetupBrowser:
         return
 
 
+@final
 class _SetupBrowserType:
     def __init__(self, browser: _SetupBrowser) -> None:
         self.browser = browser
@@ -2092,6 +2101,7 @@ class _SetupBrowserType:
         return self.browser
 
 
+@final
 class _SetupPlaywright:
     def __init__(self, browser_type: _SetupBrowserType) -> None:
         self._browser_type = browser_type
@@ -2104,6 +2114,7 @@ class _SetupPlaywright:
         return
 
 
+@final
 class _SetupPlaywrightStarter:
     def __init__(self, playwright: _SetupPlaywright) -> None:
         self.playwright = playwright
@@ -2112,6 +2123,7 @@ class _SetupPlaywrightStarter:
         return self.playwright
 
 
+@final
 class _SetupPlaywrightModule:
     def __init__(self, playwright: _SetupPlaywright) -> None:
         self.playwright = playwright
@@ -2160,7 +2172,7 @@ def test_setup_browser_uses_native_viewport_for_isolated_window(
     )
     monkeypatch.setattr(f"{__name__}.find_chromium", chromium_path)
 
-    setup_browser(
+    _ = setup_browser(
         _setup_browser_config(tmp_path, cdp_url=None),
         Recorder(output_dir=tmp_path),
     )
@@ -2191,7 +2203,7 @@ def test_setup_browser_uses_native_viewport_for_new_cdp_context(
         load_module,
     )
 
-    setup_browser(
+    _ = setup_browser(
         _setup_browser_config(
             tmp_path,
             cdp_url="http://127.0.0.1:9222",
@@ -2209,9 +2221,9 @@ def test_visible_playwright_full_game_playthrough() -> None:
     if not _should_run_playthrough():
         pytest.skip(
             "visible browser playthrough is skipped by default; run "
-            "`python -m pytest tests/test_playthrough_playwright.py"
-            "-s`"
-            "or set TRACTOR_PLAYTHROUGH=1"
+            + "`python -m pytest tests/test_playthrough_playwright.py"
+            + "-s`"
+            + "or set TRACTOR_PLAYTHROUGH=1"
         )
 
     port = _env_int("TRACTOR_PLAYTHROUGH_PORT", 8787)

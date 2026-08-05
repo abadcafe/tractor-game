@@ -43,7 +43,7 @@ class SharedRolloutArenaWriter:
             )
         notify_progress = False
         result: _result.Ok[RolloutArenaAppendResult] | _result.Rejected
-        self.handle.lock.acquire()
+        _ = self.handle.lock.acquire()
         try:
             buffer = _segment_buffer(self._segment)
             header = unpack_header(buffer)
@@ -102,7 +102,7 @@ class SharedRolloutArenaWriter:
         assert count >= 0
         if count == 0:
             return
-        self.handle.lock.acquire()
+        _ = self.handle.lock.acquire()
         try:
             buffer = _segment_buffer(self._segment)
             header = unpack_header(buffer)
@@ -154,7 +154,7 @@ def _segment_buffer(
 
 
 def _notify_progress(handle: RolloutArenaHandle) -> None:
-    handle.progress_condition.acquire()
+    _ = handle.progress_condition.acquire()
     try:
         handle.progress_condition.notify_all()
     finally:

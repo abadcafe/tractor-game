@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Protocol
+
 from torch import Tensor, nn
 
 from server.policy_model.observation.tensor_batch import (
     ObservationTensorBatch,
 )
 
+from ._module_call import call_tensor
 from .action_decoder import (
     ActionDecoder,
     ActionDecodeSession,
@@ -15,6 +18,19 @@ from .action_decoder import (
 )
 from .action_value import CompleteActionEncoder
 from .observation_encoder import EncodedObservation, ObservationEncoder
+
+
+class _ObservationEncoderCall(Protocol):
+    def __call__(
+        self, observation: ObservationTensorBatch
+    ) -> EncodedObservation: ...
+
+
+def _call_observation_encoder(
+    encoder: _ObservationEncoderCall,
+    observation: ObservationTensorBatch,
+) -> EncodedObservation:
+    return encoder(observation)
 
 
 class PolicyActionModel(nn.Module):
@@ -32,26 +48,32 @@ class PolicyActionModel(nn.Module):
         assert d_model > 0
         assert d_model % heads == 0
         assert action_value_layers > 0
-        self._policy_observation_encoder = ObservationEncoder(
-            d_model=d_model,
-            layers=layers,
-            heads=heads,
+        self._policy_observation_encoder: ObservationEncoder = (
+            ObservationEncoder(
+                d_model=d_model,
+                layers=layers,
+                heads=heads,
+            )
         )
-        self._action_decoder = ActionDecoder(
-            d_model=d_model,
-            heads=heads,
-        )
-        self._action_value_observation_encoder = ObservationEncoder(
-            d_model=d_model,
-            layers=layers,
-            heads=heads,
-        )
-        self._complete_action_encoder = CompleteActionEncoder(
+        self._action_decoder: ActionDecoder = ActionDecoder(
             d_model=d_model,
             heads=heads,
-            layers=action_value_layers,
         )
-        self._action_value_head = nn.Sequential(
+        self._action_value_observation_encoder: ObservationEncoder = (
+            ObservationEncoder(
+                d_model=d_model,
+                layers=layers,
+                heads=heads,
+            )
+        )
+        self._complete_action_encoder: CompleteActionEncoder = (
+            CompleteActionEncoder(
+                d_model=d_model,
+                heads=heads,
+                layers=action_value_layers,
+            )
+        )
+        self._action_value_head: nn.Sequential = nn.Sequential(
             nn.LayerNorm(d_model * 2),
             nn.Linear(d_model * 2, d_model * 2),
             nn.GELU(),
@@ -62,13 +84,17 @@ class PolicyActionModel(nn.Module):
         self, observation: ObservationTensorBatch
     ) -> EncodedObservation:
         """Encode observations for autoregressive policy decoding."""
-        return self._policy_observation_encoder(observation)
+        return _call_observation_encoder(
+            self._policy_observation_encoder, observation
+        )
 
     def encode_action_value_observations(
         self, observation: ObservationTensorBatch
     ) -> EncodedObservation:
         """Encode observations through the independent value branch."""
-        return self._action_value_observation_encoder(observation)
+        return _call_observation_encoder(
+            self._action_value_observation_encoder, observation
+        )
 
     def action_values(
         self,
@@ -79,13 +105,16 @@ class PolicyActionModel(nn.Module):
         step_counts: Tensor,
     ) -> Tensor:
         """Evaluate complete semantic action traces."""
-        return self._action_value_head(
-            self._complete_action_encoder(
-                encoding,
-                source_rows=source_rows,
-                choice_ids_padded=choice_ids_padded,
-                step_counts=step_counts,
-            )
+        action_features = call_tensor(
+            self._complete_action_encoder,
+            encoding,
+            source_rows=source_rows,
+            choice_ids_padded=choice_ids_padded,
+            step_counts=step_counts,
+        )
+        return call_tensor(
+            self._action_value_head,
+            action_features,
         ).squeeze(-1)
 
     def score_action_traces(

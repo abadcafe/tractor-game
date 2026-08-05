@@ -12,6 +12,9 @@ from server.web.application_test_client import (
 from server.web.application_test_client import (
     is_dict as _is_dict,
 )
+from server.web.application_test_client import (
+    json_object_from as _json_object_from,
+)
 
 pytest_plugins: tuple[str, ...] = (
     "server.web.application_test_fixtures",
@@ -26,8 +29,8 @@ def test_training_api_exposes_distinct_init_and_resume_schemas(
 
     assert init_response.status_code == 200
     assert resume_response.status_code == 200
-    init_document = init_response.json()
-    resume_document = resume_response.json()
+    init_document = _json_object_from(init_response)
+    resume_document = _json_object_from(resume_response)
     assert _is_dict(init_document)
     assert _is_dict(resume_document)
     init_properties = init_document["properties"]
@@ -46,7 +49,7 @@ def test_training_config_returns_server_default_directory(
     response = sync_client.get("/api/training/config")
 
     assert response.status_code == 200
-    document = response.json()
+    document = _json_object_from(response)
     assert _is_dict(document)
     assert document["default_run_dir"] == str(
         training_control_config().default_run_dir
@@ -65,12 +68,14 @@ def test_training_init_requires_yes_before_replacement(
     }
 
     initialized = sync_client.post("/api/training/init", json=request)
-    (tmp_path / "stdout.log").write_text(
+    _ = (tmp_path / "stdout.log").write_text(
         "old output\n", encoding="utf-8"
     )
     (tmp_path / "runtime").mkdir()
-    (tmp_path / "runtime" / "stale").write_text("old", encoding="utf-8")
-    pid_file_path(tmp_path).write_text(
+    _ = (tmp_path / "runtime" / "stale").write_text(
+        "old", encoding="utf-8"
+    )
+    _ = pid_file_path(tmp_path).write_text(
         f"{os.getpid()}\n", encoding="ascii"
     )
     rejected = sync_client.post("/api/training/init", json=request)
@@ -79,7 +84,7 @@ def test_training_init_requires_yes_before_replacement(
 
     assert initialized.status_code == 204
     assert rejected.status_code == 412
-    assert rejected.json() == {
+    assert _json_object_from(rejected) == {
         "detail": "type yes to replace existing training artifacts"
     }
     assert replaced.status_code == 204

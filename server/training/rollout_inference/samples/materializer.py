@@ -6,6 +6,7 @@ import struct
 from dataclasses import dataclass, field
 
 import torch
+from pydantic import ConfigDict, TypeAdapter
 from torch import Tensor
 
 from server.training.rollout_inference.samples.records import (
@@ -14,6 +15,10 @@ from server.training.rollout_inference.samples.records import (
 )
 
 _INITIAL_VALUE_CAPACITY = 256
+_I64_VALUES = TypeAdapter(
+    tuple[int, ...],
+    config=ConfigDict(strict=True),
+)
 
 
 @dataclass(slots=True)
@@ -65,13 +70,17 @@ class PolicyDecisionMaterializer:
         required_value_count = choice_value_count + 2 * row_count
         self._ensure_capacity(required_value_count)
         device_values = self._device_values[:required_value_count]
-        device_values[:choice_value_count].view(
-            row_count, padded_step_count
-        ).copy_(choice_ids_padded)
+        _ = (
+            device_values[:choice_value_count]
+            .view(row_count, padded_step_count)
+            .copy_(choice_ids_padded)
+        )
         step_start = choice_value_count
         choice_count_start = step_start + row_count
-        device_values[step_start:choice_count_start].copy_(step_counts)
-        device_values[choice_count_start:].copy_(choice_counts)
+        _ = device_values[step_start:choice_count_start].copy_(
+            step_counts
+        )
+        _ = device_values[choice_count_start:].copy_(choice_counts)
 
         host_values = self._copy_to_host(required_value_count)
         host_counts = _cpu_int_tuple(host_values[step_start:])
@@ -117,7 +126,7 @@ class PolicyDecisionMaterializer:
         if self.device.type == "cpu":
             return device_values
         host_values = self._host_values[:value_count]
-        host_values.copy_(
+        _ = host_values.copy_(
             device_values, non_blocking=self.device.type == "cuda"
         )
         event = self._cuda_event
@@ -132,10 +141,11 @@ def _cpu_int_tuple(values: Tensor) -> tuple[int, ...]:
     assert values.dtype == torch.long
     assert values.ndim == 1
     count = int(values.shape[0])
-    decoded = struct.unpack(
-        f"<{count}q", values.contiguous().numpy().tobytes()
+    return _I64_VALUES.validate_python(
+        struct.unpack(
+            f"<{count}q", values.contiguous().numpy().tobytes()
+        )
     )
-    return tuple(int(value) for value in decoded)
 
 
 __all__ = ("PolicyDecisionMaterializer",)

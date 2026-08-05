@@ -64,7 +64,7 @@ def test_training_metrics_rejects_missing_or_non_current_schema() -> (
     for payload in payloads:
         rejected = False
         try:
-            TrainingMetrics.model_validate(payload)
+            _ = TrainingMetrics.model_validate(payload)
         except ValidationError:
             rejected = True
         assert rejected

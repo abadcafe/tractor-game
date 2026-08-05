@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass, field
-from typing import Literal, Protocol, Self
+from typing import ClassVar, Literal, Protocol, Self
 
 import httpx
 from pydantic import (
@@ -35,7 +35,9 @@ type RemoteCommandKind = Literal[
 class RemoteObservation(BaseModel):
     """One complete contiguous player view."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     seq: int = Field(ge=0)
     snapshot: PlayerSnapshot
@@ -45,7 +47,9 @@ class RemoteObservation(BaseModel):
 class RemoteCommand(BaseModel):
     """Closed command wire used only by model-backed controllers."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     kind: RemoteCommandKind
     card_ids: tuple[str, ...] = ()
@@ -115,7 +119,9 @@ class RemoteCommand(BaseModel):
 class RemoteDecisionRequest(BaseModel):
     """All unsent observations plus one idempotent decision query."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     session_id: str = Field(min_length=16, max_length=128)
     seat: Seat
@@ -147,7 +153,9 @@ class RemoteDecisionRequest(BaseModel):
 class RemoteDecisionResponse(BaseModel):
     """Exactly one command or domain error."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     command: RemoteCommand | None = None
     error: str | None = None
@@ -325,7 +333,7 @@ class RemoteAIController:
                 ),
                 headers={"content-type": "application/json"},
             )
-            response.raise_for_status()
+            _ = response.raise_for_status()
         except (httpx.RequestError, httpx.HTTPStatusError) as error:
             return Rejected(reason=f"remote AI request failed: {error}")
         try:

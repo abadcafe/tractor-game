@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from functools import partial
 from pathlib import Path
-from typing import Annotated, Never
+from typing import Annotated, ClassVar, Never
 
 from anyio import to_thread
 from fastapi import FastAPI, HTTPException, Query, Response
@@ -46,7 +46,9 @@ type _RequestPath = Annotated[
 class TrainingRunBody(BaseModel):
     """Optional run directory used by control commands."""
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", strict=True
+    )
 
     run_dir: _RequestPath | None = None
 
@@ -54,7 +56,9 @@ class TrainingRunBody(BaseModel):
 class TrainingControlConfigResponse(BaseModel):
     """Server defaults consumed by the training SPA."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     default_run_dir: Path
     stop_timeout_seconds: float

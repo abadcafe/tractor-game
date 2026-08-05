@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping, cast
+from typing import cast
 
 import torch
 from torch import Tensor
@@ -46,7 +47,7 @@ def load_runtime_training_state(
     snapshot: RuntimeTrainingState,
 ) -> None:
     """Load a runtime snapshot into an already constructed state."""
-    state.model.load_state_dict(snapshot.model_state)
+    _ = state.model.load_state_dict(snapshot.model_state)
     state.trainer.load_optimizer_state(snapshot.optimizer_state)
 
 

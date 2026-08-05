@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 import secrets
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, final
 
 import httpx
 
@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from server.policy_model.inference.runtime import InferenceRuntime
 
 
+@final
 class AIService:
     """Own exactly one configured AI deployment."""
 

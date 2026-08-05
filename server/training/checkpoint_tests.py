@@ -11,16 +11,14 @@ from typing import TypeGuard
 
 import pytest
 import torch
+from pydantic import ConfigDict, TypeAdapter
 
+import server.policy_model.checkpoint.manifest as _checkpoint_manifest
 from server.foundation.result import Ok, Rejected
 from server.policy_model.checkpoint import (
     CheckpointManifest,
     read_checkpoint_snapshot,
 )
-from server.policy_model.checkpoint import (
-    pruning as _checkpoint_pruning,
-)
-from server.policy_model.checkpoint import save as _checkpoint_save
 from server.policy_model.checkpoint.load import (
     load_policy_checkpoint as _load_policy_checkpoint,
 )
@@ -54,6 +52,11 @@ from server.training.runtime import (
     ExecutionTimeouts,
     ModelRankKind,
     ModelRankPlacement,
+)
+
+_OBJECT_DICT_ADAPTER: TypeAdapter[dict[object, object]] = TypeAdapter(
+    dict[object, object],
+    config=ConfigDict(strict=True),
 )
 
 
@@ -144,6 +147,7 @@ def test_read_metadata_uses_manifest_without_torch_load(
     )
 
     def fail_torch_load(*args: object, **kwargs: object) -> object:
+        _ = args, kwargs
         assert False
 
     monkeypatch.setattr(torch, "load", fail_torch_load)
@@ -215,6 +219,7 @@ def test_torch_checkpoint_save_rejects_payload_write_failure(
     )
 
     def fail_torch_save(*args: object, **kwargs: object) -> None:
+        _ = args, kwargs
         raise OSError("disk full")
 
     monkeypatch.setattr(torch, "save", fail_torch_save)
@@ -343,7 +348,7 @@ def test_torch_checkpoint_save_rolls_back_manifest_write_failure(
     )
     latest_before = latest_path.read_bytes()
     state_paths_before = _state_paths(tmp_path)
-    original_writer = _checkpoint_save.write_checkpoint_manifest
+    original_writer = _checkpoint_manifest.write_checkpoint_manifest
     write_count = 0
 
     def fail_second_manifest_write(
@@ -361,7 +366,7 @@ def test_torch_checkpoint_save_rolls_back_manifest_write_failure(
         return original_writer(path=path, manifest=manifest)
 
     monkeypatch.setattr(
-        _checkpoint_save,
+        _checkpoint_manifest,
         "write_checkpoint_manifest",
         fail_second_manifest_write,
     )
@@ -592,7 +597,7 @@ def test_torch_checkpoint_save_rejects_retained_file_before_commit(
     retained_object_dir = _single_state_path(latest_path).parent
     retained_object_name = retained_object_dir.name
     shutil.rmtree(retained_object_dir)
-    retained_object_dir.write_bytes(
+    _ = retained_object_dir.write_bytes(
         b"not-a-checkpoint-object-directory"
     )
 
@@ -646,16 +651,14 @@ def test_torch_checkpoint_save_reports_post_commit_prune_rmtree_failure(
     )
     orphan_dir = tmp_path / "objects" / "orphan"
     orphan_dir.mkdir()
-    original_rmtree = _checkpoint_pruning.shutil.rmtree
+    original_rmtree = shutil.rmtree
 
     def fail_rmtree(path: Path) -> None:
         if path == orphan_dir:
             raise OSError("busy")
         original_rmtree(path)
 
-    monkeypatch.setattr(
-        _checkpoint_pruning.shutil, "rmtree", fail_rmtree
-    )
+    monkeypatch.setattr(shutil, "rmtree", fail_rmtree)
 
     result = _save_training_checkpoint(
         manifest_paths=(latest_path,),
@@ -707,11 +710,7 @@ def test_torch_checkpoint_state_payload_is_weights_only_safe(
         retained_update_count=5,
     )
 
-    loaded: object = torch.load(
-        _single_state_path(path),
-        map_location=torch.device("cpu"),
-        weights_only=True,
-    )
+    loaded = _load_state_payload(_single_state_path(path))
 
     assert isinstance(loaded, dict)
     assert loaded["schema_version"] == 24
@@ -991,7 +990,7 @@ def test_torch_checkpoint_save_ignores_unmanaged_json(
         total_updates=1,
         retained_update_count=5,
     )
-    (tmp_path / "notes.json").write_text(
+    _ = (tmp_path / "notes.json").write_text(
         "{not checkpoint json", encoding="utf-8"
     )
 
@@ -1040,11 +1039,11 @@ def test_torch_checkpoint_save_ignores_noncanonical_update_json(
         retained_update_count=5,
     )
     noncanonical_path = tmp_path / "update-001.json"
-    noncanonical_path.write_text(
+    _ = noncanonical_path.write_text(
         "{not checkpoint json", encoding="utf-8"
     )
     zero_update_path = tmp_path / "update-0.json"
-    zero_update_path.write_text(
+    _ = zero_update_path.write_text(
         "{not checkpoint json", encoding="utf-8"
     )
     update_path = tmp_path / "update-2.json"
@@ -1098,7 +1097,7 @@ def test_torch_checkpoint_save_reports_corrupt_update_manifest(
     )
     latest_before = latest_path.read_text(encoding="utf-8")
     state_paths_before = _state_paths(tmp_path)
-    (tmp_path / "update-1.json").write_text(
+    _ = (tmp_path / "update-1.json").write_text(
         "{not checkpoint json", encoding="utf-8"
     )
 
@@ -1251,7 +1250,7 @@ def test_torch_checkpoint_read_rejects_invalid_utf8_manifest(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "latest.json"
-    path.write_bytes(b"\xff")
+    _ = path.write_bytes(b"\xff")
 
     result = _read_metadata(path)
 
@@ -1278,7 +1277,7 @@ def test_torch_checkpoint_read_rejects_manifest_symlink(
 ) -> None:
     _, _, path = _saved_checkpoint(tmp_path)
     external_manifest_path = tmp_path / "external-latest.json"
-    path.rename(external_manifest_path)
+    _ = path.rename(external_manifest_path)
     path.symlink_to(external_manifest_path)
 
     result = _read_metadata(path)
@@ -1398,7 +1397,7 @@ def test_torch_checkpoint_load_rejects_state_hash_mismatch(
         retained_update_count=5,
     )
     with _single_state_path(path).open("ab") as file:
-        file.write(b"corrupt")
+        _ = file.write(b"corrupt")
 
     result = _load_training_checkpoint(
         path=path,
@@ -1440,7 +1439,7 @@ def test_torch_checkpoint_load_rejects_objects_dir_symlink(
     model_config, train_config, path = _saved_checkpoint(tmp_path)
     objects_dir = tmp_path / "objects"
     external_objects_dir = tmp_path / "external-objects"
-    objects_dir.rename(external_objects_dir)
+    _ = objects_dir.rename(external_objects_dir)
     objects_dir.symlink_to(
         external_objects_dir, target_is_directory=True
     )
@@ -1464,7 +1463,7 @@ def test_torch_checkpoint_load_rejects_checkpoint_object_symlink(
     model_config, train_config, path = _saved_checkpoint(tmp_path)
     object_dir = _single_state_path(path).parent
     external_object_dir = tmp_path / "external-object"
-    object_dir.rename(external_object_dir)
+    _ = object_dir.rename(external_object_dir)
     object_dir.symlink_to(external_object_dir, target_is_directory=True)
 
     result = _load_training_checkpoint(
@@ -1486,7 +1485,7 @@ def test_torch_checkpoint_load_rejects_state_file_symlink(
     model_config, train_config, path = _saved_checkpoint(tmp_path)
     state_path = _single_state_path(path)
     external_state_path = tmp_path / "external-state.pt"
-    state_path.rename(external_state_path)
+    _ = state_path.rename(external_state_path)
     state_path.symlink_to(external_state_path)
 
     result = _load_training_checkpoint(
@@ -1574,7 +1573,7 @@ def test_torch_checkpoint_load_rejects_non_torch_state_payload(
         retained_update_count=5,
     )
     state_path = _single_state_path(path)
-    state_path.write_bytes(b"not a torch checkpoint")
+    _ = state_path.write_bytes(b"not a torch checkpoint")
     _update_manifest_state_sha(path, state_path)
 
     result = _load_training_checkpoint(
@@ -2047,13 +2046,7 @@ def test_checkpoint_payload_is_always_deserialized_on_cpu(
         retained_update_count=5,
     )
     state_path = _single_state_path(path)
-    saved_payload: object = torch.load(
-        state_path,
-        map_location=torch.device("cpu"),
-        weights_only=True,
-    )
-    assert _is_object_dict(saved_payload)
-    payload: dict[object, object] = dict(saved_payload)
+    payload = _load_state_payload(state_path)
     load_map_locations: list[torch.device] = []
 
     def fake_torch_load(
@@ -2241,13 +2234,13 @@ def _single_state_path(checkpoint_path: Path) -> Path:
 
 
 def _read_json_object(path: Path) -> dict[object, object]:
-    loaded: object = json.loads(path.read_text(encoding="utf-8"))
-    assert _is_object_dict(loaded)
-    return dict(loaded)
+    return _OBJECT_DICT_ADAPTER.validate_json(
+        path.read_text(encoding="utf-8")
+    )
 
 
 def _write_json_object(path: Path, data: dict[object, object]) -> None:
-    path.write_text(
+    _ = path.write_text(
         f"{json.dumps(data, ensure_ascii=False, sort_keys=True)}\n",
         encoding="utf-8",
     )
@@ -2265,13 +2258,13 @@ def _update_manifest_state_sha(
 
 
 def _load_state_payload(path: Path) -> dict[object, object]:
-    loaded: object = torch.load(
-        path,
-        map_location=torch.device("cpu"),
-        weights_only=True,
+    return _OBJECT_DICT_ADAPTER.validate_python(
+        torch.load(
+            path,
+            map_location=torch.device("cpu"),
+            weights_only=True,
+        )
     )
-    assert _is_object_dict(loaded)
-    return dict(loaded)
 
 
 def _write_state_payload(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import final
 
 from server.foundation.result import Ok, Rejected
 from server.game import Seat, commands
@@ -42,6 +43,7 @@ class TrainingDecision:
     step: DecisionStep
 
 
+@final
 class SelfPlayActor:
     """Create policy decisions from contiguous player snapshots."""
 

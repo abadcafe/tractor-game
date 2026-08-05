@@ -16,6 +16,7 @@ from server.training.checkpoint import (
 from server.training.config import TrainConfig
 from server.training.lifecycle.run_setup import initialize_training_run
 from server.training_events.store import database_path
+from tests.sqlite_support import fetch_rows
 
 _JSON_OBJECT_ADAPTER: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
 
@@ -78,12 +79,16 @@ def test_initialize_training_run_replace_existing_rebuilds_state(
     )
     assert isinstance(first, Ok)
     outside = tmp_path.parent / "outside.txt"
-    outside.write_text("keep", encoding="utf-8")
-    (tmp_path / "stdout.log").write_text("old stdout", encoding="utf-8")
-    (tmp_path / "stderr.log").write_text("old stderr", encoding="utf-8")
+    _ = outside.write_text("keep", encoding="utf-8")
+    _ = (tmp_path / "stdout.log").write_text(
+        "old stdout", encoding="utf-8"
+    )
+    _ = (tmp_path / "stderr.log").write_text(
+        "old stderr", encoding="utf-8"
+    )
     stale_directory = tmp_path / "runtime" / "nested"
     stale_directory.mkdir(parents=True)
-    (stale_directory / "state").write_text("old", encoding="utf-8")
+    _ = (stale_directory / "state").write_text("old", encoding="utf-8")
     (tmp_path / "outside-link").symlink_to(outside)
 
     replaced = initialize_training_run(
@@ -112,7 +117,7 @@ def test_initialize_training_run_rejects_unrelated_directory_contents(
     tmp_path: Path,
 ) -> None:
     unrelated = tmp_path / "unrelated.txt"
-    unrelated.write_text("preserve", encoding="utf-8")
+    _ = unrelated.write_text("preserve", encoding="utf-8")
 
     prepared = initialize_training_run(
         run_dir=tmp_path,
@@ -127,9 +132,11 @@ def test_initialize_training_run_rejects_unrelated_directory_contents(
 
 def _event_documents(run_dir: Path) -> tuple[JsonObject, ...]:
     with sqlite3.connect(database_path(run_dir)) as connection:
-        rows = connection.execute(
-            "SELECT event_json FROM training_logs ORDER BY sequence"
-        ).fetchall()
+        rows = fetch_rows(
+            connection.execute(
+                "SELECT event_json FROM training_logs ORDER BY sequence"
+            )
+        )
     documents: list[JsonObject] = []
     for row in rows:
         value = row[0]

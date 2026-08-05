@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from itertools import cycle, islice
+from typing import final, override
 
 import pytest
 import torch
@@ -80,6 +81,7 @@ class CountingPolicyActionModel(PolicyActionModel):
         self.score_prefix_widths: list[int] = []
         self.training_modes: list[bool] = []
 
+    @override
     def encode_policy_observations(
         self,
         observation: ObservationTensorBatch,
@@ -90,6 +92,7 @@ class CountingPolicyActionModel(PolicyActionModel):
         )
         return super().encode_policy_observations(observation)
 
+    @override
     def score_action_traces(
         self,
         encoding: EncodedObservation,
@@ -112,6 +115,7 @@ class CountingPolicyActionModel(PolicyActionModel):
 class NonFiniteValueModel(PolicyActionModel):
     """Policy model that produces an infinite action-value loss."""
 
+    @override
     def action_values(
         self,
         encoding: EncodedObservation,
@@ -129,6 +133,7 @@ class NonFiniteValueModel(PolicyActionModel):
         return torch.full_like(values, torch.inf)
 
 
+@final
 class _TraceChoiceDecoder:
     def __init__(
         self,
@@ -227,7 +232,7 @@ def test_update_handles_clipped_policy_ratio_above_float32_range() -> (
         profile_mode="off",
     )
     batch = _single_card_batch(count=2)
-    batch.old_log_probabilities.fill_(-100.0)
+    _ = batch.old_log_probabilities.fill_(-100.0)
 
     update_result = trainer.update(
         PPOUpdateInput(policy_version=0, local_batch=batch)
@@ -258,7 +263,7 @@ def test_update_batches_minibatch_model_forwards() -> None:
         layers=model_config.layers,
         heads=model_config.heads,
     ).to(device)
-    model.eval()
+    _ = model.eval()
     trainer = PPOTrainer(
         model=model,
         train_config=train_config,

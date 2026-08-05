@@ -334,14 +334,16 @@ def _verify_follow_sub_play_priority(
         else:
             # Tractor: pc pairs. Count how many ranks have both cards
             # played
-            rank_played_count: dict[Rank, int] = {}
+            tractor_rank_played_count: dict[Rank, int] = {}
             for c in sub.cards:
                 if c.id in played_card_ids:
-                    rank_played_count[c.rank] = (
-                        rank_played_count.get(c.rank, 0) + 1
+                    tractor_rank_played_count[c.rank] = (
+                        tractor_rank_played_count.get(c.rank, 0) + 1
                     )
             pairs_from_tractor = sum(
-                1 for count in rank_played_count.values() if count >= 2
+                1
+                for count in tractor_rank_played_count.values()
+                if count >= 2
             )
             played_pairs_from_hand_by_level[pc] = (
                 played_pairs_from_hand_by_level.get(pc, 0)

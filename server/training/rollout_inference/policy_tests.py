@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import final, override
+
 import pytest
 import torch
 from torch import Tensor
@@ -161,6 +163,7 @@ def test_batch_sampling_encodes_multiple_observations_together() -> (
     assert model.score_batch_sizes == [2]
 
 
+@final
 class _FixedChoiceModel(PolicyActionModel):
     def __init__(self, *, choice_logits: Tensor) -> None:
         super().__init__(d_model=8, layers=1, heads=1)
@@ -169,12 +172,14 @@ class _FixedChoiceModel(PolicyActionModel):
         self.encode_calls = 0
         self.score_batch_sizes: list[int] = []
 
+    @override
     def encode_policy_observations(
         self, observation: ObservationTensorBatch
     ) -> EncodedObservation:
         self.encode_calls += 1
         return super().encode_policy_observations(observation)
 
+    @override
     def begin_action_decode_session(
         self,
         encoding: EncodedObservation,
@@ -191,6 +196,7 @@ class _FixedChoiceModel(PolicyActionModel):
         )
 
 
+@final
 class _FixedChoiceSession(ActionDecodeSession):
     def __init__(
         self,
@@ -208,6 +214,12 @@ class _FixedChoiceSession(ActionDecodeSession):
         self._max_steps = max_steps
         self._step_index = 0
 
+    @property
+    @override
+    def unique_prefix_count(self) -> int:
+        return self._batch_size
+
+    @override
     def next_choice_logits(
         self,
         active_rows: Tensor,
@@ -222,11 +234,26 @@ class _FixedChoiceSession(ActionDecodeSession):
             self._batch_size, 1
         )
 
+    @override
     def advance(
         self,
         selected_choice_ids: Tensor,
         active_rows: Tensor,
     ) -> None:
+        assert selected_choice_ids.shape == (self._batch_size,)
+        assert active_rows.shape == (self._batch_size,)
+        self._step_index += 1
+        assert self._step_index <= self._max_steps
+
+    @override
+    def fork(
+        self,
+        *,
+        parent_rows: Tensor,
+        selected_choice_ids: Tensor,
+        active_rows: Tensor,
+    ) -> None:
+        assert parent_rows.shape == (self._batch_size,)
         assert selected_choice_ids.shape == (self._batch_size,)
         assert active_rows.shape == (self._batch_size,)
         self._step_index += 1

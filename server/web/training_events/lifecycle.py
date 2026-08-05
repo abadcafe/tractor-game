@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import suppress
+from typing import final
 
 
+@final
 class EventStreamLifecycle:
     """End wrapped event streams when application shutdown begins."""
 
@@ -41,11 +43,11 @@ class EventStreamLifecycle:
                 if closed in completed or self._closed.is_set():
                     if next_frame.done():
                         try:
-                            next_frame.result()
+                            _ = next_frame.result()
                         except StopAsyncIteration:
                             return
                     else:
-                        next_frame.cancel()
+                        _ = next_frame.cancel()
                         with suppress(asyncio.CancelledError):
                             await next_frame
                     return
@@ -60,10 +62,10 @@ class EventStreamLifecycle:
                 next_frame = asyncio.create_task(anext(source))
         finally:
             if not next_frame.done():
-                next_frame.cancel()
+                _ = next_frame.cancel()
                 with suppress(asyncio.CancelledError):
                     await next_frame
-            closed.cancel()
+            _ = closed.cancel()
             with suppress(asyncio.CancelledError):
                 await closed
             await source.aclose()

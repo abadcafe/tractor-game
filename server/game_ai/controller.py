@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import random
 import time
-from typing import Protocol
+from typing import Protocol, final
 
 from server.foundation.result import Ok, Rejected
 from server.game import Seat, commands
@@ -63,6 +63,7 @@ class ControllerInference(Protocol):
         ...
 
 
+@final
 class AIController:
     """Produce commands from one contiguous seat-local game history."""
 
@@ -145,7 +146,7 @@ class AIController:
             return command
         _LOGGER.debug(
             "ai.decision kind=%s candidates=%d action_value=%s "
-            "elapsed_ms=%.3f",
+            + "elapsed_ms=%.3f",
             snapshot.awaiting_action,
             decision.candidate_count,
             (

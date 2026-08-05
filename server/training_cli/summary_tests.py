@@ -116,10 +116,10 @@ def test_summary_import_and_query_do_not_load_torch(
             sys.executable,
             "-c",
             "import pathlib, sys; "
-            "from server.training_cli.summary import "
-            "build_training_summary; "
-            "build_training_summary(pathlib.Path(sys.argv[1])); "
-            "assert 'torch' not in sys.modules",
+            + "from server.training_cli.summary import "
+            + "build_training_summary; "
+            + "build_training_summary(pathlib.Path(sys.argv[1])); "
+            + "assert 'torch' not in sys.modules",
             str(tmp_path),
         ),
         capture_output=True,
@@ -136,11 +136,11 @@ def test_summary_cli_does_not_load_torch(tmp_path: Path) -> None:
             sys.executable,
             "-c",
             "import runpy, sys; "
-            "sys.argv = ['server.training_cli', '--run-dir', "
-            "sys.argv[1], 'summary', '--format', 'json']; "
-            "runpy.run_module('server.training_cli', "
-            "run_name='__main__'); "
-            "assert 'torch' not in sys.modules",
+            + "sys.argv = ['server.training_cli', '--run-dir', "
+            + "sys.argv[1], 'summary', '--format', 'json']; "
+            + "runpy.run_module('server.training_cli', "
+            + "run_name='__main__'); "
+            + "assert 'torch' not in sys.modules",
             str(tmp_path / "missing"),
         ),
         capture_output=True,

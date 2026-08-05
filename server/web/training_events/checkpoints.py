@@ -7,7 +7,7 @@ import time
 from collections.abc import AsyncGenerator
 from functools import partial
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, ClassVar, Literal
 
 from anyio import to_thread
 from fastapi import FastAPI, Query
@@ -38,7 +38,9 @@ type _StoreId = Annotated[str, Query(pattern=r"^[0-9a-f]{32}$")]
 class CheckpointCursorEvent(BaseModel):
     """Current checkpoint-relevant event-store cursor."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     store_id: str | None
     through_sequence: int = Field(ge=0)

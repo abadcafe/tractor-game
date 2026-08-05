@@ -14,7 +14,7 @@ from server.training.config import (
     CheckpointPolicy,
     TrainConfig,
 )
-from server.training.interface import TrainingResumeOptions
+from server.training.contracts import TrainingResumeOptions
 from server.training.runtime import (
     ExecutionConfig,
     ExecutionTimeouts,

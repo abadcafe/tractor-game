@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import server.game.commands as commands
+import server.game.rules.play as play
 from server.foundation.result import Ok, Rejected
-from server.game import commands
-from server.game.rules import play
 from server.game.rules.cards import CardId
 from server.game.seating import (
     Seat,

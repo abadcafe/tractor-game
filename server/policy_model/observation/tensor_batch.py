@@ -11,7 +11,7 @@ from server.policy_model._schema.actions import CARD_CHOICE_COUNT
 from server.policy_model._schema.encoding import (
     CATEGORY_COUNT,
 )
-from server.policy_model.observation import Observation
+from server.policy_model.observation.interface import Observation
 from server.policy_model.observation.packing import (
     MAX_LOSSLESS_OBSERVATION_TOKENS,
     PackedObservation,

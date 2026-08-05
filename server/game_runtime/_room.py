@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import final
 
 from server.foundation.result import Ok, Rejected
 from server.game import GameConfig, GameSeed, Seat, seats
@@ -62,6 +63,7 @@ class SeatStatus:
     ready: bool
 
 
+@final
 class GameRoom:
     """Coordinate a pregame roster and its single game session."""
 

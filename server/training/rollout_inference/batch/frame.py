@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from pydantic import ConfigDict, TypeAdapter
+
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
 from server.policy_model.actions import MAX_ACTION_STEPS
@@ -33,6 +35,10 @@ from server.training.rollout_inference.batch.types import (
 )
 
 type ReadableFrameBuffer = bytes | bytearray | memoryview
+_I64_VALUE = TypeAdapter(
+    tuple[int],
+    config=ConfigDict(strict=True),
+)
 type WritableFrameBuffer = bytearray | memoryview
 
 
@@ -222,5 +228,4 @@ def _read_i64(data: ReadableFrameBuffer, word_index: int) -> int:
 
 
 def _read_i64_at(data: ReadableFrameBuffer, offset: int) -> int:
-    values = I64.unpack_from(data, offset)
-    return int(values[0])
+    return _I64_VALUE.validate_python(I64.unpack_from(data, offset))[0]

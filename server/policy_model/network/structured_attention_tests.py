@@ -108,7 +108,7 @@ def _encode(
     padding_mask: Tensor,
     encoded_structure_coordinates: Tensor,
 ) -> Tensor:
-    return encoder(
+    return encoder.forward(
         values,
         padding_mask=padding_mask,
         encoded_structure_coordinates=encoded_structure_coordinates,

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import (
+    ConfigDict,
     TypeAdapter,
     ValidationError,
 )
@@ -26,6 +27,15 @@ from server.training_metrics.contract import (
 )
 
 _JSON_OBJECT_ADAPTER: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
+type _SqlRow = tuple[object, ...]
+_SQL_ROWS: TypeAdapter[list[_SqlRow]] = TypeAdapter(
+    list[_SqlRow],
+    config=ConfigDict(strict=True),
+)
+_OPTIONAL_SQL_ROW: TypeAdapter[_SqlRow | None] = TypeAdapter(
+    _SqlRow | None,
+    config=ConfigDict(strict=True),
+)
 _METRICS_CURSOR_QUERY = (
     "SELECT coalesce(max(sequence), 0) FROM training_logs "
     "WHERE event_type IN "
@@ -55,14 +65,14 @@ def query_training_metric_summary(
     if connection is None:
         return _result.Ok(value=_empty_metric_summary())
     try:
-        connection.execute("BEGIN")
+        _ = connection.execute("BEGIN")
         store_id = training_store_id(connection)
         through_sequence = _metrics_through_sequence(connection)
         dropped = _scalar_int(
             connection,
             "SELECT coalesce(sum(json_extract(event_json, "
-            "'$.fields.count')), 0) FROM training_logs "
-            "WHERE event_type = 'logging.drop'",
+            + "'$.fields.count')), 0) FROM training_logs "
+            + "WHERE event_type = 'logging.drop'",
         )
         latest_update = _latest_event(connection, event_type="update")
         connection.commit()
@@ -108,19 +118,19 @@ def query_training_metrics(
     if connection is None:
         return _result.Ok(value=_empty_metrics())
     try:
-        connection.execute("BEGIN")
+        _ = connection.execute("BEGIN")
         store_id = training_store_id(connection)
         through_sequence = _metrics_through_sequence(connection)
         started_at_ms = _scalar_int(
             connection,
             "SELECT coalesce(min(recorded_at_ms), 0) "
-            "FROM training_logs",
+            + "FROM training_logs",
         )
         dropped = _scalar_int(
             connection,
             "SELECT coalesce(sum(json_extract(event_json, "
-            "'$.fields.count')), 0) FROM training_logs "
-            "WHERE event_type = 'logging.drop'",
+            + "'$.fields.count')), 0) FROM training_logs "
+            + "WHERE event_type = 'logging.drop'",
         )
         all_updates = _events(connection, event_type="update")
         recent_updates = all_updates[-update_limit:]
@@ -255,27 +265,31 @@ def _events(
         placeholders = ", ".join("?" for _item in rollout_ids)
         conditions.append(f"rollout_id IN ({placeholders})")
         parameters.extend(sorted(rollout_ids))
-    rows = connection.execute(
-        "SELECT sequence, recorded_at_ms, process_index, "
-        "policy_version, event_json FROM training_logs WHERE "
-        + " AND ".join(conditions)
-        + " ORDER BY sequence",
-        parameters,
-    ).fetchall()
+    rows = _SQL_ROWS.validate_python(
+        connection.execute(
+            "SELECT sequence, recorded_at_ms, process_index, "
+            + "policy_version, event_json FROM training_logs WHERE "
+            + " AND ".join(conditions)
+            + " ORDER BY sequence",
+            parameters,
+        ).fetchall()
+    )
     return tuple(_event_from_row(row) for row in rows)
 
 
 def _latest_event(
     connection: sqlite3.Connection, *, event_type: str
 ) -> _Event | None:
-    row = connection.execute(
-        "SELECT sequence, recorded_at_ms, process_index, "
-        "policy_version, event_json FROM training_logs "
-        "WHERE event_type = ? "
-        "AND json_type(event_json, '$.error') IS NULL "
-        "ORDER BY sequence DESC LIMIT 1",
-        (event_type,),
-    ).fetchone()
+    row = _OPTIONAL_SQL_ROW.validate_python(
+        connection.execute(
+            "SELECT sequence, recorded_at_ms, process_index, "
+            + "policy_version, event_json FROM training_logs "
+            + "WHERE event_type = ? "
+            + "AND json_type(event_json, '$.error') IS NULL "
+            + "ORDER BY sequence DESC LIMIT 1",
+            (event_type,),
+        ).fetchone()
+    )
     return None if row is None else _event_from_row(row)
 
 
@@ -311,19 +325,21 @@ def _event_from_row(row: tuple[object, ...]) -> _Event:
 
 
 def _pending_rollout_ids(connection: sqlite3.Connection) -> set[str]:
-    rows = connection.execute(
-        "SELECT DISTINCT source.rollout_id "
-        "FROM training_logs AS source "
-        "WHERE source.event_type IN "
-        "('rollout', 'sampling', 'inference.batch') "
-        "AND source.rollout_id IS NOT NULL "
-        "AND json_type(source.event_json, '$.error') IS NULL "
-        "AND NOT EXISTS ("
-        "SELECT 1 FROM training_logs AS terminal "
-        "WHERE terminal.rollout_id = source.rollout_id "
-        "AND terminal.event_type = 'update'"
-        ")",
-    ).fetchall()
+    rows = _SQL_ROWS.validate_python(
+        connection.execute(
+            "SELECT DISTINCT source.rollout_id "
+            + "FROM training_logs AS source "
+            + "WHERE source.event_type IN "
+            + "('rollout', 'sampling', 'inference.batch') "
+            + "AND source.rollout_id IS NOT NULL "
+            + "AND json_type(source.event_json, '$.error') IS NULL "
+            + "AND NOT EXISTS ("
+            + "SELECT 1 FROM training_logs AS terminal "
+            + "WHERE terminal.rollout_id = source.rollout_id "
+            + "AND terminal.event_type = 'update'"
+            + ")",
+        ).fetchall()
+    )
     rollout_ids: set[str] = set()
     for row in rows:
         rollout_id = row[0]
@@ -608,7 +624,9 @@ def _is_json_value(value: object) -> bool:
 
 
 def _scalar_int(connection: sqlite3.Connection, query: str) -> int:
-    row = connection.execute(query).fetchone()
+    row = _OPTIONAL_SQL_ROW.validate_python(
+        connection.execute(query).fetchone()
+    )
     if row is None or not isinstance(row[0], int):
         raise ValueError("metric scalar is invalid")
     return row[0]

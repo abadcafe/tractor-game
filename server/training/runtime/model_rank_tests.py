@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import final
 
 import pytest
 import torch
@@ -433,6 +434,7 @@ def _policy_peer_pair(*, worker_index: int) -> _PolicyPeerPair:
     )
 
 
+@final
 class _MismatchedFirstResponseTransport:
     def __init__(self) -> None:
         self._first_sent = asyncio.Event()
@@ -446,7 +448,9 @@ class _MismatchedFirstResponseTransport:
 
     async def wait_first_sent(self) -> bool:
         try:
-            await asyncio.wait_for(self._first_sent.wait(), timeout=5.0)
+            _ = await asyncio.wait_for(
+                self._first_sent.wait(), timeout=5.0
+            )
         except TimeoutError:
             return False
         return True
@@ -473,7 +477,7 @@ class _MismatchedFirstResponseTransport:
         sent_request_id = self._sent_request_ids[-1]
         if receive_index == 1:
             try:
-                await asyncio.wait_for(
+                _ = await asyncio.wait_for(
                     self._release_first_response.wait(),
                     timeout=timeout_seconds,
                 )
@@ -501,6 +505,7 @@ class _MismatchedFirstResponseTransport:
         )
 
 
+@final
 class _CancelBeforeReceiveLocalTransport:
     def __init__(self, inner: LocalPolicyBatchTransport) -> None:
         self._inner = inner
@@ -516,7 +521,7 @@ class _CancelBeforeReceiveLocalTransport:
         cancel = self._cancel
         if cancel is not None:
             self._cancel = None
-            asyncio.get_running_loop().call_soon(cancel)
+            _ = asyncio.get_running_loop().call_soon(cancel)
             await asyncio.sleep(0)
         return result
 
@@ -528,6 +533,7 @@ class _CancelBeforeReceiveLocalTransport:
         )
 
 
+@final
 class _FakeReplica:
     def __init__(
         self,

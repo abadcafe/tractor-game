@@ -5,9 +5,9 @@ from __future__ import annotations
 import random
 from dataclasses import replace
 
+import server.game.commands as commands
+import server.game.rules.bidding as bidding
 from server.foundation.result import Ok, Rejected
-from server.game import commands
-from server.game.rules import bidding
 from server.game.rules.cards import Card, create_decks
 from server.game.seating import Seat, SeatMap, next_seat, seats
 

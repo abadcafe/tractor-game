@@ -37,8 +37,9 @@ async def test_stream_forwards_source_frames() -> None:
 
 async def test_stream_ends_when_source_ends() -> None:
     async def source() -> AsyncGenerator[bytes, None]:
-        if False:
-            yield b"unreachable"
+        items: tuple[bytes, ...] = ()
+        for item in items:
+            yield item
 
     lifecycle = EventStreamLifecycle()
     completed = await _completed_next(lifecycle.stream(source()))
@@ -52,13 +53,13 @@ async def test_close_ends_waiting_stream() -> None:
 
     async def source() -> AsyncGenerator[bytes, None]:
         source_waiting.set()
-        await never.wait()
+        _ = await never.wait()
         yield b"unreachable"
 
     lifecycle = EventStreamLifecycle()
     stream = lifecycle.stream(source())
     pending_frame = asyncio.create_task(anext(stream))
-    await source_waiting.wait()
+    _ = await source_waiting.wait()
 
     lifecycle.close()
 
@@ -75,7 +76,7 @@ async def test_close_ends_all_active_streams() -> None:
 
     async def source(index: int) -> AsyncGenerator[bytes, None]:
         source_waiting[index].set()
-        await never.wait()
+        _ = await never.wait()
         yield b"unreachable"
 
     lifecycle = EventStreamLifecycle()
@@ -83,7 +84,7 @@ async def test_close_ends_all_active_streams() -> None:
     pending_frames = [
         asyncio.create_task(anext(stream)) for stream in streams
     ]
-    await asyncio.gather(
+    _ = await asyncio.gather(
         *(waiting.wait() for waiting in source_waiting)
     )
 
@@ -105,13 +106,13 @@ async def test_close_discards_frame_completed_in_same_turn() -> None:
 
     async def source() -> AsyncGenerator[bytes, None]:
         source_waiting.set()
-        await release_source.wait()
+        _ = await release_source.wait()
         yield b"must-not-be-sent"
 
     lifecycle = EventStreamLifecycle()
     stream = lifecycle.stream(source())
     pending_frame = asyncio.create_task(anext(stream))
-    await source_waiting.wait()
+    _ = await source_waiting.wait()
 
     release_source.set()
     lifecycle.close()
@@ -160,7 +161,7 @@ async def test_stream_close_finalizes_source_once() -> None:
         nonlocal source_finalizations
         try:
             yield b"first"
-            await asyncio.Event().wait()
+            _ = await asyncio.Event().wait()
         finally:
             source_finalizations += 1
 
@@ -183,7 +184,7 @@ async def test_lifecycle_close_finalizes_source_once() -> None:
         try:
             yield b"first"
             source_waiting.set()
-            await asyncio.Event().wait()
+            _ = await asyncio.Event().wait()
         finally:
             source_finalizations += 1
 
@@ -191,7 +192,7 @@ async def test_lifecycle_close_finalizes_source_once() -> None:
     stream = lifecycle.stream(source())
     assert await anext(stream) == b"first"
     pending_frame = asyncio.create_task(anext(stream))
-    await source_waiting.wait()
+    _ = await source_waiting.wait()
 
     lifecycle.close()
 
@@ -225,14 +226,16 @@ async def test_close_propagates_simultaneous_source_error() -> None:
 
     async def source() -> AsyncGenerator[bytes, None]:
         source_waiting.set()
-        await release_source.wait()
+        _ = await release_source.wait()
+        items: tuple[bytes, ...] = ()
+        for item in items:
+            yield item
         raise RuntimeError("source failed during close")
-        yield b"unreachable"
 
     lifecycle = EventStreamLifecycle()
     stream = lifecycle.stream(source())
     failed = asyncio.create_task(anext(stream))
-    await source_waiting.wait()
+    _ = await source_waiting.wait()
 
     release_source.set()
     lifecycle.close()

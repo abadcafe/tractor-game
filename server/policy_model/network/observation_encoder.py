@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import final, override
 
 import torch
 from torch import Tensor, nn
@@ -12,6 +13,7 @@ from server.policy_model.observation.tensor_batch import (
     ObservationTensorBatch,
 )
 
+from ._module_call import call_tensor
 from .structured_attention import StructuredObservationEncoder
 from .token_encoder import TypedTokenEncoder
 
@@ -68,6 +70,7 @@ class EncodedObservation:
         )
 
 
+@final
 class ObservationEncoder(nn.Module):
     """Own token encoding and structure-aware attention."""
 
@@ -82,17 +85,21 @@ class ObservationEncoder(nn.Module):
             heads=heads,
         )
 
+    @override
     def forward(
         self, observation: ObservationTensorBatch
     ) -> EncodedObservation:
         """Encode a padded observation batch and every candidate."""
         memory_padding_mask = observation.category_ids[:, :, 0].eq(0)
-        memory = self._structured_attention(
-            self._token_encoder(
-                category_ids=observation.category_ids,
-                scalar_values=observation.scalar_values,
-                card_rule_values=observation.card_rule_values,
-            ),
+        token_values = call_tensor(
+            self._token_encoder,
+            category_ids=observation.category_ids,
+            scalar_values=observation.scalar_values,
+            card_rule_values=observation.card_rule_values,
+        )
+        memory = call_tensor(
+            self._structured_attention,
+            token_values,
             padding_mask=memory_padding_mask,
             encoded_structure_coordinates=(
                 observation.encoded_structure_coordinates
@@ -103,7 +110,7 @@ class ObservationEncoder(nn.Module):
             dtype=torch.long,
             device=memory.device,
         )
-        observation_context = memory[
+        observation_context: Tensor = memory[
             batch_indices, observation.query_indices
         ]
         card_categories = observation.candidate_category_ids

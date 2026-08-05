@@ -77,12 +77,12 @@ def evaluate_trace_batch(
     if isinstance(prefix_eval_result, _result.Rejected):
         return prefix_eval_result
     prefix_eval = prefix_eval_result.value
-    log_probability_sums.index_add_(
+    _ = log_probability_sums.index_add_(
         dim=0,
         index=prefix_eval.active_positions,
         source=prefix_eval.log_probabilities,
     )
-    entropy_sums.index_add_(
+    _ = entropy_sums.index_add_(
         dim=0,
         index=prefix_eval.active_positions,
         source=prefix_eval.entropies,

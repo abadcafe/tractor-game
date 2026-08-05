@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from typing import final, override
 
 from server.foundation.result import Ok, Rejected
 from server.game import CommandRejected, commands
@@ -44,16 +45,19 @@ class _Stopped:
 type _Lifecycle = _New | _Running | _Stopped
 
 
+@final
 class _TypedCommandDecoder(CommandDecoder):
     def __init__(self, command: commands.Command) -> None:
         self._command = command
 
+    @override
     def decode(
         self,
     ) -> Ok[commands.Command] | CommandRejected:
         return Ok(self._command)
 
 
+@final
 class BotPlayer:
     """Run one DecisionPolicy behind a stable runtime player."""
 
@@ -97,7 +101,7 @@ class BotPlayer:
         )
         if task in done:
             if not ready_task.done():
-                ready_task.cancel()
+                _ = ready_task.cancel()
                 try:
                     await ready_task
                 except asyncio.CancelledError:
@@ -120,7 +124,7 @@ class BotPlayer:
         self._lifecycle = _Stopped()
         if isinstance(lifecycle, _New):
             return
-        lifecycle.task.cancel()
+        _ = lifecycle.task.cancel()
         if lifecycle.task is asyncio.current_task():
             return
         try:

@@ -23,6 +23,7 @@ from server.training_events.store import (
     database_path,
     initialize_database,
 )
+from tests.sqlite_support import fetch_optional_row
 
 _JSON_OBJECT_ADAPTER: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
 
@@ -48,9 +49,9 @@ def test_event_sink_batches_typed_json_and_preserves_context(
     sink.close()
 
     with sqlite3.connect(database_path(tmp_path)) as connection:
-        row = connection.execute(
-            "SELECT event_json FROM training_logs"
-        ).fetchone()
+        row = fetch_optional_row(
+            connection.execute("SELECT event_json FROM training_logs")
+        )
     assert row is not None
     event_json = row[0]
     assert isinstance(event_json, str)
@@ -84,9 +85,9 @@ def test_failed_event_uses_same_name_and_top_level_error(
     sink.close()
 
     with sqlite3.connect(database_path(tmp_path)) as connection:
-        row = connection.execute(
-            "SELECT event_json FROM training_logs"
-        ).fetchone()
+        row = fetch_optional_row(
+            connection.execute("SELECT event_json FROM training_logs")
+        )
     assert row is not None
     event_json = row[0]
     assert isinstance(event_json, str)
@@ -131,9 +132,9 @@ def test_emit_accepts_finite_domain_fields(
     sink.close()
 
     with sqlite3.connect(database_path(tmp_path)) as connection:
-        stored = connection.execute(
-            "SELECT count(*) FROM training_logs"
-        ).fetchone()
+        stored = fetch_optional_row(
+            connection.execute("SELECT count(*) FROM training_logs")
+        )
     assert stored == (1,)
 
 
@@ -155,9 +156,9 @@ def test_store_accepts_every_contract_event_name(
     sink.close()
 
     with sqlite3.connect(database_path(tmp_path)) as connection:
-        count = connection.execute(
-            "SELECT count(*) FROM training_logs"
-        ).fetchone()
+        count = fetch_optional_row(
+            connection.execute("SELECT count(*) FROM training_logs")
+        )
     assert count == (len(EVENT_NAMES),)
 
 
@@ -169,7 +170,7 @@ def test_writer_close_waits_for_space_without_dropping_stop(
 
     def blocked_open(_run_dir: Path) -> Rejected:
         entered.set()
-        release.wait()
+        _ = release.wait()
         return Rejected(reason="injected open failure")
 
     monkeypatch.setattr(writer, "_QUEUE_CAPACITY", 1)

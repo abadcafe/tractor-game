@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import server.game.rules._bid as _bid
 from server.foundation.result import Ok, Rejected
 
-from . import _bid
 from ._ordering import bid_value as _bid_value
 from .cards import Card, Rank, Suit
 

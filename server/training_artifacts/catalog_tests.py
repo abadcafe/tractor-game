@@ -26,7 +26,7 @@ def test_read_checkpoint_catalog_lists_manifest_object_and_orphan(
     _write_checkpoint(tmp_path, "latest.json", current_id, b"state")
     orphan = tmp_path / "checkpoints" / "objects" / orphan_id
     orphan.mkdir(parents=True)
-    orphan.joinpath("state.pt").write_bytes(b"orphan")
+    _ = orphan.joinpath("state.pt").write_bytes(b"orphan")
 
     result = read_checkpoint_catalog(tmp_path)
 
@@ -48,7 +48,7 @@ def test_invalid_object_id_is_visible_but_never_valid(
 ) -> None:
     invalid = tmp_path / "checkpoints" / "objects" / "foo"
     invalid.mkdir(parents=True)
-    invalid.joinpath("state.pt").write_bytes(b"state")
+    _ = invalid.joinpath("state.pt").write_bytes(b"state")
 
     result = read_checkpoint_catalog(tmp_path)
 
@@ -65,7 +65,7 @@ def test_read_checkpoint_catalog_keeps_invalid_manifest_visible(
 ) -> None:
     checkpoint_dir = tmp_path / "checkpoints"
     checkpoint_dir.mkdir()
-    checkpoint_dir.joinpath("broken.json").write_text("not json")
+    _ = checkpoint_dir.joinpath("broken.json").write_text("not json")
 
     result = read_checkpoint_catalog(tmp_path)
 
@@ -86,7 +86,7 @@ def test_read_checkpoint_catalog_rejects_mismatched_schema_manifest(
         '"schema_version": 24', '"schema_version": 0'
     )
     assert stale != current
-    manifest_path.write_text(stale, encoding="utf-8")
+    _ = manifest_path.write_text(stale, encoding="utf-8")
 
     result = read_checkpoint_catalog(tmp_path)
 
@@ -104,9 +104,9 @@ def test_web_application_import_does_not_load_torch() -> None:
             sys.executable,
             "-c",
             "import sys; "
-            "from server.web.app import WebApplication; "
-            "WebApplication(); "
-            "assert 'torch' not in sys.modules",
+            + "from server.web.app import WebApplication; "
+            + "WebApplication(); "
+            + "assert 'torch' not in sys.modules",
         ),
         check=False,
         capture_output=True,
@@ -126,7 +126,7 @@ def _write_checkpoint(
     state_path = Path("objects") / checkpoint_id / "state.pt"
     absolute_state = checkpoint_dir / state_path
     absolute_state.parent.mkdir(parents=True)
-    absolute_state.write_bytes(state)
+    _ = absolute_state.write_bytes(state)
     result = write_checkpoint_manifest(
         path=checkpoint_dir / manifest_name,
         manifest=CheckpointManifest(

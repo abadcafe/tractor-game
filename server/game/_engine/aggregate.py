@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import server.game.commands as commands
 from server.foundation.result import Ok, Rejected
-from server.game import commands
 from server.game.config import GameConfig, GameSeed
 from server.game.positions import RoundDeal
 from server.game.rejections import CommandRejected

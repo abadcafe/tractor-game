@@ -151,24 +151,24 @@ class ModelRankSampleArena:
         self._row_policy_versions_tensor()[rows] = torch.tensor(
             policy_versions, dtype=torch.long, device=self.device
         )
-        self._row_step_counts_tensor()[rows].copy_(
+        _ = self._row_step_counts_tensor()[rows].copy_(
             action_sample.step_counts
         )
-        self._row_step_offsets_tensor()[rows].copy_(
+        _ = self._row_step_offsets_tensor()[rows].copy_(
             torch.cumsum(action_sample.step_counts, 0)
             - action_sample.step_counts
             + step_start
         )
         self._write_observation(rows=rows, source=observation_batch)
-        self._choice_ids_tensor()[rows].zero_()
+        _ = self._choice_ids_tensor()[rows].zero_()
         width = int(action_sample.choice_ids_padded.shape[1])
-        self._choice_ids_tensor()[rows, :width].copy_(
+        _ = self._choice_ids_tensor()[rows, :width].copy_(
             action_sample.choice_ids_padded
         )
-        self._flat_legal_choice_masks_tensor()[
+        _ = self._flat_legal_choice_masks_tensor()[
             step_start:step_end
         ].copy_(action_sample.legal_choice_masks)
-        self._old_log_probabilities_tensor()[rows].copy_(
+        _ = self._old_log_probabilities_tensor()[rows].copy_(
             action_sample.log_probabilities
         )
         self._row_count = end
@@ -405,18 +405,20 @@ class ModelRankSampleArena:
             ),
         )
         for destination, values in sequence_pairs:
-            destination[rows].zero_()
-            destination[rows, :token_count].copy_(values)
-        self._candidate_category_ids_tensor()[rows].copy_(
+            _ = destination[rows].zero_()
+            _ = destination[rows, :token_count].copy_(values)
+        _ = self._candidate_category_ids_tensor()[rows].copy_(
             source.candidate_category_ids
         )
-        self._candidate_counts_tensor()[rows].copy_(
+        _ = self._candidate_counts_tensor()[rows].copy_(
             source.candidate_counts
         )
-        self._candidate_card_rule_values_tensor()[rows].copy_(
+        _ = self._candidate_card_rule_values_tensor()[rows].copy_(
             source.candidate_card_rule_values
         )
-        self._query_indices_tensor()[rows].copy_(source.query_indices)
+        _ = self._query_indices_tensor()[rows].copy_(
+            source.query_indices
+        )
 
     def _select_observation(
         self, rows: Tensor
@@ -620,7 +622,7 @@ def _grow_first_dimension(values: Tensor, capacity: int) -> Tensor:
         dtype=values.dtype,
         device=values.device,
     )
-    result[: int(values.shape[0])].copy_(values)
+    _ = result[: int(values.shape[0])].copy_(values)
     return result
 
 
@@ -631,7 +633,7 @@ def _grow_second_dimension(values: Tensor, capacity: int) -> Tensor:
         dtype=values.dtype,
         device=values.device,
     )
-    result[:, : shape[1]].copy_(values)
+    _ = result[:, : shape[1]].copy_(values)
     return result
 
 

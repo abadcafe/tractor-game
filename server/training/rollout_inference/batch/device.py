@@ -80,11 +80,11 @@ def copy_policy_request_host_frame_to_device(
     if device.type != "cuda":
         if device_slot is None:
             return host_frame.to(device=device)
-        device_slot.copy_(host_frame)
+        _ = device_slot.copy_(host_frame)
         return device_slot
     if device_slot is None:
         return host_frame.to(device=device, non_blocking=True)
-    device_slot.copy_(host_frame, non_blocking=True)
+    _ = device_slot.copy_(host_frame, non_blocking=True)
     return device_slot
 
 

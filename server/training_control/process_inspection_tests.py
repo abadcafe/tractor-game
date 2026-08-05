@@ -25,7 +25,7 @@ def test_missing_pid_file_is_stopped(tmp_path: Path) -> None:
 def test_live_pid_exposes_actual_process_details(
     tmp_path: Path,
 ) -> None:
-    pid_file_path(tmp_path).write_text(
+    _ = pid_file_path(tmp_path).write_text(
         f"{os.getpid()}\n", encoding="ascii"
     )
 
@@ -46,14 +46,16 @@ def test_live_pid_exposes_actual_process_details(
 def test_malformed_pid_file_is_stopped(tmp_path: Path) -> None:
     path = pid_file_path(tmp_path)
     for content in ("", "not-a-pid\n", "0\n", "-12\n", "1\n2\n"):
-        path.write_text(content, encoding="ascii")
+        _ = path.write_text(content, encoding="ascii")
         result = ProcessInspector().inspect(tmp_path)
         assert isinstance(result, Ok)
         assert result.value.process is None
 
 
 def test_dead_pid_file_is_stopped(tmp_path: Path) -> None:
-    pid_file_path(tmp_path).write_text("2147483647\n", encoding="ascii")
+    _ = pid_file_path(tmp_path).write_text(
+        "2147483647\n", encoding="ascii"
+    )
 
     result = ProcessInspector().inspect(tmp_path)
 
@@ -81,7 +83,7 @@ def test_pid_file_write_and_matching_removal(tmp_path: Path) -> None:
 
 def test_pid_file_symlink_is_rejected(tmp_path: Path) -> None:
     target = tmp_path / "target"
-    target.write_text(f"{os.getpid()}\n", encoding="ascii")
+    _ = target.write_text(f"{os.getpid()}\n", encoding="ascii")
     pid_file_path(tmp_path).symlink_to(target)
 
     result = read_training_pid(tmp_path)

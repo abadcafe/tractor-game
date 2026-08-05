@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+import torch
 
 from server.foundation.result import Ok, Rejected
 from server.training.runtime import threads
@@ -61,19 +62,15 @@ def test_apply_torch_thread_config_inherits_current_thread_counts(
     def fake_set_num_interop_threads(value: int) -> None:
         interop_calls.append(value)
 
+    monkeypatch.setattr(torch, "get_num_threads", fake_num_threads)
     monkeypatch.setattr(
-        threads.torch, "get_num_threads", fake_num_threads
-    )
-    monkeypatch.setattr(
-        threads.torch,
+        torch,
         "get_num_interop_threads",
         fake_num_interop_threads,
     )
+    monkeypatch.setattr(torch, "set_num_threads", fake_set_num_threads)
     monkeypatch.setattr(
-        threads.torch, "set_num_threads", fake_set_num_threads
-    )
-    monkeypatch.setattr(
-        threads.torch,
+        torch,
         "set_num_interop_threads",
         fake_set_num_interop_threads,
     )
@@ -110,19 +107,15 @@ def test_apply_torch_thread_config_applies_changed_counts(
     def fake_set_num_interop_threads(value: int) -> None:
         interop_calls.append(value)
 
+    monkeypatch.setattr(torch, "get_num_threads", fake_num_threads)
     monkeypatch.setattr(
-        threads.torch, "get_num_threads", fake_num_threads
-    )
-    monkeypatch.setattr(
-        threads.torch,
+        torch,
         "get_num_interop_threads",
         fake_num_interop_threads,
     )
+    monkeypatch.setattr(torch, "set_num_threads", fake_set_num_threads)
     monkeypatch.setattr(
-        threads.torch, "set_num_threads", fake_set_num_threads
-    )
-    monkeypatch.setattr(
-        threads.torch,
+        torch,
         "set_num_interop_threads",
         fake_set_num_interop_threads,
     )
@@ -157,19 +150,15 @@ def test_apply_torch_thread_config_skips_matching_counts(
     def fake_set_num_interop_threads(value: int) -> None:
         interop_calls.append(value)
 
+    monkeypatch.setattr(torch, "get_num_threads", fake_num_threads)
     monkeypatch.setattr(
-        threads.torch, "get_num_threads", fake_num_threads
-    )
-    monkeypatch.setattr(
-        threads.torch,
+        torch,
         "get_num_interop_threads",
         fake_num_interop_threads,
     )
+    monkeypatch.setattr(torch, "set_num_threads", fake_set_num_threads)
     monkeypatch.setattr(
-        threads.torch, "set_num_threads", fake_set_num_threads
-    )
-    monkeypatch.setattr(
-        threads.torch,
+        torch,
         "set_num_interop_threads",
         fake_set_num_interop_threads,
     )
@@ -197,17 +186,13 @@ def test_apply_torch_thread_config_rejects_runtime_failure(
         assert value == 1
         raise RuntimeError
 
+    monkeypatch.setattr(torch, "get_num_threads", fake_num_threads)
     monkeypatch.setattr(
-        threads.torch, "get_num_threads", fake_num_threads
-    )
-    monkeypatch.setattr(
-        threads.torch,
+        torch,
         "get_num_interop_threads",
         fake_num_interop_threads,
     )
-    monkeypatch.setattr(
-        threads.torch, "set_num_threads", fake_set_num_threads
-    )
+    monkeypatch.setattr(torch, "set_num_threads", fake_set_num_threads)
 
     applied = apply_torch_thread_config(
         num_threads=1,

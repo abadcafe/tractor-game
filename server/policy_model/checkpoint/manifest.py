@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 from typing import TypeGuard, cast
 
+from pydantic import TypeAdapter, ValidationError
+
 from server.checkpoint_contract import (
     CHECKPOINT_OBJECTS_DIR,
     CHECKPOINT_SCHEMA_VERSION,
@@ -25,6 +27,8 @@ from server.policy_model.checkpoint.schema import (
 from server.policy_model.checkpoint.validation import (
     model_config_from_json,
 )
+
+_JSON_OBJECT_ADAPTER: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
 
 
 def checkpoint_dir_from_manifest_paths(
@@ -48,7 +52,7 @@ def checkpoint_dir_from_manifest_paths(
             return checkpoint_corruption(
                 path,
                 "manifest path must be latest.json or "
-                "update-<positive n>.json",
+                + "update-<positive n>.json",
             )
         seen_paths.add(path)
     return _result.Ok(value=checkpoint_dir)
@@ -68,7 +72,7 @@ def write_checkpoint_manifest(
     )
     tmp_manifest_path = path.with_suffix(f"{path.suffix}.tmp")
     try:
-        tmp_manifest_path.write_text(
+        _ = tmp_manifest_path.write_text(
             f"{manifest_text}\n",
             encoding="utf-8",
         )
@@ -96,22 +100,20 @@ def read_checkpoint_manifest(
     if isinstance(path_check, _result.Rejected):
         return path_check
     try:
-        loaded: object = json.loads(path.read_text(encoding="utf-8"))
+        loaded = _JSON_OBJECT_ADAPTER.validate_json(
+            path.read_text(encoding="utf-8")
+        )
     except FileNotFoundError:
         return checkpoint_corruption(path, "manifest file is missing")
     except UnicodeDecodeError:
         return checkpoint_corruption(
             path, "manifest is not valid UTF-8"
         )
-    except json.JSONDecodeError:
+    except ValidationError:
         return checkpoint_corruption(path, "manifest is not valid JSON")
     except OSError:
         return checkpoint_corruption(
             path, "manifest file is not readable"
-        )
-    if not _is_json_object(loaded):
-        return checkpoint_corruption(
-            path, "manifest root is not an object"
         )
     expected_fields = {
         "schema_version",
@@ -271,7 +273,7 @@ def _assert_manifest_state_path(
         return checkpoint_corruption(
             path,
             "manifest state path does not match checkpoint id "
-            f"{manifest.checkpoint_id}",
+            + f"{manifest.checkpoint_id}",
         )
     return _result.Ok(value=None)
 

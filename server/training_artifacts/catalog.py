@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
-from typing import Literal
+from typing import ClassVar, Literal
 
 from pydantic import (
     BaseModel,
@@ -29,7 +28,9 @@ _CHECKPOINT_ID_PATTERN = r"^[0-9a-f]{32}$"
 class _ManifestDocument(BaseModel):
     """Torch-free representation of the on-disk manifest contract."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     schema_version: int
     checkpoint_id: str = Field(pattern=_CHECKPOINT_ID_PATTERN)
@@ -54,7 +55,9 @@ class _ManifestDocument(BaseModel):
 class CheckpointManifestView(BaseModel):
     """One valid or invalid manifest shown by the dashboard."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     name: str
     kind: Literal["latest", "archive", "invalid"]
@@ -77,7 +80,9 @@ class CheckpointManifestView(BaseModel):
 class CheckpointObjectView(BaseModel):
     """One immutable checkpoint object and its manifest references."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     checkpoint_id: str
     state_path: str
@@ -92,7 +97,9 @@ class CheckpointObjectView(BaseModel):
 class CheckpointCatalog(BaseModel):
     """Complete managed checkpoint directory inventory."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     checkpoint_directory: Path
     manifests: tuple[CheckpointManifestView, ...]
@@ -311,23 +318,21 @@ def _read_manifest(
             path, "manifest must not be a symlink"
         )
     try:
-        loaded: object = json.loads(path.read_text(encoding="utf-8"))
+        manifest = _ManifestDocument.model_validate_json(
+            path.read_text(encoding="utf-8")
+        )
     except FileNotFoundError:
         return _checkpoint_rejection(path, "manifest file is missing")
     except UnicodeDecodeError:
         return _checkpoint_rejection(
             path, "manifest is not valid UTF-8"
         )
-    except json.JSONDecodeError:
-        return _checkpoint_rejection(path, "manifest is not valid JSON")
+    except ValidationError as error:
+        return _checkpoint_rejection(path, str(error))
     except OSError:
         return _checkpoint_rejection(
             path, "manifest file is not readable"
         )
-    try:
-        manifest = _ManifestDocument.model_validate(loaded)
-    except ValidationError as error:
-        return _checkpoint_rejection(path, str(error))
     state_path = Path(manifest.state_path)
     expected = (
         Path(CHECKPOINT_OBJECTS_DIR)

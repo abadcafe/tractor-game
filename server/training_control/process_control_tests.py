@@ -45,7 +45,7 @@ async def test_initialize_does_not_validate_or_replace_live_pid(
     _write_fixture_cli(tmp_path)
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    pid_file_path(run_dir).write_text(
+    _ = pid_file_path(run_dir).write_text(
         f"{os.getpid()}\n", encoding="ascii"
     )
     control = TrainingProcessControl()
@@ -171,7 +171,7 @@ async def test_live_unrelated_pid_rejects_resume(
     _write_fixture_cli(tmp_path)
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    pid_file_path(run_dir).write_text(
+    _ = pid_file_path(run_dir).write_text(
         f"{os.getpid()}\n", encoding="ascii"
     )
     control = TrainingProcessControl()
@@ -193,7 +193,7 @@ async def test_malformed_pid_is_overwritten_by_resume(
     _write_fixture_cli(tmp_path)
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    pid_file_path(run_dir).write_text("invalid\n", encoding="ascii")
+    _ = pid_file_path(run_dir).write_text("invalid\n", encoding="ascii")
     control = TrainingProcessControl()
 
     started = await control.resume(
@@ -271,7 +271,9 @@ async def test_stop_forces_process_that_ignores_sigterm(
 async def test_stop_removes_stale_pid_file(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    pid_file_path(run_dir).write_text("2147483647\n", encoding="ascii")
+    _ = pid_file_path(run_dir).write_text(
+        "2147483647\n", encoding="ascii"
+    )
     control = TrainingProcessControl()
 
     stopped = await control.stop(run_dir=run_dir, timeout_seconds=1.0)
@@ -314,30 +316,30 @@ def _command(
 def _write_fixture_cli(tmp_path: Path) -> None:
     package = tmp_path / "server" / "training_cli"
     package.mkdir(parents=True)
-    package.parent.joinpath("__init__.py").write_text(
+    _ = package.parent.joinpath("__init__.py").write_text(
         "", encoding="ascii"
     )
-    package.joinpath("__init__.py").write_text("", encoding="ascii")
-    package.joinpath("__main__.py").write_text(
+    _ = package.joinpath("__init__.py").write_text("", encoding="ascii")
+    _ = package.joinpath("__main__.py").write_text(
         "import pathlib, signal, sys, time\n"
-        "args = sys.argv[1:]\n"
-        "run_dir = pathlib.Path(args[args.index('--run-dir') + 1])\n"
-        "run_dir.mkdir(parents=True, exist_ok=True)\n"
-        "stopped = False\n"
-        "def stop(_signal, _frame):\n"
-        "    global stopped\n"
-        "    stopped = True\n"
-        "if '--fixture-ignore-term' in args:\n"
-        "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-        "else:\n"
-        "    signal.signal(signal.SIGTERM, stop)\n"
-        "run_dir.joinpath('fixture-ready').write_text('ready')\n"
-        "if 'resume' in args:\n"
-        "    if '--fixture-fail' in args:\n"
-        "        time.sleep(0.1)\n"
-        "        print('fixture failure', file=sys.stderr)\n"
-        "        raise SystemExit(2)\n"
-        "    while not stopped:\n"
-        "        time.sleep(0.01)\n",
+        + "args = sys.argv[1:]\n"
+        + "run_dir = pathlib.Path(args[args.index('--run-dir') + 1])\n"
+        + "run_dir.mkdir(parents=True, exist_ok=True)\n"
+        + "stopped = False\n"
+        + "def stop(_signal, _frame):\n"
+        + "    global stopped\n"
+        + "    stopped = True\n"
+        + "if '--fixture-ignore-term' in args:\n"
+        + "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        + "else:\n"
+        + "    signal.signal(signal.SIGTERM, stop)\n"
+        + "run_dir.joinpath('fixture-ready').write_text('ready')\n"
+        + "if 'resume' in args:\n"
+        + "    if '--fixture-fail' in args:\n"
+        + "        time.sleep(0.1)\n"
+        + "        print('fixture failure', file=sys.stderr)\n"
+        + "        raise SystemExit(2)\n"
+        + "    while not stopped:\n"
+        + "        time.sleep(0.01)\n",
         encoding="ascii",
     )

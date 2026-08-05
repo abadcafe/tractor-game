@@ -6,6 +6,8 @@ import sqlite3
 from pathlib import Path
 from uuid import uuid4
 
+from pydantic import ConfigDict, TypeAdapter
+
 from server.foundation import result as _result
 from server.training_events.contract import EVENT_NAMES, PROCESS_KINDS
 from server.training_events.envelope import (
@@ -15,6 +17,16 @@ from server.training_events.envelope import (
 DATABASE_FILENAME = "training.sqlite3"
 APPLICATION_ID = 0x54524149
 TRAINING_EVENT_STORE_SCHEMA_VERSION = 4
+
+type _SqlRow = tuple[object, ...]
+_OPTIONAL_SQL_ROW: TypeAdapter[_SqlRow | None] = TypeAdapter(
+    _SqlRow | None,
+    config=ConfigDict(strict=True),
+)
+_SQL_ROWS: TypeAdapter[list[_SqlRow]] = TypeAdapter(
+    list[_SqlRow],
+    config=ConfigDict(strict=True),
+)
 
 _EVENT_NAMES_SQL = ", ".join(f"'{name}'" for name in EVENT_NAMES)
 _PROCESS_KINDS_SQL = ", ".join(f"'{kind}'" for kind in PROCESS_KINDS)
@@ -164,9 +176,12 @@ def database_path(run_dir: Path) -> Path:
 
 def training_store_id(connection: sqlite3.Connection) -> str:
     """Read the immutable identity of one initialized log store."""
-    row = connection.execute(
-        "SELECT store_id FROM training_log_store WHERE singleton = 1"
-    ).fetchone()
+    row = _OPTIONAL_SQL_ROW.validate_python(
+        connection.execute(
+            "SELECT store_id FROM training_log_store "
+            + "WHERE singleton = 1"
+        ).fetchone()
+    )
     if row is None or not isinstance(row[0], str) or not row[0]:
         raise sqlite3.DatabaseError(
             "training log store identity is invalid"
@@ -192,18 +207,18 @@ def initialize_database(
         user_version = _pragma_int(connection, "user_version")
         tables = _table_count(connection)
         if tables == 0 and application_id == 0 and user_version == 0:
-            connection.executescript(_CREATE_SCHEMA)
-            connection.execute(
+            _ = connection.executescript(_CREATE_SCHEMA)
+            _ = connection.execute(
                 "INSERT INTO training_log_store(singleton, store_id) "
-                "VALUES (1, ?)",
+                + "VALUES (1, ?)",
                 (uuid4().hex,),
             )
-            connection.execute(
+            _ = connection.execute(
                 f"PRAGMA application_id = {APPLICATION_ID}"
             )
-            connection.execute(
+            _ = connection.execute(
                 "PRAGMA user_version = "
-                f"{TRAINING_EVENT_STORE_SCHEMA_VERSION}"
+                + f"{TRAINING_EVENT_STORE_SCHEMA_VERSION}"
             )
             connection.commit()
         elif (
@@ -255,8 +270,8 @@ def open_reader(
         connection = sqlite3.connect(
             f"file:{path}?mode=ro", uri=True, timeout=5.0
         )
-        connection.execute("PRAGMA query_only = ON")
-        connection.execute("PRAGMA busy_timeout = 5000")
+        _ = connection.execute("PRAGMA query_only = ON")
+        _ = connection.execute("PRAGMA busy_timeout = 5000")
         application_id = _pragma_int(connection, "application_id")
         user_version = _pragma_int(connection, "user_version")
     except sqlite3.Error:
@@ -276,15 +291,17 @@ def open_reader(
 
 
 def _configure_writer(connection: sqlite3.Connection) -> None:
-    connection.execute("PRAGMA journal_mode = WAL")
-    connection.execute("PRAGMA synchronous = NORMAL")
-    connection.execute("PRAGMA busy_timeout = 5000")
-    connection.execute("PRAGMA foreign_keys = ON")
-    connection.execute("PRAGMA trusted_schema = ON")
+    _ = connection.execute("PRAGMA journal_mode = WAL")
+    _ = connection.execute("PRAGMA synchronous = NORMAL")
+    _ = connection.execute("PRAGMA busy_timeout = 5000")
+    _ = connection.execute("PRAGMA foreign_keys = ON")
+    _ = connection.execute("PRAGMA trusted_schema = ON")
 
 
 def _pragma_int(connection: sqlite3.Connection, name: str) -> int:
-    row = connection.execute(f"PRAGMA {name}").fetchone()
+    row = _OPTIONAL_SQL_ROW.validate_python(
+        connection.execute(f"PRAGMA {name}").fetchone()
+    )
     assert row is not None
     value = row[0]
     assert isinstance(value, int)
@@ -292,10 +309,12 @@ def _pragma_int(connection: sqlite3.Connection, name: str) -> int:
 
 
 def _table_count(connection: sqlite3.Connection) -> int:
-    row = connection.execute(
-        "SELECT count(*) FROM sqlite_schema WHERE type = 'table' "
-        "AND name NOT LIKE 'sqlite_%'"
-    ).fetchone()
+    row = _OPTIONAL_SQL_ROW.validate_python(
+        connection.execute(
+            "SELECT count(*) FROM sqlite_schema WHERE type = 'table' "
+            + "AND name NOT LIKE 'sqlite_%'"
+        ).fetchone()
+    )
     assert row is not None
     value = row[0]
     assert isinstance(value, int)
@@ -304,16 +323,20 @@ def _table_count(connection: sqlite3.Connection) -> int:
 
 def _schema_is_complete(connection: sqlite3.Connection) -> bool:
     try:
-        tables = connection.execute(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' "
-            "AND name NOT LIKE 'sqlite_%' ORDER BY name"
-        ).fetchall()
+        tables = _SQL_ROWS.validate_python(
+            connection.execute(
+                "SELECT name FROM sqlite_schema WHERE type = 'table' "
+                + "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            ).fetchall()
+        )
         if tables != [("training_log_store",), ("training_logs",)]:
             return False
-        row = connection.execute(
-            "SELECT store_id FROM training_log_store "
-            "WHERE singleton = 1"
-        ).fetchone()
+        row = _OPTIONAL_SQL_ROW.validate_python(
+            connection.execute(
+                "SELECT store_id FROM training_log_store "
+                + "WHERE singleton = 1"
+            ).fetchone()
+        )
         if row is None or not isinstance(row[0], str):
             return False
         store_id = row[0]
@@ -322,10 +345,10 @@ def _schema_is_complete(connection: sqlite3.Connection) -> bool:
             for character in store_id
         ):
             return False
-        connection.execute(
+        _ = connection.execute(
             "SELECT sequence, event_json, event_type, recorded_at_ms, "
-            "process_kind, process_index, policy_version, rollout_id, "
-            "episode_id FROM training_logs LIMIT 0"
+            + "process_kind, process_index, policy_version, "
+            + "rollout_id, episode_id FROM training_logs LIMIT 0"
         )
     except sqlite3.Error:
         return False

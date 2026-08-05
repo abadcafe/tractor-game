@@ -32,7 +32,8 @@ def sample_policy_batch(
     sampler: ActionSampler,
 ) -> PolicySamplingResult:
     """Sample policy decisions for a staged request batch."""
-    model.eval()
+    _ = device
+    _ = model.eval()
     with torch.no_grad():
         observation_batch = requests.observation_batch
         encoding = model.encode_policy_observations(observation_batch)
@@ -79,7 +80,8 @@ def sample_policy_batch_into_arena(
     sample_arena: ModelRankSampleArena,
 ) -> PolicySamplingDecisionResult:
     """Sample policy decisions and append replay tensors to an arena."""
-    model.eval()
+    _ = device
+    _ = model.eval()
     with torch.no_grad():
         observation_batch = requests.observation_batch
         encoding = model.encode_policy_observations(observation_batch)

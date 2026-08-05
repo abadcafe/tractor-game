@@ -75,6 +75,7 @@ _INITIAL_LEVELS = PartnershipMap(
     first=Rank.TWO,
     second=Rank.TWO,
 )
+_NO_CONFIRMED_SEATS: frozenset[Seat] = frozenset()
 
 
 def card(
@@ -215,7 +216,7 @@ def snapshot(
     scoring: ScoringSnapshot | None = None,
     winning_partnership: Partnership | None = None,
     partnership_levels: PartnershipMap[Rank] = _INITIAL_LEVELS,
-    next_round_confirmed: frozenset[Seat] = frozenset(),
+    next_round_confirmed: frozenset[Seat] = _NO_CONFIRMED_SEATS,
     mandatory_levels: tuple[Rank, ...] = (Rank.ACE,),
 ) -> snapshots.PlayerSnapshot:
     """Create one complete player snapshot through its public type."""

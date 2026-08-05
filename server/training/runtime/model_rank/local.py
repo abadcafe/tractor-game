@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, final
 
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
@@ -25,6 +25,7 @@ class ModelReplicaProtocol(Protocol):
     def snapshot(self) -> RuntimeTrainingState: ...
 
 
+@final
 class LocalModelRank:
     """Model rank hosted inside the current worker process."""
 

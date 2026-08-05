@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import math
+from typing import final, override
+
 import torch
 from torch import Tensor, nn
 from torch.nn.attention import SDPBackend, sdpa_kernel
@@ -12,12 +15,14 @@ from server.policy_model._schema.actions import (
     MAX_ACTION_STEPS,
 )
 
+from ._module_call import call_attention, call_tensor
 from .observation_encoder import (
     ActionDecoderInputs,
     EncodedObservation,
 )
 
 
+@final
 class CompleteActionEncoder(nn.Module):
     """Encode a complete action against separate observation memory."""
 
@@ -36,10 +41,10 @@ class CompleteActionEncoder(nn.Module):
         self._control_choice_embeddings = nn.Parameter(
             torch.empty(CARD_CHOICE_BASE_ID, d_model)
         )
-        nn.init.normal_(
+        _ = nn.init.normal_(
             self._control_choice_embeddings,
             mean=0.0,
-            std=d_model**-0.5,
+            std=1.0 / math.sqrt(float(d_model)),
         )
         self._selected_choice_adapter = nn.Linear(d_model, d_model)
         self._action_position_embedding = nn.Embedding(
@@ -47,16 +52,17 @@ class CompleteActionEncoder(nn.Module):
             d_model,
         )
         self._value_query = nn.Parameter(torch.empty(d_model))
-        nn.init.normal_(
+        _ = nn.init.normal_(
             self._value_query,
             mean=0.0,
-            std=d_model**-0.5,
+            std=1.0 / math.sqrt(float(d_model)),
         )
         self._layers = nn.ModuleList(
             _CompleteActionBlock(d_model=d_model, heads=heads)
             for _ in range(layers)
         )
 
+    @override
     def forward(
         self,
         encoding: EncodedObservation,
@@ -88,15 +94,18 @@ class CompleteActionEncoder(nn.Module):
             dtype=torch.long,
             device=choice_ids_padded.device,
         ).unsqueeze(1)
-        selected = choice_embeddings[batch_indices, choice_ids_padded]
+        selected: Tensor = choice_embeddings[
+            batch_indices, choice_ids_padded
+        ]
         positions = torch.arange(
             max_steps,
             dtype=torch.long,
             device=choice_ids_padded.device,
         )
-        selected = self._selected_choice_adapter(selected)
-        selected = selected + self._action_position_embedding(
-            positions.unsqueeze(0)
+        selected = call_tensor(self._selected_choice_adapter, selected)
+        selected = selected + call_tensor(
+            self._action_position_embedding,
+            positions.unsqueeze(0),
         )
         action_padding_mask = positions.unsqueeze(
             0
@@ -105,13 +114,14 @@ class CompleteActionEncoder(nn.Module):
             action_padding_mask.unsqueeze(-1),
             0.0,
         )
-        value_query = self._value_query.unsqueeze(0).expand(
+        value_query: Tensor = self._value_query.unsqueeze(0).expand(
             row_count, -1
         )
-        value_query = value_query + self._action_position_embedding(
-            step_counts
+        value_query = value_query + call_tensor(
+            self._action_position_embedding,
+            step_counts,
         )
-        sequence = torch.cat(
+        sequence: Tensor = torch.cat(
             (selected, value_query.unsqueeze(1)),
             dim=1,
         )
@@ -127,7 +137,8 @@ class CompleteActionEncoder(nn.Module):
             dim=1,
         )
         for layer in self._layers:
-            sequence = layer(
+            next_sequence = call_tensor(
+                layer,
                 sequence,
                 memory=selected_inputs.memory,
                 sequence_padding_mask=sequence_padding_mask,
@@ -135,6 +146,7 @@ class CompleteActionEncoder(nn.Module):
                     selected_inputs.memory_padding_mask
                 ),
             )
+            sequence = next_sequence
         action_context = sequence[:, -1]
         return torch.cat(
             (
@@ -163,6 +175,7 @@ class CompleteActionEncoder(nn.Module):
         return result
 
 
+@final
 class _CompleteActionBlock(nn.Module):
     """Contextualize a complete action against observation memory."""
 
@@ -189,6 +202,7 @@ class _CompleteActionBlock(nn.Module):
             nn.Linear(d_model * 4, d_model),
         )
 
+    @override
     def forward(
         self,
         sequence: Tensor,
@@ -205,7 +219,7 @@ class _CompleteActionBlock(nn.Module):
             value=sequence,
             key_padding_mask=sequence_padding_mask,
         )
-        hidden = self._norm1(sequence + self_attended)
+        hidden = call_tensor(self._norm1, sequence + self_attended)
         cross_attended = _stable_training_attention(
             attention=self._cross_attention,
             query=hidden,
@@ -213,8 +227,10 @@ class _CompleteActionBlock(nn.Module):
             value=memory,
             key_padding_mask=memory_padding_mask,
         )
-        hidden = self._norm2(hidden + cross_attended)
-        return self._norm3(hidden + self._feed_forward(hidden))
+        hidden = call_tensor(self._norm2, hidden + cross_attended)
+        feed_forward = call_tensor(self._feed_forward, hidden)
+        result = call_tensor(self._norm3, hidden + feed_forward)
+        return result
 
 
 def _stable_training_attention(
@@ -226,22 +242,26 @@ def _stable_training_attention(
     key_padding_mask: Tensor,
 ) -> Tensor:
     if not torch.is_grad_enabled():
-        attended, _weights = attention(
+        attention_result = call_attention(
+            attention,
             query,
             key,
             value,
             key_padding_mask=key_padding_mask,
             need_weights=False,
         )
+        attended, _weights = attention_result
         return attended
     with sdpa_kernel(SDPBackend.MATH):
-        attended, _weights = attention(
+        attention_result = call_attention(
+            attention,
             query,
             key,
             value,
             key_padding_mask=key_padding_mask,
             need_weights=False,
         )
+    attended, _weights = attention_result
     return attended
 
 

@@ -50,6 +50,7 @@ from server.training_events.store import (
     database_path,
     initialize_database,
 )
+from tests.sqlite_support import fetch_rows
 
 _JSON_OBJECT_ADAPTER: TypeAdapter[JsonObject] = TypeAdapter(JsonObject)
 
@@ -448,9 +449,11 @@ def _update_stats() -> PPOUpdateStats:
 
 def _events(run_dir: Path) -> tuple[JsonObject, ...]:
     with sqlite3.connect(database_path(run_dir)) as connection:
-        rows = connection.execute(
-            "SELECT event_json FROM training_logs ORDER BY sequence"
-        ).fetchall()
+        rows = fetch_rows(
+            connection.execute(
+                "SELECT event_json FROM training_logs ORDER BY sequence"
+            )
+        )
     events: list[JsonObject] = []
     for row in rows:
         event_json = row[0]

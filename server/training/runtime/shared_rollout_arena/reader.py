@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from multiprocessing import shared_memory
-from typing import Literal
+from typing import Literal, assert_never
 
 import torch
 from torch import Tensor
@@ -50,7 +50,7 @@ class SharedRolloutArenaReader:
         for handle, segment in zip(
             self.handles, self._segments, strict=True
         ):
-            handle.lock.acquire()
+            _ = handle.lock.acquire()
             try:
                 buffer = _segment_buffer(segment)
                 header = unpack_header(buffer)
@@ -184,7 +184,9 @@ class _TransferColumnWorkspace:
             device_tensor = self._device_buffer(
                 count=count, dtype=dtype, device=device
             )
-            device_tensor[:count].copy_(host[:count], non_blocking=True)
+            _ = device_tensor[:count].copy_(
+                host[:count], non_blocking=True
+            )
             return device_tensor[:count]
         if device.type == "cpu":
             host = self._host_buffer(
@@ -267,7 +269,7 @@ class _RankReturnTransferWorkspace:
             return self.step_counts
         if name == "return_values":
             return self.return_values
-        raise AssertionError(name)
+        assert_never(name)
 
 
 def _copy_blocks_to_host(
@@ -283,5 +285,5 @@ def _copy_blocks_to_host(
         source = torch.frombuffer(
             block.values, dtype=dtype, count=block.count
         )
-        target[offset : offset + block.count].copy_(source)
+        _ = target[offset : offset + block.count].copy_(source)
         offset += block.count

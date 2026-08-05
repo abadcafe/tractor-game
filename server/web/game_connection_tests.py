@@ -21,6 +21,12 @@ from server.web.application_test_client import (
 from server.web.application_test_client import (
     is_list_of_dict as _is_list_of_dict,
 )
+from server.web.application_test_client import (
+    json_object_from as _json_object_from,
+)
+from server.web.application_test_client import (
+    websocket_json_object as _websocket_json_object,
+)
 
 pytest_plugins: tuple[str, ...] = (
     "server.web.application_test_fixtures",
@@ -38,9 +44,7 @@ _WS_ERRORS: tuple[type[Exception], ...] = (
 def _receive_ws_dict(
     websocket: WebSocketTestSession,
 ) -> dict[str, object]:
-    message = websocket.receive_json()
-    assert _is_dict(message)
-    return message
+    return _websocket_json_object(websocket)
 
 
 def _seat_ws_path(
@@ -75,7 +79,7 @@ def _listed_seat(
 ) -> dict[str, object]:
     response = sync_client.get(f"/api/game?user_id={user_id}")
     assert response.status_code == 200
-    document = response.json()
+    document = _json_object_from(response)
     assert _is_dict(document)
     games = document["games"]
     assert _is_list_of_dict(games)
@@ -109,7 +113,7 @@ def test_delete_game_after_ws_connection(
     listed = sync_client.get("/api/game")
 
     assert deleted.status_code == 200
-    document = listed.json()
+    document = _json_object_from(listed)
     assert _is_dict(document)
     games = document["games"]
     assert _is_list_of_dict(games)
@@ -169,7 +173,7 @@ def test_ws_connect_nonexistent_rejected(
         with sync_client.websocket_connect(
             _seat_ws_path("nonexistent999")
         ) as ws:
-            _receive_ws_dict(ws)
+            _ = _receive_ws_dict(ws)
 
 
 def test_ws_connect_missing_user_id_rejected(
@@ -182,7 +186,7 @@ def test_ws_connect_missing_user_id_rejected(
         with sync_client.websocket_connect(
             f"/game/{game_id}/seat/b"
         ) as ws:
-            _receive_ws_dict(ws)
+            _ = _receive_ws_dict(ws)
 
     assert exc_info.value.code == 4410
 
@@ -197,7 +201,7 @@ def test_ws_connect_invalid_player_rejected(
         with sync_client.websocket_connect(
             f"/game/{game_id}/seat/4?user_id=user-4"
         ) as ws:
-            _receive_ws_dict(ws)
+            _ = _receive_ws_dict(ws)
 
     assert exc_info.value.code == 4410
 
@@ -221,7 +225,7 @@ def test_ws_connect_rejects_player_stealing(
             with sync_client.websocket_connect(
                 _seat_ws_path(game_id, seat="b", user_id="user-other")
             ) as ws2:
-                _receive_ws_dict(ws2)
+                _ = _receive_ws_dict(ws2)
 
         assert exc_info.value.code == 4409
 
@@ -294,7 +298,7 @@ def test_ws_connect_takeover_closes_old_connection(
             assert _is_dict(replacement_player)
             assert replacement_player["connected"] is True
             with pytest.raises(_WS_ERRORS):
-                _receive_ws_dict(ws1)
+                _ = _receive_ws_dict(ws1)
 
 
 # ---- WebSocket: Actions with response verification ----

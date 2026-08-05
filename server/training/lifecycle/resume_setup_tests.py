@@ -21,6 +21,7 @@ from server.training.lifecycle.resume_setup import (
 from server.training.lifecycle.run_setup import initialize_training_run
 from server.training.runtime.config import ExecutionConfig
 from server.training_events.store import database_path
+from tests.sqlite_support import fetch_rows
 
 
 def test_canonicalize_resume_timeline_removes_future_state(
@@ -80,10 +81,12 @@ def test_canonicalize_resume_timeline_removes_future_state(
 
 def _event_rows(run_dir: Path) -> tuple[tuple[int, str], ...]:
     with sqlite3.connect(database_path(run_dir)) as connection:
-        rows = connection.execute(
-            "SELECT sequence, event_json FROM training_logs "
-            "ORDER BY sequence"
-        ).fetchall()
+        rows = fetch_rows(
+            connection.execute(
+                "SELECT sequence, event_json FROM training_logs "
+                + "ORDER BY sequence"
+            )
+        )
     events: list[tuple[int, str]] = []
     for sequence, event_json in rows:
         assert isinstance(sequence, int)

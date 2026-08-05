@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -40,7 +40,9 @@ _MAX_BID_HINTS = 10
 
 
 class _WireModel(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        frozen=True, extra="forbid"
+    )
 
 
 class CardWire(_WireModel):

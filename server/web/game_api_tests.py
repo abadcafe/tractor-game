@@ -15,6 +15,9 @@ from server.web.application_test_client import (
 from server.web.application_test_client import (
     is_list_of_dict as _is_list_of_dict,
 )
+from server.web.application_test_client import (
+    json_object_from as _json_object_from,
+)
 
 pytest_plugins: tuple[str, ...] = (
     "server.web.application_test_fixtures",
@@ -25,7 +28,7 @@ pytest_plugins: tuple[str, ...] = (
 async def test_create_game_returns_201(client: AsyncRestClient) -> None:
     response = await client.post("/api/game")
     assert response.status_code == 201
-    data = response.json()
+    data = _json_object_from(response)
     assert _is_dict(data)
     assert "game_id" in data
 
@@ -33,7 +36,7 @@ async def test_create_game_returns_201(client: AsyncRestClient) -> None:
 @pytest.mark.asyncio
 async def test_create_game_starts_game(client: AsyncRestClient) -> None:
     response = await client.post("/api/game")
-    data = response.json()
+    data = _json_object_from(response)
     assert _is_dict(data)
     game_id_raw = data["game_id"]
     assert isinstance(game_id_raw, str)
@@ -48,7 +51,7 @@ async def test_create_game_starts_with_empty_players_by_default(
     game_id = _game_id_from(response)
     listed = await client.get("/api/game")
 
-    document = listed.json()
+    document = _json_object_from(listed)
     assert _is_dict(document)
     games = document["games"]
     assert _is_list_of_dict(games)
@@ -68,7 +71,7 @@ async def test_create_game_starts_with_empty_players_by_default(
 async def test_list_games_empty(client: AsyncRestClient) -> None:
     response = await client.get("/api/game")
     assert response.status_code == 200
-    data = response.json()
+    data = _json_object_from(response)
     assert _is_dict(data)
     assert data["games"] == []
 
@@ -81,7 +84,7 @@ async def test_list_games_with_games(client: AsyncRestClient) -> None:
     # List games
     response = await client.get("/api/game")
     assert response.status_code == 200
-    data = response.json()
+    data = _json_object_from(response)
     assert _is_dict(data)
     games_raw = data["games"]
     assert _is_list_of_dict(games_raw)
@@ -111,7 +114,7 @@ def test_list_games_counts_attached_user_player(
 
     response = sync_client.get("/api/game?user_id=user-1")
     assert response.status_code == 200
-    data = response.json()
+    data = _json_object_from(response)
     assert _is_dict(data)
     games_raw = data["games"]
     assert _is_list_of_dict(games_raw)
@@ -151,10 +154,10 @@ async def test_attach_player_rest_attaches_lobby_player(
     response = await client.get("/api/game?user_id=user-2")
 
     assert attach_resp.status_code == 200
-    attach_data = attach_resp.json()
+    attach_data = _json_object_from(attach_resp)
     assert _is_dict(attach_data)
     assert attach_data["ok"] is True
-    data = response.json()
+    data = _json_object_from(response)
     assert _is_dict(data)
     games_raw = data["games"]
     assert _is_list_of_dict(games_raw)
@@ -193,7 +196,7 @@ async def test_attach_player_rest_switches_user_player(
 
     assert first_resp.status_code == 200
     assert second_resp.status_code == 200
-    data = response.json()
+    data = _json_object_from(response)
     assert _is_dict(data)
     games_raw = data["games"]
     assert _is_list_of_dict(games_raw)
@@ -228,7 +231,7 @@ async def test_detach_player_rest_detaches_lobby_player(
 
     assert attach_resp.status_code == 200
     assert detach_resp.status_code == 200
-    data = response.json()
+    data = _json_object_from(response)
     assert _is_dict(data)
     games_raw = data["games"]
     assert _is_list_of_dict(games_raw)
@@ -259,7 +262,7 @@ async def test_attach_player_rest_rejects_occupied_player(
 
     assert first_resp.status_code == 200
     assert second_resp.status_code == 409
-    data = second_resp.json()
+    data = _json_object_from(second_resp)
     assert _is_dict(data)
     assert data["ok"] is False
     assert data["error"] == "seat occupied"
@@ -282,10 +285,10 @@ async def test_fill_bot_players_rest_fills_remaining_with_auto(
 
     assert attach_resp.status_code == 200
     assert fill_resp.status_code == 200
-    fill_data = fill_resp.json()
+    fill_data = _json_object_from(fill_resp)
     assert _is_dict(fill_data)
     assert fill_data["ok"] is True
-    data = list_resp.json()
+    data = _json_object_from(list_resp)
     assert _is_dict(data)
     games_raw = data["games"]
     assert _is_list_of_dict(games_raw)
@@ -322,7 +325,7 @@ async def test_fill_bot_players_rest_requires_attached_user(
     )
 
     assert fill_resp.status_code == 409
-    data = fill_resp.json()
+    data = _json_object_from(fill_resp)
     assert _is_dict(data)
     assert data["ok"] is False
     assert data["error"] == "user does not occupy seat"
@@ -340,7 +343,7 @@ async def test_fill_bot_players_rest_rejects_invalid_policy(
     )
 
     assert fill_resp.status_code == 400
-    data = fill_resp.json()
+    data = _json_object_from(fill_resp)
     assert _is_dict(data)
     assert data["ok"] is False
     assert data["error"] == "invalid bot policy"
@@ -355,7 +358,7 @@ async def test_delete_game_returns_200(client: AsyncRestClient) -> None:
     game_id = _game_id_from(create_resp)
     response = await client.delete(f"/api/game/{game_id}")
     assert response.status_code == 200
-    del_data = response.json()
+    del_data = _json_object_from(response)
     assert _is_dict(del_data)
     assert del_data["ok"] is True
 
@@ -367,6 +370,6 @@ async def test_delete_nonexistent_returns_200(
     """DELETE is idempotent -- returns 200 even for unknown game_id."""
     response = await client.delete("/api/game/nonexistent123")
     assert response.status_code == 200
-    data = response.json()
+    data = _json_object_from(response)
     assert _is_dict(data)
     assert data["ok"] is True

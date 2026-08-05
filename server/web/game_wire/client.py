@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TypeGuard
+from typing import TypeGuard, final
 
 from server.foundation.result import Ok
 from server.game import CommandRejected, commands
@@ -19,6 +19,7 @@ class ClientFrame:
     decoder: CommandDecoder
 
 
+@final
 class WireCommandDecoder:
     """Decode action fields only after the runtime sequence gate."""
 

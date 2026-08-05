@@ -1,6 +1,7 @@
 """Score a completed round and advance the game."""
 
-from server.game.rules import progression, scoring
+import server.game.rules.progression as progression
+import server.game.rules.scoring as scoring
 from server.game.seating import (
     Partnership,
     PartnershipMap,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import final, override
 
 import torch
 import torch.nn.functional as F
@@ -14,6 +15,7 @@ from server.policy_model.observation.structure import (
     StructureAxis,
 )
 
+from ._module_call import call_tensor
 from .config import MIN_ATTENTION_HEAD_DIMENSION
 
 STRUCTURE_AXIS_DIMENSION = 4
@@ -41,6 +43,7 @@ class _StructureContext:
     same_play: Tensor
 
 
+@final
 class StructuredObservationEncoder(nn.Module):
     """Apply repeated structure-aware self-attention blocks."""
 
@@ -64,6 +67,7 @@ class StructuredObservationEncoder(nn.Module):
         )
         self._rope_frequencies: Tensor = frequencies
 
+    @override
     def forward(
         self,
         values: Tensor,
@@ -79,14 +83,17 @@ class StructuredObservationEncoder(nn.Module):
             dtype=values.dtype,
         )
         for layer in self._layers:
-            result = layer(
+            next_result = call_tensor(
+                layer,
                 result,
                 padding_mask=padding_mask,
                 structure_context=structure_context,
             )
+            result = next_result
         return result
 
 
+@final
 class _StructuredAttentionBlock(nn.Module):
     def __init__(self, *, d_model: int, heads: int) -> None:
         super().__init__()
@@ -115,6 +122,7 @@ class _StructuredAttentionBlock(nn.Module):
             nn.Linear(d_model * 4, d_model),
         )
 
+    @override
     def forward(
         self,
         values: Tensor,
@@ -123,18 +131,25 @@ class _StructuredAttentionBlock(nn.Module):
         structure_context: _StructureContext,
     ) -> Tensor:
         batch, tokens, d_model = values.shape
-        projected = self._qkv(values).view(
+        qkv = call_tensor(self._qkv, values)
+        projected = qkv.view(
             batch, tokens, 3, self._heads, self._head_dim
         )
-        content_query = projected[:, :, 0].transpose(1, 2)
-        content_key = projected[:, :, 1].transpose(1, 2)
-        value = projected[:, :, 2].transpose(1, 2)
+        content_query: Tensor = projected[:, :, 0].transpose(1, 2)
+        content_key: Tensor = projected[:, :, 1].transpose(1, 2)
+        value: Tensor = projected[:, :, 2].transpose(1, 2)
+        structure_query_projected = call_tensor(
+            self._structure_query, values
+        )
         structure_query = self._structure_projection(
-            self._structure_query(values),
+            structure_query_projected,
             structure_context=structure_context,
         )
+        structure_key_projected = call_tensor(
+            self._structure_key, values
+        )
         structure_key = self._structure_projection(
-            self._structure_key(values),
+            structure_key_projected,
             structure_context=structure_context,
         )
         query = torch.cat((content_query, structure_query), dim=-1)
@@ -154,10 +169,12 @@ class _StructuredAttentionBlock(nn.Module):
         merged = attended.transpose(1, 2).reshape(
             batch, tokens, d_model
         )
-        merged = self._output(merged)
+        merged = call_tensor(self._output, merged)
         merged = merged.masked_fill(padding_mask.unsqueeze(-1), 0.0)
-        hidden = self._norm1(values + merged)
-        return self._norm2(hidden + self._feed_forward(hidden))
+        hidden = call_tensor(self._norm1, values + merged)
+        feed_forward = call_tensor(self._feed_forward, hidden)
+        result = call_tensor(self._norm2, hidden + feed_forward)
+        return result
 
     def _structure_projection(
         self,

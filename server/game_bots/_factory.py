@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import random
-from typing import Protocol, assert_never
+from typing import Protocol, assert_never, final
 
 from server.foundation.result import Ok, Rejected
 from server.game import Seat
@@ -27,6 +27,7 @@ class AIControllerFactory(Protocol):
         ...
 
 
+@final
 class DefaultBotPlayerFactory:
     """Create BotPlayer instances with stateful policies."""
 

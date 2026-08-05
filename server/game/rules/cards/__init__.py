@@ -9,7 +9,7 @@ Total points in game: 200
 """
 
 from enum import Enum
-from typing import Literal, NewType, Self, overload
+from typing import ClassVar, Literal, NewType, Self, overload
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -128,7 +128,9 @@ type CardKey = Literal["id", "suit", "rank", "points"]
 class Card(BaseModel):
     """A single playing card visible to rules and players."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        frozen=True, extra="forbid"
+    )
 
     id: str
     suit: Suit

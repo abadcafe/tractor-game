@@ -33,7 +33,7 @@ def test_encoder_returns_query_and_all_card_candidates() -> None:
         ),
     )
 
-    encoded = encoder(
+    encoded = encoder.forward(
         tensorize_observation(
             observation=observation,
             device=torch.device("cpu"),

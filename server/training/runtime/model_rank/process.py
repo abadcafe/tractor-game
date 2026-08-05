@@ -144,7 +144,7 @@ async def _run_model_rank_process_async(
             error=setup_result.reason,
         )
         event_sink.close()
-        await control.send_response(
+        _ = await control.send_response(
             ModelRankRejected(
                 model_rank_index=model_rank_index,
                 reason=setup_result.reason,
@@ -158,7 +158,7 @@ async def _run_model_rank_process_async(
             error=sync_result.reason,
         )
         event_sink.close()
-        await control.send_response(
+        _ = await control.send_response(
             ModelRankRejected(
                 model_rank_index=model_rank_index,
                 reason=sync_result.reason,
@@ -198,7 +198,7 @@ async def _run_model_rank_process_async(
             event_sink=event_sink,
         )
         if isinstance(loop_result, Rejected):
-            await control.send_response(
+            _ = await control.send_response(
                 ModelRankRejected(
                     model_rank_index=model_rank_index,
                     reason=loop_result.reason,
@@ -425,6 +425,7 @@ def _run_model_rank_update(
     rollout_arena_reader: SharedRolloutArenaReader,
     event_sink: StructuredEventSink,
 ) -> ModelRankUpdateCompleted | ModelRankRejected:
+    _ = run_id
     context = EventContext(
         policy_version=command.policy_version,
         rollout_id=command.rollout_id,

@@ -17,7 +17,7 @@ from server.policy_model.network import ModelConfig
 from server.training.config import TrainConfig
 from server.training.ppo import PPOUpdateStats
 from server.training.ppo.profile import blank_update_profile
-from server.training.runtime import training_runtime
+from server.training.runtime import process_signals, training_runtime
 from server.training.runtime.async_ipc import (
     AsyncChildControlEndpoint,
     AsyncCoordinatorControlEndpoint,
@@ -378,11 +378,11 @@ async def test_start_sampling_session_stops_when_requested() -> None:
                 stop_request=stop_request,
             )
         )
-        await _receive_start_command(first)
-        await _receive_start_command(second)
+        _ = await _receive_start_command(first)
+        _ = await _receive_start_command(second)
         stop_request.request_stop()
-        await _receive_stop_command(first)
-        await _receive_stop_command(second)
+        _ = await _receive_stop_command(first)
+        _ = await _receive_stop_command(second)
         for worker in (first, second):
             started = await worker.child.send_response(
                 WorkerSamplingStarted(
@@ -480,7 +480,8 @@ async def test_start_sampling_reports_uncleaned_sent_workers() -> None:
         assert isinstance(result, WorkerSamplingCleanupFailed)
         assert (
             "sampling cleanup failed: process control response "
-            "timed out" in result.rejection.reason
+            + "timed out"
+            in result.rejection.reason
         )
     finally:
         first.close()
@@ -896,6 +897,7 @@ async def test_runtime_poisoned_after_sampling_start_cleanup_failure(
         | Rejected
         | WorkerSamplingCleanupFailed
     ):
+        _ = rollout_id
         nonlocal start_calls
         assert handles == (fake_worker.handle,)
         assert execution_config.samples_per_update == 1
@@ -1002,6 +1004,7 @@ async def test_runtime_poisoned_after_worker_update_partial_broadcast(
         timeout_seconds: float,
         stop_request: TrainingStopRequest,
     ) -> Ok[RolloutWaitOutcome] | Rejected:
+        _ = timeout_seconds
         assert group.handles
         assert not stop_request.is_requested()
         assert target_sample_count == 1
@@ -1014,6 +1017,7 @@ async def test_runtime_poisoned_after_worker_update_partial_broadcast(
     async def stopped_sampling_session(
         *, session: WorkerSamplingSession, timeout_seconds: float
     ) -> Ok[tuple[WorkerSamplingStopped, ...]] | Rejected:
+        _ = timeout_seconds
         return Ok(
             value=tuple(
                 WorkerSamplingStopped(
@@ -1118,6 +1122,7 @@ async def test_runtime_poisoned_after_model_rank_update_partial_send(
         | Rejected
         | WorkerSamplingCleanupFailed
     ):
+        _ = execution_config
         assert not stop_request.is_requested()
         return Ok(
             value=WorkerSamplingSession(
@@ -1136,6 +1141,7 @@ async def test_runtime_poisoned_after_model_rank_update_partial_send(
         timeout_seconds: float,
         stop_request: TrainingStopRequest,
     ) -> Ok[RolloutWaitOutcome] | Rejected:
+        _ = target_sample_count, timeout_seconds
         assert group.handles
         assert not stop_request.is_requested()
         return Ok(
@@ -1147,6 +1153,7 @@ async def test_runtime_poisoned_after_model_rank_update_partial_send(
     async def stopped_sampling_session(
         *, session: WorkerSamplingSession, timeout_seconds: float
     ) -> Ok[tuple[WorkerSamplingStopped, ...]] | Rejected:
+        _ = timeout_seconds
         return Ok(
             value=(
                 WorkerSamplingStopped(
@@ -1256,6 +1263,7 @@ async def test_runtime_poisoned_after_worker_update_response_timeout(
         | Rejected
         | WorkerSamplingCleanupFailed
     ):
+        _ = execution_config
         assert not stop_request.is_requested()
         return Ok(
             value=WorkerSamplingSession(
@@ -1274,6 +1282,7 @@ async def test_runtime_poisoned_after_worker_update_response_timeout(
         timeout_seconds: float,
         stop_request: TrainingStopRequest,
     ) -> Ok[RolloutWaitOutcome] | Rejected:
+        _ = target_sample_count, timeout_seconds
         assert group.handles
         assert not stop_request.is_requested()
         return Ok(
@@ -1285,6 +1294,7 @@ async def test_runtime_poisoned_after_worker_update_response_timeout(
     async def stopped_sampling_session(
         *, session: WorkerSamplingSession, timeout_seconds: float
     ) -> Ok[tuple[WorkerSamplingStopped, ...]] | Rejected:
+        _ = timeout_seconds
         return Ok(
             value=tuple(
                 WorkerSamplingStopped(
@@ -1480,7 +1490,7 @@ def test_start_runtime_pools_cleans_worker_started_before_interrupt(
     started_processes: list[BaseProcess] = []
     starter = _InterruptingStarter(
         original=(
-            training_runtime.start_child_process_ignoring_terminal_interrupt
+            process_signals.start_child_process_ignoring_terminal_interrupt
         ),
         started_processes=started_processes,
         interrupt_after_start_count=1,
@@ -1491,13 +1501,13 @@ def test_start_runtime_pools_cleans_worker_started_before_interrupt(
         _sleep_forever_training_process,
     )
     monkeypatch.setattr(
-        training_runtime,
+        process_signals,
         "start_child_process_ignoring_terminal_interrupt",
         starter,
     )
     interrupted = False
     try:
-        training_runtime.open_training_runtime(
+        _ = training_runtime.open_training_runtime(
             run_dir=tmp_path,
             run_id="interrupt-worker",
             event_sink=NullEventSink(),
@@ -1525,7 +1535,7 @@ def test_start_runtime_pools_cleans_model_rank_started_before_interrupt(
     started_processes: list[BaseProcess] = []
     starter = _InterruptingStarter(
         original=(
-            training_runtime.start_child_process_ignoring_terminal_interrupt
+            process_signals.start_child_process_ignoring_terminal_interrupt
         ),
         started_processes=started_processes,
         interrupt_after_start_count=1,
@@ -1536,13 +1546,13 @@ def test_start_runtime_pools_cleans_model_rank_started_before_interrupt(
         _sleep_forever_training_process,
     )
     monkeypatch.setattr(
-        training_runtime,
+        process_signals,
         "start_child_process_ignoring_terminal_interrupt",
         starter,
     )
     interrupted = False
     try:
-        training_runtime.open_training_runtime(
+        _ = training_runtime.open_training_runtime(
             run_dir=tmp_path,
             run_id="interrupt-model-rank",
             event_sink=NullEventSink(),

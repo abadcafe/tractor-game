@@ -27,7 +27,7 @@ def model_config_from_json(
         return checkpoint_corruption(
             path,
             "manifest model_config fields do not match "
-            "the current schema",
+            + "the current schema",
         )
     d_model = _json_int_field(
         data, "d_model", path, label="model_config.d_model"
@@ -69,14 +69,14 @@ def model_config_from_json(
         return checkpoint_corruption(
             path,
             "manifest model_config.d_model must be divisible by "
-            "model_config.heads",
+            + "model_config.heads",
         )
     if d_model.value // heads.value < MIN_ATTENTION_HEAD_DIMENSION:
         return checkpoint_corruption(
             path,
             "manifest model_config.d_model divided by "
-            "model_config.heads must be at least "
-            f"{MIN_ATTENTION_HEAD_DIMENSION}",
+            + "model_config.heads must be at least "
+            + f"{MIN_ATTENTION_HEAD_DIMENSION}",
         )
     return _result.Ok(
         value=ModelConfig(

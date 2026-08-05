@@ -15,6 +15,7 @@ from server.foundation.result import Ok, Rejected
 from server.policy_model.network import ModelConfig
 from server.training.config import TrainConfig
 from server.training.ppo import PPOUpdateProfile, PPOUpdateStats
+from server.training.runtime import process_signals
 from server.training.runtime.async_ipc import (
     AsyncCoordinatorControlEndpoint,
     ControlCommandBroadcastFailure,
@@ -63,9 +64,6 @@ from server.training.runtime.model_rank.messages import (
     ModelRankUpdateCompleted,
     decode_model_rank_command,
     decode_model_rank_response,
-)
-from server.training.runtime.process_signals import (
-    start_child_process_ignoring_terminal_interrupt,
 )
 from server.training.runtime.rendezvous import create_file_rendezvous
 from server.training.runtime.shared_rollout_arena import (
@@ -449,7 +447,9 @@ def _start_runtime_pools(
                 )
             )
             try:
-                start_child_process_ignoring_terminal_interrupt(process)
+                process_signals.start_child_process_ignoring_terminal_interrupt(
+                    process
+                )
             finally:
                 control_link.child.close()
         pools = _RuntimePools(
@@ -552,7 +552,9 @@ def _start_model_rank_pool(
                 )
             )
             try:
-                start_child_process_ignoring_terminal_interrupt(process)
+                process_signals.start_child_process_ignoring_terminal_interrupt(
+                    process
+                )
             finally:
                 control_link.child.close()
         pool = _ModelRankPool(handles=tuple(handles))
@@ -1091,18 +1093,18 @@ async def _receive_worker_updates(
                 case WorkerStateLoaded():
                     return _runtime_protocol_failure_reason(
                         "worker returned state sync during "
-                        "synchronized update"
+                        + "synchronized update"
                     )
                 case WorkerSnapshotCompleted():
                     return _runtime_protocol_failure_reason(
                         "worker returned snapshot during "
-                        "synchronized update"
+                        + "synchronized update"
                     )
                 case WorkerUpdateCompleted():
                     if response.policy_version != policy_version:
                         return _runtime_protocol_failure_reason(
                             "worker returned stale update policy "
-                            "version"
+                            + "version"
                         )
                     responses.append(response)
                 case _:
@@ -1175,7 +1177,7 @@ async def _sync_worker_states(
                     if response.policy_version != policy_version:
                         return _runtime_protocol_failure_reason(
                             "worker state sync returned stale "
-                            "policy version"
+                            + "policy version"
                         )
                     loaded_indices.add(response.worker_index)
                 case _:
@@ -1229,7 +1231,7 @@ async def _sync_model_rank_states(
                 case ModelRankRejected():
                     return _runtime_protocol_failure_reason(
                         f"model-rank-{response.model_rank_index}: "
-                        f"{response.reason}"
+                        + f"{response.reason}"
                     )
                 case ModelRankUpdateCompleted():
                     return _runtime_protocol_failure_reason(
@@ -1365,7 +1367,7 @@ async def _snapshot_model_rank_state(
         case ModelRankRejected():
             return _runtime_protocol_failure_reason(
                 f"model-rank-{response.model_rank_index}: "
-                f"{response.reason}"
+                + f"{response.reason}"
             )
         case ModelRankStateLoaded():
             return _runtime_protocol_failure_reason(
@@ -1468,7 +1470,7 @@ async def _run_model_rank_updates(
                 case ModelRankRejected():
                     return _runtime_protocol_failure_reason(
                         f"model-rank-{response.model_rank_index}: "
-                        f"{response.reason}"
+                        + f"{response.reason}"
                     )
                 case ModelRankStateLoaded():
                     return _runtime_protocol_failure_reason(
@@ -1482,7 +1484,7 @@ async def _run_model_rank_updates(
                     if response.policy_version != policy_version:
                         return _runtime_protocol_failure_reason(
                             "model rank returned stale update "
-                            "policy version"
+                            + "policy version"
                         )
                     responses.append(response)
                 case _:
@@ -1566,7 +1568,7 @@ def _cleanup_startup_model_rank_handles(
 
 
 async def _stop_worker_pool(pool: _WorkerPool) -> None:
-    await broadcast_control_commands(
+    _ = await broadcast_control_commands(
         targets=pool.handles,
         sender=_worker_control_sender,
         command=lambda _handle: StopWorkerCommand(reason="complete"),
@@ -1577,7 +1579,7 @@ async def _stop_worker_pool(pool: _WorkerPool) -> None:
 
 
 async def _stop_model_rank_pool(pool: _ModelRankPool) -> None:
-    await broadcast_control_commands(
+    _ = await broadcast_control_commands(
         targets=pool.handles,
         sender=_model_rank_control_sender,
         command=lambda _handle: ModelRankStopCommand(reason="complete"),

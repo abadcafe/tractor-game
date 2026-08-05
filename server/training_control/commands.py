@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, ClassVar, Literal
 
 from pydantic import (
     BaseModel,
@@ -32,7 +32,9 @@ type RequestPath = Annotated[Path, BeforeValidator(_parse_request_path)]
 class TrainingInitRequest(BaseModel):
     """Portable state required to initialize a new training run."""
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", strict=True
+    )
 
     run_dir: RequestPath = DEFAULT_RUN_DIR
     replace_existing: Literal["yes"] | None = None
@@ -87,7 +89,9 @@ class TrainingInitRequest(BaseModel):
 class TrainingResumeRequest(BaseModel):
     """Checkpoint and process policy for one training run."""
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", strict=True
+    )
 
     run_dir: RequestPath = DEFAULT_RUN_DIR
     checkpoint: ManagedCheckpointName

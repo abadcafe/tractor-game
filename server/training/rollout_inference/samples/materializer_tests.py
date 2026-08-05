@@ -89,7 +89,7 @@ def test_materializer_reuses_workspace_across_batch_shapes(
     device: torch.device,
 ) -> None:
     materializer = PolicyDecisionMaterializer(device=device)
-    materializer.materialize(
+    _ = materializer.materialize(
         model_rank_index=0,
         policy_versions=(3, 3),
         row_start=0,

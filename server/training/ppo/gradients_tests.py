@@ -66,7 +66,8 @@ def test_gradient_reason_reports_non_finite_parameter() -> None:
     assert reason is not None
     assert (
         "parameter_state=nonfinite(nan_count=1,positive_inf_count=0,"
-        "negative_inf_count=0)" in reason
+        + "negative_inf_count=0)"
+        in reason
     )
 
 

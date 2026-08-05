@@ -12,7 +12,6 @@ the controllable clock injected via GameRegistry(clock=...) or the
 public API.
 """
 
-import json
 import time
 from collections.abc import AsyncGenerator, Generator
 from typing import Literal, Protocol, TypeGuard
@@ -20,11 +19,15 @@ from typing import Literal, Protocol, TypeGuard
 import httpx
 import pytest
 from anyio import WouldBlock
+from pydantic import TypeAdapter
 from starlette.testclient import TestClient, WebSocketTestSession
 
 from server.web.app import WebApplication
 
 _DEFAULT_WS_RECEIVE_TIMEOUT_SECONDS: float = 5.0
+_DYNAMIC_OBJECT = TypeAdapter(object)
+_JSON_OBJECT = TypeAdapter(dict[str, object])
+_JSON_VALUE = TypeAdapter(object)
 type WireSeat = Literal["a", "b", "c", "d"]
 
 
@@ -78,7 +81,7 @@ def _as_str(val: object) -> str:
 
 
 def _game_id_from_response(resp: httpx.Response) -> str:
-    data = _as_dict(resp.json())
+    data = _response_json_object(resp)
     game_id = data["game_id"]
     assert isinstance(game_id, str)
     return game_id
@@ -93,13 +96,17 @@ def _has_raise_on_close(val: object) -> TypeGuard[_RaiseOnClose]:
 
 
 def _private_send_rx(ws: WebSocketTestSession) -> _ReceiveNowaitQueue:
-    queue = object.__getattribute__(ws, "_send_rx")
+    queue = _DYNAMIC_OBJECT.validate_python(
+        object.__getattribute__(ws, "_send_rx")
+    )
     assert _has_receive_nowait(queue)
     return queue
 
 
 def _private_raise_on_close(ws: WebSocketTestSession) -> _RaiseOnClose:
-    fn = object.__getattribute__(ws, "_raise_on_close")
+    fn = _DYNAMIC_OBJECT.validate_python(
+        object.__getattribute__(ws, "_raise_on_close")
+    )
     assert _has_raise_on_close(fn)
     return fn
 
@@ -115,13 +122,19 @@ def _receive_ws_json(
             message = _private_send_rx(ws).receive_nowait()
             _private_raise_on_close(ws)(message)
             text = _as_str(message["text"])
-            return json.loads(text)
+            return _JSON_VALUE.validate_json(text)
         except WouldBlock as exc:
             if time.monotonic() >= deadline:
                 raise WsReceiveTimeout(
                     "timed out waiting for websocket message"
                 ) from exc
             time.sleep(0.001)
+
+
+def _response_json_object(
+    response: httpx.Response,
+) -> dict[str, object]:
+    return _JSON_OBJECT.validate_json(response.content)
 
 
 @pytest.fixture
@@ -240,7 +253,7 @@ async def test_concurrent_games(client: AsyncRestClient) -> None:
     assert game_id_1 != game_id_2
     # List games
     resp = await client.get("/api/game")
-    games_raw = _as_list(_as_dict(resp.json())["games"])
+    games_raw = _as_list(_as_dict(_response_json_object(resp))["games"])
     games = [_as_dict(g) for g in games_raw]
     assert len(games) == 2
     game_ids = {g["game_id"] for g in games}
@@ -282,7 +295,7 @@ def test_delete_game_disconnects_ws(
     _prepare_ws_game(sync_client, game_id)
     with sync_client.websocket_connect(_seat_ws_path(game_id)) as ws:
         ws.send_json({"seq": 0})
-        _receive_ws_json(ws)
+        _ = _receive_ws_json(ws)
     # Delete after disconnect is fine
     resp = sync_client.delete(f"/api/game/{game_id}")
     assert resp.status_code == 200
@@ -295,7 +308,7 @@ async def test_list_games_shows_lobby_fields(
     """Test that listing games exposes lobby-safe public fields."""
     game_id = await _create_game(client)
     resp = await client.get("/api/game")
-    games_raw = _as_list(_as_dict(resp.json())["games"])
+    games_raw = _as_list(_as_dict(_response_json_object(resp))["games"])
     games = [_as_dict(g) for g in games_raw]
     assert len(games) == 1
     assert games[0]["game_id"] == game_id

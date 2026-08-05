@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, Self
+from typing import ClassVar, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -21,7 +21,7 @@ class SubPlay(BaseModel):
     suit: effective suit of this sub-play ("trump" or a Suit enum)
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
 
     pair_count: int
     cards: list[Card]
@@ -38,8 +38,8 @@ class SubPlay(BaseModel):
             if len(self.cards) != expected:
                 raise ValueError(
                     f"cards count ({len(self.cards)}) must equal"
-                    f"{expected}"
-                    f"for pair_count={self.pair_count}"
+                    + f"{expected}"
+                    + f"for pair_count={self.pair_count}"
                 )
         return self
 
@@ -55,7 +55,7 @@ class SubPlay(BaseModel):
 class PlayShapeInfo(BaseModel):
     """Structured description of a played shape for rejection text."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
 
     kind: PlayShapeKind
     suit: EffectiveSuit | None

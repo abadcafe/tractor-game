@@ -6,7 +6,7 @@ import json
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -30,7 +30,9 @@ SUMMARY_SCHEMA_VERSION = 5
 class TrainingSummary(BaseModel):
     """A terminal-only composition, never a Web process contract."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     schema_version: Literal[5] = SUMMARY_SCHEMA_VERSION
     run_dir: Path
@@ -136,7 +138,7 @@ def _finish_summary(lines: list[str], summary: TrainingSummary) -> str:
             f"  objects: {len(summary.checkpoints.objects)}",
             f"  orphan objects: {orphan_objects}",
             "  unique state bytes: "
-            f"{summary.checkpoints.total_unique_state_bytes}",
+            + f"{summary.checkpoints.total_unique_state_bytes}",
         )
     )
     latest = next(

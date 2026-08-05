@@ -40,7 +40,7 @@ def train_config_from_json(
         return checkpoint_corruption(
             path,
             "manifest train_config fields do not match "
-            "the current schema",
+            + "the current schema",
         )
     seed = _json_int_field(
         data, "seed", path, label="train_config.seed"
@@ -164,7 +164,7 @@ def validate_optimizer_state_payload(
         return checkpoint_corruption(
             path,
             "state payload optimizer_state fields do not match "
-            "the current schema",
+            + "the current schema",
         )
     kind = _payload_str_field(
         payload_state, "kind", path, label="optimizer_state.kind"
@@ -208,13 +208,13 @@ def validate_optimizer_state_payload(
         return checkpoint_corruption(
             path,
             "state payload optimizer_state.exp_avgs length does not "
-            "match model parameters",
+            + "match model parameters",
         )
     if len(exp_avg_sqs.value) != len(parameters):
         return checkpoint_corruption(
             path,
             "state payload optimizer_state.exp_avg_sqs length does not "
-            "match model parameters",
+            + "match model parameters",
         )
     for index, parameter in enumerate(parameters):
         exp_avg = exp_avgs.value[index]
@@ -223,7 +223,7 @@ def validate_optimizer_state_payload(
             return checkpoint_corruption(
                 path,
                 "state payload optimizer moments must be present "
-                "as pairs",
+                + "as pairs",
             )
         if exp_avg is not None:
             exp_avg_validation = _validate_optimizer_tensor(
@@ -287,7 +287,7 @@ def _validate_train_config_values(
         return checkpoint_corruption(
             path,
             "manifest train_config.action_value_max_grad_norm "
-            "must be >= 0",
+            + "must be >= 0",
         )
     if ppo_epochs <= 0:
         return checkpoint_corruption(
@@ -325,13 +325,13 @@ def _validate_optimizer_tensor(
         return checkpoint_corruption(
             path,
             f"state payload {label} tensor shape does not match "
-            "model parameter",
+            + "model parameter",
         )
     if value.dtype != parameter.dtype:
         return checkpoint_corruption(
             path,
             f"state payload {label} tensor dtype does not match "
-            "model parameter",
+            + "model parameter",
         )
     if not bool(torch.isfinite(value).all().item()):
         return checkpoint_corruption(
@@ -421,7 +421,7 @@ def _payload_optional_tensor_list_field(
         return checkpoint_corruption(
             path,
             f"state payload {field_label} is not an optional tensor "
-            "list",
+            + "list",
         )
     return _result.Ok(value=value)
 

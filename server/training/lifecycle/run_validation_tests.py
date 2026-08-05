@@ -68,7 +68,7 @@ def test_validate_training_run_rejects_state_hash_mismatch(
     state_path = next(
         (tmp_path / "checkpoints" / "objects").glob("*/state.pt")
     )
-    state_path.write_bytes(b"corrupt")
+    _ = state_path.write_bytes(b"corrupt")
 
     result = validate_training_run(tmp_path)
 

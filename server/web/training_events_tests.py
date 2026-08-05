@@ -1,13 +1,14 @@
 """Black-box tests for training server-sent event routes."""
 
 import asyncio
-import json
 import sqlite3
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Annotated, ClassVar, Literal
 from urllib.parse import urlencode, urlsplit
 
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from server.training_events import (
@@ -24,6 +25,9 @@ from server.web.application_test_client import (
 )
 from server.web.application_test_client import (
     is_list_of_dict as _is_list_of_dict,
+)
+from server.web.application_test_client import (
+    json_object_from as _json_object_from,
 )
 
 pytest_plugins: tuple[str, ...] = (
@@ -54,7 +58,7 @@ async def test_training_logs_have_rest_history_and_cursor_tail(
 
     page = await client.get(f"/api/training/logs?{query}")
     assert page.status_code == 200
-    document = page.json()
+    document = _json_object_from(page)
     assert _is_dict(document)
     events = document["events"]
     assert _is_list_of_dict(events) and events
@@ -67,7 +71,7 @@ async def test_training_logs_have_rest_history_and_cursor_tail(
     response = await _read_sse(
         web_application.asgi,
         "/api/training/events/logs?"
-        f"{query}&store_id={store_id}&after_sequence=0",
+        + f"{query}&store_id={store_id}&after_sequence=0",
     )
     assert response.status == 200
     assert response.headers["content-type"].startswith(
@@ -263,7 +267,9 @@ async def test_training_events_send_terminal_rejection(
     run_dir = tmp_path / ("x" * 120)
     run_dir.mkdir()
     with sqlite3.connect(run_dir / "training.sqlite3") as connection:
-        connection.execute("CREATE TABLE invalid_store (value TEXT)")
+        _ = connection.execute(
+            "CREATE TABLE invalid_store (value TEXT)"
+        )
     query = urlencode({"run_dir": str(run_dir)})
     expected_error = (
         "unsupported training database schema: "
@@ -297,7 +303,7 @@ async def test_training_log_events_resume_from_last_event_id(
     page = await client.get(
         f"/api/training/logs?{urlencode({'run_dir': str(tmp_path)})}"
     )
-    document = page.json()
+    document = _json_object_from(page)
     assert _is_dict(document)
     store_id = document["store_id"]
     events = document["events"]
@@ -340,8 +346,8 @@ class _SseEvent:
     data: str
     event_id: str | None
 
-    def json(self) -> object:
-        return json.loads(self.data)
+    def json(self) -> dict[str, object]:
+        return TypeAdapter(dict[str, object]).validate_json(self.data)
 
 
 @dataclass(frozen=True, slots=True)
@@ -349,6 +355,31 @@ class _SseResponse:
     status: int
     headers: dict[str, str]
     events: tuple[_SseEvent, ...]
+
+
+class _HttpResponseStart(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
+
+    type: Literal["http.response.start"]
+    status: int
+    headers: list[tuple[bytes, bytes]]
+
+
+class _HttpResponseBody(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="ignore")
+
+    type: Literal["http.response.body"]
+    body: bytes = b""
+
+
+type _HttpResponseMessage = Annotated[
+    _HttpResponseStart | _HttpResponseBody,
+    Field(discriminator="type"),
+]
+
+_HTTP_RESPONSE_MESSAGE: TypeAdapter[_HttpResponseMessage] = TypeAdapter(
+    _HttpResponseMessage
+)
 
 
 async def _read_sse(
@@ -364,7 +395,7 @@ async def _read_sse(
     parsed = urlsplit(url)
     disconnect = asyncio.Event()
     request_sent = False
-    status: int | None = None
+    statuses: list[int] = []
     response_headers: dict[str, str] = {}
     events: list[_SseEvent] = []
     buffer = bytearray()
@@ -379,22 +410,24 @@ async def _read_sse(
                 "body": b"",
                 "more_body": False,
             }
-        await disconnect.wait()
+        _ = await disconnect.wait()
         return {"type": "http.disconnect"}
 
     async def send(message: Message) -> None:
-        nonlocal status, buffer, called_after_first
-        if message["type"] == "http.response.start":
-            status = message["status"]
+        nonlocal buffer, called_after_first
+        response_message = _HTTP_RESPONSE_MESSAGE.validate_python(
+            message
+        )
+        if isinstance(response_message, _HttpResponseStart):
+            statuses.append(response_message.status)
             response_headers.update(
                 {
                     key.decode("latin-1"): value.decode("latin-1")
-                    for key, value in message["headers"]
+                    for key, value in response_message.headers
                 }
             )
             return
-        assert message["type"] == "http.response.body"
-        buffer.extend(message.get("body", b""))
+        buffer.extend(response_message.body)
         blocks = bytes(buffer).split(b"\n\n")
         buffer = bytearray(blocks.pop())
         for block in blocks:
@@ -429,10 +462,10 @@ async def _read_sse(
     await asyncio.wait_for(
         app(scope, app_receive, app_send), timeout=8.0
     )
-    assert status is not None
+    assert statuses
     assert len(events) >= event_count
     return _SseResponse(
-        status=status,
+        status=statuses[0],
         headers=response_headers,
         events=tuple(events[:event_count]),
     )

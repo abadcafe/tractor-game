@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, final
 
 from server.foundation.result import Ok, Rejected
 from server.game import Seat, SeatMap, seats
@@ -71,6 +71,7 @@ class _HumanBinding:
     player: HumanPlayer
 
 
+@final
 class SeatRoster:
     """Own mutable pregame seat assignments and freeze them once."""
 
@@ -96,8 +97,8 @@ class SeatRoster:
         if existing is not None:
             return SeatOccupied()
         if current is not None:
-            self._players.pop(current.seat)
-            self._humans.pop(user_id)
+            _ = self._players.pop(current.seat)
+            _ = self._humans.pop(user_id)
         player = HumanPlayer(user_id)
         self._players[seat] = player
         self._humans[user_id] = _HumanBinding(
@@ -118,8 +119,8 @@ class SeatRoster:
         assignment = self._humans.get(user_id)
         if assignment is None or assignment.seat != seat:
             return UserDoesNotOccupySeat()
-        self._humans.pop(user_id)
-        self._players.pop(seat)
+        _ = self._humans.pop(user_id)
+        _ = self._players.pop(seat)
         return Ok(None)
 
     def fill_bots(

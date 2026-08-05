@@ -7,7 +7,7 @@ from typing import Protocol, cast
 
 import torch
 import torch.distributed as dist
-from torch import Tensor, nn
+from torch import nn
 from torch.nn.parallel import DistributedDataParallel
 
 from server.foundation import result as _result
@@ -19,14 +19,6 @@ from server.training.ppo.loss_module import (
 )
 from server.training.ppo.minibatch import TensorizedPPOMinibatch
 from server.training.ppo.profile import PPOProfileAccumulator
-
-
-class _AllReduceInPlace(Protocol):
-    def __call__(self, tensor: Tensor, op: object) -> object: ...
-
-
-_all_reduce_object: object = getattr(dist, "all_reduce")
-_all_reduce_in_place = cast(_AllReduceInPlace, _all_reduce_object)
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +58,16 @@ class _TensorLossForwarder(Protocol):
     def train(self, mode: bool = True) -> nn.Module: ...
 
     def zero_grad(self, set_to_none: bool = True) -> None: ...
+
+
+class _AllReduceInPlace(Protocol):
+    def __call__(self, tensor: torch.Tensor, op: object) -> None: ...
+
+
+_all_reduce_in_place = cast(
+    _AllReduceInPlace,
+    cast(object, dist.all_reduce),
+)
 
 
 @dataclass(slots=True)

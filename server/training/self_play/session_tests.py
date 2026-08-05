@@ -61,7 +61,7 @@ class _NeverDecidesPolicy:
     ) -> Ok[PolicyDecision] | Rejected:
         assert observation.action_query == legal_actions.query
         assert decision_key.episode_id >= 0
-        await asyncio.Event().wait()
+        _ = await asyncio.Event().wait()
         assert False
 
 

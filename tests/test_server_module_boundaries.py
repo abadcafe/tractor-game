@@ -280,7 +280,7 @@ def test_policy_inference_contracts_import_loads_no_torch() -> None:
             sys.executable,
             "-c",
             "import sys; import server.policy_model.inference; "
-            "assert 'torch' not in sys.modules",
+            + "assert 'torch' not in sys.modules",
         ),
         check=False,
         capture_output=True,
@@ -296,9 +296,9 @@ def test_policy_inference_runtime_loads_no_training_modules() -> None:
             sys.executable,
             "-c",
             "import sys; import server.policy_model.inference.runtime; "
-            "assert not [name for name in sys.modules "
-            "if name == 'server.training' "
-            "or name.startswith('server.training.')]",
+            + "assert not [name for name in sys.modules "
+            + "if name == 'server.training' "
+            + "or name.startswith('server.training.')]",
         ),
         check=False,
         capture_output=True,

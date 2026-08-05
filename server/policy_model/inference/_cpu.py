@@ -6,18 +6,18 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, cast
 
 import torch
 
 
-class _LinuxScheduler(Protocol):
-    def sched_getaffinity(self, pid: int) -> set[int]: ...
+def _linux_sched_getaffinity(pid: int) -> set[int]:
+    assert sys.platform == "linux"
+    return os.sched_getaffinity(pid)
 
-    def sched_setaffinity(self, pid: int, cpus: set[int]) -> None: ...
 
-
-_LINUX_SCHEDULER = cast(_LinuxScheduler, os)
+def _linux_sched_setaffinity(pid: int, cpus: set[int]) -> None:
+    assert sys.platform == "linux"
+    os.sched_setaffinity(pid, cpus)
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,7 +43,7 @@ def cpu_execution_plan() -> CPUExecutionPlan:
             thread_count=os.cpu_count() or 1,
             cpu_ids=None,
         )
-    allowed = tuple(sorted(_LINUX_SCHEDULER.sched_getaffinity(0)))
+    allowed = tuple(sorted(_linux_sched_getaffinity(0)))
     assert allowed
     capacities = _cpu_capacities(allowed)
     if capacities is None:
@@ -64,7 +64,7 @@ def cpu_execution_plan() -> CPUExecutionPlan:
 def initialize_cpu_worker(plan: CPUExecutionPlan) -> None:
     """Pin the model owner before PyTorch creates intra-op workers."""
     if plan.cpu_ids is not None:
-        _LINUX_SCHEDULER.sched_setaffinity(0, set(plan.cpu_ids))
+        _linux_sched_setaffinity(0, set(plan.cpu_ids))
     torch.set_num_threads(plan.thread_count)
 
 

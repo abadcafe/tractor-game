@@ -573,7 +573,7 @@ class _FinalPolicyRequestBatchBuilder:
             source=frame.device_batch.action_plan_batch,
             start=start,
         )
-        self.sampling_thresholds[start:end, :].zero_()
+        _ = self.sampling_thresholds[start:end, :].zero_()
         source_thresholds = frame.device_batch.sampling_thresholds
         if self.sampling_thresholds.device.type == "mps":
             source_thresholds = (
@@ -582,7 +582,7 @@ class _FinalPolicyRequestBatchBuilder:
                     device=self.sampling_thresholds.device,
                 )
             )
-        self.sampling_thresholds[
+        _ = self.sampling_thresholds[
             start:end, : frame.padded_generation_steps()
         ].copy_(
             source_thresholds,
@@ -591,7 +591,7 @@ class _FinalPolicyRequestBatchBuilder:
                 source=source_thresholds,
             ),
         )
-        self.generation_step_counts[start:end].copy_(
+        _ = self.generation_step_counts[start:end].copy_(
             frame.device_batch.generation_step_counts,
             non_blocking=_non_blocking_copy(
                 destination=self.generation_step_counts,
@@ -892,8 +892,10 @@ def _copy_observation_rows(
         ),
     )
     for destination_values, source_values in sequence_pairs:
-        destination_values[start : start + count].zero_()
-        destination_values[start : start + count, :token_count].copy_(
+        _ = destination_values[start : start + count].zero_()
+        _ = destination_values[
+            start : start + count, :token_count
+        ].copy_(
             source_values,
             non_blocking=_non_blocking_copy(
                 destination=destination_values,
@@ -913,7 +915,7 @@ def _copy_observation_rows(
         (destination.query_indices, source.query_indices),
     )
     for destination_values, source_values in fixed_pairs:
-        destination_values[start : start + count].copy_(
+        _ = destination_values[start : start + count].copy_(
             source_values,
             non_blocking=_non_blocking_copy(
                 destination=destination_values,
@@ -962,9 +964,11 @@ def _copy_action_plan_rows(
         destination.has_tractor, source.has_tractor, start=start
     )
     generation_width = int(source.trace_choice_ids.shape[-1])
-    destination.trace_choice_ids[start : start + count].zero_()
-    destination.trace_choice_mask[start : start + count].fill_(False)
-    destination.trace_choice_ids[
+    _ = destination.trace_choice_ids[start : start + count].zero_()
+    _ = destination.trace_choice_mask[start : start + count].fill_(
+        False
+    )
+    _ = destination.trace_choice_ids[
         start : start + count, :, :generation_width
     ].copy_(
         source.trace_choice_ids,
@@ -973,7 +977,7 @@ def _copy_action_plan_rows(
             source=source.trace_choice_ids,
         ),
     )
-    destination.trace_choice_mask[
+    _ = destination.trace_choice_mask[
         start : start + count, :, :generation_width
     ].copy_(
         source.trace_choice_mask,
@@ -1002,7 +1006,7 @@ def _copy_fixed(
     destination: Tensor, source: Tensor, *, start: int
 ) -> None:
     count = int(source.shape[0])
-    destination[start : start + count].copy_(
+    _ = destination[start : start + count].copy_(
         source,
         non_blocking=_non_blocking_copy(
             destination=destination, source=source

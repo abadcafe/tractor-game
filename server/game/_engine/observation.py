@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from server.game.rules import play
+import server.game.rules.play as play
 from server.game.rules.cards import Card, Rank, Suit
 from server.game.seating import Partnership, Seat, SeatMap
 from server.game.snapshots import PlayerSnapshot

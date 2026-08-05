@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import final
 
 from ._contracts import (
     CommandDecoder,
@@ -45,6 +46,7 @@ class _Connected:
 type _Connection = _Disconnected | _Connected
 
 
+@final
 class HumanPlayer:
     """Human seat controller surviving transport reconnects."""
 

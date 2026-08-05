@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 import torch
 
-import server.training.ppo.profile as profile_module
 from server.training.ppo.profile import PPOProfileAccumulator
 
 
@@ -26,7 +27,7 @@ def test_start_finish_basic_cuda_synchronizes_update_boundaries(
 
     monkeypatch.setattr(torch.cuda, "synchronize", fake_synchronize)
     monkeypatch.setattr(
-        profile_module.time,
+        time,
         "perf_counter",
         fake_perf_counter,
     )

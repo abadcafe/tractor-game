@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import override
 
 from server.foundation.result import Ok, Rejected
 from server.game.rules import play
@@ -36,9 +37,11 @@ class LeadPlayLegalActionSpace(LegalActionSpace):
     _hand_cards: tuple[Card, ...]
 
     @property
+    @override
     def query(self) -> ActionQuery:
         return self._query
 
+    @override
     def decode(
         self, trace: ActionTrace
     ) -> Ok[GeneratedAction] | Rejected:

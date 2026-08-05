@@ -5,7 +5,10 @@ from __future__ import annotations
 from typing import Protocol, TypeGuard
 
 import httpx
+from pydantic import TypeAdapter
 from starlette.testclient import WebSocketTestSession
+
+_JSON_OBJECT = TypeAdapter(dict[str, object])
 
 
 class AsyncRestClient(Protocol):
@@ -50,8 +53,19 @@ def is_list_of_dict(
 
 def game_id_from(response: httpx.Response) -> str:
     """Extract the public identifier returned by game creation."""
-    document = response.json()
-    assert is_dict(document)
+    document = json_object_from(response)
     game_id = document["game_id"]
     assert isinstance(game_id, str)
     return game_id
+
+
+def json_object_from(response: httpx.Response) -> dict[str, object]:
+    """Validate an HTTP response body as a JSON object."""
+    return _JSON_OBJECT.validate_json(response.content)
+
+
+def websocket_json_object(
+    websocket: WebSocketTestSession,
+) -> dict[str, object]:
+    """Receive and validate one WebSocket JSON object."""
+    return _JSON_OBJECT.validate_python(websocket.receive_json())

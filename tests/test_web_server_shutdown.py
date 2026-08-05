@@ -92,7 +92,7 @@ async def _assert_server_shutdown(
 
                 process.send_signal(shutdown_signal)
 
-                await asyncio.wait_for(
+                _ = await asyncio.wait_for(
                     asyncio.gather(
                         *(_drain_to_eof(stream) for stream in streams)
                     ),
@@ -103,7 +103,7 @@ async def _assert_server_shutdown(
     finally:
         if process.poll() is None:
             process.kill()
-            process.wait(timeout=5.0)
+            _ = process.wait(timeout=5.0)
         log_file.close()
 
     output = log_path.read_text(encoding="utf-8")

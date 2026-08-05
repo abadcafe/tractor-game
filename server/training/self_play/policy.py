@@ -90,6 +90,7 @@ class RandomTrainingPolicy:
         legal_actions: LegalActionSpace,
         decision_key: TrainingDecisionKey,
     ) -> Ok[PolicyDecision] | Rejected:
+        _ = observation
         device = torch.device("cpu")
         action_plan = compile_legal_action_frame(legal_actions)
         generation_step_count = action_plan_generation_step_count(

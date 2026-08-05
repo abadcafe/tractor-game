@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import override
 
 import torch
 
@@ -54,6 +55,7 @@ class _CountingModel(PolicyActionModel):
         self.action_value_row_counts = []
         self.action_counts = []
 
+    @override
     def encode_policy_observations(
         self,
         observation: ObservationTensorBatch,
@@ -63,6 +65,7 @@ class _CountingModel(PolicyActionModel):
         )
         return super().encode_policy_observations(observation)
 
+    @override
     def encode_action_value_observations(
         self,
         observation: ObservationTensorBatch,
@@ -72,6 +75,7 @@ class _CountingModel(PolicyActionModel):
         )
         return super().encode_action_value_observations(observation)
 
+    @override
     def action_values(
         self,
         encoding: EncodedObservation,
@@ -96,6 +100,7 @@ class _SlowModel(_CountingModel):
         super().__init__()
         self.delay_next_encode = True
 
+    @override
     def encode_policy_observations(
         self,
         observation: ObservationTensorBatch,
@@ -107,6 +112,7 @@ class _SlowModel(_CountingModel):
 
 
 class _BrokenModel(_CountingModel):
+    @override
     def encode_policy_observations(
         self,
         observation: ObservationTensorBatch,
@@ -116,6 +122,7 @@ class _BrokenModel(_CountingModel):
 
 
 class _PreferRevealModel(_CountingModel):
+    @override
     def action_values(
         self,
         encoding: EncodedObservation,
@@ -284,7 +291,7 @@ async def test_cancelled_caller_does_not_break_runtime() -> None:
         runtime.decide(requests=(_request(query=query, seed=7),))
     )
     await asyncio.sleep(0)
-    pending.cancel()
+    _ = pending.cancel()
 
     cancellation = await asyncio.gather(
         pending,

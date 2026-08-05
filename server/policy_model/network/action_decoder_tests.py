@@ -19,7 +19,7 @@ from .observation_encoder import EncodedObservation, ObservationEncoder
 
 def test_cached_decode_exactly_matches_causal_teacher_forcing() -> None:
     decoder = ActionDecoder(d_model=8, heads=1)
-    decoder.eval()
+    _ = decoder.eval()
     encoding = _encoding()
     choices = torch.tensor(((2, 7, 1),), dtype=torch.long)
     step_counts = torch.tensor((3,), dtype=torch.long)
@@ -51,7 +51,7 @@ def test_cached_decode_exactly_matches_causal_teacher_forcing() -> None:
 
 def test_teacher_forcing_cannot_see_future_choices() -> None:
     decoder = ActionDecoder(d_model=8, heads=1)
-    decoder.eval()
+    _ = decoder.eval()
     encoding = _encoding()
     first = torch.tensor(((2, 7, 1),), dtype=torch.long)
     changed_future = torch.tensor(((2, 31, 44),), dtype=torch.long)
@@ -110,7 +110,7 @@ def _encoding() -> EncodedObservation:
             completed_tricks=(),
         ),
     )
-    return ObservationEncoder(d_model=8, layers=1, heads=1)(
+    return ObservationEncoder(d_model=8, layers=1, heads=1).forward(
         tensorize_observation(
             observation=observation,
             device=torch.device("cpu"),

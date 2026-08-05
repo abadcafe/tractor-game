@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Literal
+from typing import ClassVar, Literal
 
 import psutil
 from pydantic import BaseModel, ConfigDict, Field
@@ -18,7 +18,9 @@ _MAX_PID_FILE_BYTES = 64
 class ProcessDetails(BaseModel):
     """Best-effort operating-system facts shown to the user."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     kind: Literal["details"] = "details"
     started_at_ms: int = Field(ge=0)
@@ -33,7 +35,9 @@ class ProcessDetails(BaseModel):
 class ProcessInspectionError(BaseModel):
     """A live PID whose diagnostics cannot be read."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     kind: Literal["error"] = "error"
     error: str
@@ -45,7 +49,9 @@ type ProcessInspection = ProcessDetails | ProcessInspectionError
 class ProcessSnapshot(BaseModel):
     """A live PID from the selected run's PID file."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     pid: int = Field(gt=0)
     inspection: ProcessInspection
@@ -54,7 +60,9 @@ class ProcessSnapshot(BaseModel):
 class ProcessState(BaseModel):
     """Current PID-file process state for one training run."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     process: ProcessSnapshot | None
 

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
+import sys
+
 import pytest
 
 from server.foundation.result import Ok, Rejected
-from server.training.runtime import affinity
 from server.training.runtime.affinity import (
     apply_cpu_affinity,
     current_cpu_affinity,
@@ -20,9 +22,9 @@ def test_apply_cpu_affinity_empty_cpu_set_reads_current_affinity(
         assert pid == 0
         return {3, 1}
 
-    monkeypatch.setattr(affinity.sys, "platform", "linux")
+    monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(
-        affinity.os,
+        os,
         "sched_getaffinity",
         fake_getaffinity,
         raising=False,
@@ -39,7 +41,7 @@ def test_apply_cpu_affinity_empty_cpu_set_reads_current_affinity(
 def test_apply_cpu_affinity_rejects_non_linux_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(affinity.sys, "platform", "darwin")
+    monkeypatch.setattr(sys, "platform", "darwin")
 
     applied = apply_cpu_affinity(label="worker-0", cpus=(4,))
 
@@ -51,7 +53,7 @@ def test_apply_cpu_affinity_rejects_non_linux_binding(
 def test_unbound_worker_skips_affinity_on_darwin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(affinity.sys, "platform", "darwin")
+    monkeypatch.setattr(sys, "platform", "darwin")
 
     applied = apply_cpu_affinity(label="worker-0", cpus=())
     checked = preflight_cpu_affinity(label="worker-0", cpus=())
@@ -76,15 +78,15 @@ def test_apply_cpu_affinity_sets_requested_linux_cpus(
         assert pid == 0
         return {5, 4}
 
-    monkeypatch.setattr(affinity.sys, "platform", "linux")
+    monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(
-        affinity.os,
+        os,
         "sched_setaffinity",
         fake_setaffinity,
         raising=False,
     )
     monkeypatch.setattr(
-        affinity.os,
+        os,
         "sched_getaffinity",
         fake_getaffinity,
         raising=False,
@@ -105,9 +107,9 @@ def test_apply_cpu_affinity_rejects_operating_system_failure(
         assert cpus == {7}
         raise OSError
 
-    monkeypatch.setattr(affinity.sys, "platform", "linux")
+    monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(
-        affinity.os,
+        os,
         "sched_setaffinity",
         fake_setaffinity,
         raising=False,
@@ -134,15 +136,15 @@ def test_preflight_cpu_affinity_restores_original_cpu_set(
         assert pid == 0
         return set(active_sets[0])
 
-    monkeypatch.setattr(affinity.sys, "platform", "linux")
+    monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(
-        affinity.os,
+        os,
         "sched_setaffinity",
         fake_setaffinity,
         raising=False,
     )
     monkeypatch.setattr(
-        affinity.os,
+        os,
         "sched_getaffinity",
         fake_getaffinity,
         raising=False,
@@ -171,15 +173,15 @@ def test_preflight_cpu_affinity_rejects_invalid_cpu_set(
         assert pid == 0
         return {0, 1}
 
-    monkeypatch.setattr(affinity.sys, "platform", "linux")
+    monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(
-        affinity.os,
+        os,
         "sched_setaffinity",
         fake_setaffinity,
         raising=False,
     )
     monkeypatch.setattr(
-        affinity.os,
+        os,
         "sched_getaffinity",
         fake_getaffinity,
         raising=False,
@@ -195,7 +197,7 @@ def test_preflight_cpu_affinity_rejects_invalid_cpu_set(
 def test_current_cpu_affinity_returns_empty_when_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(affinity.sys, "platform", "freebsd")
+    monkeypatch.setattr(sys, "platform", "freebsd")
 
     assert current_cpu_affinity() == ()
 
@@ -207,9 +209,9 @@ def test_current_cpu_affinity_returns_empty_on_os_failure(
         assert pid == 0
         raise OSError
 
-    monkeypatch.setattr(affinity.sys, "platform", "linux")
+    monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(
-        affinity.os,
+        os,
         "sched_getaffinity",
         fake_getaffinity,
         raising=False,

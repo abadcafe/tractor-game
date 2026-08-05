@@ -59,7 +59,7 @@ def load_policy_checkpoint(
     if isinstance(model_result, _result.Rejected):
         return model_result
     model = model_result.value
-    model.eval()
+    _ = model.eval()
     return _result.Ok(
         value=LoadedPolicyCheckpoint(
             model=model,
@@ -182,11 +182,11 @@ def restore_policy_model(
             heads=model_config.heads,
             action_value_layers=model_config.action_value_layers,
         )
-        model.to(device)
+        _ = model.to(device)
     finally:
         torch.random.set_rng_state(cpu_rng_state)
     try:
-        model.load_state_dict(checkpoint.payload.model_state)
+        _ = model.load_state_dict(checkpoint.payload.model_state)
     except RuntimeError:
         return checkpoint_corruption(
             checkpoint.state_path,

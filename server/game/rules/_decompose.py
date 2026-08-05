@@ -106,24 +106,26 @@ def decompose(
         # group has 4+ cards (2-deck game), it contributes multiple
         # pairs; each
         # pair must reference different card instances.
-        pair_entries: list[tuple[tuple[Rank, Suit], list[Card]]] = []
-        single_cards: list[Card] = []
+        trump_pair_entries: list[
+            tuple[tuple[Rank, Suit], list[Card]]
+        ] = []
+        trump_single_cards: list[Card] = []
         for key, group_cards in rank_suit_groups.items():
             n_pairs = len(group_cards) // 2
             remainder = len(group_cards) % 2
             for i in range(n_pairs):
-                pair_entries.append(
+                trump_pair_entries.append(
                     (key, group_cards[i * 2 : i * 2 + 2])
                 )
             if remainder == 1:
-                single_cards.append(group_cards[-1])
+                trump_single_cards.append(group_cards[-1])
 
         # Sort pairs by trump_rank_order position of representative card
         rep_cards: dict[tuple[Rank, Suit], Card] = {}
-        for key, pair_cards in pair_entries:
+        for key, pair_cards in trump_pair_entries:
             if key not in rep_cards:
                 rep_cards[key] = pair_cards[0]
-        pair_entries.sort(
+        trump_pair_entries.sort(
             key=lambda entry: (
                 trump_rank_order(
                     rep_cards[entry[0]], trump_suit, trump_rank
@@ -143,7 +145,7 @@ def decompose(
                 trump_rank_order(
                     rep_cards[e[0]], trump_suit, trump_rank
                 )
-                for e in pair_entries
+                for e in trump_pair_entries
             }
         )
 
@@ -179,11 +181,12 @@ def decompose(
 
         # Find runs of consecutive adjacent pairs
         runs: list[list[int]] = []  # indices into pair_entries
-        if pair_entries:
+        if trump_pair_entries:
             current_run: list[int] = [0]
-            for i in range(1, len(pair_entries)):
+            for i in range(1, len(trump_pair_entries)):
                 if _are_adjacent_t(
-                    pair_entries[current_run[-1]], pair_entries[i]
+                    trump_pair_entries[current_run[-1]],
+                    trump_pair_entries[i],
                 ):
                     current_run.append(i)
                 else:
@@ -208,7 +211,7 @@ def decompose(
         for run in tractor_runs:
             tractor_cards: list[Card] = []
             for idx in run:
-                tractor_cards.extend(pair_entries[idx][1])
+                tractor_cards.extend(trump_pair_entries[idx][1])
             result.append(
                 SubPlay(
                     pair_count=len(run),
@@ -217,14 +220,14 @@ def decompose(
                 )
             )
 
-        for idx, (key, pair_cards) in enumerate(pair_entries):
+        for idx, (key, pair_cards) in enumerate(trump_pair_entries):
             if idx in used_indices:
                 continue
             result.append(
                 SubPlay(pair_count=1, cards=pair_cards, suit=eff_suit)
             )
 
-        for c in single_cards:
+        for c in trump_single_cards:
             result.append(
                 SubPlay(pair_count=0, cards=[c], suit=eff_suit)
             )
@@ -237,22 +240,24 @@ def decompose(
 
         # Create a flat list of pair entries, each owning a distinct
         # pair of cards.
-        pair_entries: list[tuple[tuple[Rank, Suit], list[Card]]] = []
-        single_cards: list[Card] = []
+        non_trump_pair_entries: list[
+            tuple[tuple[Rank, Suit], list[Card]]
+        ] = []
+        non_trump_single_cards: list[Card] = []
         for rank, rank_cards in rank_groups.items():
             n_pairs = len(rank_cards) // 2
             remainder = len(rank_cards) % 2
             for i in range(n_pairs):
-                pair_entries.append(
+                non_trump_pair_entries.append(
                     (
                         (rank, rank_cards[0].suit),
                         rank_cards[i * 2 : i * 2 + 2],
                     )
                 )
             if remainder == 1:
-                single_cards.append(rank_cards[-1])
+                non_trump_single_cards.append(rank_cards[-1])
 
-        pair_entries.sort(
+        non_trump_pair_entries.sort(
             key=lambda e: non_trump_rank_order(e[0][0], trump_rank)
         )
 
@@ -266,55 +271,58 @@ def decompose(
             return abs(o1 - o2) == 1
 
         # Find runs (indices into pair_entries)
-        runs: list[list[int]] = []
-        if pair_entries:
-            current_run: list[int] = [0]
-            for i in range(1, len(pair_entries)):
+        non_trump_runs: list[list[int]] = []
+        if non_trump_pair_entries:
+            non_trump_current_run: list[int] = [0]
+            for i in range(1, len(non_trump_pair_entries)):
                 if _are_adjacent_nt(
-                    pair_entries[current_run[-1]], pair_entries[i]
+                    non_trump_pair_entries[non_trump_current_run[-1]],
+                    non_trump_pair_entries[i],
                 ):
-                    current_run.append(i)
+                    non_trump_current_run.append(i)
                 else:
-                    if len(current_run) >= 2:
-                        runs.append(current_run)
-                    current_run = [i]
-            if len(current_run) >= 2:
-                runs.append(current_run)
+                    if len(non_trump_current_run) >= 2:
+                        non_trump_runs.append(non_trump_current_run)
+                    non_trump_current_run = [i]
+            if len(non_trump_current_run) >= 2:
+                non_trump_runs.append(non_trump_current_run)
 
         # Greedy: extract longest tractors first
-        runs.sort(key=lambda r: len(r), reverse=True)
-        used_indices: set[int] = set()
-        tractor_runs: list[list[int]] = []
-        for run in runs:
-            if any(idx in used_indices for idx in run):
+        non_trump_runs.sort(key=lambda r: len(r), reverse=True)
+        non_trump_used_indices: set[int] = set()
+        non_trump_tractor_runs: list[list[int]] = []
+        for run in non_trump_runs:
+            if any(idx in non_trump_used_indices for idx in run):
                 continue
-            tractor_runs.append(run)
-            used_indices.update(run)
+            non_trump_tractor_runs.append(run)
+            non_trump_used_indices.update(run)
 
         # Build SubPlay list
         result = []
-        for run in tractor_runs:
-            tractor_cards: list[Card] = []
+        for run in non_trump_tractor_runs:
+            non_trump_tractor_cards: list[Card] = []
             for idx in run:
-                tractor_cards.extend(pair_entries[idx][1])
+                non_trump_tractor_cards.extend(
+                    non_trump_pair_entries[idx][1]
+                )
             result.append(
                 SubPlay(
                     pair_count=len(run),
-                    cards=tractor_cards,
+                    cards=non_trump_tractor_cards,
                     suit=eff_suit,
                 )
             )
 
         for idx, ((_rank, _suit), pair_cards) in enumerate(
-            pair_entries
+            non_trump_pair_entries
         ):
-            if idx in used_indices:
+            if idx in non_trump_used_indices:
                 continue
             result.append(
                 SubPlay(pair_count=1, cards=pair_cards, suit=eff_suit)
             )
 
-        for c in single_cards:
+        for c in non_trump_single_cards:
             result.append(
                 SubPlay(pair_count=0, cards=[c], suit=eff_suit)
             )

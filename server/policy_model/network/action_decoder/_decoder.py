@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Protocol, final
 
 import torch
 import torch.nn.functional as F
@@ -14,6 +15,7 @@ from server.policy_model._schema.actions import (
     MAX_ACTION_STEPS,
 )
 
+from .._module_call import call_attention, call_tensor
 from ..observation_encoder import (
     ActionDecoderInputs,
     EncodedObservation,
@@ -30,7 +32,7 @@ def _sorted_unique_inverse(values: Tensor) -> tuple[Tensor, Tensor]:
     starts[1:] = sorted_values[1:] != sorted_values[:-1]
     groups = starts.to(dtype=torch.long).cumsum(dim=0) - 1
     inverse = torch.empty_like(groups)
-    inverse.scatter_(0, sorted_result.indices, groups)
+    _ = inverse.scatter_(0, sorted_result.indices, groups)
     return sorted_values[starts], inverse
 
 
@@ -41,8 +43,35 @@ class ActionTraceScores:
     choice_logits: Tensor
 
 
+class ActionDecodeSession(Protocol):
+    """Incremental action-decoding session contract."""
+
+    @property
+    def unique_prefix_count(self) -> int: ...
+
+    def next_choice_logits(
+        self,
+        active_rows: Tensor,
+        scored_rows: Tensor,
+    ) -> Tensor: ...
+
+    def advance(
+        self,
+        selected_choice_ids: Tensor,
+        active_rows: Tensor,
+    ) -> None: ...
+
+    def fork(
+        self,
+        *,
+        parent_rows: Tensor,
+        selected_choice_ids: Tensor,
+        active_rows: Tensor,
+    ) -> None: ...
+
+
 @dataclass(slots=True)
-class ActionDecodeSession:
+class _ActionDecodeSession:
     """Incremental decoder state shared by identical action prefixes."""
 
     _decoder: ActionDecoder
@@ -112,7 +141,7 @@ class ActionDecodeSession:
                 0, source_rows
             ),
         )
-        logits.index_copy_(
+        _ = logits.index_copy_(
             0,
             scored_lane_rows,
             prefix_logits.index_select(0, scored_inverse),
@@ -198,7 +227,9 @@ class ActionDecodeSession:
             choice_embeddings=embeddings,
         )
         lane_to_prefix = torch.zeros_like(self._lane_to_prefix)
-        lane_to_prefix.index_copy_(0, active_lane_rows, child_inverse)
+        _ = lane_to_prefix.index_copy_(
+            0, active_lane_rows, child_inverse
+        )
         self._cache = cache
         self._prefix_source_rows = child_source_rows
         self._lane_to_prefix = lane_to_prefix
@@ -221,7 +252,7 @@ class ActionDecodeSession:
             self._prefix_source_rows.index_select(0, unique_prefixes)
         )
         lane_to_prefix = torch.zeros_like(self._lane_to_prefix)
-        lane_to_prefix.index_copy_(0, active_lane_rows, inverse)
+        _ = lane_to_prefix.index_copy_(0, active_lane_rows, inverse)
         self._lane_to_prefix = lane_to_prefix
 
 
@@ -293,6 +324,7 @@ class _ActionDecodeCache:
         )
 
 
+@final
 class ActionDecoder(nn.Module):
     """Own all parameters and state transitions for action decoding."""
 
@@ -301,7 +333,7 @@ class ActionDecoder(nn.Module):
         self._control_choice_embeddings = nn.Parameter(
             torch.empty(2, d_model)
         )
-        nn.init.normal_(
+        _ = nn.init.normal_(
             self._control_choice_embeddings,
             mean=0.0,
             std=1.0 / math.sqrt(float(d_model)),
@@ -395,8 +427,9 @@ class ActionDecoder(nn.Module):
             1
         ).expand(-1, max_steps, -1)
         decision_context = torch.tanh(
-            self._decision_projection(
-                torch.cat((observation_context, decoded), dim=-1)
+            call_tensor(
+                self._decision_projection,
+                torch.cat((observation_context, decoded), dim=-1),
             )
         )
         return ActionTraceScores(
@@ -431,13 +464,14 @@ class ActionDecoder(nn.Module):
         root_context = inputs.observation_context.index_select(
             0, prefix_source_rows
         )
-        seed = self._query_seed(root_context)
-        seed = seed + self._action_position_embedding(
+        seed = call_tensor(self._query_seed, root_context)
+        seed = seed + call_tensor(
+            self._action_position_embedding,
             torch.zeros(
                 (int(prefix_source_rows.shape[0]),),
                 dtype=torch.long,
                 device=seed.device,
-            )
+            ),
         )
         cache = self._transformer.begin_decode_cache(
             first_embeddings=seed,
@@ -453,12 +487,14 @@ class ActionDecoder(nn.Module):
             batch_size=encoding.batch_size,
             inputs=inputs,
         )
-        return ActionDecodeSession(
+        return _ActionDecodeSession(
             _decoder=self,
             _cache=cache,
             _base_observation_context=inputs.observation_context,
             _base_choice_embeddings=choice_embeddings,
-            _base_choice_keys=self._choice_key(choice_embeddings),
+            _base_choice_keys=call_tensor(
+                self._choice_key, choice_embeddings
+            ),
             _prefix_source_rows=prefix_source_rows,
             _lane_to_prefix=lane_to_prefix,
             _lane_count=int(source_rows.shape[0]),
@@ -488,11 +524,12 @@ class ActionDecoder(nn.Module):
         choice_keys: Tensor,
     ) -> Tensor:
         decision_context = torch.tanh(
-            self._decision_projection(
+            call_tensor(
+                self._decision_projection,
                 torch.cat(
                     (observation_context, prefix_context),
                     dim=-1,
-                )
+                ),
             )
         )
         return self._score_projected_choices(
@@ -516,9 +553,9 @@ class ActionDecoder(nn.Module):
         )
         selected = choice_embeddings[batch_indices, choice_ids]
         positions = torch.full_like(choice_ids, position)
-        return self._selected_choice_adapter(
-            selected
-        ) + self._action_position_embedding(positions)
+        return call_tensor(
+            self._selected_choice_adapter, selected
+        ) + call_tensor(self._action_position_embedding, positions)
 
     def _teacher_forced_prefix_embeddings(
         self,
@@ -528,7 +565,9 @@ class ActionDecoder(nn.Module):
     ) -> Tensor:
         max_steps = int(choice_ids_padded.shape[1])
         assert 0 < max_steps <= MAX_ACTION_STEPS
-        seed = self._query_seed(inputs.observation_context).unsqueeze(1)
+        seed = call_tensor(
+            self._query_seed, inputs.observation_context
+        ).unsqueeze(1)
         if max_steps == 1:
             prefix = seed
         else:
@@ -546,7 +585,12 @@ class ActionDecoder(nn.Module):
                 choice_ids_padded[:, : max_steps - 1],
             ]
             prefix = torch.cat(
-                (seed, self._selected_choice_adapter(selected)),
+                (
+                    seed,
+                    call_tensor(
+                        self._selected_choice_adapter, selected
+                    ),
+                ),
                 dim=1,
             )
         positions = torch.arange(
@@ -554,7 +598,9 @@ class ActionDecoder(nn.Module):
             dtype=torch.long,
             device=choice_ids_padded.device,
         ).unsqueeze(0)
-        return prefix + self._action_position_embedding(positions)
+        return prefix + call_tensor(
+            self._action_position_embedding, positions
+        )
 
     def _choice_embeddings(
         self,
@@ -582,7 +628,9 @@ class ActionDecoder(nn.Module):
     ) -> Tensor:
         return self._score_projected_choices(
             decision_context=decision_context,
-            choice_keys=self._choice_key(choice_embeddings),
+            choice_keys=call_tensor(
+                self._choice_key, choice_embeddings
+            ),
         )
 
     def _score_projected_choices(
@@ -591,7 +639,7 @@ class ActionDecoder(nn.Module):
         decision_context: Tensor,
         choice_keys: Tensor,
     ) -> Tensor:
-        queries = self._choice_query(decision_context)
+        queries = call_tensor(self._choice_query, decision_context)
         if queries.ndim == 2:
             logits = torch.einsum("bd,bcd->bc", queries, choice_keys)
         else:
@@ -602,6 +650,7 @@ class ActionDecoder(nn.Module):
         )
 
 
+@final
 class _ActionDecoderLayer(nn.Module):
     """Single-layer decoder with teacher-forced and cached paths."""
 
@@ -635,7 +684,8 @@ class _ActionDecoderLayer(nn.Module):
         memory_padding_mask: Tensor,
         self_attention_mask: Tensor,
     ) -> Tensor:
-        self_attended, _weights = self._self_attn(
+        self_attention_result = call_attention(
+            self._self_attn,
             prefix_embeddings,
             prefix_embeddings,
             prefix_embeddings,
@@ -643,16 +693,23 @@ class _ActionDecoderLayer(nn.Module):
             attn_mask=self_attention_mask,
             need_weights=False,
         )
-        target = self._norm1(prefix_embeddings + self_attended)
-        cross_attended, _weights = self._cross_attn(
+        self_attended, _weights = self_attention_result
+        target = call_tensor(
+            self._norm1, prefix_embeddings + self_attended
+        )
+        cross_attention_result = call_attention(
+            self._cross_attn,
             target,
             memory,
             memory,
             key_padding_mask=memory_padding_mask,
             need_weights=False,
         )
-        target = self._norm2(target + cross_attended)
-        return self._norm3(target + self._feed_forward(target))
+        cross_attended, _weights = cross_attention_result
+        target = call_tensor(self._norm2, target + cross_attended)
+        return call_tensor(
+            self._norm3, target + self._feed_forward(target)
+        )
 
     def begin_decode_cache(
         self,
@@ -681,8 +738,8 @@ class _ActionDecoderLayer(nn.Module):
             device=self_key.device,
         )
         values = torch.empty_like(keys)
-        keys[:, :, 0:1].copy_(self_key)
-        values[:, :, 0:1].copy_(self_value)
+        _ = keys[:, :, 0:1].copy_(self_key)
+        _ = values[:, :, 0:1].copy_(self_value)
         return _ActionDecodeCache(
             self_keys=keys,
             self_values=values,
@@ -707,8 +764,10 @@ class _ActionDecoderLayer(nn.Module):
             choice_embeddings.unsqueeze(1)
         )
         position = cache.current_length
-        cache.self_keys[:, :, position : position + 1].copy_(key)
-        cache.self_values[:, :, position : position + 1].copy_(value)
+        _ = cache.self_keys[:, :, position : position + 1].copy_(key)
+        _ = cache.self_values[:, :, position : position + 1].copy_(
+            value
+        )
         cache.current_embedding = choice_embeddings
         cache.current_query = self._project_self_query(
             choice_embeddings
@@ -725,7 +784,9 @@ class _ActionDecoderLayer(nn.Module):
             key_padding_mask=None,
             out_projection=self._self_attn.out_proj,
         )
-        target = self._norm1(cache.current_embedding + self_attended)
+        target = call_tensor(
+            self._norm1, cache.current_embedding + self_attended
+        )
         cross_attended = self._scaled_attention(
             query=self._project_cross_query(target),
             key=cache.memory_keys,
@@ -733,11 +794,14 @@ class _ActionDecoderLayer(nn.Module):
             key_padding_mask=cache.memory_padding_mask,
             out_projection=self._cross_attn.out_proj,
         )
-        target = self._norm2(target + cross_attended)
-        return self._norm3(target + self._feed_forward(target))
+        target = call_tensor(self._norm2, target + cross_attended)
+        return call_tensor(
+            self._norm3, target + self._feed_forward(target)
+        )
 
     def _feed_forward(self, target: Tensor) -> Tensor:
-        return self._linear2(F.gelu(self._linear1(target)))
+        hidden = call_tensor(self._linear1, target)
+        return call_tensor(self._linear2, F.gelu(hidden))
 
     def _project_self_query(self, embeddings: Tensor) -> Tensor:
         return self._project_query(
@@ -832,7 +896,7 @@ class _ActionDecoderLayer(nn.Module):
             torch.softmax(scores, dim=-1).unsqueeze(2),
             value,
         ).squeeze(2)
-        return out_projection(_merge_heads(context))
+        return call_tensor(out_projection, _merge_heads(context))
 
 
 def _split_heads(values: Tensor, *, heads: int) -> Tensor:

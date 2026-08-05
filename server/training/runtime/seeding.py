@@ -12,7 +12,7 @@ def seed_training_rng(seed: int) -> None:
     assert seed >= 0
     random.seed(seed)
     cpu_generator = torch.Generator(device="cpu")
-    cpu_generator.manual_seed(seed)
+    _ = cpu_generator.manual_seed(seed)
     torch.set_rng_state(cpu_generator.get_state())
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)

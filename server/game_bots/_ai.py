@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import final
+
 from server.foundation.result import Ok, Rejected
 from server.game import commands
 from server.game_ai import AIControllerPort
@@ -10,6 +12,7 @@ from server.game_runtime.player import PlayerView
 from ._policy import DecisionCommand, DecisionRequest
 
 
+@final
 class AIPolicy:
     """Drive a seat with one model-backed decision controller."""
 

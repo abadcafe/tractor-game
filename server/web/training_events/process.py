@@ -72,7 +72,7 @@ async def _process_events(
                 yield ServerEvent(
                     name="process", data=result.value.model_dump_json()
                 ).encode()
-                heartbeat.cancel()
+                _ = heartbeat.cancel()
                 with suppress(asyncio.CancelledError):
                     await heartbeat
                 heartbeat = asyncio.create_task(
@@ -86,10 +86,10 @@ async def _process_events(
                 asyncio.sleep(_HEARTBEAT_SECONDS)
             )
     finally:
-        snapshot_task.cancel()
+        _ = snapshot_task.cancel()
         with suppress(asyncio.CancelledError):
             await snapshot_task
-        heartbeat.cancel()
+        _ = heartbeat.cancel()
         with suppress(asyncio.CancelledError):
             await heartbeat
         await snapshots.aclose()

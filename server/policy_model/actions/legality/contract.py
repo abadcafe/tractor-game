@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import override
 
 from server.foundation.result import Ok, Rejected
 from server.policy_model._schema.actions import (
@@ -25,6 +26,7 @@ class LegalActionSpace:
         self, trace: ActionTrace
     ) -> Ok[GeneratedAction] | Rejected:
         """Decode a complete legal trace into a generated action."""
+        _ = trace
         raise NotImplementedError
 
 
@@ -35,9 +37,11 @@ class EmptyLegalActionSpace(LegalActionSpace):
     _query: ActionQuery
 
     @property
+    @override
     def query(self) -> ActionQuery:
         return self._query
 
+    @override
     def decode(
         self, trace: ActionTrace
     ) -> Ok[GeneratedAction] | Rejected:

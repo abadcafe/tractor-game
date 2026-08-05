@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import multiprocessing as mp
-from typing import NoReturn
+from multiprocessing import shared_memory
+from typing import NoReturn, final
 
 import pytest
 import torch
@@ -21,9 +22,6 @@ from server.training.runtime.shared_rollout_arena import (
     reset_rollout_arenas,
     snapshot_rollout_arenas,
     wait_rollout_sample_target_or_stop,
-)
-from server.training.runtime.shared_rollout_arena import (
-    group as arena_group_module,
 )
 from server.training.runtime.shared_rollout_arena.types import (
     RolloutRoundMetrics,
@@ -205,7 +203,7 @@ def test_snapshot_and_reset_reuse_group_owned_segments(
         assert isinstance(first_append, Ok)
         assert isinstance(second_append, Ok)
         monkeypatch.setattr(
-            arena_group_module.shared_memory,
+            shared_memory,
             "SharedMemory",
             _reject_group_shared_memory_attach,
         )
@@ -526,6 +524,7 @@ def _commit(
     )
 
 
+@final
 class _RecordingCondition:
     def __init__(self, *, name: str, events: list[str]) -> None:
         self._name = name
@@ -539,6 +538,7 @@ class _RecordingCondition:
         self._events.append(f"{self._name}.release")
 
     def wait(self, timeout: float | None = None) -> bool:
+        _ = timeout
         self._events.append(f"{self._name}.wait")
         return True
 

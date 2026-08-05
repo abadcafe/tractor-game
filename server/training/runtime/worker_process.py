@@ -181,7 +181,7 @@ async def _run_training_worker_process_async(
             error=setup_result.reason,
         )
         event_sink.close()
-        await control.send_response(
+        _ = await control.send_response(
             _worker_rejection(
                 worker_index=worker_index,
                 command="setup",
@@ -197,7 +197,7 @@ async def _run_training_worker_process_async(
             error=sync_result.reason,
         )
         event_sink.close()
-        await control.send_response(
+        _ = await control.send_response(
             _worker_rejection(
                 worker_index=worker_index,
                 command="setup",
@@ -223,7 +223,7 @@ async def _run_training_worker_process_async(
             error=runtime_result.reason,
         )
         event_sink.close()
-        await control.send_response(
+        _ = await control.send_response(
             _worker_rejection(
                 worker_index=worker_index,
                 command="setup",
@@ -472,6 +472,7 @@ def _run_worker_update(
     command: WorkerUpdateCommand,
     event_sink: StructuredEventSink,
 ) -> WorkerResponse:
+    _ = train_config, execution_config
     if _sampling_is_active(runtime):
         event_sink.emit(
             "update.rank",
@@ -750,7 +751,7 @@ async def _stop_worker_sampling(
             reason="worker sampling rollout id mismatch",
         )
     if not task.done():
-        task.cancel()
+        _ = task.cancel()
     sampling_result = await task
     runtime.sampling_task = None
     runtime.sampling_policy_version = None
@@ -803,7 +804,7 @@ async def _cancel_active_sampling(*, runtime: _WorkerRuntime) -> None:
     if task is None:
         return
     if not task.done():
-        task.cancel()
+        _ = task.cancel()
     await task
     runtime.sampling_task = None
     runtime.sampling_policy_version = None
@@ -1065,7 +1066,7 @@ async def _cancel_pending_rounds(
     policy: TrainingPolicy,
 ) -> None:
     for task in pending:
-        task.cancel()
+        _ = task.cancel()
     for task, game_env_index in tuple(pending.items()):
         try:
             await task

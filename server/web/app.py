@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import final
 
 from fastapi import FastAPI
 
@@ -18,6 +19,7 @@ from server.web.training_events.lifecycle import EventStreamLifecycle
 __all__ = ["WebApplication"]
 
 
+@final
 class WebApplication:
     """Own one ASGI application and all of its process-local state."""
 

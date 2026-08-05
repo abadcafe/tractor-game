@@ -75,7 +75,7 @@ def test_resume_command_preserves_unbound_worker_slots() -> None:
 def test_resume_request_rejects_unmanaged_checkpoint_path() -> None:
     rejected = False
     try:
-        TrainingResumeRequest(checkpoint="../other/latest.json")
+        _ = TrainingResumeRequest(checkpoint="../other/latest.json")
     except ValidationError:
         rejected = True
 

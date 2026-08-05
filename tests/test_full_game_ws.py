@@ -13,11 +13,10 @@ interfaces,
     handling.
 """
 
-import json
 import time
 from collections.abc import Generator
 from itertools import combinations
-from typing import Literal, Protocol, TypeGuard
+from typing import Literal, Protocol, TypeGuard, final
 
 import httpx
 import pytest
@@ -27,6 +26,7 @@ from anyio import (
     EndOfStream,
     WouldBlock,
 )
+from pydantic import TypeAdapter
 from starlette.testclient import TestClient, WebSocketTestSession
 from starlette.websockets import WebSocketDisconnect
 
@@ -43,6 +43,9 @@ _WS_ERRORS: tuple[type[Exception], ...] = (
     EndOfStream,
 )
 _DEFAULT_WS_RECEIVE_TIMEOUT_SECONDS: float = 5.0
+_DYNAMIC_OBJECT = TypeAdapter(object)
+_JSON_OBJECT = TypeAdapter(dict[str, object])
+_JSON_VALUE = TypeAdapter(object)
 type WireSeat = Literal["a", "b", "c", "d"]
 type WirePartnership = Literal["first", "second"]
 _USER_SEAT: WireSeat = "c"
@@ -233,13 +236,17 @@ def _has_raise_on_close(val: object) -> TypeGuard[_RaiseOnClose]:
 
 
 def _private_send_rx(ws: WebSocketTestSession) -> _ReceiveNowaitQueue:
-    queue = object.__getattribute__(ws, "_send_rx")
+    queue = _DYNAMIC_OBJECT.validate_python(
+        object.__getattribute__(ws, "_send_rx")
+    )
     assert _has_receive_nowait(queue)
     return queue
 
 
 def _private_raise_on_close(ws: WebSocketTestSession) -> _RaiseOnClose:
-    fn = object.__getattribute__(ws, "_raise_on_close")
+    fn = _DYNAMIC_OBJECT.validate_python(
+        object.__getattribute__(ws, "_raise_on_close")
+    )
     assert _has_raise_on_close(fn)
     return fn
 
@@ -258,13 +265,19 @@ def _receive_ws_json(
             message = _private_send_rx(ws).receive_nowait()
             _private_raise_on_close(ws)(message)
             text = _as_str(message["text"])
-            return json.loads(text)
+            return _JSON_VALUE.validate_json(text)
         except WouldBlock as exc:
             if time.monotonic() >= deadline:
                 raise WsReceiveTimeout(
                     "timed out waiting for websocket message"
                 ) from exc
             time.sleep(0.001)
+
+
+def _response_json_object(
+    response: httpx.Response,
+) -> dict[str, object]:
+    return _JSON_OBJECT.validate_json(response.content)
 
 
 # ---- Fixtures ----
@@ -288,6 +301,7 @@ def sync_client(
         yield c
 
 
+@final
 class WsGameDriver:
     """WebSocket game driver with send-and-wait semantics.
 
@@ -357,7 +371,7 @@ class WsGameDriver:
             self._ws = None
         if self._ws_cm is not None:
             try:
-                self._ws_cm.__exit__(None, None, None)
+                _ = self._ws_cm.__exit__(None, None, None)
             except Exception:
                 pass
             self._ws_cm = None
@@ -392,9 +406,9 @@ class WsGameDriver:
                 else f" cards={action_with_seq.get('cards')}"
             )
         print(
-            f"  [WsGameDriver] send:"
-            f"type={action_with_seq.get('type')}{detail}"
-            f"seq={seq}{slow}",
+            "  [WsGameDriver] send:"
+            + f"type={action_with_seq.get('type')}{detail}"
+            + f"seq={seq}{slow}",
             flush=True,
         )
 
@@ -425,8 +439,8 @@ class WsGameDriver:
                 extra = f" ERROR={err}"
             print(
                 f"  [WsGameDriver] recv: type={result.get('type')}"
-                f"seq={result.get('seq')}"
-                f"awaiting={_awaiting(result)}{extra}",
+                + f"seq={result.get('seq')}"
+                + f"awaiting={_awaiting(result)}{extra}",
                 flush=True,
             )
         if result.get("type") == "state":
@@ -457,16 +471,16 @@ class WsGameDriver:
         if stirring is not None:
             parts.append(
                 "stirring="
-                f"phase:{stirring.get('phase')},"
-                f"current:{stirring.get('current_actor')},"
-                f"exchanging:{stirring.get('exchanging_actor')}"
+                + f"phase:{stirring.get('phase')},"
+                + f"current:{stirring.get('current_actor')},"
+                + f"exchanging:{stirring.get('exchanging_actor')}"
             )
         trick = _as_dict_or_none(state.get("trick"))
         if trick is not None:
             parts.append(
                 "trick="
-                f"current:{trick.get('current_actor')},"
-                f"lead:{trick.get('lead_actor')}"
+                + f"current:{trick.get('current_actor')},"
+                + f"lead:{trick.get('lead_actor')}"
             )
         return " ".join(parts)
 
@@ -545,8 +559,8 @@ class WsGameDriver:
         while True:
             if time.monotonic() > deadline:
                 print(
-                    f"  [do_action] TIMEOUT after 5s, seq stuck at"
-                    f"{self._known_seq}",
+                    "  [do_action] TIMEOUT after 5s, seq stuck at"
+                    + f"{self._known_seq}",
                     flush=True,
                 )
                 return None
@@ -557,15 +571,15 @@ class WsGameDriver:
                 )
             except WsReceiveTimeout:
                 print(
-                    f"  [do_action] TIMEOUT waiting for WS message,"
-                    f"seq stuck at {self._known_seq}",
+                    "  [do_action] TIMEOUT waiting for WS message,"
+                    + f"seq stuck at {self._known_seq}",
                     flush=True,
                 )
                 return None
             except Exception as e:
                 print(
-                    f"  [WsGameDriver] do_action: receive error:"
-                    f"{type(e).__name__}: {e}",
+                    "  [WsGameDriver] do_action: receive error:"
+                    + f"{type(e).__name__}: {e}",
                     flush=True,
                 )
                 raise
@@ -578,7 +592,7 @@ class WsGameDriver:
                 self.last_error = _as_str(error)
                 print(
                     f"  [do_action] rejected: error={self.last_error}"
-                    f"seq={self._known_seq}",
+                    + f"seq={self._known_seq}",
                     flush=True,
                 )
                 return None
@@ -634,8 +648,8 @@ class WsGameDriver:
                 self.sync_seq(_as_int(msg["seq"]))
                 if _awaiting(msg) == value:
                     print(
-                        f"  [WsGameDriver] wait_for_awaiting: found"
-                        f"{value} seq={self._known_seq}",
+                        "  [WsGameDriver] wait_for_awaiting: found"
+                        + f"{value} seq={self._known_seq}",
                         flush=True,
                     )
                     return msg
@@ -676,8 +690,8 @@ class WsGameDriver:
                 )
             except WsReceiveTimeout:
                 print(
-                    f"  [do_stir_pass] TIMEOUT waiting for WS"
-                    f"message, seq stuck at {self._known_seq}",
+                    "  [do_stir_pass] TIMEOUT waiting for WS"
+                    + f"message, seq stuck at {self._known_seq}",
                     flush=True,
                 )
                 return None
@@ -698,8 +712,8 @@ class WsGameDriver:
                 return msg
 
         print(
-            f"  [do_stir_pass] TIMEOUT after 5s, seq stuck at"
-            f"{self._known_seq}",
+            "  [do_stir_pass] TIMEOUT after 5s, seq stuck at"
+            + f"{self._known_seq}",
             flush=True,
         )
         return None
@@ -747,8 +761,8 @@ class WsGameDriver:
                 )
             except WsReceiveTimeout:
                 print(
-                    f"  [do_next_round] TIMEOUT waiting for WS"
-                    f"message, seq stuck at {self._known_seq}",
+                    "  [do_next_round] TIMEOUT waiting for WS"
+                    + f"message, seq stuck at {self._known_seq}",
                     flush=True,
                 )
                 return None
@@ -773,8 +787,8 @@ class WsGameDriver:
                 continue
 
         print(
-            f"  [do_next_round] TIMEOUT after 5s, seq stuck at"
-            f"{self._known_seq}",
+            "  [do_next_round] TIMEOUT after 5s, seq stuck at"
+            + f"{self._known_seq}",
             flush=True,
         )
         return None
@@ -787,7 +801,7 @@ def test_create_game_returns_201(sync_client: SyncServerClient) -> None:
     """POST /api/game returns 201 with game_id in response body."""
     resp = sync_client.post("/api/game")
     assert resp.status_code == 201
-    data = resp.json()
+    data = _response_json_object(resp)
     assert _is_dict(data)
     assert "game_id" in data
     assert isinstance(data["game_id"], str)
@@ -798,26 +812,22 @@ def test_health_check(sync_client: SyncServerClient) -> None:
     """GET /health returns 200 with status ok."""
     resp = sync_client.get("/health")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+    assert _response_json_object(resp) == {"status": "ok"}
 
 
 def test_list_games(sync_client: SyncServerClient) -> None:
     """GET /api/game returns a list of games."""
     # Create a game first
     resp = sync_client.post("/api/game")
-    data = resp.json()
+    data = _response_json_object(resp)
     assert _is_dict(data)
     game_id = _as_str(data["game_id"])
 
     resp = sync_client.get("/api/game")
     assert resp.status_code == 200
-    resp_data = resp.json()
-    # Don't narrow resp_data with _is_dict — it would make
-    # resp_data["games"]
-    # return `object` (non-iterable in pyright strict). Keep resp_data
-    # in its inferred TestClient response shape so list iteration works
-    # with proper type narrowing on each element.
+    resp_data = _response_json_object(resp)
     games = resp_data["games"]
+    assert _is_list_of_dict(games)
     assert len(games) >= 1
     game_ids = [_as_str(g["game_id"]) for g in games]
     assert game_id in game_ids
@@ -825,7 +835,7 @@ def test_list_games(sync_client: SyncServerClient) -> None:
         assert g["user_count"] == 0
         assert g["capacity"] == 4
         assert g["user_seats"] == []
-        assert len(g["seats"]) == 4
+        assert len(_as_list(g["seats"])) == 4
         assert "phase" not in g
 
 
@@ -835,7 +845,7 @@ def test_delete_game_closes_ws(sync_client: SyncServerClient) -> None:
     pushing state.
     """
     resp = sync_client.post("/api/game")
-    data = resp.json()
+    data = _response_json_object(resp)
     assert _is_dict(data)
     game_id = _as_str(data["game_id"])
     _prepare_ws_game(sync_client, game_id)
@@ -850,7 +860,7 @@ def test_delete_game_closes_ws(sync_client: SyncServerClient) -> None:
         assert resp.status_code == 200
 
         with pytest.raises(_WS_ERRORS):
-            _receive_ws_json(ws)
+            _ = _receive_ws_json(ws)
 
 
 def test_connect_nonexistent_game(
@@ -861,7 +871,7 @@ def test_connect_nonexistent_game(
         with sync_client.websocket_connect(
             _seat_ws_path("nonexistent_id")
         ) as ws:
-            _receive_ws_json(ws)
+            _ = _receive_ws_json(ws)
     assert exc_info.value.code == 4404
 
 
@@ -870,7 +880,7 @@ def test_connection_takeover(sync_client: SyncServerClient) -> None:
     New WS connection kicks the old one; old connection gets closed.
     """
     resp = sync_client.post("/api/game")
-    data = resp.json()
+    data = _response_json_object(resp)
     assert _is_dict(data)
     game_id = _as_str(data["game_id"])
     _prepare_ws_game(sync_client, game_id)
@@ -899,7 +909,7 @@ def test_connection_takeover(sync_client: SyncServerClient) -> None:
         # because
         # the server already sent a close frame, so we only try receive.
         with pytest.raises(_WS_ERRORS):
-            _receive_ws_json(ws1)
+            _ = _receive_ws_json(ws1)
 
 
 def test_reconnect_resumes_game(sync_client: SyncServerClient) -> None:
@@ -908,7 +918,7 @@ def test_reconnect_resumes_game(sync_client: SyncServerClient) -> None:
     actions work.
     """
     resp = sync_client.post("/api/game")
-    data = resp.json()
+    data = _response_json_object(resp)
     assert _is_dict(data)
     game_id = _as_str(data["game_id"])
     _prepare_ws_game(sync_client, game_id)
@@ -1088,7 +1098,7 @@ def _recv_state(
                     extra = f" trick_cp={cp} lead={lp}"
             print(
                 f"  [{label}] recv: phase={phase} awaiting={awaiting}"
-                f"seq={seq}{extra}",
+                + f"seq={seq}{extra}",
                 flush=True,
             )
             return state, msg
@@ -1169,9 +1179,9 @@ def _recv_until_our_turn(
                     stuck_time = time.monotonic() - deadline + timeout
                     print(
                         f"  [{label}] STUCK? t={stuck_time:.1f}s "
-                        f"seq={seq_val} phase={cur_phase} "
-                        f"awaiting={awaiting} "
-                        f"(same seq x{stuck_count})",
+                        + f"seq={seq_val} phase={cur_phase} "
+                        + f"awaiting={awaiting} "
+                        + f"(same seq x{stuck_count})",
                         flush=True,
                     )
             else:
@@ -1181,7 +1191,7 @@ def _recv_until_our_turn(
             if cur_phase != phase:
                 print(
                     f"  [{label}] phase changed: {phase} ->"
-                    f"{cur_phase} seq={seq_val} (drained {count})",
+                    + f"{cur_phase} seq={seq_val} (drained {count})",
                     flush=True,
                 )
                 return state, msg
@@ -1189,7 +1199,7 @@ def _recv_until_our_turn(
             if awaiting in awaiting_values:
                 print(
                     f"  [{label}] our turn: awaiting={awaiting}"
-                    f"seq={seq_val} (drained {count})",
+                    + f"seq={seq_val} (drained {count})",
                     flush=True,
                 )
                 return state, msg
@@ -1197,7 +1207,7 @@ def _recv_until_our_turn(
             if exit_awaiting is not None and awaiting in exit_awaiting:
                 print(
                     f"  [{label}] exit awaiting: {awaiting}"
-                    f"seq={seq_val} (drained {count})",
+                    + f"seq={seq_val} (drained {count})",
                     flush=True,
                 )
                 return state, msg
@@ -1505,8 +1515,8 @@ def _expect_error_response(
             return
     raise TimeoutError(
         f"{label}: wrong action was not rejected within 3s; "
-        f"action={wrong_action} seq_before={seq_before};"
-        f"{driver.debug_context(label)}"
+        + f"action={wrong_action} seq_before={seq_before};"
+        + f"{driver.debug_context(label)}"
     )
 
 
@@ -1539,8 +1549,8 @@ def _expect_seq_mismatch_response(
         return
     raise TimeoutError(
         f"{label}: seq-mismatch action did not return state within 3s; "
-        f"action={wrong_action} seq_before={seq_before};"
-        f"{driver.debug_context(label)}"
+        + f"action={wrong_action} seq_before={seq_before};"
+        + f"{driver.debug_context(label)}"
     )
 
 
@@ -1575,7 +1585,7 @@ def _play_deal_bid(
         if state["phase"] != "DEAL_BID":
             print(
                 f"  [R{round_count}:BID] phase={state['phase']},"
-                f"waiting for DEAL_BID",
+                + "waiting for DEAL_BID",
                 flush=True,
             )
             msg = driver.wait_for_phase("DEAL_BID", timeout=5)
@@ -1635,19 +1645,19 @@ def _play_deal_bid(
                         prev_bid_events_count = len(new_events)
                         print(
                             f"  [R{round_count}:BID] bid accepted"
-                            f"(events={len(new_events)})",
+                            + f"(events={len(new_events)})",
                             flush=True,
                         )
                     else:
                         print(
                             f"  [R{round_count}:BID] bid response but"
-                            f"events unchanged",
+                            + "events unchanged",
                             flush=True,
                         )
                     if state["phase"] != "DEAL_BID":
                         print(
                             f"[round {round_count}] DEAL_BID ->"
-                            f"{state['phase']}",
+                            + f"{state['phase']}",
                             flush=True,
                         )
                         break
@@ -1658,7 +1668,7 @@ def _play_deal_bid(
                     # pass
                     print(
                         f"  [R{round_count}:BID] bid rejected:"
-                        f"{driver.last_error}",
+                        + f"{driver.last_error}",
                         flush=True,
                     )
 
@@ -1676,7 +1686,7 @@ def _play_deal_bid(
                     if state["phase"] != "DEAL_BID":
                         print(
                             f"[round {round_count}] DEAL_BID ->"
-                            f"{state['phase']}",
+                            + f"{state['phase']}",
                             flush=True,
                         )
                         break
@@ -1809,7 +1819,7 @@ def _play_stirring_exchange(
             discard_ids.append(_as_str(c["id"]))
         print(
             f"  [R{round_count}:STIR-EXCH] user discard"
-            f"{len(discard_ids)} cards",
+            + f"{len(discard_ids)} cards",
             flush=True,
         )
         _send_wrong_actions(
@@ -1823,14 +1833,14 @@ def _play_stirring_exchange(
             msg = response
             print(
                 f"  [R{round_count}:STIR-EXCH] discard response:"
-                f"phase={state.get('phase')}"
-                f"awaiting={_awaiting(response)}",
+                + f"phase={state.get('phase')}"
+                + f"awaiting={_awaiting(response)}",
                 flush=True,
             )
         else:
             print(
                 f"  [R{round_count}:STIR-EXCH] discard failed,"
-                f"draining to get current state",
+                + "draining to get current state",
                 flush=True,
             )
             state, msg = _recv_until_our_turn(
@@ -1848,8 +1858,8 @@ def _play_stirring_exchange(
     else:
         print(
             f"  [R{round_count}:STIR-EXCH]"
-            f"exchanging_actor={exchanging_actor}, waiting for our"
-            f"turn",
+            + f"exchanging_actor={exchanging_actor}, waiting for our"
+            + "turn",
             flush=True,
         )
         state, msg = _recv_until_our_turn(
@@ -1879,7 +1889,7 @@ def _verify_trick_invariants(
     assert "winner" in last_trick, (
         "last_completed_trick must have 'winner' field"
     )
-    _as_wire_seat(last_trick["winner"])
+    _ = _as_wire_seat(last_trick["winner"])
 
     # Verify suit-following in the last trick
     last_trick_slots_raw = last_trick.get("slots", [])
@@ -2028,7 +2038,7 @@ def _play_playing(
             completed_tricks_seen += 1
             print(
                 f"  [R{round_count}:PLAY] trick completed"
-                f"({completed_tricks_seen})",
+                + f"({completed_tricks_seen})",
                 flush=True,
             )
 
@@ -2059,8 +2069,8 @@ def _play_playing(
                     trick_number = tricks_played + 1
                     print(
                         f"  [R{round_count}:PLAY] "
-                        f"trick {trick_number}: "
-                        f"play {play_card_ids}",
+                        + f"trick {trick_number}: "
+                        + f"play {play_card_ids}",
                         flush=True,
                     )
                     if len(attempted) == 1:
@@ -2074,7 +2084,7 @@ def _play_playing(
                         break
                     print(
                         f"  [R{round_count}:PLAY] play rejected:"
-                        f"error={driver.last_error}",
+                        + f"error={driver.last_error}",
                         flush=True,
                     )
                 assert response is not None, (
@@ -2093,8 +2103,8 @@ def _play_playing(
                 if state["phase"] != "PLAYING":
                     print(
                         f"[round {round_count}] PLAYING ->"
-                        f"{state['phase']} after {tricks_played}"
-                        f"tricks",
+                        + f"{state['phase']} after {tricks_played}"
+                        + "tricks",
                         flush=True,
                     )
                     break
@@ -2112,7 +2122,7 @@ def _play_playing(
                     completed_tricks_seen += 1
                     print(
                         f"  [R{round_count}:PLAY] trick completed"
-                        f"({completed_tricks_seen})",
+                        + f"({completed_tricks_seen})",
                         flush=True,
                     )
                 if _awaiting(msg) == "play":
@@ -2122,7 +2132,7 @@ def _play_playing(
             else:
                 print(
                     f"  [R{round_count}:PLAY] no legal actions!?"
-                    f"awaiting={_awaiting(msg)}",
+                    + f"awaiting={_awaiting(msg)}",
                     flush=True,
                 )
 
@@ -2140,7 +2150,7 @@ def _play_playing(
             if state["phase"] != "PLAYING":
                 print(
                     f"[round {round_count}] PLAYING ->"
-                    f"{state['phase']} after {tricks_played} tricks",
+                    + f"{state['phase']} after {tricks_played} tricks",
                     flush=True,
                 )
                 break
@@ -2155,7 +2165,7 @@ def _play_playing(
                 completed_tricks_seen += 1
                 print(
                     f"  [R{round_count}:PLAY] trick completed"
-                    f"({completed_tricks_seen})",
+                    + f"({completed_tricks_seen})",
                     flush=True,
                 )
             if _awaiting(msg) == "play":
@@ -2195,7 +2205,7 @@ def _play_waiting(
     """
     print(
         f"[round {round_count}] === WAITING (round complete) ==="
-        f"phase={state.get('phase')} awaiting={_awaiting(msg)}",
+        + f"phase={state.get('phase')} awaiting={_awaiting(msg)}",
         flush=True,
     )
     _verify_common_fields(state, "WAITING")
@@ -2279,9 +2289,9 @@ def _play_waiting(
         )
     print(
         f"  [R{round_count}:WAITING] defender_pts={scoring_tdp} "
-        f"declarer_partnership={round_declarer_partnership} "
-        f"winning_partnership={winning_partnership} "
-        f"levels: first={expected_first} second={expected_second}",
+        + f"declarer_partnership={round_declarer_partnership} "
+        + f"winning_partnership={winning_partnership} "
+        + f"levels: first={expected_first} second={expected_second}",
         flush=True,
     )
 
@@ -2360,7 +2370,7 @@ def _verify_game_over(
     # can reconnect and request the current state.
     print("  checking registry...", flush=True)
     resp = sync_client.get("/api/game")
-    games_raw = resp.json()["games"]
+    games_raw = _response_json_object(resp)["games"]
     assert _is_list_of_dict(games_raw)
     game_ids = [g["game_id"] for g in games_raw]
     assert game_id in game_ids, (
@@ -2401,7 +2411,7 @@ def test_full_game(sync_client: SyncServerClient) -> None:
     """
     print(">>> test_full_game starting <<<", flush=True)
     resp = sync_client.post("/api/game")
-    game_id = resp.json()["game_id"]
+    game_id = _response_json_object(resp)["game_id"]
     assert isinstance(game_id, str)
     _prepare_ws_game(sync_client, game_id)
     print(f"=== Created game {game_id} ===", flush=True)
@@ -2427,7 +2437,7 @@ def test_full_game(sync_client: SyncServerClient) -> None:
         sync_state = _as_dict(sync_msg["state"])
         print(
             f"  initial sync: phase={sync_state.get('phase')}"
-            f"awaiting={_awaiting(sync_msg)} seq={driver.known_seq}",
+            + f"awaiting={_awaiting(sync_msg)} seq={driver.known_seq}",
             flush=True,
         )
 
@@ -2455,7 +2465,7 @@ def test_full_game(sync_client: SyncServerClient) -> None:
             cur_awaiting = _awaiting(msg)
             print(
                 f"  initial state: phase={cur_phase}"
-                f"awaiting={cur_awaiting} seq={driver.known_seq}",
+                + f"awaiting={cur_awaiting} seq={driver.known_seq}",
                 flush=True,
             )
             if (
@@ -2549,7 +2559,7 @@ def test_full_game(sync_client: SyncServerClient) -> None:
                         )
                 break
 
-        _as_wire_partnership(state["winning_partnership"])
+        _ = _as_wire_partnership(state["winning_partnership"])
         assert state.get("winning_partnership") is not None, (
             "Game should set winning_partnership within "
             f"{max_rounds} rounds, "

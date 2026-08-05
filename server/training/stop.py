@@ -7,8 +7,10 @@ import threading
 from collections.abc import Generator
 from contextlib import contextmanager
 from types import FrameType
+from typing import final
 
 
+@final
 class TrainingStopRequest:
     """Thread-safe cooperative stop flag for training stages."""
 
@@ -38,5 +40,5 @@ def training_stop_signals(
     try:
         yield
     finally:
-        signal.signal(signal.SIGINT, previous_sigint)
-        signal.signal(signal.SIGTERM, previous_sigterm)
+        _ = signal.signal(signal.SIGINT, previous_sigint)
+        _ = signal.signal(signal.SIGTERM, previous_sigterm)

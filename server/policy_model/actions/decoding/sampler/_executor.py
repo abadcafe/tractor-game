@@ -292,16 +292,18 @@ class ActionSamplerWorkspace:
         batch_size = action_batch.batch_size()
         assert batch_size <= self.batch_capacity
         assert 0 < padded_generation_steps <= MAX_ACTION_STEPS
-        self.selected_counts[:batch_size].zero_()
-        self.choice_ids[:batch_size, :padded_generation_steps].zero_()
-        self.step_counts[:batch_size].zero_()
-        self.selected_width[:batch_size].zero_()
-        self.last_face_indices[:batch_size].fill_(-1)
-        self.selected_suit_codes[:batch_size].fill_(-1)
-        self.done[:batch_size].copy_(
+        _ = self.selected_counts[:batch_size].zero_()
+        _ = self.choice_ids[
+            :batch_size, :padded_generation_steps
+        ].zero_()
+        _ = self.step_counts[:batch_size].zero_()
+        _ = self.selected_width[:batch_size].zero_()
+        _ = self.last_face_indices[:batch_size].fill_(-1)
+        _ = self.selected_suit_codes[:batch_size].fill_(-1)
+        _ = self.done[:batch_size].copy_(
             action_batch.kind_codes == ACTION_KIND_EMPTY
         )
-        self.choice_counts[:batch_size].zero_()
+        _ = self.choice_counts[:batch_size].zero_()
         if self.log_probabilities.dtype != log_probability_dtype:
             self.log_probabilities = torch.zeros(
                 (self.batch_capacity,),
@@ -309,9 +311,9 @@ class ActionSamplerWorkspace:
                 device=self.device,
             )
         else:
-            self.log_probabilities[:batch_size].zero_()
-        self.legal_masks[:batch_size].zero_()
-        self.replay_legal_masks[
+            _ = self.log_probabilities[:batch_size].zero_()
+        _ = self.legal_masks[:batch_size].zero_()
+        _ = self.replay_legal_masks[
             :batch_size, :padded_generation_steps
         ].zero_()
 
@@ -340,30 +342,30 @@ class ActionSamplerWorkspace:
         assert parent_rows.dtype == torch.long
         assert 0 < row_count <= self.batch_capacity
         assert 0 < padded_generation_steps <= MAX_ACTION_STEPS
-        self.selected_counts[:row_count].copy_(
+        _ = self.selected_counts[:row_count].copy_(
             self.selected_counts.index_select(0, parent_rows)
         )
-        self.choice_ids[:row_count, :padded_generation_steps].copy_(
+        _ = self.choice_ids[:row_count, :padded_generation_steps].copy_(
             self.choice_ids[:, :padded_generation_steps].index_select(
                 0, parent_rows
             )
         )
-        self.step_counts[:row_count].copy_(
+        _ = self.step_counts[:row_count].copy_(
             self.step_counts.index_select(0, parent_rows)
         )
-        self.selected_width[:row_count].copy_(
+        _ = self.selected_width[:row_count].copy_(
             self.selected_width.index_select(0, parent_rows)
         )
-        self.last_face_indices[:row_count].copy_(
+        _ = self.last_face_indices[:row_count].copy_(
             self.last_face_indices.index_select(0, parent_rows)
         )
-        self.selected_suit_codes[:row_count].copy_(
+        _ = self.selected_suit_codes[:row_count].copy_(
             self.selected_suit_codes.index_select(0, parent_rows)
         )
-        self.done[:row_count].copy_(
+        _ = self.done[:row_count].copy_(
             self.done.index_select(0, parent_rows)
         )
-        self.choice_counts[:row_count].copy_(
+        _ = self.choice_counts[:row_count].copy_(
             self.choice_counts.index_select(0, parent_rows)
         )
 
@@ -420,7 +422,7 @@ def _sample_actions(
             active_rows=active_rows,
         )
         error_code = _merge_error_code(error_code, sampled.error_code)
-        workspace.replay_legal_masks[:batch_size, step_index].copy_(
+        _ = workspace.replay_legal_masks[:batch_size, step_index].copy_(
             legal.masks
         )
         advance_action_state(
@@ -430,7 +432,7 @@ def _sample_actions(
             choice_counts=legal.choice_counts,
             active_rows=active_rows,
         )
-        workspace.log_probabilities[:batch_size].add_(
+        _ = workspace.log_probabilities[:batch_size].add_(
             torch.where(
                 active_rows,
                 sampled.selected_log_probabilities,
@@ -588,7 +590,7 @@ def _score_actions(
             .gather(1, selected.unsqueeze(1))
             .squeeze(1)
         )
-        workspace.log_probabilities[:batch_size].add_(
+        _ = workspace.log_probabilities[:batch_size].add_(
             torch.where(
                 active_rows,
                 log_probabilities,
@@ -645,7 +647,7 @@ def legal_action_choices(
     active_masks = torch.where(trace_rows, trace_full, selection_full)
     fallback = torch.zeros_like(active_masks)
     fallback[:, PASS_CHOICE_ID] = True
-    workspace.legal_masks[:batch_size].copy_(
+    _ = workspace.legal_masks[:batch_size].copy_(
         torch.where(active_rows.unsqueeze(1), active_masks, fallback)
     )
     return legal_choice_batch(masks=workspace.legal_masks[:batch_size])
@@ -659,7 +661,7 @@ def _scatter_choice_mask(
         dtype=torch.long,
         device=ids.device,
     )
-    counts.scatter_add_(1, ids, masks.to(dtype=torch.long))
+    _ = counts.scatter_add_(1, ids, masks.to(dtype=torch.long))
     return counts > 0
 
 
@@ -726,21 +728,21 @@ def advance_action_state(
         active_rows, selected_choice_ids, current
     )
     additions = torch.where(active_rows & is_card, choice_count, 0)
-    state.selected_counts.scatter_add_(
+    _ = state.selected_counts.scatter_add_(
         1,
         choice_face.clamp(min=0).unsqueeze(1),
         additions.unsqueeze(1),
     )
-    state.selected_width.add_(additions)
-    state.step_counts.add_(active_rows.to(dtype=torch.long))
-    state.last_face_indices.copy_(
+    _ = state.selected_width.add_(additions)
+    _ = state.step_counts.add_(active_rows.to(dtype=torch.long))
+    _ = state.last_face_indices.copy_(
         torch.where(
             active_rows & is_card,
             choice_face,
             state.last_face_indices,
         )
     )
-    state.selected_suit_codes.copy_(
+    _ = state.selected_suit_codes.copy_(
         torch.where(
             active_rows & is_card & (state.selected_suit_codes < 0),
             choice_suit,
@@ -759,11 +761,11 @@ def advance_action_state(
         selected_choice_ids=state.selected_choice_ids,
         step_counts=state.step_counts,
     )
-    state.done.copy_(
+    _ = state.done.copy_(
         state.done
         | (active_rows & (terminal | exact_done | trace_complete))
     )
-    state.choice_counts.add_(
+    _ = state.choice_counts.add_(
         torch.where(
             active_rows, choice_counts, torch.zeros_like(choice_counts)
         )

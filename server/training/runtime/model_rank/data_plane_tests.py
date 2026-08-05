@@ -140,14 +140,14 @@ async def test_run_until_command_drains_requests_before_command() -> (
         )
 
         async with asyncio.TaskGroup() as senders:
-            senders.create_task(
+            _ = senders.create_task(
                 _send_request(
                     link=link0,
                     worker_index=0,
                     policy_version=7,
                 )
             )
-            senders.create_task(
+            _ = senders.create_task(
                 _send_request(
                     link=link1,
                     worker_index=1,
@@ -228,7 +228,7 @@ async def test_run_until_command_rejects_stale_policy_version() -> None:
         )
 
         async with asyncio.TaskGroup() as senders:
-            senders.create_task(
+            _ = senders.create_task(
                 _send_request(
                     link=link,
                     worker_index=2,
@@ -282,21 +282,21 @@ async def test_run_until_command_rejects_only_stale_routes() -> None:
         )
 
         async with asyncio.TaskGroup() as senders:
-            senders.create_task(
+            _ = senders.create_task(
                 _send_request(
                     link=link0,
                     worker_index=0,
                     policy_version=4,
                 )
             )
-            senders.create_task(
+            _ = senders.create_task(
                 _send_request(
                     link=link1,
                     worker_index=1,
                     policy_version=5,
                 )
             )
-            senders.create_task(
+            _ = senders.create_task(
                 _send_request(
                     link=link2,
                     worker_index=2,
@@ -352,21 +352,21 @@ async def test_run_until_command_batches_until_batch_size() -> None:
         )
 
         async with asyncio.TaskGroup() as senders:
-            senders.create_task(
+            _ = senders.create_task(
                 _send_request(
                     link=link0,
                     worker_index=0,
                     policy_version=3,
                 )
             )
-            senders.create_task(
+            _ = senders.create_task(
                 _send_request(
                     link=link1,
                     worker_index=1,
                     policy_version=3,
                 )
             )
-            senders.create_task(
+            _ = senders.create_task(
                 _send_request(
                     link=link2,
                     worker_index=2,
@@ -474,14 +474,14 @@ async def test_ingress_aggregates_mps_thresholds_as_float32() -> None:
     try:
         ingress.begin_batch()
         async with asyncio.TaskGroup() as senders:
-            senders.create_task(
+            _ = senders.create_task(
                 _send_request(
                     link=link0,
                     worker_index=0,
                     policy_version=13,
                 )
             )
-            senders.create_task(
+            _ = senders.create_task(
                 _send_request(
                     link=link1,
                     worker_index=1,
@@ -592,7 +592,7 @@ async def _receive_single_frame_batch(
 ) -> ModelRankInferenceBatch:
     ingress.begin_batch()
     async with asyncio.TaskGroup() as senders:
-        senders.create_task(
+        _ = senders.create_task(
             _send_request(
                 link=link,
                 worker_index=worker_index,

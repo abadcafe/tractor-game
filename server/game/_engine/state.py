@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from server.game.config import GameConfig, GameSeed
 
 from .phases import GamePhase
@@ -10,11 +12,19 @@ from .phases import GamePhase
 class GameState:
     """Opaque state threaded through the public game operations."""
 
-    __slots__ = ()
+    __slots__: ClassVar[tuple[str, ...]] = ()
 
 
 class _GameState(GameState):
-    __slots__ = ("_config", "_phase", "_seed")
+    __slots__: ClassVar[tuple[str, ...]] = (
+        "_config",
+        "_phase",
+        "_seed",
+    )
+
+    _config: GameConfig
+    _phase: GamePhase
+    _seed: GameSeed
 
     def __init__(
         self,

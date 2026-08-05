@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from server.foundation import result as _result
 from server.training_cli.summary import (
@@ -23,6 +23,10 @@ if TYPE_CHECKING:
     )
 
 type SummaryFormat = Literal["text", "json"]
+_ARGUMENT_VALUES = TypeAdapter(
+    dict[str, object],
+    config=ConfigDict(strict=True),
+)
 
 
 def main(
@@ -32,9 +36,10 @@ def main(
 ) -> None:
     parser = _argument_parser()
     namespace = parser.parse_args(argv)
-    values = vars(namespace)
+    values = _ARGUMENT_VALUES.validate_python(vars(namespace))
     command = values.pop("command")
     run_dir = values.pop("run_dir")
+    assert isinstance(command, str)
     assert isinstance(run_dir, Path)
     try:
         if command == "init":
@@ -123,7 +128,7 @@ def _argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m server.training_cli"
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--run-dir", type=Path, default=Path("training_runs")
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -134,48 +139,52 @@ def _argument_parser() -> argparse.ArgumentParser:
 
 
 def _add_init_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
+    _ = parser.add_argument(
         "--replace-existing", choices=("yes",), default=None
     )
-    parser.add_argument("--d-model", type=int, default=128)
-    parser.add_argument("--layers", type=int, default=3)
-    parser.add_argument("--heads", type=int, default=4)
-    parser.add_argument("--action-value-layers", type=int, default=2)
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--learning-rate", type=float, default=0.0003)
-    parser.add_argument("--ppo-clip", type=float, default=0.2)
-    parser.add_argument("--entropy-coef", type=float, default=0.01)
-    parser.add_argument(
+    _ = parser.add_argument("--d-model", type=int, default=128)
+    _ = parser.add_argument("--layers", type=int, default=3)
+    _ = parser.add_argument("--heads", type=int, default=4)
+    _ = parser.add_argument(
+        "--action-value-layers", type=int, default=2
+    )
+    _ = parser.add_argument("--seed", type=int, default=0)
+    _ = parser.add_argument(
+        "--learning-rate", type=float, default=0.0003
+    )
+    _ = parser.add_argument("--ppo-clip", type=float, default=0.2)
+    _ = parser.add_argument("--entropy-coef", type=float, default=0.01)
+    _ = parser.add_argument(
         "--policy-max-grad-norm", type=float, default=0.5
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--action-value-max-grad-norm", type=float, default=0.5
     )
-    parser.add_argument("--ppo-epochs", type=int, default=4)
-    parser.add_argument("--minibatch-size", type=int, default=64)
-    parser.add_argument("--adam-beta1", type=float, default=0.9)
-    parser.add_argument("--adam-beta2", type=float, default=0.999)
-    parser.add_argument("--weight-decay", type=float, default=0.0)
+    _ = parser.add_argument("--ppo-epochs", type=int, default=4)
+    _ = parser.add_argument("--minibatch-size", type=int, default=64)
+    _ = parser.add_argument("--adam-beta1", type=float, default=0.9)
+    _ = parser.add_argument("--adam-beta2", type=float, default=0.999)
+    _ = parser.add_argument("--weight-decay", type=float, default=0.0)
 
 
 def _add_resume_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("checkpoint")
-    parser.add_argument("--worker-cpus", default=None)
-    parser.add_argument("--model-ranks", default=None)
-    parser.add_argument(
+    _ = parser.add_argument("checkpoint")
+    _ = parser.add_argument("--worker-cpus", default=None)
+    _ = parser.add_argument("--model-ranks", default=None)
+    _ = parser.add_argument(
         "--ppo-profile",
         choices=("off", "basic", "detailed"),
         default=None,
     )
-    parser.add_argument("--max-samples", type=int, default=0)
-    parser.add_argument("--learning-rate", type=float, default=None)
-    parser.add_argument(
+    _ = parser.add_argument("--max-samples", type=int, default=0)
+    _ = parser.add_argument("--learning-rate", type=float, default=None)
+    _ = parser.add_argument(
         "--checkpoint-every-updates",
         type=int,
         default=5,
         help="save a periodic checkpoint every N updates (default: 5)",
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--checkpoint-retention-updates", type=int, default=5
     )
     for name in (
@@ -186,23 +195,23 @@ def _add_resume_arguments(parser: argparse.ArgumentParser) -> None:
         "state-sync",
         "update",
     ):
-        parser.add_argument(f"--{name}-timeout-seconds", type=float)
-    parser.add_argument("--model-inference-batch-size", type=int)
-    parser.add_argument("--game-envs-per-worker", type=int)
-    parser.add_argument("--samples-per-update", type=int)
-    parser.add_argument("--ppo-clip", type=float)
-    parser.add_argument("--entropy-coef", type=float)
-    parser.add_argument("--policy-max-grad-norm", type=float)
-    parser.add_argument("--action-value-max-grad-norm", type=float)
-    parser.add_argument("--ppo-epochs", type=int)
-    parser.add_argument("--minibatch-size", type=int)
-    parser.add_argument("--adam-beta1", type=float)
-    parser.add_argument("--adam-beta2", type=float)
-    parser.add_argument("--weight-decay", type=float)
+        _ = parser.add_argument(f"--{name}-timeout-seconds", type=float)
+    _ = parser.add_argument("--model-inference-batch-size", type=int)
+    _ = parser.add_argument("--game-envs-per-worker", type=int)
+    _ = parser.add_argument("--samples-per-update", type=int)
+    _ = parser.add_argument("--ppo-clip", type=float)
+    _ = parser.add_argument("--entropy-coef", type=float)
+    _ = parser.add_argument("--policy-max-grad-norm", type=float)
+    _ = parser.add_argument("--action-value-max-grad-norm", type=float)
+    _ = parser.add_argument("--ppo-epochs", type=int)
+    _ = parser.add_argument("--minibatch-size", type=int)
+    _ = parser.add_argument("--adam-beta1", type=float)
+    _ = parser.add_argument("--adam-beta2", type=float)
+    _ = parser.add_argument("--weight-decay", type=float)
 
 
 def _add_summary_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
+    _ = parser.add_argument(
         "--format", choices=("text", "json"), default="text"
     )
 

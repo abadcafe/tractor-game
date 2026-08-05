@@ -7,6 +7,7 @@ import functools
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from typing import final
 
 import torch
 
@@ -34,6 +35,7 @@ class _StopCall:
 type _InferenceCall = _DecisionCall | _StopCall
 
 
+@final
 class InferenceRuntime:
     """Batch concurrent decisions around one model-owning worker."""
 

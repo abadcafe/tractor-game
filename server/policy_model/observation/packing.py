@@ -27,7 +27,7 @@ from server.policy_model._schema.encoding import (
     SemanticState,
     TokenVariant,
 )
-from server.policy_model.observation import Observation
+from server.policy_model.observation.interface import Observation
 from server.policy_model.observation.relative_state import (
     RelativeActor,
     TrickPosition,

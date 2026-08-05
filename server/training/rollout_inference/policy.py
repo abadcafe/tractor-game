@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import final
+
 import torch
 
 from server.foundation.result import Ok, Rejected
@@ -31,6 +33,7 @@ from server.training.rollout_inference.samples import (
 from server.training.self_play.policy import PolicyDecision
 
 
+@final
 class TorchTrainingPolicy:
     """Sample semantic argument traces from a torch model."""
 

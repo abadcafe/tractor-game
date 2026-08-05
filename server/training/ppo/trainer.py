@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import final
 
 import torch
 import torch.distributed as dist
@@ -85,6 +86,7 @@ class _MinibatchSpan:
         return self.end - self.start
 
 
+@final
 class PPOTrainer:
     """Clipped PPO trainer over semantic argument traces."""
 
@@ -146,7 +148,7 @@ class PPOTrainer:
             return self._loss_forwarder_rejection
         loss_forwarder = self._loss_forwarder
         assert loss_forwarder is not None
-        loss_forwarder.train()
+        _ = loss_forwarder.train()
         profile = PPOProfileAccumulator.start(
             device=self.device,
             mode=self.profile_mode,

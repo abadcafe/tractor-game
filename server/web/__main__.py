@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import socket
 from collections.abc import Sequence
+from typing import ClassVar, final, override
 
 import uvicorn
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -14,12 +15,15 @@ from server.web.logging_config import configure_server_logging
 
 
 class _Options(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     host: str = Field(min_length=1)
     port: int = Field(ge=1, le=65535)
 
 
+@final
 class _Server(uvicorn.Server):
     def __init__(
         self,
@@ -29,6 +33,7 @@ class _Server(uvicorn.Server):
         super().__init__(config)
         self._application = application
 
+    @override
     async def shutdown(
         self, sockets: list[socket.socket] | None = None
     ) -> None:
@@ -38,8 +43,8 @@ class _Server(uvicorn.Server):
 
 def _argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m server.web")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument(
+    _ = parser.add_argument("--host", default="127.0.0.1")
+    _ = parser.add_argument(
         "--port",
         type=int,
         default=8000,

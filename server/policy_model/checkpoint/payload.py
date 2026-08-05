@@ -10,12 +10,18 @@ from pathlib import Path
 from typing import TypeGuard
 
 import torch
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 from torch import Tensor
 
 from server.checkpoint_contract import CHECKPOINT_SCHEMA_VERSION
 from server.foundation import result as _result
 from server.policy_model.checkpoint.schema import (
     checkpoint_corruption,
+)
+
+_OBJECT_DICT = TypeAdapter(
+    dict[object, object],
+    config=ConfigDict(strict=True),
 )
 
 
@@ -144,23 +150,22 @@ def _load_checkpoint_payload(
     path: Path,
 ) -> _result.Ok[dict[object, object]] | _result.Rejected:
     try:
-        loaded: object = torch.load(
-            path,
-            map_location=torch.device("cpu"),
-            weights_only=True,
+        loaded = _OBJECT_DICT.validate_python(
+            torch.load(
+                path,
+                map_location=torch.device("cpu"),
+                weights_only=True,
+            )
         )
     except (
         EOFError,
         RuntimeError,
         ValueError,
         pickle.UnpicklingError,
+        ValidationError,
     ):
         return checkpoint_corruption(
             path, "state payload cannot be loaded"
-        )
-    if not _is_object_dict(loaded):
-        return checkpoint_corruption(
-            path, "state payload root is not an object"
         )
     return _result.Ok(value=loaded)
 

@@ -13,6 +13,7 @@ from server.training_events.store import (
     initialize_database,
     open_reader,
 )
+from tests.sqlite_support import fetch_optional_row, fetch_rows
 
 
 def test_initialize_database_creates_strict_schema(
@@ -22,16 +23,18 @@ def test_initialize_database_creates_strict_schema(
 
     assert isinstance(result, Ok)
     with sqlite3.connect(database_path(tmp_path)) as connection:
-        application_id = connection.execute(
-            "PRAGMA application_id"
-        ).fetchone()
-        user_version = connection.execute(
-            "PRAGMA user_version"
-        ).fetchone()
-        tables = connection.execute(
-            "SELECT name FROM sqlite_schema WHERE type = 'table' "
-            "ORDER BY name"
-        ).fetchall()
+        application_id = fetch_optional_row(
+            connection.execute("PRAGMA application_id")
+        )
+        user_version = fetch_optional_row(
+            connection.execute("PRAGMA user_version")
+        )
+        tables = fetch_rows(
+            connection.execute(
+                "SELECT name FROM sqlite_schema WHERE type = 'table' "
+                + "ORDER BY name"
+            )
+        )
     assert application_id == (APPLICATION_ID,)
     assert user_version == (TRAINING_EVENT_STORE_SCHEMA_VERSION,)
     assert TRAINING_EVENT_STORE_SCHEMA_VERSION == 4
@@ -55,7 +58,7 @@ def test_initialize_database_rejects_foreign_database(
     tmp_path: Path,
 ) -> None:
     with sqlite3.connect(database_path(tmp_path)) as connection:
-        connection.execute("CREATE TABLE foreign_data (value TEXT)")
+        _ = connection.execute("CREATE TABLE foreign_data (value TEXT)")
 
     result = initialize_database(tmp_path)
 
@@ -102,14 +105,14 @@ def test_schema_rejects_incomplete_event_envelopes(
     invalid.append(unknown_process)
     with sqlite3.connect(database_path(tmp_path)) as connection:
         for payload in invalid:
-            connection.execute(
+            _ = connection.execute(
                 "INSERT OR IGNORE INTO training_logs(event_json) "
-                "VALUES (?)",
+                + "VALUES (?)",
                 (json.dumps(payload),),
             )
-        stored = connection.execute(
-            "SELECT count(*) FROM training_logs"
-        ).fetchone()
+        stored = fetch_optional_row(
+            connection.execute("SELECT count(*) FROM training_logs")
+        )
     assert stored == (0,)
 
 
@@ -117,11 +120,13 @@ def test_initialize_database_rejects_fake_v3_without_store(
     tmp_path: Path,
 ) -> None:
     with sqlite3.connect(database_path(tmp_path)) as connection:
-        connection.execute("CREATE TABLE training_logs(value TEXT)")
-        connection.execute(f"PRAGMA application_id = {APPLICATION_ID}")
-        connection.execute(
+        _ = connection.execute("CREATE TABLE training_logs(value TEXT)")
+        _ = connection.execute(
+            f"PRAGMA application_id = {APPLICATION_ID}"
+        )
+        _ = connection.execute(
             "PRAGMA user_version = "
-            f"{TRAINING_EVENT_STORE_SCHEMA_VERSION}"
+            + f"{TRAINING_EVENT_STORE_SCHEMA_VERSION}"
         )
 
     result = initialize_database(tmp_path)

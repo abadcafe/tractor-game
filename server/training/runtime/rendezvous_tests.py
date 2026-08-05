@@ -47,7 +47,7 @@ def test_create_file_rendezvous_rejects_runtime_dir_create_failure(
     tmp_path: Path,
 ) -> None:
     run_dir = tmp_path / "run"
-    run_dir.write_text("not a directory", encoding="utf-8")
+    _ = run_dir.write_text("not a directory", encoding="utf-8")
 
     created = create_file_rendezvous(run_dir)
 

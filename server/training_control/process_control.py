@@ -11,6 +11,7 @@ import time
 from collections.abc import AsyncGenerator
 from contextlib import suppress
 from pathlib import Path
+from typing import ClassVar, final
 
 from pydantic import BaseModel, ConfigDict
 
@@ -33,7 +34,9 @@ _PROCESS_LOG_NAME = "training-cli.log"
 class StopResult(BaseModel):
     """Outcome of a PID-file stop request."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     forced: bool
 
@@ -41,12 +44,15 @@ class StopResult(BaseModel):
 class TrainingInitialization(BaseModel):
     """Filesystem result of a completed initialization command."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid", frozen=True, strict=True
+    )
 
     run_dir: Path
     checkpoint_path: Path
 
 
+@final
 class TrainingProcessControl:
     """Control initialization and resumed training with a PID file."""
 
@@ -251,7 +257,7 @@ class TrainingProcessControl:
         """Stop local reapers without stopping resumed training."""
         tasks = tuple(self._reapers)
         for task in tasks:
-            task.cancel()
+            _ = task.cancel()
         for task in tasks:
             with suppress(asyncio.CancelledError):
                 await task
@@ -269,7 +275,7 @@ class TrainingProcessControl:
     async def _reap(
         self, process: asyncio.subprocess.Process, run_dir: Path
     ) -> None:
-        await process.wait()
+        _ = await process.wait()
         async with self._lock(run_dir):
             removed = remove_training_pid_if_matches(
                 run_dir, process.pid
@@ -304,7 +310,7 @@ async def _kill_spawned_process_group(
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
-    await process.wait()
+    _ = await process.wait()
 
 
 async def _wait_for_process_group_exit(

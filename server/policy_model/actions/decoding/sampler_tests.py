@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import override
 
 import torch
 from torch import Tensor
@@ -37,6 +38,7 @@ class _ZeroDecoder(ActionChoiceLogitDecoder):
     batch_size: int
     device: torch.device
 
+    @override
     def next_choice_logits(
         self,
         active_rows: Tensor,
@@ -50,6 +52,7 @@ class _ZeroDecoder(ActionChoiceLogitDecoder):
             device=self.device,
         )
 
+    @override
     def advance(
         self,
         selected_choice_ids: Tensor,
@@ -66,6 +69,7 @@ class _RecordingDecoder(ActionChoiceLogitDecoder):
     preferred_choice: int
     scored_counts: list[int]
 
+    @override
     def next_choice_logits(
         self,
         active_rows: Tensor,
@@ -84,6 +88,7 @@ class _RecordingDecoder(ActionChoiceLogitDecoder):
         logits[:, self.preferred_choice] = 100.0
         return logits
 
+    @override
     def advance(
         self,
         selected_choice_ids: Tensor,

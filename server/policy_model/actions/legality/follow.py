@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import override
 
 from server.foundation.result import Ok, Rejected
 from server.game.rules import play
@@ -33,6 +34,7 @@ class FollowPlayLegalActionSpace(LegalActionSpace):
     _space: play.FollowActionSpace
 
     @property
+    @override
     def query(self) -> ActionQuery:
         return self._query
 
@@ -41,6 +43,7 @@ class FollowPlayLegalActionSpace(LegalActionSpace):
         """Return compiled follow constraints for this decision."""
         return self._space
 
+    @override
     def decode(
         self, trace: ActionTrace
     ) -> Ok[GeneratedAction] | Rejected:

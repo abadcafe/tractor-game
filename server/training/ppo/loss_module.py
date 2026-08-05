@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import final, override
 
 import torch
 from torch import Tensor, nn
@@ -57,6 +58,7 @@ type PPOLossForwardTensors = tuple[
 ]
 
 
+@final
 class PPOLossModule(nn.Module):
     """Train-time PPO objective module wrapped by DDP when needed."""
 
@@ -76,6 +78,7 @@ class PPOLossModule(nn.Module):
         """Return the owned policy model for inference/checkpointing."""
         return self._model
 
+    @override
     def forward(
         self,
         minibatch: TensorizedPPOMinibatch,

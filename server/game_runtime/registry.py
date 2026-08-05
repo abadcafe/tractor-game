@@ -5,10 +5,12 @@ from __future__ import annotations
 import time
 import uuid
 from collections.abc import Callable
+from typing import final
 
 __all__ = ["GameRegistry"]
 
 
+@final
 class GameRegistry[ValueT]:
     """Store values by opaque ID and track last access."""
 
@@ -37,7 +39,7 @@ class GameRegistry[ValueT]:
     def delete(self, value_id: str) -> ValueT | None:
         """Remove and return a value if present."""
         value = self._values.pop(value_id, None)
-        self._last_access.pop(value_id, None)
+        _ = self._last_access.pop(value_id, None)
         return value
 
     def list_ids(self) -> tuple[str, ...]:
@@ -54,5 +56,5 @@ class GameRegistry[ValueT]:
         )
         values = tuple(self._values[value_id] for value_id in expired)
         for value_id in expired:
-            self.delete(value_id)
+            _ = self.delete(value_id)
         return values
