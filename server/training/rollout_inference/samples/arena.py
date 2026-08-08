@@ -49,7 +49,6 @@ class ArenaPPOBatchSource:
     row_indices: Tensor
     step_counts: Tensor
     old_log_probabilities: Tensor
-    return_values: Tensor
     raw_advantages: Tensor
     max_step_count: int
 
@@ -220,7 +219,6 @@ class ModelRankSampleArena:
                 row_indices=rows,
                 step_counts=steps,
                 old_log_probabilities=old_log_probabilities,
-                return_values=return_values,
                 raw_advantages=return_values,
                 max_step_count=returns.max_step_count,
             )
@@ -298,7 +296,6 @@ class ModelRankSampleArena:
                 0, indices
             ),
             advantages=advantages.index_select(0, indices),
-            return_values=source.return_values.index_select(0, indices),
             local_count=local_count,
             global_count=global_count,
         )

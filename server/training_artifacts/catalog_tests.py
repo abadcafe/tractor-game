@@ -83,7 +83,7 @@ def test_read_checkpoint_catalog_rejects_mismatched_schema_manifest(
     manifest_path = tmp_path / "checkpoints" / "latest.json"
     current = manifest_path.read_text(encoding="utf-8")
     stale = current.replace(
-        '"schema_version": 24', '"schema_version": 0'
+        '"schema_version": 26', '"schema_version": 0'
     )
     assert stale != current
     _ = manifest_path.write_text(stale, encoding="utf-8")
@@ -95,7 +95,7 @@ def test_read_checkpoint_catalog_rejects_mismatched_schema_manifest(
     manifest = result.value.manifests[0]
     assert manifest.valid is False
     assert manifest.error is not None
-    assert "Input should be 24" in manifest.error
+    assert "Input should be 26" in manifest.error
 
 
 def test_web_application_import_does_not_load_torch() -> None:

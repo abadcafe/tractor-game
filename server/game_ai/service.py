@@ -62,10 +62,6 @@ class AIService:
             AIController(
                 seat=seat,
                 model=runtime_result.value,
-                candidate_count=config.candidate_count,
-                action_value_temperature=(
-                    config.action_value_temperature
-                ),
                 random_source=random.Random(secrets.randbits(128)),
             )
         )

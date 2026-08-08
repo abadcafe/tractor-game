@@ -105,22 +105,6 @@ class ActionSampleBatch:
 
 
 @dataclass(frozen=True, slots=True)
-class ActionScoreBatch:
-    """Masked model log probabilities for supplied legal traces."""
-
-    log_probabilities: Tensor
-    choice_counts: Tensor
-
-    def __post_init__(self) -> None:
-        assert self.log_probabilities.ndim == 1
-        assert self.choice_counts.shape == self.log_probabilities.shape
-        assert self.choice_counts.dtype == torch.long
-        assert (
-            self.choice_counts.device == self.log_probabilities.device
-        )
-
-
-@dataclass(frozen=True, slots=True)
 class ForcedActionBatch:
     """Action traces proven unique without evaluating policy logits."""
 
@@ -138,7 +122,6 @@ class ForcedActionBatch:
 
 
 type ActionSamplingResult = Ok[ActionSampleBatch] | Rejected
-type ActionScoringResult = Ok[ActionScoreBatch] | Rejected
 type ForcedActionResult = Ok[ForcedActionBatch] | Rejected
 
 
@@ -178,25 +161,6 @@ class ActionSampler:
             action_batch=action_batch,
             generation_step_counts=generation_step_counts,
             sampling_thresholds=sampling_thresholds,
-            padded_generation_steps=padded_generation_steps,
-            logit_decoder=logit_decoder,
-            workspace=self.workspace,
-        )
-
-    def score(
-        self,
-        *,
-        action_batch: DeviceActionPlanBatch,
-        selected_choice_ids: Tensor,
-        step_counts: Tensor,
-        padded_generation_steps: int,
-        logit_decoder: ActionChoiceLogitDecoder,
-    ) -> ActionScoringResult:
-        """Score supplied traces under the exact legal-choice policy."""
-        return _score_actions(
-            action_batch=action_batch,
-            selected_choice_ids=selected_choice_ids,
-            step_counts=step_counts,
             padded_generation_steps=padded_generation_steps,
             logit_decoder=logit_decoder,
             workspace=self.workspace,
@@ -529,96 +493,6 @@ def _resolve_forced_actions(
     )
 
 
-def _score_actions(
-    *,
-    action_batch: DeviceActionPlanBatch,
-    selected_choice_ids: Tensor,
-    step_counts: Tensor,
-    padded_generation_steps: int,
-    logit_decoder: ActionChoiceLogitDecoder,
-    workspace: ActionSamplerWorkspace,
-) -> ActionScoringResult:
-    batch_size = action_batch.batch_size()
-    assert batch_size <= workspace.batch_capacity
-    assert selected_choice_ids.shape == (
-        batch_size,
-        padded_generation_steps,
-    )
-    assert selected_choice_ids.dtype == torch.long
-    assert step_counts.shape == (batch_size,)
-    assert step_counts.dtype == torch.long
-    workspace.reset(
-        action_batch=action_batch,
-        padded_generation_steps=padded_generation_steps,
-        log_probability_dtype=torch.float32,
-    )
-    for step_index in range(padded_generation_steps):
-        state = workspace.state_view(batch_size=batch_size)
-        unfinished_trace = state.step_counts < step_counts
-        if bool((state.done & unfinished_trace).any().cpu().item()):
-            return Rejected(
-                reason="policy action trace continues after termination"
-            )
-        active_rows = (~state.done) & unfinished_trace
-        legal = legal_action_choices(
-            workspace=workspace,
-            batch=action_batch,
-            state=state,
-            active_rows=active_rows,
-        )
-        selected = selected_choice_ids[:, step_index]
-        selected_legal = legal.masks.gather(
-            1, selected.unsqueeze(1)
-        ).squeeze(1)
-        if bool((active_rows & ~selected_legal).any().cpu().item()):
-            return Rejected(
-                reason="policy action trace contains an illegal choice"
-            )
-        scored_rows = active_rows & legal.choice_counts.gt(1)
-        logits = logit_decoder.next_choice_logits(
-            active_rows,
-            scored_rows,
-        )
-        valid_logits = logits[legal.masks & active_rows.unsqueeze(1)]
-        if bool((~torch.isfinite(valid_logits)).any().cpu().item()):
-            return Rejected(
-                reason="policy choice logits must be finite"
-            )
-        masked_logits = logits.masked_fill(~legal.masks, -torch.inf)
-        log_probabilities = (
-            torch.log_softmax(masked_logits, dim=1)
-            .gather(1, selected.unsqueeze(1))
-            .squeeze(1)
-        )
-        _ = workspace.log_probabilities[:batch_size].add_(
-            torch.where(
-                active_rows,
-                log_probabilities,
-                torch.zeros_like(log_probabilities),
-            )
-        )
-        advance_action_state(
-            workspace=workspace,
-            batch=action_batch,
-            selected_choice_ids=selected,
-            choice_counts=legal.choice_counts,
-            active_rows=active_rows,
-        )
-        if step_index + 1 < padded_generation_steps:
-            logit_decoder.advance(selected, active_rows)
-    final_state = workspace.state_view(batch_size=batch_size)
-    if bool((~final_state.done).any().cpu().item()):
-        return Rejected(reason=_error_reason(_ERROR_UNTERMINATED))
-    return Ok(
-        value=ActionScoreBatch(
-            log_probabilities=workspace.log_probabilities[
-                :batch_size
-            ].clone(),
-            choice_counts=workspace.choice_counts[:batch_size].clone(),
-        )
-    )
-
-
 def legal_action_choices(
     *,
     workspace: ActionSamplerWorkspace,
@@ -804,6 +678,6 @@ def _error_reason(error_code: int) -> str:
 __all__ = (
     "ActionChoiceLogitDecoder",
     "ActionSampleBatch",
-    "ActionScoreBatch",
     "ActionSampler",
+    "ForcedActionBatch",
 )

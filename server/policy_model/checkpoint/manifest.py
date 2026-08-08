@@ -126,7 +126,7 @@ def read_checkpoint_manifest(
         "total_samples",
         "total_updates",
     }
-    if not set(loaded).issubset(expected_fields):
+    if set(loaded) != expected_fields:
         return checkpoint_corruption(
             path,
             "manifest fields do not match the current schema",

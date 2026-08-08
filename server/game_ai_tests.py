@@ -24,8 +24,7 @@ from server.policy_model.actions.decoding import (
     plan_batch_to_device,
 )
 from server.policy_model.inference import (
-    ActionDecision,
-    ActionDecisionRequest,
+    PolicyDecisionRequest,
     PolicyQuery,
 )
 from tests.support import card
@@ -69,35 +68,23 @@ class _ZeroDecoder(ActionChoiceLogitDecoder):
         assert active_rows.shape == (self.batch_size,)
 
 
-def _requests() -> list[ActionDecisionRequest]:
+def _requests() -> list[PolicyDecisionRequest]:
     return []
 
 
 @dataclass(slots=True)
 class _DecisionModel:
-    requests: list[ActionDecisionRequest] = field(
+    requests: list[PolicyDecisionRequest] = field(
         default_factory=_requests
     )
 
     async def decide(
         self,
         *,
-        requests: tuple[ActionDecisionRequest, ...],
-    ) -> Ok[tuple[ActionDecision, ...]] | Rejected:
-        self.requests.extend(requests)
-        decisions: list[ActionDecision] = []
-        for request in requests:
-            action = _first_legal_action(request.query)
-            if isinstance(action, Rejected):
-                return action
-            decisions.append(
-                ActionDecision(
-                    action=action.value,
-                    candidate_count=request.candidate_count,
-                    selected_action_value=0.25,
-                )
-            )
-        return Ok(tuple(decisions))
+        request: PolicyDecisionRequest,
+    ) -> Ok[GeneratedAction] | Rejected:
+        self.requests.append(request)
+        return _first_legal_action(request.query)
 
 
 async def test_ai_controller_builds_one_direct_model_decision() -> None:
@@ -105,8 +92,6 @@ async def test_ai_controller_builds_one_direct_model_decision() -> None:
     controller = AIController(
         seat=Seat.A,
         model=model,
-        candidate_count=12,
-        action_value_temperature=0.75,
         random_source=random.Random(7),
     )
     snapshot = make_snapshot(
@@ -133,8 +118,6 @@ async def test_ai_controller_builds_one_direct_model_decision() -> None:
     )
     assert len(model.requests) == 1
     request = model.requests[0]
-    assert request.candidate_count == 12
-    assert request.action_value_temperature == 0.75
     assert request.draw.ordinal == 0
 
 
@@ -144,8 +127,6 @@ async def test_ai_controller_logs_successful_decision_at_debug() -> (
     controller = AIController(
         seat=Seat.A,
         model=_DecisionModel(),
-        candidate_count=12,
-        action_value_temperature=0.75,
         random_source=random.Random(7),
     )
     snapshot = make_snapshot(
@@ -182,8 +163,6 @@ async def test_ai_controller_rejects_non_strategic_view() -> None:
     controller = AIController(
         seat=Seat.A,
         model=_DecisionModel(),
-        candidate_count=4,
-        action_value_temperature=1.0,
         random_source=random.Random(3),
     )
     snapshot = make_snapshot(
@@ -201,8 +180,6 @@ def test_ai_controller_requires_contiguous_observations() -> None:
     controller = AIController(
         seat=Seat.A,
         model=_DecisionModel(),
-        candidate_count=4,
-        action_value_temperature=1.0,
         random_source=random.Random(3),
     )
     snapshot = make_snapshot(

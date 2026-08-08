@@ -152,7 +152,9 @@ class ScoringWire(_WireModel):
     winning_partnership: PartnershipId
     defender_points: int
     total_defender_points: int
-    bottom_card_bonus: int
+    bottom_base_points: int
+    bottom_multiplier: int | None
+    bottom_points: int
     bottom_cards: tuple[CardWire, ...]
 
 
@@ -421,7 +423,9 @@ def _scoring(
         ),
         defender_points=scoring.defender_points,
         total_defender_points=scoring.total_defender_points,
-        bottom_card_bonus=scoring.bottom_card_bonus,
+        bottom_base_points=scoring.bottom_base_points,
+        bottom_multiplier=scoring.bottom_multiplier,
+        bottom_points=scoring.bottom_points,
         bottom_cards=_cards(scoring.bottom_cards),
     )
 

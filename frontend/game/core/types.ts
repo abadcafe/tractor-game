@@ -147,7 +147,9 @@ export interface StateSnapshot {
     winning_partnership: PartnershipId;
     defender_points: number;
     total_defender_points: number;
-    bottom_card_bonus: number;
+    bottom_base_points: number;
+    bottom_multiplier: number | null;
+    bottom_points: number;
     bottom_cards: Card[];
   } | null;
   winning_partnership: PartnershipId | null;

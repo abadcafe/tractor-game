@@ -38,7 +38,9 @@ function makeSnapshot(
       winning_partnership: "first",
       defender_points: 30,
       total_defender_points: 30,
-      bottom_card_bonus: 0,
+      bottom_base_points: 0,
+      bottom_multiplier: null,
+      bottom_points: 0,
       bottom_cards: [],
     },
     winning_partnership: null,
@@ -50,11 +52,12 @@ function makeSnapshot(
   };
 }
 
-Deno.test("test_renderScoringOverlay_shows_scoring", () => {
+Deno.test("test_renderScoringOverlay_distinguishes_uncaptured_bottom", () => {
   const snap = makeSnapshot();
   const el = renderScoringOverlay(snap, "c", "next_round");
   const text = el.textContent ?? "";
-  assertEquals(text.includes("30"), true);
+  assertEquals(text.includes("30 分"), true);
+  assertEquals(text.includes("牌分 30 / 未抠底（底牌 0 分）"), true);
 });
 
 Deno.test("test_renderScoringOverlay_next_round_button", () => {
@@ -74,8 +77,10 @@ Deno.test("test_renderScoringOverlay_bottom_cards_are_prominent_cards", () => {
     scoring: {
       winning_partnership: "first",
       defender_points: 30,
-      total_defender_points: 70,
-      bottom_card_bonus: 40,
+      total_defender_points: 45,
+      bottom_base_points: 15,
+      bottom_multiplier: 1,
+      bottom_points: 15,
       bottom_cards: [
         { id: "D1-hearts-5", suit: "hearts", rank: "5" },
         { id: "D1-diamonds-10", suit: "diamonds", rank: "10" },
@@ -91,6 +96,10 @@ Deno.test("test_renderScoringOverlay_bottom_cards_are_prominent_cards", () => {
   assertNotEquals(bottom, null);
   assertEquals(text.includes("底牌"), true);
   assertEquals(bottomCards.length, 3);
+  assertEquals(
+    (el.textContent ?? "").includes("牌分 30 / 底牌 15 × 1 = 15"),
+    true,
+  );
 });
 
 Deno.test("test_renderScoringOverlay_eight_bottom_cards_use_centered_layout", () => {
@@ -103,8 +112,10 @@ Deno.test("test_renderScoringOverlay_eight_bottom_cards_use_centered_layout", ()
     scoring: {
       winning_partnership: "first",
       defender_points: 120,
-      total_defender_points: 240,
-      bottom_card_bonus: 120,
+      total_defender_points: 200,
+      bottom_base_points: 40,
+      bottom_multiplier: 2,
+      bottom_points: 80,
       bottom_cards: bottomCards,
     },
   });

@@ -1,15 +1,9 @@
 """Torch-free production decision contracts."""
 
-from .contracts import (
-    ActionDecision,
-    ActionDecisionRequest,
-    PolicyQuery,
-    SamplingSeed,
-)
+from .contracts import PolicyDecisionRequest, PolicyQuery, SamplingSeed
 
 __all__ = (
-    "ActionDecision",
-    "ActionDecisionRequest",
+    "PolicyDecisionRequest",
     "PolicyQuery",
     "SamplingSeed",
 )

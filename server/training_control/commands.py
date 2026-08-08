@@ -41,7 +41,6 @@ class TrainingInitRequest(BaseModel):
     d_model: Annotated[int, Field(gt=0)] = 128
     layers: Annotated[int, Field(gt=0)] = 3
     heads: Annotated[int, Field(gt=0)] = 4
-    action_value_layers: Annotated[int, Field(gt=0)] = 2
     seed: Annotated[int, Field(ge=0)] = 0
     learning_rate: Annotated[
         float, Field(gt=0.0, allow_inf_nan=False)
@@ -53,9 +52,6 @@ class TrainingInitRequest(BaseModel):
         float, Field(ge=0.0, allow_inf_nan=False)
     ] = 0.01
     policy_max_grad_norm: Annotated[
-        float, Field(ge=0.0, allow_inf_nan=False)
-    ] = 0.5
-    action_value_max_grad_norm: Annotated[
         float, Field(ge=0.0, allow_inf_nan=False)
     ] = 0.5
     ppo_epochs: Annotated[int, Field(gt=0)] = 4
@@ -137,9 +133,6 @@ class TrainingResumeRequest(BaseModel):
     policy_max_grad_norm: (
         Annotated[float, Field(ge=0.0, allow_inf_nan=False)] | None
     ) = None
-    action_value_max_grad_norm: (
-        Annotated[float, Field(ge=0.0, allow_inf_nan=False)] | None
-    ) = None
     ppo_epochs: Annotated[int, Field(gt=0)] | None = None
     minibatch_size: Annotated[int, Field(gt=0)] | None = None
     adam_beta1: (
@@ -204,10 +197,6 @@ class TrainingResumeRequest(BaseModel):
                 "--policy-max-grad-norm",
                 self.policy_max_grad_norm,
             ),
-            (
-                "--action-value-max-grad-norm",
-                self.action_value_max_grad_norm,
-            ),
             ("--ppo-epochs", self.ppo_epochs),
             ("--minibatch-size", self.minibatch_size),
             ("--adam-beta1", self.adam_beta1),
@@ -248,16 +237,11 @@ def _portable_values(
         ("--d-model", request.d_model),
         ("--layers", request.layers),
         ("--heads", request.heads),
-        ("--action-value-layers", request.action_value_layers),
         ("--seed", request.seed),
         ("--learning-rate", request.learning_rate),
         ("--ppo-clip", request.ppo_clip),
         ("--entropy-coef", request.entropy_coef),
         ("--policy-max-grad-norm", request.policy_max_grad_norm),
-        (
-            "--action-value-max-grad-norm",
-            request.action_value_max_grad_norm,
-        ),
         ("--ppo-epochs", request.ppo_epochs),
         ("--minibatch-size", request.minibatch_size),
         ("--adam-beta1", request.adam_beta1),

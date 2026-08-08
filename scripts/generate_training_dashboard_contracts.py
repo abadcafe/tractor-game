@@ -122,7 +122,7 @@ def _training_log_page() -> TrainingLogHistoryPage:
         ),
         fields={
             "policy_loss": 0.25,
-            "action_value_loss": 0.5,
+            "objective_loss": 0.2,
         },
     )
     failed = TrainingEvent(
@@ -154,7 +154,7 @@ def _training_metrics() -> TrainingMetrics:
         update=3,
         elapsed_seconds=1.5,
         recorded_at_ms=1235,
-        values={"action_value_loss": 0.5},
+        values={"objective_loss": 0.2},
     )
     return TrainingMetrics(
         schema_version=TRAINING_METRICS_SCHEMA_VERSION,

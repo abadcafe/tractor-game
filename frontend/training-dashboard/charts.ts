@@ -66,8 +66,8 @@ const SPECS: readonly ChartSpec[] = [
     series: [
       { key: "policy_loss", label: "Policy loss", color: "#1769aa" },
       {
-        key: "action_value_loss",
-        label: "Action value loss",
+        key: "objective_loss",
+        label: "Objective loss",
         color: "#c26718",
       },
     ],
@@ -100,16 +100,6 @@ const SPECS: readonly ChartSpec[] = [
         key: "ppo_policy_observation_encode_seconds",
         label: "Policy encode",
         color: "#1769aa",
-      },
-      {
-        key: "ppo_action_value_observation_encode_seconds",
-        label: "Action value encode",
-        color: "#c26718",
-      },
-      {
-        key: "ppo_action_value_decode_seconds",
-        label: "Action value decode",
-        color: "#a86a16",
       },
       {
         key: "ppo_action_decode_seconds",

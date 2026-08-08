@@ -11,7 +11,7 @@ from server.policy_model._schema.actions import (
     CARD_CHOICE_BASE_ID,
     PASS_CHOICE_ID,
 )
-from server.policy_model.network import PolicyActionModel
+from server.policy_model.network import ModelConfig, PolicyModel
 from server.policy_model.observation import (
     Observation,
     build_observation,
@@ -33,20 +33,18 @@ def test_model_package_exposes_only_complete_model_api() -> None:
         "EncodedObservation",
         "MIN_ATTENTION_HEAD_DIMENSION",
         "ModelConfig",
-        "PolicyActionModel",
+        "PolicyModel",
     )
 
 
-def test_model_scores_policy_choices_and_complete_action_value() -> (
-    None
-):
+def test_model_scores_complete_policy_trace() -> None:
     device = torch.device("cpu")
-    model = PolicyActionModel(d_model=16, layers=1, heads=2)
+    model = _model()
     batch = tensorize_observation(
         observation=_bid_observation(), device=device
     )
 
-    encoding = model.encode_policy_observations(batch)
+    encoding = model.encode_observations(batch)
     scores = model.score_action_traces(
         encoding,
         source_rows=torch.tensor((0,), dtype=torch.long, device=device),
@@ -56,178 +54,41 @@ def test_model_scores_policy_choices_and_complete_action_value() -> (
         step_counts=torch.tensor((1,), dtype=torch.long, device=device),
     )
 
-    value_encoding = model.encode_action_value_observations(batch)
-    action_values = model.action_values(
-        value_encoding,
+    assert scores.choice_logits.shape == (1, 1, ACTION_CHOICE_COUNT)
+
+
+def test_model_trace_loss_reaches_every_parameter() -> None:
+    device = torch.device("cpu")
+    model = _model()
+    batch = tensorize_observation(
+        observation=_bid_observation(), device=device
+    )
+    encoding = model.encode_observations(batch)
+    scores = model.score_action_traces(
+        encoding,
         source_rows=torch.tensor((0,), dtype=torch.long, device=device),
         choice_ids_padded=torch.tensor(
-            ((PASS_CHOICE_ID,),),
+            ((CARD_CHOICE_BASE_ID, PASS_CHOICE_ID),),
             dtype=torch.long,
             device=device,
         ),
-        step_counts=torch.tensor((1,), dtype=torch.long, device=device),
+        step_counts=torch.tensor((2,), dtype=torch.long, device=device),
     )
 
-    assert scores.choice_logits.shape == (1, 1, ACTION_CHOICE_COUNT)
-    assert action_values.shape == (1,)
+    torch.autograd.backward(scores.choice_logits.sum())
 
-
-def test_policy_and_action_value_parameters_are_disjoint() -> None:
-    model = PolicyActionModel(d_model=16, layers=1, heads=2)
-
-    policy_parameters = model.policy_parameters()
-    action_value_parameters = model.action_value_parameters()
-    policy_ids = {id(parameter) for parameter in policy_parameters}
-    action_value_ids = {
-        id(parameter) for parameter in action_value_parameters
-    }
-
-    assert policy_ids
-    assert action_value_ids
-    assert policy_ids.isdisjoint(action_value_ids)
-    assert policy_ids | action_value_ids == {
-        id(parameter) for parameter in model.parameters()
-    }
-
-
-def test_each_loss_reaches_only_its_owned_branch() -> None:
-    device = torch.device("cpu")
-    model = PolicyActionModel(d_model=16, layers=1, heads=2)
-    batch = tensorize_observation(
-        observation=_bid_observation(), device=device
-    )
-    source_rows = torch.tensor((0,), dtype=torch.long, device=device)
-    choice_ids = torch.tensor(
-        ((PASS_CHOICE_ID,),),
-        dtype=torch.long,
-        device=device,
-    )
-    step_counts = torch.tensor((1,), dtype=torch.long, device=device)
-
-    policy_encoding = model.encode_policy_observations(batch)
-    policy_scores = model.score_action_traces(
-        policy_encoding,
-        source_rows=source_rows,
-        choice_ids_padded=choice_ids,
-        step_counts=step_counts,
-    )
-    torch.autograd.backward(policy_scores.choice_logits.sum())
-
-    assert any(
-        parameter.grad is not None
-        for parameter in model.policy_parameters()
-    )
-    assert all(
-        parameter.grad is None
-        for parameter in model.action_value_parameters()
-    )
-
-    model.zero_grad(set_to_none=True)
-    action_value_encoding = model.encode_action_value_observations(
-        batch
-    )
-    torch.autograd.backward(
-        model.action_values(
-            action_value_encoding,
-            source_rows=source_rows,
-            choice_ids_padded=choice_ids,
-            step_counts=step_counts,
-        ).sum()
-    )
-
-    assert all(
-        parameter.grad is None
-        for parameter in model.policy_parameters()
-    )
-    assert any(
-        parameter.grad is not None
-        for parameter in model.action_value_parameters()
-    )
-
-
-def test_action_value_reads_last_choice_and_ignores_padding() -> None:
-    device = torch.device("cpu")
-    model = PolicyActionModel(d_model=16, layers=1, heads=2)
-    _ = model.eval()
-    batch = tensorize_observation(
-        observation=_bid_observation(), device=device
-    )
-    encoding = model.encode_action_value_observations(batch)
-    source_rows = torch.tensor(
-        (0, 0, 0),
-        dtype=torch.long,
-        device=device,
-    )
-    choices = torch.tensor(
-        (
-            (CARD_CHOICE_BASE_ID, PASS_CHOICE_ID, PASS_CHOICE_ID),
-            (CARD_CHOICE_BASE_ID, PASS_CHOICE_ID, CARD_CHOICE_BASE_ID),
-            (
-                CARD_CHOICE_BASE_ID,
-                CARD_CHOICE_BASE_ID,
-                PASS_CHOICE_ID,
-            ),
-        ),
-        dtype=torch.long,
-        device=device,
-    )
-    values = model.action_values(
-        encoding,
-        source_rows=source_rows,
-        choice_ids_padded=choices,
-        step_counts=torch.tensor(
-            (2, 2, 2),
-            dtype=torch.long,
-            device=device,
-        ),
-    )
-
-    torch.testing.assert_close(values[0], values[1])
-    assert not torch.allclose(values[0], values[2])
-
-
-def test_action_value_padding_gradients_are_finite() -> None:
-    device = torch.device("cpu")
-    model = PolicyActionModel(d_model=16, layers=1, heads=2)
-    batch = tensorize_observation(
-        observation=_bid_observation(), device=device
-    )
-    encoding = model.encode_action_value_observations(batch)
-    choices = torch.tensor(
-        (
-            (PASS_CHOICE_ID, PASS_CHOICE_ID, PASS_CHOICE_ID),
-            (CARD_CHOICE_BASE_ID, PASS_CHOICE_ID, PASS_CHOICE_ID),
-            (
-                CARD_CHOICE_BASE_ID,
-                CARD_CHOICE_BASE_ID + 2,
-                PASS_CHOICE_ID,
-            ),
-        ),
-        dtype=torch.long,
-        device=device,
-    )
-
-    values = model.action_values(
-        encoding,
-        source_rows=torch.zeros(3, dtype=torch.long, device=device),
-        choice_ids_padded=choices,
-        step_counts=torch.tensor(
-            (1, 2, 3), dtype=torch.long, device=device
-        ),
-    )
-    torch.autograd.backward(values.square().mean())
-
-    assert bool(torch.isfinite(values).all().item())
+    parameters = tuple(model.parameters())
+    assert parameters
     assert all(
         parameter.grad is not None
         and bool(torch.isfinite(parameter.grad).all().item())
-        for parameter in model.action_value_parameters()
+        for parameter in parameters
     )
 
 
 def test_live_query_seed_matches_teacher_forced_scoring() -> None:
     device = torch.device("cpu")
-    model = PolicyActionModel(d_model=16, layers=1, heads=2)
+    model = _model()
     _ = model.eval()
     batch = tensorize_observation(
         observation=_bid_observation(), device=device
@@ -240,7 +101,7 @@ def test_live_query_seed_matches_teacher_forced_scoring() -> None:
     steps = torch.tensor((2,), dtype=torch.long, device=device)
 
     with torch.no_grad():
-        encoding = model.encode_policy_observations(batch)
+        encoding = model.encode_observations(batch)
         scored = model.score_action_traces(
             encoding,
             source_rows=torch.tensor(
@@ -263,6 +124,12 @@ def test_live_query_seed_matches_teacher_forced_scoring() -> None:
 
     torch.testing.assert_close(first, scored.choice_logits[:, 0])
     torch.testing.assert_close(second, scored.choice_logits[:, 1])
+
+
+def _model() -> PolicyModel:
+    return PolicyModel(
+        config=ModelConfig(d_model=16, layers=1, heads=2)
+    )
 
 
 def _bid_observation() -> Observation:

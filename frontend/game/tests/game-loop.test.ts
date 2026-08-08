@@ -211,7 +211,9 @@ Deno.test("test_handleMessage_waiting_next_round", () => {
       winning_partnership: "first",
       defender_points: 30,
       total_defender_points: 30,
-      bottom_card_bonus: 0,
+      bottom_base_points: 0,
+      bottom_multiplier: null,
+      bottom_points: 0,
       bottom_cards: [],
     },
   });

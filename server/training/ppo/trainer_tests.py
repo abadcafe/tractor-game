@@ -32,7 +32,7 @@ from server.policy_model.network import (
     ActionTraceScores,
     EncodedObservation,
     ModelConfig,
-    PolicyActionModel,
+    PolicyModel,
 )
 from server.policy_model.observation import (
     ObservationMemoryView,
@@ -61,28 +61,22 @@ from tests.support import card
 from tests.support import snapshot as make_snapshot
 
 
-class CountingPolicyActionModel(PolicyActionModel):
+class CountingPolicyModel(PolicyModel):
     """Policy model that records forward batch sizes for tests."""
 
     def __init__(
         self,
         *,
-        d_model: int,
-        layers: int,
-        heads: int,
+        config: ModelConfig,
     ) -> None:
-        super().__init__(
-            d_model=d_model,
-            layers=layers,
-            heads=heads,
-        )
+        super().__init__(config=config)
         self.encode_batch_sizes: list[int] = []
         self.score_batch_sizes: list[int] = []
         self.score_prefix_widths: list[int] = []
         self.training_modes: list[bool] = []
 
     @override
-    def encode_policy_observations(
+    def encode_observations(
         self,
         observation: ObservationTensorBatch,
     ) -> EncodedObservation:
@@ -90,7 +84,7 @@ class CountingPolicyActionModel(PolicyActionModel):
         self.encode_batch_sizes.append(
             int(observation.category_ids.shape[0])
         )
-        return super().encode_policy_observations(observation)
+        return super().encode_observations(observation)
 
     @override
     def score_action_traces(
@@ -112,25 +106,29 @@ class CountingPolicyActionModel(PolicyActionModel):
         )
 
 
-class NonFiniteValueModel(PolicyActionModel):
-    """Policy model that produces an infinite action-value loss."""
+class NonFinitePolicyModel(PolicyModel):
+    """Policy model that produces non-finite action logits."""
 
     @override
-    def action_values(
+    def score_action_traces(
         self,
         encoding: EncodedObservation,
         *,
         source_rows: Tensor,
         choice_ids_padded: Tensor,
         step_counts: Tensor,
-    ) -> Tensor:
-        values = super().action_values(
+    ) -> ActionTraceScores:
+        scores = super().score_action_traces(
             encoding,
             source_rows=source_rows,
             choice_ids_padded=choice_ids_padded,
             step_counts=step_counts,
         )
-        return torch.full_like(values, torch.inf)
+        return ActionTraceScores(
+            choice_logits=torch.full_like(
+                scores.choice_logits, torch.inf
+            )
+        )
 
 
 @final
@@ -185,11 +183,7 @@ def test_update_returns_stats_and_adamw_state() -> None:
         ppo_epochs=1,
         minibatch_size=1,
     )
-    model = PolicyActionModel(
-        d_model=model_config.d_model,
-        layers=model_config.layers,
-        heads=model_config.heads,
-    ).to(device)
+    model = PolicyModel(config=model_config).to(device)
     trainer = PPOTrainer(
         model=model,
         train_config=train_config,
@@ -201,7 +195,7 @@ def test_update_returns_stats_and_adamw_state() -> None:
     stats = stats_result.value
     state = trainer.optimizer_state()
 
-    assert stats.total_loss >= 0.0
+    assert stats.objective_loss >= 0.0
     assert state["kind"] == "ppo_adamw"
     assert state["step_count"] == 1
 
@@ -220,11 +214,7 @@ def test_update_handles_clipped_policy_ratio_above_float32_range() -> (
         ppo_epochs=1,
         minibatch_size=2,
     )
-    model = PolicyActionModel(
-        d_model=model_config.d_model,
-        layers=model_config.layers,
-        heads=model_config.heads,
-    ).to(device)
+    model = PolicyModel(config=model_config).to(device)
     trainer = PPOTrainer(
         model=model,
         train_config=train_config,
@@ -258,11 +248,7 @@ def test_update_batches_minibatch_model_forwards() -> None:
         ppo_epochs=1,
         minibatch_size=4,
     )
-    model = CountingPolicyActionModel(
-        d_model=model_config.d_model,
-        layers=model_config.layers,
-        heads=model_config.heads,
-    ).to(device)
+    model = CountingPolicyModel(config=model_config).to(device)
     _ = model.eval()
     trainer = PPOTrainer(
         model=model,
@@ -303,11 +289,7 @@ def test_update_rejects_ddp_without_process_group() -> None:
         ppo_epochs=1,
         minibatch_size=4,
     )
-    model = PolicyActionModel(
-        d_model=model_config.d_model,
-        layers=model_config.layers,
-        heads=model_config.heads,
-    ).to(device)
+    model = PolicyModel(config=model_config).to(device)
     trainer = PPOTrainer(
         model=model,
         train_config=train_config,
@@ -334,11 +316,7 @@ def test_update_uses_configured_single_rank_partition() -> None:
         ppo_epochs=1,
         minibatch_size=4,
     )
-    model = CountingPolicyActionModel(
-        d_model=model_config.d_model,
-        layers=model_config.layers,
-        heads=model_config.heads,
-    ).to(device)
+    model = CountingPolicyModel(config=model_config).to(device)
     trainer = PPOTrainer(
         model=model,
         train_config=train_config,
@@ -366,11 +344,7 @@ def test_update_rejects_empty_single_rank_input() -> None:
         ppo_epochs=1,
         minibatch_size=4,
     )
-    model = PolicyActionModel(
-        d_model=model_config.d_model,
-        layers=model_config.layers,
-        heads=model_config.heads,
-    ).to(device)
+    model = PolicyModel(config=model_config).to(device)
     trainer = PPOTrainer(
         model=model,
         train_config=train_config,
@@ -400,11 +374,7 @@ def test_update_disables_profile_by_default() -> None:
         ppo_epochs=1,
         minibatch_size=4,
     )
-    model = PolicyActionModel(
-        d_model=model_config.d_model,
-        layers=model_config.layers,
-        heads=model_config.heads,
-    ).to(device)
+    model = PolicyModel(config=model_config).to(device)
     trainer = PPOTrainer(
         model=model,
         train_config=train_config,
@@ -430,11 +400,7 @@ def test_update_basic_profile_records_only_update_seconds() -> None:
         ppo_epochs=1,
         minibatch_size=4,
     )
-    model = PolicyActionModel(
-        d_model=model_config.d_model,
-        layers=model_config.layers,
-        heads=model_config.heads,
-    ).to(device)
+    model = PolicyModel(config=model_config).to(device)
     trainer = PPOTrainer(
         model=model,
         train_config=train_config,
@@ -450,8 +416,6 @@ def test_update_basic_profile_records_only_update_seconds() -> None:
     assert profile.minibatch_loss_seconds == 0.0
     assert profile.observation_batch_seconds == 0.0
     assert profile.policy_observation_encode_seconds == 0.0
-    assert profile.action_value_observation_encode_seconds == 0.0
-    assert profile.action_value_decode_seconds == 0.0
     assert profile.action_decode_seconds == 0.0
     assert profile.action_distribution_seconds == 0.0
     assert profile.backward_seconds == 0.0
@@ -476,11 +440,7 @@ def test_update_rejects_non_finite_loss_before_optimizer_step() -> None:
         ppo_epochs=1,
         minibatch_size=1,
     )
-    model = NonFiniteValueModel(
-        d_model=model_config.d_model,
-        layers=model_config.layers,
-        heads=model_config.heads,
-    ).to(device)
+    model = NonFinitePolicyModel(config=model_config).to(device)
     trainer = PPOTrainer(
         model=model,
         train_config=train_config,
@@ -494,7 +454,7 @@ def test_update_rejects_non_finite_loss_before_optimizer_step() -> None:
     result = trainer.update(_single_card_update_input(count=1))
 
     assert isinstance(result, Rejected)
-    assert "PPO action_value_loss must be finite" in result.reason
+    assert result.reason == "PPO trace evaluation failed"
     assert trainer.optimizer_state()["step_count"] == 0
     for index, parameter in enumerate(model.parameters()):
         assert torch.equal(parameter.detach(), before[index])
@@ -514,11 +474,7 @@ def test_update_rejects_non_finite_gradients_before_optimizer_step(
         ppo_epochs=1,
         minibatch_size=1,
     )
-    model = PolicyActionModel(
-        d_model=model_config.d_model,
-        layers=model_config.layers,
-        heads=model_config.heads,
-    ).to(device)
+    model = PolicyModel(config=model_config).to(device)
     trainer = PPOTrainer(
         model=model,
         train_config=train_config,
@@ -543,11 +499,10 @@ def test_update_rejects_non_finite_gradients_before_optimizer_step(
     assert (
         "PPO gradients must be finite before clipping" in result.reason
     )
-    assert "parameter=_policy_observation_encoder" in result.reason
+    assert "parameter=_observation_encoder" in result.reason
     assert "nan_count=" in result.reason
     assert "parameter_state=finite" in result.reason
     assert "policy_loss=" in result.reason
-    assert "action_value_loss=" in result.reason
     assert "entropy=" in result.reason
     assert "policy_version=0" in result.reason
     assert "epoch=0" in result.reason
@@ -632,8 +587,6 @@ def _assert_profile_zero(profile: PPOUpdateProfile) -> None:
     assert profile.minibatch_loss_seconds == 0.0
     assert profile.observation_batch_seconds == 0.0
     assert profile.policy_observation_encode_seconds == 0.0
-    assert profile.action_value_observation_encode_seconds == 0.0
-    assert profile.action_value_decode_seconds == 0.0
     assert profile.action_decode_seconds == 0.0
     assert profile.action_distribution_seconds == 0.0
     assert profile.backward_seconds == 0.0

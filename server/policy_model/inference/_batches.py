@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from server.policy_model.observation import Observation
 from server.policy_model.observation.packing import (
     PackedObservation,
-    pack_observation,
 )
 
 
@@ -17,16 +15,6 @@ class PackedRows:
 
     unique: tuple[PackedObservation, ...]
     source_indices: tuple[int, ...]
-
-
-def pack_unique(
-    observations: tuple[Observation, ...],
-) -> PackedRows:
-    """Pack each observation once and deduplicate exact values."""
-    assert observations
-    return deduplicate_packed(
-        tuple(pack_observation(item) for item in observations)
-    )
 
 
 def deduplicate_packed(
@@ -115,5 +103,4 @@ __all__ = (
     "attention_batch_groups",
     "deduplicate_packed",
     "inference_batch_row_limit",
-    "pack_unique",
 )

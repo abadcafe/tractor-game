@@ -111,7 +111,9 @@ class CompletedRound:
     next_declarer: Seat
     defender_points: int
     total_defender_points: int
-    bottom_card_bonus: int
+    bottom_base_points: int
+    bottom_multiplier: int | None
+    bottom_points: int
     bottom_cards: tuple[Card, ...]
     levels_before: TeamLevels
     levels_after: TeamLevels

@@ -10,7 +10,7 @@ from torch import Tensor
 from server.foundation import result as _result
 from server.policy_model.network import (
     EncodedObservation,
-    PolicyActionModel,
+    PolicyModel,
 )
 from server.training.ppo.minibatch import TensorizedPPOMinibatch
 from server.training.ppo.profile import PPOProfileAccumulator
@@ -28,7 +28,6 @@ class TraceBatchEval:
     """Current-model scores for a minibatch of recorded traces."""
 
     log_probabilities: Tensor
-    action_values: Tensor
     entropies: Tensor
 
 
@@ -43,7 +42,7 @@ class ActionStepBatchEval:
 
 def evaluate_trace_batch(
     *,
-    model: PolicyActionModel,
+    model: PolicyModel,
     minibatch: TensorizedPPOMinibatch,
     device: torch.device,
     profile: PPOProfileAccumulator,
@@ -53,9 +52,7 @@ def evaluate_trace_batch(
     observation_batch = minibatch.observation_batch
     assert observation_batch is not None
     encode_start = profile.mark()
-    policy_encoding = model.encode_policy_observations(
-        observation_batch
-    )
+    policy_encoding = model.encode_observations(observation_batch)
     profile.record_elapsed(
         "policy_observation_encode_seconds",
         encode_start,
@@ -87,33 +84,9 @@ def evaluate_trace_batch(
         index=prefix_eval.active_positions,
         source=prefix_eval.entropies,
     )
-    action_value_encode_start = profile.mark()
-    action_value_encoding = model.encode_action_value_observations(
-        observation_batch
-    )
-    profile.record_elapsed(
-        "action_value_observation_encode_seconds",
-        action_value_encode_start,
-    )
-    action_value_decode_start = profile.mark()
-    action_values = model.action_values(
-        action_value_encoding,
-        source_rows=torch.arange(
-            minibatch.local_count,
-            dtype=torch.long,
-            device=device,
-        ),
-        choice_ids_padded=replay.choice_ids_padded,
-        step_counts=replay.step_counts,
-    )
-    profile.record_elapsed(
-        "action_value_decode_seconds",
-        action_value_decode_start,
-    )
     return _result.Ok(
         value=TraceBatchEval(
             log_probabilities=log_probability_sums,
-            action_values=action_values,
             entropies=entropy_sums,
         )
     )
@@ -121,7 +94,7 @@ def evaluate_trace_batch(
 
 def _action_step_batch_eval(
     *,
-    model: PolicyActionModel,
+    model: PolicyModel,
     encoding: EncodedObservation,
     replay: PPOReplayTensorBatch,
     profile: PPOProfileAccumulator,

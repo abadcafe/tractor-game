@@ -52,7 +52,6 @@ def initialize_run(
             d_model=options.d_model,
             layers=options.layers,
             heads=options.heads,
-            action_value_layers=options.action_value_layers,
         ),
         train_config=TrainConfig(
             seed=options.seed,
@@ -60,9 +59,6 @@ def initialize_run(
             ppo_clip=options.ppo_clip,
             entropy_coef=options.entropy_coef,
             policy_max_grad_norm=options.policy_max_grad_norm,
-            action_value_max_grad_norm=(
-                options.action_value_max_grad_norm
-            ),
             ppo_epochs=options.ppo_epochs,
             minibatch_size=options.minibatch_size,
             adam_beta1=options.adam_beta1,

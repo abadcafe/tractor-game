@@ -10,12 +10,11 @@ from torch import Tensor
 PPO_VALIDATION_OK = 0
 PPO_TRACE_EVALUATION_FAILED = 1
 PPO_POLICY_LOSS_NONFINITE = 2
-PPO_ACTION_VALUE_LOSS_NONFINITE = 3
-PPO_ENTROPY_NONFINITE = 4
-PPO_TOTAL_LOSS_NONFINITE = 5
-PPO_APPROX_KL_NONFINITE = 6
-PPO_CLIP_FRACTION_NONFINITE = 7
-PPO_GRADIENTS_NONFINITE = 8
+PPO_ENTROPY_NONFINITE = 3
+PPO_OBJECTIVE_LOSS_NONFINITE = 4
+PPO_APPROX_KL_NONFINITE = 5
+PPO_CLIP_FRACTION_NONFINITE = 6
+PPO_GRADIENTS_NONFINITE = 7
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,12 +96,10 @@ def validation_rejection_reason(code: Tensor) -> str | None:
         return "PPO trace evaluation failed"
     if value == PPO_POLICY_LOSS_NONFINITE:
         return "PPO policy_loss must be finite"
-    if value == PPO_ACTION_VALUE_LOSS_NONFINITE:
-        return "PPO action_value_loss must be finite"
     if value == PPO_ENTROPY_NONFINITE:
         return "PPO entropy must be finite"
-    if value == PPO_TOTAL_LOSS_NONFINITE:
-        return "PPO total_loss must be finite"
+    if value == PPO_OBJECTIVE_LOSS_NONFINITE:
+        return "PPO objective_loss must be finite"
     if value == PPO_APPROX_KL_NONFINITE:
         return "PPO approx_kl must be finite"
     if value == PPO_CLIP_FRACTION_NONFINITE:

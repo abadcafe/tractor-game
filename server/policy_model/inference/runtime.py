@@ -12,18 +12,19 @@ from typing import final
 import torch
 
 from server.foundation.result import Ok, Rejected
-from server.policy_model.network import PolicyActionModel
+from server.policy_model.actions import GeneratedAction
+from server.policy_model.network import PolicyModel
 
 from ._cpu import cpu_execution_plan, initialize_cpu_worker
 from ._executor import TorchBatchExecutor
-from .contracts import ActionDecision, ActionDecisionRequest
+from .contracts import PolicyDecisionRequest
 
-type DecisionResult = Ok[tuple[ActionDecision, ...]] | Rejected
+type DecisionResult = Ok[GeneratedAction] | Rejected
 
 
 @dataclass(frozen=True, slots=True)
 class _DecisionCall:
-    requests: tuple[ActionDecisionRequest, ...]
+    request: PolicyDecisionRequest
     future: asyncio.Future[DecisionResult]
 
 
@@ -73,7 +74,7 @@ class InferenceRuntime:
     def create(
         cls,
         *,
-        model: PolicyActionModel,
+        model: PolicyModel,
         device: torch.device,
     ) -> InferenceRuntime:
         """Create a runtime from an already constructed model."""
@@ -82,10 +83,9 @@ class InferenceRuntime:
     async def decide(
         self,
         *,
-        requests: tuple[ActionDecisionRequest, ...],
+        request: PolicyDecisionRequest,
     ) -> DecisionResult:
-        """Schedule complete policy-improvement decisions."""
-        assert requests
+        """Schedule one complete policy decision."""
         self._raise_dispatcher_failure()
         if self._closed:
             return Rejected(reason="AI inference runtime is closed")
@@ -93,7 +93,7 @@ class InferenceRuntime:
         future: asyncio.Future[DecisionResult] = loop.create_future()
         self._start_dispatcher()
         self._queue.put_nowait(
-            _DecisionCall(requests=requests, future=future)
+            _DecisionCall(request=request, future=future)
         )
         return await future
 
@@ -165,9 +165,7 @@ class InferenceRuntime:
         self,
         calls: tuple[_DecisionCall, ...],
     ) -> None:
-        requests = tuple(
-            request for call in calls for request in call.requests
-        )
+        requests = tuple(call.request for call in calls)
         loop = asyncio.get_running_loop()
         operation = functools.partial(
             self._executor.decide,
@@ -179,13 +177,10 @@ class InferenceRuntime:
                 if not call.future.cancelled():
                     call.future.set_result(result)
             return
-        offset = 0
-        for call in calls:
-            end = offset + len(call.requests)
+        assert len(result.value) == len(calls)
+        for call, action in zip(calls, result.value, strict=True):
             if not call.future.cancelled():
-                call.future.set_result(Ok(result.value[offset:end]))
-            offset = end
-        assert offset == len(result.value)
+                call.future.set_result(Ok(action))
 
 
 def _fail_call(

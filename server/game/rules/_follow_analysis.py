@@ -5,14 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from server.foundation.result import Ok, Rejected
-from server.game.rules._decompose import decompose
 from server.game.rules._follow_pairs import (
     FollowPairPlanner,
     build_follow_pair_planner,
-    played_pair_faces,
 )
-from server.game.rules._ordering import effective_suit
-from server.game.rules._play_types import EffectiveSuit
+from server.game.rules._ordering import EffectiveSuit, effective_suit
+from server.game.rules._patterns import analyze_patterns
 from server.game.rules._rejections.play import EmptyLeadRejected
 from server.game.rules.cards import Card, Rank, Suit
 from server.game.rules.cards.faces import (
@@ -126,16 +124,15 @@ class FollowAnalysis:
         if not played_suit_cards:
             return True
 
-        played_subs = decompose(
-            list(played_suit_cards), self.trump_suit, self.trump_rank
+        played_analysis = analyze_patterns(
+            played_suit_cards, self.trump_suit, self.trump_rank
         )
-        played_pair_count = sum(sub.pair_count for sub in played_subs)
+        played_pair_count = len(played_analysis.pair_faces)
         if played_pair_count < self.pair_floor:
             return False
 
-        selected_pair_faces = played_pair_faces(played_suit_cards)
         return self.pair_planner.pair_selection_is_valid(
-            selected_pair_faces
+            frozenset(played_analysis.pair_faces)
         )
 
     def _can_complete_exhausting_suit(
@@ -213,14 +210,16 @@ def analyze_follow(
         if effective_suit(card, trump_suit, trump_rank)
         != lead_effective_suit
     )
-    hand_subs = (
-        decompose(list(same_suit_cards), trump_suit, trump_rank)
+    hand_analysis = (
+        analyze_patterns(same_suit_cards, trump_suit, trump_rank)
         if same_suit_cards
-        else []
+        else None
     )
-    lead_subs = decompose(lead_cards, trump_suit, trump_rank)
-    lead_pair_count = sum(sub.pair_count for sub in lead_subs)
-    hand_pair_count = sum(sub.pair_count for sub in hand_subs)
+    lead_analysis = analyze_patterns(lead_cards, trump_suit, trump_rank)
+    lead_pair_count = len(lead_analysis.pair_faces)
+    hand_pair_count = (
+        0 if hand_analysis is None else len(hand_analysis.pair_faces)
+    )
     lead_count = len(lead_cards)
     same_suit_faces = canonical_face_counts(same_suit_cards)
     return Ok(
@@ -241,7 +240,7 @@ def analyze_follow(
             lead_pair_count=lead_pair_count,
             pair_floor=min(hand_pair_count, lead_pair_count),
             pair_planner=build_follow_pair_planner(
-                hand_subs=hand_subs,
+                hand_analysis=hand_analysis,
                 same_suit_faces=same_suit_faces,
                 lead_pair_count=lead_pair_count,
                 pair_floor=min(hand_pair_count, lead_pair_count),

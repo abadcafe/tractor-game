@@ -29,14 +29,13 @@ def train_config_from_json(
         "ppo_clip",
         "entropy_coef",
         "policy_max_grad_norm",
-        "action_value_max_grad_norm",
         "ppo_epochs",
         "minibatch_size",
         "adam_beta1",
         "adam_beta2",
         "weight_decay",
     }
-    if not set(data).issubset(expected_fields):
+    if set(data) != expected_fields:
         return checkpoint_corruption(
             path,
             "manifest train_config fields do not match "
@@ -73,14 +72,6 @@ def train_config_from_json(
     )
     if isinstance(policy_max_grad_norm, _result.Rejected):
         return policy_max_grad_norm
-    action_value_max_grad_norm = _json_float_field(
-        data,
-        "action_value_max_grad_norm",
-        path,
-        label="train_config.action_value_max_grad_norm",
-    )
-    if isinstance(action_value_max_grad_norm, _result.Rejected):
-        return action_value_max_grad_norm
     ppo_epochs = _json_int_field(
         data, "ppo_epochs", path, label="train_config.ppo_epochs"
     )
@@ -116,7 +107,6 @@ def train_config_from_json(
         ppo_clip=ppo_clip.value,
         entropy_coef=entropy_coef.value,
         policy_max_grad_norm=policy_max_grad_norm.value,
-        action_value_max_grad_norm=(action_value_max_grad_norm.value),
         ppo_epochs=ppo_epochs.value,
         minibatch_size=minibatch_size.value,
         adam_beta1=adam_beta1.value,
@@ -132,9 +122,6 @@ def train_config_from_json(
             ppo_clip=ppo_clip.value,
             entropy_coef=entropy_coef.value,
             policy_max_grad_norm=policy_max_grad_norm.value,
-            action_value_max_grad_norm=(
-                action_value_max_grad_norm.value
-            ),
             ppo_epochs=ppo_epochs.value,
             minibatch_size=minibatch_size.value,
             adam_beta1=adam_beta1.value,
@@ -160,7 +147,7 @@ def validate_optimizer_state_payload(
         "exp_avgs",
         "exp_avg_sqs",
     }
-    if not set(payload_state).issubset(expected_fields):
+    if set(payload_state) != expected_fields:
         return checkpoint_corruption(
             path,
             "state payload optimizer_state fields do not match "
@@ -254,7 +241,6 @@ def _validate_train_config_values(
     ppo_clip: float,
     entropy_coef: float,
     policy_max_grad_norm: float,
-    action_value_max_grad_norm: float,
     ppo_epochs: int,
     minibatch_size: int,
     adam_beta1: float,
@@ -282,12 +268,6 @@ def _validate_train_config_values(
         return checkpoint_corruption(
             path,
             "manifest train_config.policy_max_grad_norm must be >= 0",
-        )
-    if action_value_max_grad_norm < 0.0:
-        return checkpoint_corruption(
-            path,
-            "manifest train_config.action_value_max_grad_norm "
-            + "must be >= 0",
         )
     if ppo_epochs <= 0:
         return checkpoint_corruption(

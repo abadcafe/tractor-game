@@ -17,8 +17,6 @@ def test_clipped_ppo_objective_returns_finite_scalar_losses() -> None:
     new_log_probabilities = torch.log(
         torch.tensor([0.5, 0.5], dtype=torch.float32)
     )
-    action_values = torch.tensor([0.3, -0.1], dtype=torch.float32)
-    return_values = torch.tensor([1.0, -1.0], dtype=torch.float32)
     advantages = torch.tensor([0.8, -0.4], dtype=torch.float32)
     entropies = torch.tensor([0.2, 0.4], dtype=torch.float32)
 
@@ -26,8 +24,6 @@ def test_clipped_ppo_objective_returns_finite_scalar_losses() -> None:
         old_log_probabilities=old_log_probabilities,
         new_log_probabilities=new_log_probabilities,
         advantages=advantages,
-        action_values=action_values,
-        return_values=return_values,
         entropies=entropies,
         config=PPOObjectiveConfig(
             ppo_clip=0.2,
@@ -36,12 +32,11 @@ def test_clipped_ppo_objective_returns_finite_scalar_losses() -> None:
     )
 
     assert objective.policy_loss.shape == ()
-    assert objective.action_value_loss.shape == ()
     assert objective.entropy.shape == ()
-    assert objective.total_loss.shape == ()
+    assert objective.objective_loss.shape == ()
     assert objective.approx_kl.shape == ()
     assert objective.clip_fraction.shape == ()
-    assert torch.isfinite(objective.total_loss)
+    assert torch.isfinite(objective.objective_loss)
 
 
 def test_clipped_ppo_objective_clips_policy_ratio() -> None:
@@ -53,8 +48,6 @@ def test_clipped_ppo_objective_clips_policy_ratio() -> None:
             torch.tensor([1.0], dtype=torch.float32)
         ),
         advantages=torch.tensor([1.0], dtype=torch.float32),
-        action_values=torch.tensor([0.0], dtype=torch.float32),
-        return_values=torch.tensor([0.0], dtype=torch.float32),
         entropies=torch.tensor([0.0], dtype=torch.float32),
         config=PPOObjectiveConfig(
             ppo_clip=0.2,
@@ -83,8 +76,6 @@ def test_clipped_ppo_objective_matches_ratio_space_gradients() -> None:
         old_log_probabilities=old_log_probabilities,
         new_log_probabilities=stable_new,
         advantages=advantages,
-        action_values=torch.zeros(6),
-        return_values=torch.zeros(6),
         entropies=torch.zeros(6),
         config=PPOObjectiveConfig(
             ppo_clip=0.2,
@@ -113,8 +104,6 @@ def test_clipped_ppo_objective_avoids_clipped_exp_overflow() -> None:
         old_log_probabilities=torch.tensor((-100.0,)),
         new_log_probabilities=new_log_probabilities,
         advantages=torch.tensor((1.0,)),
-        action_values=torch.zeros(1),
-        return_values=torch.zeros(1),
         entropies=torch.zeros(1),
         config=PPOObjectiveConfig(
             ppo_clip=0.2,
@@ -130,15 +119,14 @@ def test_clipped_ppo_objective_avoids_clipped_exp_overflow() -> None:
         bool(torch.isfinite(value).item())
         for value in (
             objective.policy_loss,
-            objective.action_value_loss,
             objective.entropy,
-            objective.total_loss,
+            objective.objective_loss,
             objective.approx_kl,
             objective.clip_fraction,
         )
     )
 
-    torch.autograd.backward(objective.total_loss)
+    torch.autograd.backward(objective.objective_loss)
 
     assert new_log_probabilities.grad is not None
     assert torch.equal(
@@ -155,8 +143,6 @@ def test_clipped_ppo_objective_stabilizes_adverse_exp_tail() -> None:
         old_log_probabilities=torch.tensor((-100.0,)),
         new_log_probabilities=new_log_probabilities,
         advantages=torch.tensor((-1.0,)),
-        action_values=torch.zeros(1),
-        return_values=torch.zeros(1),
         entropies=torch.zeros(1),
         config=PPOObjectiveConfig(
             ppo_clip=ppo_clip,
@@ -166,7 +152,7 @@ def test_clipped_ppo_objective_stabilizes_adverse_exp_tail() -> None:
     upper_log_ratio = torch.log1p(torch.tensor(ppo_clip))
     expected_loss = (1.0 + ppo_clip) * (1.0 + 100.0 - upper_log_ratio)
 
-    torch.autograd.backward(objective.total_loss)
+    torch.autograd.backward(objective.objective_loss)
 
     assert torch.allclose(objective.policy_loss, expected_loss)
     assert new_log_probabilities.grad is not None
@@ -186,8 +172,6 @@ def test_clipped_ppo_objective_handles_extreme_zero_advantage() -> None:
         old_log_probabilities=torch.zeros(2),
         new_log_probabilities=new_log_probabilities,
         advantages=torch.zeros(2),
-        action_values=torch.zeros(2),
-        return_values=torch.zeros(2),
         entropies=torch.zeros(2),
         config=PPOObjectiveConfig(
             ppo_clip=0.2,
@@ -195,7 +179,7 @@ def test_clipped_ppo_objective_handles_extreme_zero_advantage() -> None:
         ),
     )
 
-    torch.autograd.backward(objective.total_loss)
+    torch.autograd.backward(objective.objective_loss)
 
     assert torch.equal(objective.policy_loss, torch.tensor(0.0))
     assert new_log_probabilities.grad is not None
@@ -212,8 +196,6 @@ def test_clipped_ppo_objective_supports_full_clip_range() -> None:
         old_log_probabilities=torch.zeros(1),
         new_log_probabilities=new_log_probabilities,
         advantages=torch.tensor((-1.0,)),
-        action_values=torch.zeros(1),
-        return_values=torch.zeros(1),
         entropies=torch.zeros(1),
         config=PPOObjectiveConfig(
             ppo_clip=1.0,
@@ -221,28 +203,8 @@ def test_clipped_ppo_objective_supports_full_clip_range() -> None:
         ),
     )
 
-    torch.autograd.backward(objective.total_loss)
+    torch.autograd.backward(objective.objective_loss)
 
-    assert bool(torch.isfinite(objective.total_loss).item())
+    assert bool(torch.isfinite(objective.objective_loss).item())
     assert new_log_probabilities.grad is not None
     assert bool(torch.isfinite(new_log_probabilities.grad).all().item())
-
-
-def test_action_value_loss_uses_terminal_return_target() -> None:
-    objective = clipped_ppo_objective(
-        old_log_probabilities=torch.zeros(2),
-        new_log_probabilities=torch.zeros(2),
-        advantages=torch.zeros(2),
-        return_values=torch.tensor((1.0, -1.0)),
-        action_values=torch.tensor((0.5, -0.5)),
-        entropies=torch.zeros(2),
-        config=PPOObjectiveConfig(
-            ppo_clip=0.2,
-            entropy_coef=0.0,
-        ),
-    )
-
-    assert torch.allclose(
-        objective.action_value_loss,
-        torch.tensor(0.25),
-    )

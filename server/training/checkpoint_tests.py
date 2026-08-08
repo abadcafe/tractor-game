@@ -22,7 +22,7 @@ from server.policy_model.checkpoint import (
 from server.policy_model.checkpoint.load import (
     load_policy_checkpoint as _load_policy_checkpoint,
 )
-from server.policy_model.network import ModelConfig, PolicyActionModel
+from server.policy_model.network import ModelConfig, PolicyModel
 from server.training.checkpoint import (
     TrainingCheckpointMetadata,
 )
@@ -713,7 +713,7 @@ def test_torch_checkpoint_state_payload_is_weights_only_safe(
     loaded = _load_state_payload(_single_state_path(path))
 
     assert isinstance(loaded, dict)
-    assert loaded["schema_version"] == 24
+    assert loaded["schema_version"] == 26
     assert isinstance(loaded["checkpoint_id"], str)
     assert "model_config" not in loaded
     assert "train_config" not in loaded
@@ -1154,7 +1154,6 @@ def test_torch_checkpoint_read_rejects_unknown_model_config_fields(
         "d_model": 8,
         "layers": 1,
         "heads": 1,
-        "action_value_layers": 2,
         "unexpected": True,
     }
     _write_json_object(path, manifest)
@@ -1589,7 +1588,7 @@ def test_torch_checkpoint_load_rejects_non_torch_state_payload(
     assert "state payload cannot be loaded" in result.reason
 
 
-def test_torch_checkpoint_load_rejects_missing_payload_field(
+def test_torch_checkpoint_load_rejects_incomplete_payload(
     tmp_path: Path,
 ) -> None:
     model_config = ModelConfig(
@@ -1630,7 +1629,10 @@ def test_torch_checkpoint_load_rejects_missing_payload_field(
 
     assert isinstance(result, Rejected)
     assert "checkpoint corruption:" in result.reason
-    assert "state payload missing schema_version" in result.reason
+    assert (
+        "state payload fields do not match the current schema"
+        in result.reason
+    )
 
 
 def test_torch_checkpoint_load_rejects_mismatched_payload_schema(
@@ -2102,7 +2104,7 @@ def test_resolve_execution_config_overrides_process_defaults() -> None:
 def save_training_checkpoint(
     *,
     manifest_paths: tuple[Path, ...],
-    model: PolicyActionModel,
+    model: PolicyModel,
     trainer: PPOTrainer,
     model_config: ModelConfig,
     train_config: TrainConfig,
@@ -2298,7 +2300,7 @@ def _is_object_list(value: object) -> TypeGuard[list[object]]:
 
 
 def _model_parameters(
-    model: PolicyActionModel,
+    model: PolicyModel,
 ) -> tuple[torch.Tensor, ...]:
     return tuple(
         parameter.detach().cpu().clone()

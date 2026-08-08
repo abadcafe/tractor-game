@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from ._decompose import decompose, non_trump_rank_order
-from ._ordering import effective_suit, trump_rank_order
-from ._play_types import EffectiveSuit
+from ._ordering import EffectiveSuit, effective_suit, trump_order
+from ._patterns import analyze_patterns
 from .cards import Card, Rank, Suit
 
 
@@ -13,67 +12,42 @@ def _compare_same_suit(
     b_cards: list[Card],
     trump_suit: Suit | None,
     trump_rank: Rank,
-    is_trump: bool,
 ) -> int:
     """
     Compare two plays that share the same effective suit (spec 8.3-8.4).
 
-    Uses decompose to extract sub-plays, then compares:
-    1. Max sub_level (tractor > pair > single)
-    2. Same level: max rank of the highest-level sub-plays
+    Uses fixed-topology pattern analysis, then compares:
+    1. Maximum pattern level (tractor > pair > single)
+    2. Same level: strongest card in the highest-level patterns
 
     Returns >0 if a wins, <0 if b wins, 0 if tie.
     """
-    a_subs = decompose(a_cards, trump_suit, trump_rank)
-    b_subs = decompose(b_cards, trump_suit, trump_rank)
+    a_subs = analyze_patterns(a_cards, trump_suit, trump_rank).patterns
+    b_subs = analyze_patterns(b_cards, trump_suit, trump_rank).patterns
 
-    if not a_subs and not b_subs:
-        return 0
-    if not a_subs:
-        return -1
-    if not b_subs:
-        return 1
-
-    # Find max sub_level for each
-    a_max_level = max(s.sub_level for s in a_subs)
-    b_max_level = max(s.sub_level for s in b_subs)
+    a_max_level = max(pattern.level for pattern in a_subs)
+    b_max_level = max(pattern.level for pattern in b_subs)
 
     if a_max_level != b_max_level:
         return a_max_level - b_max_level
 
-    # Same max level: compare max rank of the highest-level sub-plays
-    a_high_subs = [s for s in a_subs if s.sub_level == a_max_level]
-    b_high_subs = [s for s in b_subs if s.sub_level == b_max_level]
+    a_high_subs = [
+        pattern for pattern in a_subs if pattern.level == a_max_level
+    ]
+    b_high_subs = [
+        pattern for pattern in b_subs if pattern.level == b_max_level
+    ]
 
-    # Get the max rank order across all highest-level sub-plays
-    if is_trump:
-        # Use trump_rank_order (comparator) which distinguishes
-        # sub-types:
-        #   trump-suit level=80, other-suit level=70, etc.
-        # rank_order_for_effective_suit only gives组内 position (1-15),
-        # which
-        # collapses different sub-types at the same rank.
-        a_max_rank = max(
-            trump_rank_order(c, trump_suit, trump_rank)
-            for s in a_high_subs
-            for c in s.cards
-        )
-        b_max_rank = max(
-            trump_rank_order(c, trump_suit, trump_rank)
-            for s in b_high_subs
-            for c in s.cards
-        )
-    else:
-        a_max_rank = max(
-            non_trump_rank_order(c.rank, trump_rank)
-            for s in a_high_subs
-            for c in s.cards
-        )
-        b_max_rank = max(
-            non_trump_rank_order(c.rank, trump_rank)
-            for s in b_high_subs
-            for c in s.cards
-        )
+    a_max_rank = max(
+        trump_order(card, trump_suit, trump_rank)
+        for pattern in a_high_subs
+        for card in pattern.cards
+    )
+    b_max_rank = max(
+        trump_order(card, trump_suit, trump_rank)
+        for pattern in b_high_subs
+        for card in pattern.cards
+    )
 
     return a_max_rank - b_max_rank
 
@@ -94,8 +68,10 @@ def _shape_signature(
     cards: list[Card], trump_suit: Suit | None, trump_rank: Rank
 ) -> tuple[int, ...]:
     return tuple(
-        sub.pair_count
-        for sub in decompose(cards, trump_suit, trump_rank)
+        pattern.pair_count
+        for pattern in analyze_patterns(
+            cards, trump_suit, trump_rank
+        ).patterns
     )
 
 
@@ -140,7 +116,7 @@ def compare_plays(
     """
     Compare two trick plays using the actual leading cards.
 
-    Trump cards can kill a non-trump throw only when their decomposed
+    Trump cards can kill a non-trump throw only when their analyzed
     structure exactly matches the leading structure. A structurally
     invalid kill is treated as padding and cannot win.
     """
@@ -174,8 +150,6 @@ def compare_plays(
         return -1
     if a_all_trump and b_all_trump:
         return _compare_same_suit(
-            a_cards, b_cards, trump_suit, trump_rank, is_trump=True
+            a_cards, b_cards, trump_suit, trump_rank
         )
-    return _compare_same_suit(
-        a_cards, b_cards, trump_suit, trump_rank, is_trump=False
-    )
+    return _compare_same_suit(a_cards, b_cards, trump_suit, trump_rank)

@@ -12,7 +12,7 @@ type AIDevice = Literal["cpu", "cuda", "mps"]
 
 
 class LocalAIConfig(BaseModel):
-    """Checkpoint and direct policy-improvement configuration."""
+    """Checkpoint and execution device for local policy inference."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(
         extra="forbid", frozen=True, strict=True
@@ -21,8 +21,6 @@ class LocalAIConfig(BaseModel):
     mode: Literal["local"] = "local"
     checkpoint_path: Path
     device: AIDevice = "cpu"
-    candidate_count: int = Field(default=16, gt=0)
-    action_value_temperature: float = Field(default=1.0, gt=0.0)
 
 
 class RemoteAIConfig(BaseModel):
@@ -72,14 +70,6 @@ def ai_config_from_env() -> AIConfig:
             )
         ).resolve(),
         device=_device(os.environ.get("TRACTOR_AI_DEVICE", "cpu")),
-        candidate_count=_positive_int_env(
-            "TRACTOR_AI_CANDIDATES",
-            16,
-        ),
-        action_value_temperature=_positive_float_env(
-            "TRACTOR_AI_VALUE_TEMPERATURE",
-            1.0,
-        ),
     )
 
 
@@ -92,13 +82,6 @@ def _device(value: str) -> AIDevice:
     if normalized == "mps":
         return "mps"
     raise ValueError("TRACTOR_AI_DEVICE must be cpu, cuda, or mps")
-
-
-def _positive_int_env(name: str, default: int) -> int:
-    value = int(os.environ.get(name, str(default)))
-    if value <= 0:
-        raise ValueError(f"{name} must be positive")
-    return value
 
 
 def _positive_float_env(name: str, default: float) -> float:

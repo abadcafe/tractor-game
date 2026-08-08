@@ -24,13 +24,20 @@ def finish_round(
     defenders_won_last = (
         partnership_of(last_trick.winner) != declarer_partnership
     )
+    winner_slots = tuple(
+        slot
+        for slot in last_trick.slots
+        if slot.actor == last_trick.winner
+    )
+    assert len(winner_slots) == 1
     result = scoring.score_round(
         defender_points=sum(
             card.points for card in phase.defender_point_cards
         ),
         bottom_cards=phase.bottom_cards,
-        last_trick_won_by_defenders=defenders_won_last,
-        last_lead_cards=last_trick.slots[0].cards,
+        bottom_winning_cards=(
+            winner_slots[0].cards if defenders_won_last else None
+        ),
         trump_suit=phase.contract.trump_suit,
         trump_rank=phase.contract.trump_rank,
     )
@@ -84,7 +91,9 @@ def finish_round(
             card.points for card in phase.defender_point_cards
         ),
         total_defender_points=result.total_defender_points,
-        bottom_card_bonus=result.bottom_card_bonus,
+        bottom_base_points=result.bottom_base_points,
+        bottom_multiplier=result.bottom_multiplier,
+        bottom_points=result.bottom_points,
         bottom_cards=phase.bottom_cards,
         levels_before=phase.levels,
         levels_after=levels_after,

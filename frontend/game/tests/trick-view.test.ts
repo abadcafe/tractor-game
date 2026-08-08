@@ -109,7 +109,9 @@ Deno.test("test_renderTrickView_waiting_scoring_keeps_last_trick", () => {
       winning_partnership: "first",
       defender_points: 80,
       total_defender_points: 100,
-      bottom_card_bonus: 20,
+      bottom_base_points: 20,
+      bottom_multiplier: 1,
+      bottom_points: 20,
       bottom_cards: [],
     },
   });

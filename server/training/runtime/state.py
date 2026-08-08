@@ -10,7 +10,7 @@ import torch
 from torch import Tensor
 
 from server.foundation import result as _result
-from server.policy_model.network import PolicyActionModel
+from server.policy_model.network import PolicyModel
 from server.training.lifecycle.state import LoadedTrainingState
 from server.training.ppo import PPOTrainer
 
@@ -28,7 +28,7 @@ class RuntimeTrainingState:
 
 def capture_runtime_training_state(
     *,
-    model: PolicyActionModel,
+    model: PolicyModel,
     trainer: PPOTrainer,
 ) -> RuntimeTrainingState:
     """Capture a CPU snapshot of model and trainer state."""

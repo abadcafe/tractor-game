@@ -23,7 +23,6 @@ class TensorizedPPOMinibatch:
     sample_indices: Tensor
     old_log_probabilities: Tensor
     advantages: Tensor
-    return_values: Tensor
     local_count: int
     global_count: Tensor
 
@@ -37,7 +36,6 @@ class TensorizedPPOMinibatch:
             int(self.old_log_probabilities.shape[0]) == self.local_count
         )
         assert int(self.advantages.shape[0]) == self.local_count
-        assert int(self.return_values.shape[0]) == self.local_count
         if self.local_count == 0:
             assert self.observation_batch is None
             assert self.replay is None

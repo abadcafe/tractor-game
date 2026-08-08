@@ -178,3 +178,55 @@ class TestComparePlays:
         )
 
         assert result == 0
+
+    def test_separated_trump_pairs_do_not_beat_a_real_tractor(
+        self,
+    ) -> None:
+        tractor = [
+            _card(Suit.CLUBS, Rank.JACK, 1),
+            _card(Suit.CLUBS, Rank.JACK, 2),
+            _card(Suit.CLUBS, Rank.QUEEN, 1),
+            _card(Suit.CLUBS, Rank.QUEEN, 2),
+        ]
+        separated_pairs = [
+            _card(Suit.CLUBS, Rank.THREE, 1),
+            _card(Suit.CLUBS, Rank.THREE, 2),
+            _card(Suit.CLUBS, Rank.ACE, 1),
+            _card(Suit.CLUBS, Rank.ACE, 2),
+        ]
+
+        result = compare_plays(
+            separated_pairs,
+            tractor,
+            tractor,
+            Suit.CLUBS,
+            Rank.TWO,
+        )
+
+        assert result < 0
+
+    def test_two_vice_level_pairs_do_not_beat_level_tractor(
+        self,
+    ) -> None:
+        level_tractor = [
+            _card(Suit.SPADES, Rank.TWO, 1),
+            _card(Suit.SPADES, Rank.TWO, 2),
+            _card(Suit.CLUBS, Rank.TWO, 1),
+            _card(Suit.CLUBS, Rank.TWO, 2),
+        ]
+        two_vice_pairs = [
+            _card(Suit.DIAMONDS, Rank.TWO, 1),
+            _card(Suit.DIAMONDS, Rank.TWO, 2),
+            _card(Suit.HEARTS, Rank.TWO, 1),
+            _card(Suit.HEARTS, Rank.TWO, 2),
+        ]
+
+        result = compare_plays(
+            two_vice_pairs,
+            level_tractor,
+            level_tractor,
+            Suit.CLUBS,
+            Rank.TWO,
+        )
+
+        assert result < 0

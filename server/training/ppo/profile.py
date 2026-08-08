@@ -16,8 +16,6 @@ type _ProfileField = Literal[
     "minibatch_loss_seconds",
     "observation_batch_seconds",
     "policy_observation_encode_seconds",
-    "action_value_observation_encode_seconds",
-    "action_value_decode_seconds",
     "action_decode_seconds",
     "action_distribution_seconds",
     "backward_seconds",
@@ -33,8 +31,6 @@ class PPOUpdateProfile:
     minibatch_loss_seconds: float
     observation_batch_seconds: float
     policy_observation_encode_seconds: float
-    action_value_observation_encode_seconds: float
-    action_value_decode_seconds: float
     action_decode_seconds: float
     action_distribution_seconds: float
     backward_seconds: float
@@ -54,8 +50,6 @@ def ppo_update_profile_is_finite(profile: PPOUpdateProfile) -> bool:
         profile.minibatch_loss_seconds,
         profile.observation_batch_seconds,
         profile.policy_observation_encode_seconds,
-        profile.action_value_observation_encode_seconds,
-        profile.action_value_decode_seconds,
         profile.action_decode_seconds,
         profile.action_distribution_seconds,
         profile.backward_seconds,
@@ -85,8 +79,6 @@ def blank_update_profile(*, update_seconds: float) -> PPOUpdateProfile:
         minibatch_loss_seconds=0.0,
         observation_batch_seconds=0.0,
         policy_observation_encode_seconds=0.0,
-        action_value_observation_encode_seconds=0.0,
-        action_value_decode_seconds=0.0,
         action_decode_seconds=0.0,
         action_distribution_seconds=0.0,
         backward_seconds=0.0,
@@ -134,8 +126,6 @@ class PPOProfileAccumulator:
     minibatch_loss_seconds: float = 0.0
     observation_batch_seconds: float = 0.0
     policy_observation_encode_seconds: float = 0.0
-    action_value_observation_encode_seconds: float = 0.0
-    action_value_decode_seconds: float = 0.0
     action_decode_seconds: float = 0.0
     action_distribution_seconds: float = 0.0
     backward_seconds: float = 0.0
@@ -255,10 +245,6 @@ class PPOProfileAccumulator:
             policy_observation_encode_seconds=(
                 self.policy_observation_encode_seconds
             ),
-            action_value_observation_encode_seconds=(
-                self.action_value_observation_encode_seconds
-            ),
-            action_value_decode_seconds=self.action_value_decode_seconds,
             action_decode_seconds=self.action_decode_seconds,
             action_distribution_seconds=(
                 self.action_distribution_seconds
@@ -302,12 +288,6 @@ class PPOProfileAccumulator:
             return
         if field_name == "policy_observation_encode_seconds":
             self.policy_observation_encode_seconds += seconds
-            return
-        if field_name == "action_value_observation_encode_seconds":
-            self.action_value_observation_encode_seconds += seconds
-            return
-        if field_name == "action_value_decode_seconds":
-            self.action_value_decode_seconds += seconds
             return
         if field_name == "action_decode_seconds":
             self.action_decode_seconds += seconds

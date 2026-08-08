@@ -622,7 +622,7 @@ def _record_update_completed(
             else snapshot.action_choice_count
             / snapshot.generated_action_count,
             "policy_loss": stats.policy_loss,
-            "action_value_loss": stats.action_value_loss,
+            "objective_loss": stats.objective_loss,
             "entropy": stats.entropy,
             "approx_kl": stats.approx_kl,
             "clip_fraction": stats.clip_fraction,
@@ -636,12 +636,6 @@ def _record_update_completed(
             ),
             "ppo_policy_observation_encode_seconds": (
                 profile.policy_observation_encode_seconds
-            ),
-            "ppo_action_value_observation_encode_seconds": (
-                profile.action_value_observation_encode_seconds
-            ),
-            "ppo_action_value_decode_seconds": (
-                profile.action_value_decode_seconds
             ),
             "ppo_action_decode_seconds": (
                 profile.action_decode_seconds

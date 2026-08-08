@@ -4,8 +4,11 @@ Provides trump ordering, effective suit determination, and play
 comparison.
 """
 
-from ._play_types import EffectiveSuit
+from typing import Literal
+
 from .cards import Card, Rank, Suit
+
+type EffectiveSuit = Suit | Literal["trump"]
 
 # ---- Constants ----
 
@@ -100,21 +103,6 @@ def trump_order(
         return 45 + RANK_ORDER[card.rank]
     # Non-trump
     return RANK_ORDER[card.rank] - 2
-
-
-def trump_rank_order(
-    card: Card, trump_suit: Suit | None, trump_rank: Rank
-) -> int:
-    """Return the trump rank order of a card.
-
-    Identical to trump_order. Named separately to distinguish semantic
-    use:
-    trump_order is for comparing play strength; trump_rank_order is for
-    decompose's trump-group tractor detection (spec section 2.3).
-
-    When trump_suit is None, all trump rank cards get the same order.
-    """
-    return trump_order(card, trump_suit, trump_rank)
 
 
 # ---- Effective Suit ----

@@ -33,30 +33,24 @@ uv run --extra <training-backend> python -m server.web \
 游戏大厅可用两类自动玩家：
 
 - `AUTO`：只使用规则的随机合法策略；
-- `AI`：加载训练 checkpoint，由 Policy 生成无重复候选动作，再由
-  独立 Action Value 分支批量评估完整动作并做随机策略改进。
+- `AI`：加载训练 checkpoint，按 Policy 的合法动作概率分布直接
+  采样完整动作。
 
 AI 默认加载
 `$TRAINING_RUN_DIR/checkpoints/latest.json`。可用以下环境变量配置：
 
 - `TRACTOR_AI_CHECKPOINT`
 - `TRACTOR_AI_DEVICE`（`cpu`、`cuda` 或 `mps`）
-- `TRACTOR_AI_CANDIDATES`
-- `TRACTOR_AI_VALUE_TEMPERATURE`
 
 训练与推理共用同一 checkpoint 合约和模型恢复路径；checkpoint 中的
 模型配置决定实际网络结构，不存在按 schema 编号命名的专用推理加载器。
 
-当前 checkpoint schema 为 24，只承载一个 `PolicyActionModel`：
+当前 checkpoint schema 为 25，只承载一个 `PolicyModel`：
 
-- Policy 分支拥有独立的 Observation Encoder 和自回归 Action
-  Decoder；
-- Action Value 分支拥有另一套独立 Observation Encoder、Complete
-  Action Encoder 和标量 Q Head；
-- 两个分支不共享参数，由一个 AdamW optimizer 联合保存和更新，并
-  分别裁剪梯度；
-- Policy 直接使用归一化终局回报做 PPO advantage，Action Value
-  使用实际完整动作和终局回报训练 `Q(o, a)`。
+- 模型只包含一个 Observation Encoder 和一个自回归 Action Decoder；
+- Policy 直接使用归一化终局回报做 PPO advantage；
+- 训练与推理使用同一个完整动作采样器，不存在独立动作评分分支；
+- 一个 AdamW optimizer 保存并更新全部 Policy 参数。
 
 AI 部署模式由以下环境变量控制：
 

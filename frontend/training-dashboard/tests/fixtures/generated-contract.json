@@ -17,7 +17,7 @@
           },
           "event": "update",
           "fields": {
-            "action_value_loss": 0.5,
+            "objective_loss": 0.2,
             "policy_loss": 0.25
           },
           "process": {
@@ -60,7 +60,7 @@
           "sequence": 9,
           "update": 3,
           "values": {
-            "action_value_loss": 0.5
+            "objective_loss": 0.2
           }
         }
       ],
@@ -71,7 +71,7 @@
           "sequence": 9,
           "update": 3,
           "values": {
-            "action_value_loss": 0.5
+            "objective_loss": 0.2
           }
         }
       ],
@@ -82,7 +82,7 @@
           "sequence": 9,
           "update": 3,
           "values": {
-            "action_value_loss": 0.5
+            "objective_loss": 0.2
           }
         }
       ],
@@ -93,7 +93,7 @@
           "sequence": 9,
           "update": 3,
           "values": {
-            "action_value_loss": 0.5
+            "objective_loss": 0.2
           }
         }
       ],
@@ -104,7 +104,7 @@
           "sequence": 9,
           "update": 3,
           "values": {
-            "action_value_loss": 0.5
+            "objective_loss": 0.2
           }
         }
       ],
@@ -115,7 +115,7 @@
           "sequence": 9,
           "update": 3,
           "values": {
-            "action_value_loss": 0.5
+            "objective_loss": 0.2
           }
         }
       ],
@@ -126,7 +126,7 @@
           "sequence": 9,
           "update": 3,
           "values": {
-            "action_value_loss": 0.5
+            "objective_loss": 0.2
           }
         }
       ]

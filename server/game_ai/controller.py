@@ -11,12 +11,12 @@ from server.foundation.result import Ok, Rejected
 from server.game import Seat, commands
 from server.game.snapshots import PlayerSnapshot
 from server.policy_model.actions import (
+    GeneratedAction,
     build_legal_action_space,
     physical_command,
 )
 from server.policy_model.inference import (
-    ActionDecision,
-    ActionDecisionRequest,
+    PolicyDecisionRequest,
     PolicyQuery,
     SamplingSeed,
 )
@@ -57,9 +57,9 @@ class ControllerInference(Protocol):
     async def decide(
         self,
         *,
-        requests: tuple[ActionDecisionRequest, ...],
-    ) -> Ok[tuple[ActionDecision, ...]] | Rejected:
-        """Evaluate complete policy-improvement decisions."""
+        request: PolicyDecisionRequest,
+    ) -> Ok[GeneratedAction] | Rejected:
+        """Sample one complete action from the learned policy."""
         ...
 
 
@@ -72,16 +72,10 @@ class AIController:
         *,
         seat: Seat,
         model: ControllerInference,
-        candidate_count: int,
-        action_value_temperature: float,
         random_source: random.Random,
     ) -> None:
-        assert candidate_count > 0
-        assert action_value_temperature > 0.0
         self._seat = seat
         self._model = model
-        self._candidate_count = candidate_count
-        self._action_value_temperature = action_value_temperature
         self._random = random_source
         self._memory = ObservationMemory()
 
@@ -108,7 +102,7 @@ class AIController:
         seq: int,
         snapshot: PlayerSnapshot,
     ) -> Ok[commands.Command] | Rejected:
-        """Select one action directly from policy proposals and Q."""
+        """Sample one action directly from the learned policy."""
         if snapshot.awaiting_action not in (
             "bid",
             "stir",
@@ -120,40 +114,25 @@ class AIController:
             )
         started = time.perf_counter()
         decided = await self._model.decide(
-            requests=(
-                ActionDecisionRequest(
-                    query=self._root_query(snapshot),
-                    candidate_count=self._candidate_count,
-                    action_value_temperature=(
-                        self._action_value_temperature
-                    ),
-                    draw=SamplingSeed(
-                        seed=self._random.getrandbits(63),
-                        ordinal=seq,
-                    ),
+            request=PolicyDecisionRequest(
+                query=self._root_query(snapshot),
+                draw=SamplingSeed(
+                    seed=self._random.getrandbits(63),
+                    ordinal=seq,
                 ),
             )
         )
         if isinstance(decided, Rejected):
             return decided
-        assert len(decided.value) == 1
-        decision = decided.value[0]
         command = physical_command(
-            action=decision.action,
+            action=decided.value,
             hand=snapshot.hand,
         )
         if isinstance(command, Rejected):
             return command
         _LOGGER.debug(
-            "ai.decision kind=%s candidates=%d action_value=%s "
-            + "elapsed_ms=%.3f",
+            "ai.decision kind=%s elapsed_ms=%.3f",
             snapshot.awaiting_action,
-            decision.candidate_count,
-            (
-                "not_evaluated"
-                if decision.selected_action_value is None
-                else f"{decision.selected_action_value:.6f}"
-            ),
             (time.perf_counter() - started) * 1000.0,
         )
         return command

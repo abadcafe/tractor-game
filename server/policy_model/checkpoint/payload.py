@@ -87,7 +87,7 @@ def read_checkpoint_payload(
         "model_state",
         "optimizer_state",
     }
-    if not set(loaded).issubset(expected_fields):
+    if set(loaded) != expected_fields:
         return checkpoint_corruption(
             path,
             "state payload fields do not match the current schema",

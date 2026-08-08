@@ -2,10 +2,25 @@
 
 from __future__ import annotations
 
-from typing import assert_never
+from dataclasses import dataclass
+from typing import Literal, assert_never
 
-from server.game.rules._play_types import EffectiveSuit, PlayShapeInfo
+from server.game.rules._ordering import EffectiveSuit
 from server.game.rules.cards import Suit
+
+type PlayShapeKind = Literal[
+    "empty", "single", "pair", "tractor", "cards"
+]
+
+
+@dataclass(frozen=True, slots=True)
+class PlayShapeInfo:
+    """Structured lead shape used only to render rejection text."""
+
+    kind: PlayShapeKind
+    suit: EffectiveSuit | None
+    card_count: int
+    pair_count: int | None = None
 
 
 def effective_suit_name(suit: EffectiveSuit) -> str:

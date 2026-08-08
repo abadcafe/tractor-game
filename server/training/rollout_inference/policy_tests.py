@@ -23,7 +23,8 @@ from server.policy_model.actions.decoding import ActionSampler
 from server.policy_model.network import (
     ActionDecodeSession,
     EncodedObservation,
-    PolicyActionModel,
+    ModelConfig,
+    PolicyModel,
 )
 from server.policy_model.observation import (
     Observation,
@@ -164,20 +165,22 @@ def test_batch_sampling_encodes_multiple_observations_together() -> (
 
 
 @final
-class _FixedChoiceModel(PolicyActionModel):
+class _FixedChoiceModel(PolicyModel):
     def __init__(self, *, choice_logits: Tensor) -> None:
-        super().__init__(d_model=8, layers=1, heads=1)
+        super().__init__(
+            config=ModelConfig(d_model=8, layers=1, heads=1)
+        )
         assert choice_logits.shape == (ACTION_CHOICE_COUNT,)
         self._fixed_choice_logits = choice_logits
         self.encode_calls = 0
         self.score_batch_sizes: list[int] = []
 
     @override
-    def encode_policy_observations(
+    def encode_observations(
         self, observation: ObservationTensorBatch
     ) -> EncodedObservation:
         self.encode_calls += 1
-        return super().encode_policy_observations(observation)
+        return super().encode_observations(observation)
 
     @override
     def begin_action_decode_session(

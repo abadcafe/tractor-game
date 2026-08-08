@@ -87,7 +87,9 @@ function renderScoringSummary(
     el(
       "div",
       { class: "scoring-overlay__meta" },
-      `牌分 ${scoring.defender_points} / 抠底 ${scoring.bottom_card_bonus}`,
+      scoring.bottom_multiplier === null
+        ? `牌分 ${scoring.defender_points} / 未抠底（底牌 ${scoring.bottom_base_points} 分）`
+        : `牌分 ${scoring.defender_points} / 底牌 ${scoring.bottom_base_points} × ${scoring.bottom_multiplier} = ${scoring.bottom_points}`,
     ),
   );
   summary.appendChild(

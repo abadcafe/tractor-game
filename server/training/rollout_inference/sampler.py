@@ -8,7 +8,7 @@ from server.foundation.result import Ok, Rejected
 from server.policy_model.actions.decoding import (
     ActionSampler,
 )
-from server.policy_model.network import PolicyActionModel
+from server.policy_model.network import PolicyModel
 from server.training.rollout_inference.batch import (
     DevicePolicyRequestBatch,
 )
@@ -26,7 +26,7 @@ type PolicySamplingDecisionResult = (
 
 def sample_policy_batch(
     *,
-    model: PolicyActionModel,
+    model: PolicyModel,
     device: torch.device,
     requests: DevicePolicyRequestBatch,
     sampler: ActionSampler,
@@ -36,7 +36,7 @@ def sample_policy_batch(
     _ = model.eval()
     with torch.no_grad():
         observation_batch = requests.observation_batch
-        encoding = model.encode_policy_observations(observation_batch)
+        encoding = model.encode_observations(observation_batch)
         logit_decoder = model.begin_action_decode_session(
             encoding,
             source_rows=torch.arange(
@@ -73,7 +73,7 @@ def sample_policy_batch(
 
 def sample_policy_batch_into_arena(
     *,
-    model: PolicyActionModel,
+    model: PolicyModel,
     device: torch.device,
     requests: DevicePolicyRequestBatch,
     sampler: ActionSampler,
@@ -84,7 +84,7 @@ def sample_policy_batch_into_arena(
     _ = model.eval()
     with torch.no_grad():
         observation_batch = requests.observation_batch
-        encoding = model.encode_policy_observations(observation_batch)
+        encoding = model.encode_observations(observation_batch)
         logit_decoder = model.begin_action_decode_session(
             encoding,
             source_rows=torch.arange(

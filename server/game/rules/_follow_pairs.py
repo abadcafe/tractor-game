@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from itertools import product as iterproduct
 
-from server.game.rules._play_types import SubPlay
-from server.game.rules.cards import Card
+from server.game.rules._patterns import PatternAnalysis
 from server.game.rules.cards.faces import (
     CardFace,
     FaceCount,
-    card_face,
     face_count_width,
     face_sort_key,
 )
@@ -20,7 +19,7 @@ type PairFaceSet = frozenset[CardFace]
 
 @dataclass(frozen=True, slots=True)
 class PairSegment:
-    """One contiguous pair run from a decomposed hand sub-play."""
+    """One contiguous pair run from a hand pattern analysis."""
 
     level: int
     faces: tuple[CardFace, ...]
@@ -34,22 +33,9 @@ class FollowPairPlanner:
     lead_pair_count: int
     pair_floor: int
     target_width: int
-    segments: tuple[PairSegment, ...]
-    hand_pairs_by_level: tuple[tuple[int, int], ...]
+    decompositions: tuple[tuple[PairSegment, ...], ...]
     pair_plans: tuple[PairFaceSet, ...]
-    _pair_faces: PairFaceSet = field(init=False, repr=False)
-    _face_level: dict[CardFace, int] = field(init=False, repr=False)
-
-    def __post_init__(self) -> None:
-        pair_faces = frozenset(
-            face for segment in self.segments for face in segment.faces
-        )
-        face_level: dict[CardFace, int] = {}
-        for segment in self.segments:
-            for face in segment.faces:
-                face_level[face] = segment.level
-        object.__setattr__(self, "_pair_faces", pair_faces)
-        object.__setattr__(self, "_face_level", face_level)
+    _pair_faces: PairFaceSet = field(repr=False)
 
     def can_complete(self, prefix: tuple[FaceCount, ...]) -> bool:
         """Return whether a same-suit prefix has a legal completion."""
@@ -92,10 +78,14 @@ class FollowPairPlanner:
             return False
         if len(selected_pair_faces) < self.pair_floor:
             return False
-        if not self._pair_priority_is_satisfied(selected_pair_faces):
-            return False
-        return self._tractor_continuity_is_satisfied(
-            selected_pair_faces
+        return any(
+            _pair_selection_is_valid_for_decomposition(
+                selected_pair_faces=selected_pair_faces,
+                segments=segments,
+                lead_pair_count=self.lead_pair_count,
+                pair_floor=self.pair_floor,
+            )
+            for segments in self.decompositions
         )
 
     def _can_complete_without_tractor(
@@ -170,7 +160,11 @@ class FollowPairPlanner:
         return False
 
     def _has_tractor_segment(self) -> bool:
-        return any(len(segment.faces) > 1 for segment in self.segments)
+        return any(
+            len(segment.faces) > 1
+            for segments in self.decompositions
+            for segment in segments
+        )
 
     def _future_pair_capacity(
         self,
@@ -189,117 +183,69 @@ class FollowPairPlanner:
             capacity += 1
         return capacity
 
-    def _pair_priority_is_satisfied(
-        self, selected_pair_faces: PairFaceSet
-    ) -> bool:
-        played_by_level: dict[int, int] = {}
-        for face in selected_pair_faces:
-            level = self._face_level[face]
-            played_by_level[level] = played_by_level.get(level, 0) + 1
-
-        remaining_needed = self.lead_pair_count
-        levels = sorted(
-            {level for level, _count in self.hand_pairs_by_level}
-            | set(played_by_level),
-            reverse=True,
-        )
-        hand_by_level = dict(self.hand_pairs_by_level)
-        for level in levels:
-            hand_count = hand_by_level.get(level, 0)
-            played_count = played_by_level.get(level, 0)
-            if hand_count == 0:
-                continue
-            expected = min(hand_count, remaining_needed)
-            if played_count < expected:
-                return False
-            remaining_needed -= played_count
-        return True
-
-    def _tractor_continuity_is_satisfied(
-        self, selected_pair_faces: PairFaceSet
-    ) -> bool:
-        for segment in self.segments:
-            if len(segment.faces) < 2:
-                continue
-            positions = tuple(
-                index
-                for index, face in enumerate(segment.faces)
-                if face in selected_pair_faces
-            )
-            if not positions:
-                continue
-            if len(positions) == len(segment.faces):
-                continue
-            if positions[-1] - positions[0] != len(positions) - 1:
-                return False
-        return True
-
 
 def build_follow_pair_planner(
     *,
-    hand_subs: list[SubPlay],
+    hand_analysis: PatternAnalysis | None,
     same_suit_faces: tuple[FaceCount, ...],
     lead_pair_count: int,
     pair_floor: int,
     target_width: int,
 ) -> FollowPairPlanner:
-    """Build a pair-run planner from decomposed hand structure."""
-    segments = _pair_segments(hand_subs)
-    hand_pairs_by_level = _hand_pairs_by_level(segments)
+    """Build a pair-run planner from every valid hand decomposition."""
+    decompositions = (
+        ((),)
+        if hand_analysis is None
+        else _pair_segment_decompositions(hand_analysis)
+    )
+    pair_plans = {
+        plan
+        for segments in decompositions
+        for plan in _valid_pair_plans(
+            segments=segments,
+            hand_pairs_by_level=_hand_pairs_by_level(segments),
+            lead_pair_count=lead_pair_count,
+            pair_floor=pair_floor,
+            target_width=target_width,
+        )
+    }
     return FollowPairPlanner(
         same_suit_faces=same_suit_faces,
         lead_pair_count=lead_pair_count,
         pair_floor=pair_floor,
         target_width=target_width,
-        segments=segments,
-        hand_pairs_by_level=hand_pairs_by_level,
-        pair_plans=_valid_pair_plans(
-            segments=segments,
-            hand_pairs_by_level=hand_pairs_by_level,
-            lead_pair_count=lead_pair_count,
-            pair_floor=pair_floor,
-            target_width=target_width,
+        decompositions=decompositions,
+        pair_plans=tuple(sorted(pair_plans, key=_pair_plan_sort_key)),
+        _pair_faces=(
+            frozenset()
+            if hand_analysis is None
+            else frozenset(hand_analysis.pair_faces)
         ),
     )
 
 
-def played_pair_faces(
-    played_suit_cards: tuple[Card, ...],
-) -> PairFaceSet:
-    """Return semantic faces that are played as pairs."""
-    counts: dict[CardFace, int] = {}
-    result: set[CardFace] = set()
-    for card in played_suit_cards:
-        face = card_face(card)
-        count = counts.get(face, 0) + 1
-        counts[face] = count
-        if count == 2:
-            result.add(face)
-    return frozenset(result)
-
-
-def _pair_segments(
-    hand_subs: list[SubPlay],
-) -> tuple[PairSegment, ...]:
-    segments: list[PairSegment] = []
-    for sub in hand_subs:
-        if sub.pair_count == 0:
-            continue
-        faces = _sub_pair_faces(sub)
-        assert len(faces) == sub.pair_count
-        segments.append(PairSegment(level=sub.pair_count, faces=faces))
-    return tuple(segments)
-
-
-def _sub_pair_faces(sub: SubPlay) -> tuple[CardFace, ...]:
-    counts: dict[CardFace, int] = {}
-    result: list[CardFace] = []
-    for card in sub.cards:
-        face = card_face(card)
-        count = counts.get(face, 0) + 1
-        counts[face] = count
-        if count == 2:
-            result.append(face)
+def _pair_segment_decompositions(
+    analysis: PatternAnalysis,
+) -> tuple[tuple[PairSegment, ...], ...]:
+    run_options = tuple(
+        tuple(iterproduct(*run.tiers)) for run in analysis.tractor_runs
+    )
+    selected_runs = iterproduct(*run_options) if run_options else ((),)
+    result: list[tuple[PairSegment, ...]] = []
+    for selected in selected_runs:
+        used = frozenset(face for run in selected for face in run)
+        tractor_segments = tuple(
+            PairSegment(level=len(run), faces=tuple(run))
+            for run in selected
+        )
+        pair_segments = tuple(
+            PairSegment(level=1, faces=(face,))
+            for face in analysis.pair_faces
+            if face not in used
+        )
+        decomposition = (*tractor_segments, *pair_segments)
+        if decomposition not in result:
+            result.append(decomposition)
     return tuple(result)
 
 
@@ -312,6 +258,38 @@ def _hand_pairs_by_level(
             segment.faces
         )
     return tuple(sorted(counts.items(), reverse=True))
+
+
+def _pair_selection_is_valid_for_decomposition(
+    *,
+    selected_pair_faces: PairFaceSet,
+    segments: tuple[PairSegment, ...],
+    lead_pair_count: int,
+    pair_floor: int,
+) -> bool:
+    if len(selected_pair_faces) < pair_floor:
+        return False
+    hand_pairs_by_level = _hand_pairs_by_level(segments)
+    if not _pair_priority_is_satisfied(
+        selected_pair_faces=selected_pair_faces,
+        segments=segments,
+        hand_pairs_by_level=hand_pairs_by_level,
+        lead_pair_count=lead_pair_count,
+    ):
+        return False
+    for segment in segments:
+        if len(segment.faces) < 2:
+            continue
+        positions = tuple(
+            index
+            for index, face in enumerate(segment.faces)
+            if face in selected_pair_faces
+        )
+        if not positions or len(positions) == len(segment.faces):
+            continue
+        if positions[-1] - positions[0] != len(positions) - 1:
+            return False
+    return True
 
 
 def _valid_pair_plans(

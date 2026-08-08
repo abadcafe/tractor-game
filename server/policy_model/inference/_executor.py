@@ -8,21 +8,16 @@ from typing import final
 import torch
 
 from server.foundation.result import Ok, Rejected
-from server.policy_model.actions.decoding import (
-    ActionProposalSampler,
-    ActionSampler,
-)
+from server.policy_model.actions import GeneratedAction
+from server.policy_model.actions.decoding import ActionSampler
 from server.policy_model.checkpoint import (
     load_policy_checkpoint,
 )
-from server.policy_model.network import PolicyActionModel
+from server.policy_model.network import PolicyModel
 
 from ._batches import inference_batch_row_limit
-from ._decide import decide_actions
-from .contracts import (
-    ActionDecision,
-    ActionDecisionRequest,
-)
+from ._sample import sample_actions
+from .contracts import PolicyDecisionRequest
 
 
 @final
@@ -32,7 +27,7 @@ class TorchBatchExecutor:
     def __init__(
         self,
         *,
-        model: PolicyActionModel,
+        model: PolicyModel,
         device: torch.device,
     ) -> None:
         self._model = model
@@ -40,8 +35,6 @@ class TorchBatchExecutor:
         self._max_batch_rows = inference_batch_row_limit(device.type)
         self._sampler: ActionSampler | None = None
         self._sampler_capacity = 0
-        self._proposal_sampler: ActionProposalSampler | None = None
-        self._proposal_capacity = 0
         _ = self._model.eval()
 
     @classmethod
@@ -71,19 +64,16 @@ class TorchBatchExecutor:
     def decide(
         self,
         *,
-        requests: tuple[ActionDecisionRequest, ...],
-    ) -> Ok[tuple[ActionDecision, ...]] | Rejected:
-        """Select candidates with complete-action Q."""
-        capacity = max(
-            len(requests),
-            max(request.candidate_count for request in requests),
-        )
+        requests: tuple[PolicyDecisionRequest, ...],
+    ) -> Ok[tuple[GeneratedAction, ...]] | Rejected:
+        """Sample one complete action for every policy request."""
+        assert requests
+        capacity = len(requests)
         with torch.inference_mode():
-            return decide_actions(
+            return sample_actions(
                 model=self._model,
                 device=self._device,
                 sampler=self._sampler_for(capacity),
-                proposal_sampler=self._proposal_sampler_for(capacity),
                 requests=requests,
                 max_batch_rows=self._max_batch_rows,
             )
@@ -97,21 +87,6 @@ class TorchBatchExecutor:
             )
             self._sampler_capacity = capacity
         return self._sampler
-
-    def _proposal_sampler_for(
-        self, capacity: int
-    ) -> ActionProposalSampler:
-        assert capacity > 0
-        if (
-            self._proposal_sampler is None
-            or self._proposal_capacity < capacity
-        ):
-            self._proposal_sampler = ActionProposalSampler.create(
-                candidate_capacity=capacity,
-                device=self._device,
-            )
-            self._proposal_capacity = capacity
-        return self._proposal_sampler
 
 
 def _resolve_device(name: str) -> Ok[torch.device] | Rejected:

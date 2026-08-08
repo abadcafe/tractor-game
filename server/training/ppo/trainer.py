@@ -10,7 +10,7 @@ import torch.distributed as dist
 from torch import Tensor
 
 from server.foundation import result as _result
-from server.policy_model.network import PolicyActionModel
+from server.policy_model.network import PolicyModel
 from server.training.config import TrainConfig
 from server.training.ppo.collectives import (
     all_reduce_max,
@@ -57,12 +57,11 @@ from server.training.ppo.sync import (
 )
 from server.training.ppo.update_input import PPOUpdateInput
 from server.training.ppo.validation import (
-    PPO_ACTION_VALUE_LOSS_NONFINITE,
     PPO_APPROX_KL_NONFINITE,
     PPO_CLIP_FRACTION_NONFINITE,
     PPO_ENTROPY_NONFINITE,
+    PPO_OBJECTIVE_LOSS_NONFINITE,
     PPO_POLICY_LOSS_NONFINITE,
-    PPO_TOTAL_LOSS_NONFINITE,
     TensorValidationCheck,
     combine_validation_codes,
     gradient_validation_code,
@@ -93,7 +92,7 @@ class PPOTrainer:
     def __init__(
         self,
         *,
-        model: PolicyActionModel,
+        model: PolicyModel,
         train_config: TrainConfig,
         device: torch.device,
         profile_mode: PPOProfileMode,
@@ -204,14 +203,12 @@ class PPOTrainer:
         if isinstance(partition_check, _result.Rejected):
             return partition_check
         stat_sums = torch.zeros(
-            (6,), dtype=torch.float32, device=self.device
+            (5,), dtype=torch.float32, device=self.device
         )
         stat_count = torch.zeros(
             (), dtype=torch.float32, device=self.device
         )
-        policy_parameters = self.model.policy_parameters()
-        action_value_parameters = self.model.action_value_parameters()
-        parameters = (*policy_parameters, *action_value_parameters)
+        parameters = tuple(self.model.parameters())
         parameter_names = {
             id(parameter): name
             for name, parameter in self.model.named_parameters()
@@ -299,7 +296,7 @@ class PPOTrainer:
                     return _result.Rejected(reason=loss_rejection)
                 backward_start = profile.mark()
                 torch.autograd.backward(
-                    loss.total_loss
+                    loss.objective_loss
                     * _ddp_loss_scale(
                         local_count=local_count,
                         global_count=global_count,
@@ -313,14 +310,8 @@ class PPOTrainer:
                     parameters
                 )
                 clip_grad_norm_on_device(
-                    policy_parameters,
-                    max_norm=(self.train_config.policy_max_grad_norm),
-                )
-                clip_grad_norm_on_device(
-                    action_value_parameters,
-                    max_norm=(
-                        self.train_config.action_value_max_grad_norm
-                    ),
+                    parameters,
+                    max_norm=self.train_config.policy_max_grad_norm,
                 )
                 gradient_code = combine_validation_codes(
                     preclip_gradient_code,
@@ -352,9 +343,6 @@ class PPOTrainer:
                         stage=stage,
                     )
                     policy_loss_value = _float_tensor(loss.policy_loss)
-                    action_value_loss_value = _float_tensor(
-                        loss.action_value_loss
-                    )
                     entropy_value = _float_tensor(loss.entropy)
                     self.model.zero_grad(set_to_none=True)
                     return _result.Rejected(
@@ -364,8 +352,6 @@ class PPOTrainer:
                             else (
                                 f"{detailed_reason}, "
                                 f"policy_loss={policy_loss_value}, "
-                                f"action_value_loss="
-                                f"{action_value_loss_value}, "
                                 f"entropy={entropy_value}, "
                                 f"policy_version="
                                 f"{update_input.policy_version}, "
@@ -639,9 +625,8 @@ def _loss_stat_tensor(loss: MinibatchLoss) -> Tensor:
     return torch.stack(
         (
             loss.policy_loss.detach(),
-            loss.action_value_loss.detach(),
             loss.entropy.detach(),
-            loss.total_loss.detach(),
+            loss.objective_loss.detach(),
             loss.approx_kl.detach(),
             loss.clip_fraction.detach(),
         )
@@ -655,7 +640,7 @@ def _finalize_update_stats(
     profile: PPOUpdateProfile,
     partition: PPOUpdatePartition,
 ) -> _result.Ok[PPOUpdateStats] | _result.Rejected:
-    assert stat_sums.shape == (6,)
+    assert stat_sums.shape == (5,)
     assert stat_count.shape == ()
     totals = torch.cat((stat_sums, stat_count.reshape(1)))
     if partition.world_size > 1:
@@ -666,21 +651,20 @@ def _finalize_update_stats(
                 )
             )
         totals = all_reduce_sum(totals)
-    count = totals[6]
+    count = totals[5]
     count_value = _float_tensor(count)
     if count_value <= 0.0:
         return _result.Rejected(
             reason="PPO update stats require rollout decisions"
         )
-    means = totals[:6] / count
+    means = totals[:5] / count
     return _result.Ok(
         value=PPOUpdateStats(
             policy_loss=_float_tensor(means[0]),
-            action_value_loss=_float_tensor(means[1]),
-            entropy=_float_tensor(means[2]),
-            total_loss=_float_tensor(means[3]),
-            approx_kl=_float_tensor(means[4]),
-            clip_fraction=_float_tensor(means[5]),
+            entropy=_float_tensor(means[1]),
+            objective_loss=_float_tensor(means[2]),
+            approx_kl=_float_tensor(means[3]),
+            clip_fraction=_float_tensor(means[4]),
             profile=profile,
         )
     )
@@ -694,16 +678,12 @@ def _loss_validation_code(loss: MinibatchLoss) -> Tensor:
                 code=PPO_POLICY_LOSS_NONFINITE,
             ),
             TensorValidationCheck(
-                tensor=loss.action_value_loss,
-                code=PPO_ACTION_VALUE_LOSS_NONFINITE,
-            ),
-            TensorValidationCheck(
                 tensor=loss.entropy,
                 code=PPO_ENTROPY_NONFINITE,
             ),
             TensorValidationCheck(
-                tensor=loss.total_loss,
-                code=PPO_TOTAL_LOSS_NONFINITE,
+                tensor=loss.objective_loss,
+                code=PPO_OBJECTIVE_LOSS_NONFINITE,
             ),
             TensorValidationCheck(
                 tensor=loss.approx_kl,

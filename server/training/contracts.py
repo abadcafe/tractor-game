@@ -26,7 +26,6 @@ class TrainingInitOptions(BaseModel):
     d_model: int = Field(default=128, gt=0)
     layers: int = Field(default=3, gt=0)
     heads: int = Field(default=4, gt=0)
-    action_value_layers: int = Field(default=2, gt=0)
     seed: int = Field(default=0, ge=0)
     learning_rate: float = Field(
         default=0.0003, gt=0.0, allow_inf_nan=False
@@ -38,9 +37,6 @@ class TrainingInitOptions(BaseModel):
         default=0.01, ge=0.0, allow_inf_nan=False
     )
     policy_max_grad_norm: float = Field(
-        default=0.5, ge=0.0, allow_inf_nan=False
-    )
-    action_value_max_grad_norm: float = Field(
         default=0.5, ge=0.0, allow_inf_nan=False
     )
     ppo_epochs: int = Field(default=4, gt=0)
@@ -113,9 +109,6 @@ class TrainingResumeOptions(BaseModel):
         default=None, ge=0.0, allow_inf_nan=False
     )
     policy_max_grad_norm: float | None = Field(
-        default=None, ge=0.0, allow_inf_nan=False
-    )
-    action_value_max_grad_norm: float | None = Field(
         default=None, ge=0.0, allow_inf_nan=False
     )
     ppo_epochs: int | None = Field(default=None, gt=0)

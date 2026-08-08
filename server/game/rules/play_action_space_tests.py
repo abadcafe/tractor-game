@@ -142,9 +142,7 @@ def test_allowed_next_three_pair_tractor_uses_pair_run_windows() -> (
     )
 
 
-def test_allowed_traces_follow_tractor_priority_from_decompose() -> (
-    None
-):
+def test_allowed_traces_follow_analyzed_tractor_priority() -> None:
     lead = [
         card("hearts", "A", 1),
         card("hearts", "A", 2),
@@ -203,6 +201,69 @@ def test_decode_trump_rank_pair_is_independent_of_hand_order() -> None:
             Suit.HEARTS,
             Rank.THREE,
         )
+
+
+def test_selection_plan_rejects_separated_trump_pairs_as_tractor() -> (
+    None
+):
+    hand = [
+        card("clubs", "3", 1),
+        card("clubs", "3", 2),
+        card("clubs", "A", 1),
+        card("clubs", "A", 2),
+    ]
+    lead = [
+        card("clubs", "J", 1),
+        card("clubs", "J", 2),
+        card("clubs", "Q", 1),
+        card("clubs", "Q", 2),
+    ]
+
+    result = build_follow_action_space(
+        hand=hand,
+        lead_cards=lead,
+        trump_suit=Suit.CLUBS,
+        trump_rank=Rank.TWO,
+    )
+
+    assert isinstance(result, Ok)
+    assert not result.value.selection_plan().has_tractor
+
+
+def test_selection_plan_models_vice_level_faces_as_one_tier() -> None:
+    spade_two = card("spades", "2", 1)
+    heart_two = card("hearts", "2", 1)
+    club_two = card("clubs", "2", 1)
+    hand = [
+        spade_two,
+        card("spades", "2", 2),
+        heart_two,
+        card("hearts", "2", 2),
+        club_two,
+        card("clubs", "2", 2),
+    ]
+    lead = [
+        card("clubs", "A", 1),
+        card("clubs", "A", 2),
+        card("diamonds", "2", 1),
+        card("diamonds", "2", 2),
+    ]
+
+    result = build_follow_action_space(
+        hand=hand,
+        lead_cards=lead,
+        trump_suit=Suit.CLUBS,
+        trump_rank=Rank.TWO,
+    )
+
+    assert isinstance(result, Ok)
+    plan = result.value.selection_plan()
+    club_two_face = CardFace(Suit.CLUBS, Rank.TWO)
+    assert plan.has_tractor
+    assert {frozenset(pair_plan) for pair_plan in plan.pair_plans} == {
+        frozenset((CardFace(Suit.SPADES, Rank.TWO), club_two_face)),
+        frozenset((CardFace(Suit.HEARTS, Rank.TWO), club_two_face)),
+    }
 
 
 def test_decode_accepts_full_legal_trace() -> None:
@@ -378,7 +439,7 @@ def test_wide_trump_tractor_mask_uses_compact_pair_plans() -> None:
     space = _space(hand, lead)
 
     allowed = space.allowed_next(())
-    assert len(allowed) == 12
+    assert len(allowed) == 14
     assert space.allowed_next(()) is allowed
 
 

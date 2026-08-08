@@ -11,12 +11,8 @@ from server.policy_model.actions.decoding.frame import (
 )
 from server.policy_model.actions.decoding.sampler import (
     ActionChoiceLogitDecoder,
-    ActionProposalBatch,
-    ActionProposalLogitDecoder,
-    ActionProposalSampler,
     ActionSampleBatch,
     ActionSampler,
-    ActionScoreBatch,
     ForcedActionBatch,
 )
 from server.policy_model.actions.decoding.spec import (
@@ -35,11 +31,7 @@ __all__ = (
     "MAX_TRACE_COUNT",
     "ActionChoiceLogitDecoder",
     "ActionPlanFrame",
-    "ActionProposalBatch",
-    "ActionProposalLogitDecoder",
-    "ActionProposalSampler",
     "ActionSampleBatch",
-    "ActionScoreBatch",
     "ActionSampler",
     "DeviceActionPlanBatch",
     "ForcedActionBatch",

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from server.foundation.result import Rejected
-from server.game.rules._play_types import EffectiveSuit, PlayShapeInfo
+from server.game.rules._ordering import EffectiveSuit
 from server.game.rules._rejections.text import (
+    PlayShapeInfo,
     effective_suit_name,
     play_shape_text,
 )

@@ -1632,11 +1632,10 @@ def _aggregate_ppo_update_stats(
     assert stats
     return PPOUpdateStats(
         policy_loss=_mean(tuple(item.policy_loss for item in stats)),
-        action_value_loss=_mean(
-            tuple(item.action_value_loss for item in stats)
-        ),
         entropy=_mean(tuple(item.entropy for item in stats)),
-        total_loss=_mean(tuple(item.total_loss for item in stats)),
+        objective_loss=_mean(
+            tuple(item.objective_loss for item in stats)
+        ),
         approx_kl=_mean(tuple(item.approx_kl for item in stats)),
         clip_fraction=_mean(
             tuple(item.clip_fraction for item in stats)
@@ -1671,13 +1670,6 @@ def _aggregate_ppo_update_profiles(
         policy_observation_encode_seconds=max(
             profile.policy_observation_encode_seconds
             for profile in profiles
-        ),
-        action_value_observation_encode_seconds=max(
-            profile.action_value_observation_encode_seconds
-            for profile in profiles
-        ),
-        action_value_decode_seconds=max(
-            profile.action_value_decode_seconds for profile in profiles
         ),
         action_decode_seconds=action_decode_seconds,
         action_distribution_seconds=max(

@@ -13,13 +13,11 @@ export interface InitRequest {
   d_model: number;
   layers: number;
   heads: number;
-  action_value_layers: number;
   seed: number;
   learning_rate: number;
   ppo_clip: number;
   entropy_coef: number;
   policy_max_grad_norm: number;
-  action_value_max_grad_norm: number;
   ppo_epochs: number;
   minibatch_size: number;
   adam_beta1: number;
@@ -49,7 +47,6 @@ export interface ResumeRequest {
   ppo_clip: number | null;
   entropy_coef: number | null;
   policy_max_grad_norm: number | null;
-  action_value_max_grad_norm: number | null;
   ppo_epochs: number | null;
   minibatch_size: number | null;
   adam_beta1: number | null;
@@ -155,15 +152,6 @@ const optimizationFields = (
     optional,
   ),
   number(
-    "action_value_max_grad_norm",
-    "Action value maximum gradient norm",
-    "Optimization",
-    optional ? "" : "0.5",
-    "0",
-    "any",
-    optional,
-  ),
-  number(
     "ppo_epochs",
     "PPO epochs",
     "Optimization",
@@ -221,15 +209,6 @@ export const INIT_FIELDS: readonly TrainingField[] = [
   number("d_model", "Model width", "Model", "128", "8", "1", false),
   number("layers", "Transformer layers", "Model", "3", "1", "1", false),
   number("heads", "Attention heads", "Model", "4", "1", "1", false),
-  number(
-    "action_value_layers",
-    "Action value layers",
-    "Model",
-    "2",
-    "1",
-    "1",
-    false,
-  ),
   number("seed", "Seed", "Model", "0", "0", "1", false),
   ...optimizationFields(false),
 ];
@@ -372,7 +351,6 @@ export function initRequestFromForm(
     d_model: requiredNumber(form, "d_model"),
     layers: requiredNumber(form, "layers"),
     heads: requiredNumber(form, "heads"),
-    action_value_layers: requiredNumber(form, "action_value_layers"),
     seed: requiredNumber(form, "seed"),
     learning_rate: requiredNumber(form, "learning_rate"),
     ppo_clip: requiredNumber(form, "ppo_clip"),
@@ -380,10 +358,6 @@ export function initRequestFromForm(
     policy_max_grad_norm: requiredNumber(
       form,
       "policy_max_grad_norm",
-    ),
-    action_value_max_grad_norm: requiredNumber(
-      form,
-      "action_value_max_grad_norm",
     ),
     ppo_epochs: requiredNumber(form, "ppo_epochs"),
     minibatch_size: requiredNumber(form, "minibatch_size"),
@@ -455,10 +429,6 @@ export function resumeRequestFromForm(
     policy_max_grad_norm: optionalNumber(
       form,
       "policy_max_grad_norm",
-    ),
-    action_value_max_grad_norm: optionalNumber(
-      form,
-      "action_value_max_grad_norm",
     ),
     ppo_epochs: optionalNumber(form, "ppo_epochs"),
     minibatch_size: optionalNumber(form, "minibatch_size"),

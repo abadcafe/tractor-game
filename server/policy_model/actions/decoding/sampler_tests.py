@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from typing import override
 
 import torch
 from torch import Tensor
 
-from server.foundation.result import Ok, Rejected
+from server.foundation.result import Ok
 from server.policy_model._schema.actions import (
     ACTION_CHOICE_COUNT,
     CARD_CHOICE_BASE_ID,
@@ -21,7 +20,6 @@ from server.policy_model.actions.decoding import (
     ActionPlanFrame,
     ActionSampleBatch,
     ActionSampler,
-    ActionScoreBatch,
     action_plan_generation_step_count,
     plan_batch_to_device,
 )
@@ -189,52 +187,6 @@ def test_exact_selection_terminates_without_finish() -> None:
     assert _tensor_values(sample.active_step_indices) == (0,)
 
 
-def test_score_uses_the_same_exact_legal_mask_as_sampling() -> None:
-    scored = _score(
-        _frame(
-            kind=ACTION_KIND_TRACE_SET,
-            traces=((PASS_CHOICE_ID,), (CARD_CHOICE_BASE_ID,)),
-        ),
-        trace=(CARD_CHOICE_BASE_ID,),
-    )
-
-    assert math.isclose(
-        float(scored.log_probabilities[0].item()),
-        -math.log(2.0),
-        rel_tol=1e-6,
-    )
-    assert int(scored.choice_counts[0].item()) == 2
-
-
-def test_score_rejects_a_choice_outside_the_legal_trace_set() -> None:
-    device = torch.device("cpu")
-    frame = _frame(
-        kind=ACTION_KIND_TRACE_SET,
-        traces=((PASS_CHOICE_ID,),),
-    )
-
-    result = ActionSampler.create(
-        batch_capacity=1,
-        device=device,
-    ).score(
-        action_batch=plan_batch_to_device((frame,), device=device),
-        selected_choice_ids=torch.tensor(
-            ((FINISH_CHOICE_ID,),),
-            dtype=torch.long,
-            device=device,
-        ),
-        step_counts=torch.tensor(
-            (1,),
-            dtype=torch.long,
-            device=device,
-        ),
-        padded_generation_steps=1,
-        logit_decoder=_ZeroDecoder(batch_size=1, device=device),
-    )
-
-    assert isinstance(result, Rejected)
-
-
 def _sample(
     frame: ActionPlanFrame, *, thresholds: tuple[float, ...]
 ) -> ActionSampleBatch:
@@ -250,35 +202,6 @@ def _sample(
         ),
         sampling_thresholds=torch.tensor(
             (thresholds,), dtype=torch.float64, device=device
-        ),
-        padded_generation_steps=steps,
-        logit_decoder=_ZeroDecoder(batch_size=1, device=device),
-    )
-    assert isinstance(result, Ok)
-    return result.value
-
-
-def _score(
-    frame: ActionPlanFrame,
-    *,
-    trace: tuple[int, ...],
-) -> ActionScoreBatch:
-    device = torch.device("cpu")
-    steps = action_plan_generation_step_count(frame)
-    result = ActionSampler.create(
-        batch_capacity=1,
-        device=device,
-    ).score(
-        action_batch=plan_batch_to_device((frame,), device=device),
-        selected_choice_ids=torch.tensor(
-            (trace + (0,) * (steps - len(trace)),),
-            dtype=torch.long,
-            device=device,
-        ),
-        step_counts=torch.tensor(
-            (len(trace),),
-            dtype=torch.long,
-            device=device,
         ),
         padded_generation_steps=steps,
         logit_decoder=_ZeroDecoder(batch_size=1, device=device),

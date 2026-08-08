@@ -6,13 +6,8 @@ from dataclasses import dataclass
 
 from server.foundation.result import Ok, Rejected
 
-from ._decompose import (
-    decompose,
-    extract_tractor_pairs,
-    rank_order_for_effective_suit,
-)
-from ._ordering import effective_suit, trump_rank_order
-from ._play_types import EffectiveSuit, SubPlay
+from ._ordering import EffectiveSuit, effective_suit, trump_order
+from ._patterns import Pattern, analyze_patterns, tractor_windows
 from ._rejections.card import CardsNotInHandRejected
 from ._rejections.play import EmptyPlayRejected, MixedLeadSuitRejected
 from .cards import Card, Rank, Suit
@@ -45,14 +40,14 @@ def detect_throws(
     trump_rank: Rank,
     other_players_hands: list[list[Card]],
 ) -> list[list[Card]]:
-    """Detect throw options using decompose + is_biggest verification.
+    """Detect throw options using pattern analysis and biggest checks.
 
     Per spec sections 7 and 9.7:
     1. Group hand cards by effective suit (INCLUDE trump per spec 7.4).
     2. For each suit group:
        a. If fewer than 2 cards -> skip (not a throw).
-       b. Decompose the group into sub-plays.
-       c. Verify each sub-play is biggest using _is_biggest.
+       b. Analyze the group into disjoint patterns.
+       c. Verify each pattern is biggest using _is_biggest.
        d. If all pass -> add all cards in the group as a throw option.
     3. Return list of throw options (at most one per suit).
     """
@@ -66,16 +61,20 @@ def detect_throws(
         if len(cards) < 2:
             continue
 
-        subs = decompose(cards, trump_suit, trump_rank)
+        patterns = analyze_patterns(
+            cards, trump_suit, trump_rank
+        ).patterns
 
-        # Verify each sub-play is biggest (from low to high level per
-        # spec 7.3)
-        sorted_subs = sorted(subs, key=lambda s: s.sub_level)
+        # Verify each pattern is biggest (from low to high level per
+        # spec 7.3).
+        sorted_patterns = sorted(
+            patterns, key=lambda pattern: pattern.level
+        )
         all_biggest = all(
             _is_biggest(
-                sub, other_players_hands, trump_suit, trump_rank
+                pattern, other_players_hands, trump_suit, trump_rank
             )
-            for sub in sorted_subs
+            for pattern in sorted_patterns
         )
 
         if all_biggest:
@@ -85,36 +84,28 @@ def detect_throws(
 
 
 def _is_biggest(
-    sub: SubPlay,
+    pattern: Pattern,
     other_players_hands: list[list[Card]],
     trump_suit: Suit | None,
     trump_rank: Rank,
 ) -> bool:
     """
-    Check if a sub-play is the biggest of its type in its effective
-    suit.
+    Check if a pattern is the biggest of its type in its effective suit.
 
     For single (pair_count=0): no other card of same effective suit has
-    higher
-    RANK_ORDER (or higher trump_rank_order for trump group).
-    For pair (pair_count=1): no other pair of same effective suit has
-    higher RANK_ORDER.
+    higher trump-aware order.
+    For pair (pair_count=1): no stronger same-suit pair exists.
     For tractor (pair_count>=2): no other tractor of same effective suit
     with
     same or greater length beats it.
     """
-    eff = sub.suit
-    cards = sub.cards
-    pair_count = sub.pair_count
+    eff = pattern.effective_suit
+    cards = pattern.cards
+    pair_count = pattern.pair_count
 
     if pair_count == 0:
         # Single: check if any other card has higher rank
-        sub_order = _card_order_for_effective_suit(
-            cards[0],
-            eff,
-            trump_suit,
-            trump_rank,
-        )
+        sub_order = trump_order(cards[0], trump_suit, trump_rank)
         for hand in other_players_hands:
             others = [
                 c
@@ -122,24 +113,14 @@ def _is_biggest(
                 if effective_suit(c, trump_suit, trump_rank) == eff
             ]
             for c in others:
-                other_order = _card_order_for_effective_suit(
-                    c,
-                    eff,
-                    trump_suit,
-                    trump_rank,
-                )
+                other_order = trump_order(c, trump_suit, trump_rank)
                 if other_order > sub_order:
                     return False
         return True
 
     if pair_count == 1:
         # Pair: check if any other pair has higher rank
-        sub_order = _card_order_for_effective_suit(
-            cards[0],
-            eff,
-            trump_suit,
-            trump_rank,
-        )
+        sub_order = trump_order(cards[0], trump_suit, trump_rank)
 
         for hand in other_players_hands:
             others = [
@@ -148,11 +129,8 @@ def _is_biggest(
                 if effective_suit(c, trump_suit, trump_rank) == eff
             ]
             for pair_cards in _player_pair_groups(others):
-                other_order = _card_order_for_effective_suit(
-                    pair_cards[0],
-                    eff,
-                    trump_suit,
-                    trump_rank,
+                other_order = trump_order(
+                    pair_cards[0], trump_suit, trump_rank
                 )
                 if other_order > sub_order:
                     return False
@@ -160,8 +138,7 @@ def _is_biggest(
 
     # pair_count >= 2: tractor
     sub_max_order = max(
-        _card_order_for_effective_suit(c, eff, trump_suit, trump_rank)
-        for c in cards
+        trump_order(c, trump_suit, trump_rank) for c in cards
     )
     for hand in other_players_hands:
         others = [
@@ -170,42 +147,24 @@ def _is_biggest(
             if effective_suit(c, trump_suit, trump_rank) == eff
         ]
         other_subs = (
-            decompose(others, trump_suit, trump_rank) if others else []
+            analyze_patterns(others, trump_suit, trump_rank).patterns
+            if others
+            else ()
         )
         other_tractors = [
             s for s in other_subs if s.pair_count >= pair_count
         ]
 
         for ot in other_tractors:
-            for candidate_cards in extract_tractor_pairs(
-                ot, pair_count
-            ):
+            for candidate_cards in tractor_windows(ot, pair_count):
                 ot_max_order = max(
-                    _card_order_for_effective_suit(
-                        c,
-                        eff,
-                        trump_suit,
-                        trump_rank,
-                    )
+                    trump_order(c, trump_suit, trump_rank)
                     for c in candidate_cards
                 )
                 if ot_max_order > sub_max_order:
                     return False
 
     return True
-
-
-def _card_order_for_effective_suit(
-    card: Card,
-    suit: EffectiveSuit,
-    trump_suit: Suit | None,
-    trump_rank: Rank,
-) -> int:
-    if suit == "trump":
-        return trump_rank_order(card, trump_suit, trump_rank)
-    return rank_order_for_effective_suit(
-        card.rank, suit, trump_suit, trump_rank
-    )
 
 
 def _player_pair_groups(cards: list[Card]) -> list[list[Card]]:
@@ -222,34 +181,31 @@ def _player_pair_groups(cards: list[Card]) -> list[list[Card]]:
 
 
 def _throw_verification_order(
-    sub: SubPlay,
+    pattern: Pattern,
     trump_suit: Suit | None,
     trump_rank: Rank,
 ) -> tuple[int, int]:
     """Return low-to-high throw verification order for one sub-play."""
-    if not sub.cards:
-        return (sub.sub_level, 0)
+    assert pattern.cards
     rank_order = max(
-        rank_order_for_effective_suit(
-            c.rank, sub.suit, trump_suit, trump_rank
-        )
-        for c in sub.cards
+        trump_order(card, trump_suit, trump_rank)
+        for card in pattern.cards
     )
-    return (sub.sub_level, rank_order)
+    return (pattern.level, rank_order)
 
 
 def _sorted_throw_subplays(
-    subs: list[SubPlay],
+    patterns: tuple[Pattern, ...],
     trump_suit: Suit | None,
     trump_rank: Rank,
-) -> list[SubPlay]:
+) -> list[Pattern]:
     """
     Sort throw sub-plays from the smallest required fallback upward.
     """
     return sorted(
-        subs,
-        key=lambda sub: _throw_verification_order(
-            sub, trump_suit, trump_rank
+        patterns,
+        key=lambda pattern: _throw_verification_order(
+            pattern, trump_suit, trump_rank
         ),
     )
 
@@ -282,15 +238,19 @@ def resolve_lead_throw(
     if len(eff_suits) != 1:
         return MixedLeadSuitRejected(eff_suits)
 
-    subs = decompose(attempted_cards, trump_suit, trump_rank)
-    for sub in _sorted_throw_subplays(subs, trump_suit, trump_rank):
+    patterns = analyze_patterns(
+        attempted_cards, trump_suit, trump_rank
+    ).patterns
+    for pattern in _sorted_throw_subplays(
+        patterns, trump_suit, trump_rank
+    ):
         if not _is_biggest(
-            sub, other_players_hands, trump_suit, trump_rank
+            pattern, other_players_hands, trump_suit, trump_rank
         ):
             return Ok(
                 LeadThrowResolution(
                     attempted_cards=list(attempted_cards),
-                    played_cards=list(sub.cards),
+                    played_cards=list(pattern.cards),
                 )
             )
 

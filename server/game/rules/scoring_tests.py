@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from server.game.rules import scoring
-from server.game.rules.cards import Rank, Suit
-from tests.support import card
+from server.game.rules.cards import Card, Rank, Suit
+from tests.support import TestRank, TestSuit, card
 
 
-def test_all_score_threshold_boundaries() -> None:
+def test_score_round_covers_every_level_threshold() -> None:
     cases = (
         (0, False, 3, 0),
         (1, False, 2, 0),
@@ -27,8 +27,7 @@ def test_all_score_threshold_boundaries() -> None:
         result = scoring.score_round(
             defender_points=points,
             bottom_cards=(),
-            last_trick_won_by_defenders=False,
-            last_lead_cards=(card("spades", "A"),),
+            bottom_winning_cards=None,
             trump_suit=Suit.HEARTS,
             trump_rank=Rank.TWO,
         )
@@ -37,122 +36,195 @@ def test_all_score_threshold_boundaries() -> None:
         assert result.defender_level_gain == defender_gain
 
 
-def test_declarer_shutout_advances_three_levels() -> None:
+def test_no_bottom_capture_preserves_bottom_facts() -> None:
     result = scoring.score_round(
-        defender_points=0,
-        bottom_cards=(),
-        last_trick_won_by_defenders=False,
-        last_lead_cards=(card("spades", "A"),),
+        defender_points=70,
+        bottom_cards=(card("hearts", "5"), card("spades", "K")),
+        bottom_winning_cards=None,
         trump_suit=Suit.HEARTS,
         trump_rank=Rank.TWO,
     )
 
     assert result == scoring.RoundScore(
-        total_defender_points=0,
-        declarer_level_gain=3,
+        total_defender_points=70,
+        declarer_level_gain=1,
         defender_level_gain=0,
         defenders_win=False,
-        bottom_card_bonus=0,
+        bottom_base_points=15,
+        bottom_multiplier=None,
+        bottom_points=0,
     )
 
 
-def test_defenders_win_at_eighty_and_gain_above_threshold() -> None:
-    threshold = scoring.score_round(
-        defender_points=80,
-        bottom_cards=(),
-        last_trick_won_by_defenders=False,
-        last_lead_cards=(card("spades", "A"),),
-        trump_suit=None,
-        trump_rank=Rank.TWO,
-    )
-    advanced = scoring.score_round(
-        defender_points=120,
-        bottom_cards=(),
-        last_trick_won_by_defenders=False,
-        last_lead_cards=(card("spades", "A"),),
-        trump_suit=None,
-        trump_rank=Rank.TWO,
-    )
-
-    assert threshold.defenders_win
-    assert threshold.defender_level_gain == 0
-    assert advanced.defenders_win
-    assert advanced.defender_level_gain == 1
-
-
-def test_defender_last_trick_multiplies_bottom_by_lead_shape() -> None:
-    result = scoring.score_round(
-        defender_points=70,
-        bottom_cards=(card("hearts", "5"),),
-        last_trick_won_by_defenders=True,
-        last_lead_cards=(
-            card("spades", "A", 1),
-            card("spades", "A", 2),
-        ),
-        trump_suit=Suit.HEARTS,
-        trump_rank=Rank.TWO,
-    )
-
-    assert result.bottom_card_bonus == 20
-    assert result.total_defender_points == 90
-    assert result.defenders_win
-
-
-def test_declarer_last_trick_never_scores_the_bottom() -> None:
-    result = scoring.score_round(
-        defender_points=70,
-        bottom_cards=(card("hearts", "5"),),
-        last_trick_won_by_defenders=False,
-        last_lead_cards=(
-            card("spades", "A", 1),
-            card("spades", "A", 2),
-        ),
-        trump_suit=Suit.HEARTS,
-        trump_rank=Rank.TWO,
-    )
-
-    assert result.bottom_card_bonus == 0
-    assert result.total_defender_points == 70
-    assert not result.defenders_win
-
-
-def test_single_pair_and_tractor_use_distinct_bottom_multipliers() -> (
+def test_score_round_applies_side_discount_to_every_pattern_size() -> (
     None
 ):
     bottom = (card("hearts", "5"),)
-    single = scoring.score_round(
-        defender_points=0,
-        bottom_cards=bottom,
-        last_trick_won_by_defenders=True,
-        last_lead_cards=(card("spades", "A"),),
-        trump_suit=Suit.HEARTS,
-        trump_rank=Rank.TWO,
-    )
-    pair = scoring.score_round(
-        defender_points=0,
-        bottom_cards=bottom,
-        last_trick_won_by_defenders=True,
-        last_lead_cards=(
-            card("spades", "A", 1),
-            card("spades", "A", 2),
+    cases: tuple[tuple[tuple[Card, ...], int, int], ...] = (
+        ((card("spades", "A"),), 1, 5),
+        (
+            (card("spades", "A", 1), card("spades", "A", 2)),
+            2,
+            10,
         ),
-        trump_suit=Suit.HEARTS,
-        trump_rank=Rank.TWO,
+        (_pairs("spades", ("3", "4")), 8, 40),
+        (_pairs("spades", ("3", "4", "5")), 32, 160),
     )
-    tractor = scoring.score_round(
-        defender_points=0,
-        bottom_cards=bottom,
-        last_trick_won_by_defenders=True,
-        last_lead_cards=(
-            card("spades", "3", 1),
-            card("spades", "3", 2),
-            card("spades", "4", 1),
-            card("spades", "4", 2),
+
+    for winning_cards, multiplier, bottom_points in cases:
+        result = scoring.score_round(
+            defender_points=0,
+            bottom_cards=bottom,
+            bottom_winning_cards=winning_cards,
+            trump_suit=Suit.CLUBS,
+            trump_rank=Rank.TWO,
+        )
+        assert result.bottom_multiplier == multiplier
+        assert result.bottom_points == bottom_points
+
+
+def test_score_round_uses_full_power_for_every_trump_pattern_size() -> (
+    None
+):
+    bottom = (card("hearts", "5"),)
+    cases: tuple[tuple[tuple[Card, ...], int, int], ...] = (
+        ((card("clubs", "A"),), 2, 10),
+        (
+            (card("clubs", "A", 1), card("clubs", "A", 2)),
+            4,
+            20,
         ),
-        trump_suit=Suit.HEARTS,
+        (_pairs("clubs", ("3", "4")), 16, 80),
+        (_pairs("clubs", ("3", "4", "5")), 64, 320),
+    )
+
+    for winning_cards, multiplier, bottom_points in cases:
+        result = scoring.score_round(
+            defender_points=0,
+            bottom_cards=bottom,
+            bottom_winning_cards=winning_cards,
+            trump_suit=Suit.CLUBS,
+            trump_rank=Rank.TWO,
+        )
+        assert result.bottom_multiplier == multiplier
+        assert result.bottom_points == bottom_points
+
+
+def test_score_round_does_not_cap_a_four_pair_tractor() -> None:
+    result = scoring.score_round(
+        defender_points=0,
+        bottom_cards=(card("hearts", "5"),),
+        bottom_winning_cards=_pairs("clubs", ("3", "4", "5", "6")),
+        trump_suit=Suit.CLUBS,
         trump_rank=Rank.TWO,
     )
 
-    assert single.bottom_card_bonus == 10
-    assert pair.bottom_card_bonus == 20
-    assert tractor.bottom_card_bonus == 80
+    assert result.bottom_multiplier == 256
+    assert result.bottom_points == 1280
+
+
+def test_score_round_uses_fixed_suited_trump_topology() -> None:
+    bottom = (card("hearts", "5"),)
+    cases: tuple[tuple[tuple[Card, ...], Rank, int], ...] = (
+        (_pairs("clubs", ("3", "A")), Rank.TWO, 4),
+        (_pairs("clubs", ("4", "6")), Rank.FIVE, 16),
+        (_pairs("clubs", ("A",)) + _pair("spades", "2"), Rank.TWO, 16),
+        (_pair("spades", "2") + _pair("clubs", "2"), Rank.TWO, 16),
+        (_pair("clubs", "2") + _pair("joker", "SJ"), Rank.TWO, 16),
+        (_pair("joker", "SJ") + _pair("joker", "BJ"), Rank.TWO, 16),
+        (_pair("spades", "2") + _pair("hearts", "2"), Rank.TWO, 4),
+    )
+
+    for winning_cards, trump_rank, multiplier in cases:
+        result = scoring.score_round(
+            defender_points=0,
+            bottom_cards=bottom,
+            bottom_winning_cards=winning_cards,
+            trump_suit=Suit.CLUBS,
+            trump_rank=trump_rank,
+        )
+        assert result.bottom_multiplier == multiplier
+
+
+def test_score_round_uses_fixed_no_trump_topology() -> None:
+    bottom = (card("hearts", "5"),)
+    cases: tuple[tuple[tuple[Card, ...], int], ...] = (
+        (_pair("spades", "2") + _pair("hearts", "2"), 4),
+        (_pair("spades", "2") + _pair("joker", "SJ"), 16),
+        (_pair("joker", "SJ") + _pair("joker", "BJ"), 16),
+    )
+
+    for winning_cards, multiplier in cases:
+        result = scoring.score_round(
+            defender_points=0,
+            bottom_cards=bottom,
+            bottom_winning_cards=winning_cards,
+            trump_suit=None,
+            trump_rank=Rank.TWO,
+        )
+        assert result.bottom_multiplier == multiplier
+
+
+def test_screenshot_regression_uses_jack_queen_as_maximum() -> None:
+    winning_cards = (
+        *_pair("clubs", "J"),
+        *_pair("clubs", "Q"),
+        *_pair("clubs", "2"),
+        card("joker", "BJ"),
+    )
+    bottom = (
+        card("spades", "3"),
+        card("spades", "4"),
+        card("spades", "5"),
+        card("spades", "6"),
+        card("spades", "10"),
+        card("spades", "Q"),
+        card("hearts", "K"),
+        card("hearts", "4"),
+    )
+
+    result = scoring.score_round(
+        defender_points=125,
+        bottom_cards=bottom,
+        bottom_winning_cards=winning_cards,
+        trump_suit=Suit.CLUBS,
+        trump_rank=Rank.TWO,
+    )
+
+    assert result.bottom_base_points == 25
+    assert result.bottom_multiplier == 16
+    assert result.bottom_points == 400
+    assert result.total_defender_points == 525
+    assert result.defender_level_gain == 11
+
+
+def test_score_round_uses_largest_pattern_inside_a_throw() -> None:
+    winning_cards = (
+        *_pairs("spades", ("3", "4")),
+        *_pair("spades", "A"),
+        card("spades", "Q"),
+    )
+
+    result = scoring.score_round(
+        defender_points=0,
+        bottom_cards=(card("hearts", "5"),),
+        bottom_winning_cards=winning_cards,
+        trump_suit=Suit.CLUBS,
+        trump_rank=Rank.TWO,
+    )
+
+    assert result.bottom_multiplier == 8
+    assert result.bottom_points == 40
+
+
+def _pair(suit: TestSuit, rank: TestRank) -> tuple[Card, Card]:
+    return (
+        card(suit, rank, 1),
+        card(suit, rank, 2),
+    )
+
+
+def _pairs(
+    suit: TestSuit, ranks: tuple[TestRank, ...]
+) -> tuple[Card, ...]:
+    return tuple(item for rank in ranks for item in _pair(suit, rank))

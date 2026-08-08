@@ -321,7 +321,9 @@ class RoundEntry:
     second_after: str
     winning_partnership: WirePartnership
     defender_points: int
-    bottom_card_bonus: int
+    bottom_base_points: int
+    bottom_multiplier: int | None
+    bottom_points: int
     total_defender_points: int
 
     def to_json(self) -> JsonObject:
@@ -333,9 +335,20 @@ class RoundEntry:
             "second_after": self.second_after,
             "winning_partnership": self.winning_partnership,
             "defender_points": self.defender_points,
-            "bottom_card_bonus": self.bottom_card_bonus,
+            "bottom_base_points": self.bottom_base_points,
+            "bottom_multiplier": self.bottom_multiplier,
+            "bottom_points": self.bottom_points,
             "total_defender_points": self.total_defender_points,
         }
+
+
+def _bottom_calculation(entry: RoundEntry) -> str:
+    if entry.bottom_multiplier is None:
+        return f"not captured ({entry.bottom_base_points})"
+    return (
+        f"{entry.bottom_base_points} × {entry.bottom_multiplier}"
+        + f" = {entry.bottom_points}"
+    )
 
 
 @dataclass
@@ -362,7 +375,15 @@ class RoundTracker:
             scoring, "winning_partnership"
         )
         defender_points = int_field(scoring, "defender_points")
-        bottom_card_bonus = int_field(scoring, "bottom_card_bonus")
+        bottom_base_points = int_field(scoring, "bottom_base_points")
+        bottom_points = int_field(scoring, "bottom_points")
+        bottom_multiplier_value = scoring.get("bottom_multiplier")
+        bottom_multiplier = (
+            bottom_multiplier_value
+            if isinstance(bottom_multiplier_value, int)
+            and not isinstance(bottom_multiplier_value, bool)
+            else None
+        )
         total_defender_points = int_field(
             scoring, "total_defender_points"
         )
@@ -373,7 +394,13 @@ class RoundTracker:
         assert second_after is not None
         assert winning_partnership is not None
         assert defender_points is not None
-        assert bottom_card_bonus is not None
+        assert bottom_base_points is not None
+        assert bottom_points is not None
+        assert "bottom_multiplier" in scoring
+        assert (
+            bottom_multiplier_value is None
+            or bottom_multiplier is not None
+        )
         assert total_defender_points is not None
 
         self.completed_count += 1
@@ -389,7 +416,9 @@ class RoundTracker:
             ),
             winning_partnership=winning_partnership,
             defender_points=defender_points,
-            bottom_card_bonus=bottom_card_bonus,
+            bottom_base_points=bottom_base_points,
+            bottom_multiplier=bottom_multiplier,
+            bottom_points=bottom_points,
             total_defender_points=total_defender_points,
         )
         self.first_partnership_level = first_after
@@ -1659,7 +1688,7 @@ def write_reports(
                 "",
                 "| Round | First partnership |"
                 + " Second partnership | Winner |"
-                + " Defender points | Bottom bonus |"
+                + " Defender points | Bottom calculation |"
                 + " Total defender points |",
                 "| --- | --- | --- | --- | --- | --- | --- |",
             ]
@@ -1671,7 +1700,7 @@ def write_reports(
                 + f" {entry.second_before}->{entry.second_after} |"
                 + f" {entry.winning_partnership} |"
                 + f" {entry.defender_points} |"
-                + f" {entry.bottom_card_bonus} |"
+                + f" {_bottom_calculation(entry)} |"
                 + f" {entry.total_defender_points} |"
             )
         markdown_lines.append("")
@@ -1847,7 +1876,9 @@ def _round_review_state(
     first_partnership_level: str,
     second_partnership_level: str,
     defender_points: int,
-    bottom_card_bonus: int,
+    bottom_base_points: int,
+    bottom_multiplier: int | None,
+    bottom_points: int,
     round_winner: WirePartnership,
     terminal_winner: WirePartnership | None = None,
 ) -> JsonObject:
@@ -1861,10 +1892,10 @@ def _round_review_state(
         "scoring": {
             "winning_partnership": round_winner,
             "defender_points": defender_points,
-            "bottom_card_bonus": bottom_card_bonus,
-            "total_defender_points": (
-                defender_points + bottom_card_bonus
-            ),
+            "bottom_base_points": bottom_base_points,
+            "bottom_multiplier": bottom_multiplier,
+            "bottom_points": bottom_points,
+            "total_defender_points": (defender_points + bottom_points),
         },
         "winning_partnership": terminal_winner,
     }
@@ -1878,7 +1909,9 @@ def test_round_tracker_records_one_entry_per_completed_round() -> None:
         first_partnership_level="2",
         second_partnership_level="3",
         defender_points=70,
-        bottom_card_bonus=20,
+        bottom_base_points=10,
+        bottom_multiplier=2,
+        bottom_points=20,
         round_winner="second",
     )
 
@@ -1892,7 +1925,9 @@ def test_round_tracker_records_one_entry_per_completed_round() -> None:
         second_after="3",
         winning_partnership="second",
         defender_points=70,
-        bottom_card_bonus=20,
+        bottom_base_points=10,
+        bottom_multiplier=2,
+        bottom_points=20,
         total_defender_points=90,
     )
     assert tracker.observe(review) is None
@@ -1906,7 +1941,9 @@ def test_round_tracker_records_zero_level_gain() -> None:
         first_partnership_level="6",
         second_partnership_level="8",
         defender_points=80,
-        bottom_card_bonus=0,
+        bottom_base_points=10,
+        bottom_multiplier=None,
+        bottom_points=0,
         round_winner="first",
     )
 
@@ -1927,7 +1964,9 @@ def test_round_tracker_records_terminal_progress_as_win() -> None:
         first_partnership_level="Q",
         second_partnership_level="A",
         defender_points=70,
-        bottom_card_bonus=0,
+        bottom_base_points=0,
+        bottom_multiplier=None,
+        bottom_points=0,
         round_winner="second",
         terminal_winner="second",
     )
@@ -1947,14 +1986,18 @@ def test_round_tracker_rearms_after_review_phase_ends() -> None:
         first_partnership_level="3",
         second_partnership_level="2",
         defender_points=40,
-        bottom_card_bonus=0,
+        bottom_base_points=0,
+        bottom_multiplier=None,
+        bottom_points=0,
         round_winner="first",
     )
     second = _round_review_state(
         first_partnership_level="3",
         second_partnership_level="3",
         defender_points=120,
-        bottom_card_bonus=0,
+        bottom_base_points=0,
+        bottom_multiplier=None,
+        bottom_points=0,
         round_winner="second",
     )
 
@@ -1980,7 +2023,9 @@ def test_write_reports_exposes_terminal_round_as_win(
         second_after="WIN",
         winning_partnership="second",
         defender_points=70,
-        bottom_card_bonus=0,
+        bottom_base_points=0,
+        bottom_multiplier=None,
+        bottom_points=0,
         total_defender_points=70,
     )
     config = Config(
@@ -2009,7 +2054,10 @@ def test_write_reports_exposes_terminal_round_as_win(
     markdown = (tmp_path / "playthrough.md").read_text(encoding="utf-8")
     report = _load_report(tmp_path / "playthrough.json")
     rows = list_field(report, "rounds")
-    assert "| 31 | Q->Q | A->WIN | second | 70 | 0 | 70 |" in markdown
+    assert (
+        "| 31 | Q->Q | A->WIN | second | 70 | not captured (0) | 70 |"
+        in markdown
+    )
     assert rows == [terminal.to_json()]
 
 

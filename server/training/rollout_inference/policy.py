@@ -11,7 +11,7 @@ from server.policy_model.actions import LegalActionSpace
 from server.policy_model.actions.decoding import (
     ActionSampler,
 )
-from server.policy_model.network import PolicyActionModel
+from server.policy_model.network import PolicyModel
 from server.policy_model.observation import Observation
 from server.training.rollout_inference.batch import (
     PolicyRequestCompiler,
@@ -40,7 +40,7 @@ class TorchTrainingPolicy:
     def __init__(
         self,
         *,
-        model: PolicyActionModel,
+        model: PolicyModel,
         device: torch.device,
     ) -> None:
         self.model = model

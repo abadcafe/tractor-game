@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ._decompose import decompose
+from ._patterns import analyze_patterns
 from .cards import Card, Rank, Suit
 
 __all__ = ["RoundScore", "score_round"]
@@ -18,28 +18,31 @@ class RoundScore:
     declarer_level_gain: int
     defender_level_gain: int
     defenders_win: bool
-    bottom_card_bonus: int
+    bottom_base_points: int
+    bottom_multiplier: int | None
+    bottom_points: int
 
 
 def score_round(
     *,
     defender_points: int,
     bottom_cards: tuple[Card, ...],
-    last_trick_won_by_defenders: bool,
-    last_lead_cards: tuple[Card, ...],
+    bottom_winning_cards: tuple[Card, ...] | None,
     trump_suit: Suit | None,
     trump_rank: Rank,
 ) -> RoundScore:
     """Calculate bottom multiplication and raw level gains."""
     bottom_base = sum(card.points for card in bottom_cards)
-    bottom_bonus = 0
-    if last_trick_won_by_defenders:
-        bottom_bonus = bottom_base * _ambush_multiplier(
-            last_lead_cards,
+    bottom_multiplier = None
+    bottom_points = 0
+    if bottom_winning_cards is not None:
+        bottom_multiplier = _bottom_multiplier(
+            bottom_winning_cards,
             trump_suit,
             trump_rank,
         )
-    total = defender_points + bottom_bonus
+        bottom_points = bottom_base * bottom_multiplier
+    total = defender_points + bottom_points
     if total == 0:
         declarer_gain = 3
         defender_gain = 0
@@ -61,27 +64,22 @@ def score_round(
         declarer_level_gain=declarer_gain,
         defender_level_gain=defender_gain,
         defenders_win=defenders_win,
-        bottom_card_bonus=bottom_bonus,
+        bottom_base_points=bottom_base,
+        bottom_multiplier=bottom_multiplier,
+        bottom_points=bottom_points,
     )
 
 
-def _ambush_multiplier(
-    lead_cards: tuple[Card, ...],
+def _bottom_multiplier(
+    winning_cards: tuple[Card, ...],
     trump_suit: Suit | None,
     trump_rank: Rank,
 ) -> int:
-    subs = decompose(
-        list(lead_cards),
-        trump_suit,
-        trump_rank,
+    analysis = analyze_patterns(winning_cards, trump_suit, trump_rank)
+    largest_pattern_width = max(
+        len(pattern.cards) for pattern in analysis.patterns
     )
-    if not subs:
-        return 2
-    return max(
-        2
-        if sub.pair_count == 0
-        else 4
-        if sub.pair_count == 1
-        else 2 ** len(sub.cards)
-        for sub in subs
-    )
+    full_multiplier = 1 << largest_pattern_width
+    if analysis.effective_suit == "trump":
+        return full_multiplier
+    return full_multiplier // 2

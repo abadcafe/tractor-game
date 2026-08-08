@@ -2,16 +2,11 @@
 
 from __future__ import annotations
 
-from server.foundation.result import Rejected
+from server.foundation.result import Ok, Rejected
 
-from ._decompose import (
-    decompose,
-    non_trump_rank_order,
-    rank_order_in_trump_group,
-)
 from ._follow_analysis import analyze_follow
 from ._ordering import effective_suit
-from ._play_types import EffectiveSuit, PlayShapeInfo
+from ._patterns import analyze_patterns
 from ._rejections.card import CardNotInHandRejected
 from ._rejections.play import (
     EmptyFollowRejected,
@@ -25,7 +20,9 @@ from ._rejections.play import (
     MustFollowTrumpRejected,
     WrongFollowCountRejected,
 )
+from ._rejections.text import PlayShapeInfo
 from .cards import Card, Rank, Suit
+from .cards.faces import CardFace
 
 
 def is_legal_lead(
@@ -169,39 +166,34 @@ def _explain_follow_pair_priority(
     trump_suit: Suit | None,
     trump_rank: Rank,
 ) -> Rejected | None:
-    hand_subs = (
-        decompose(hand_suit_cards, trump_suit, trump_rank)
-        if hand_suit_cards
-        else []
+    analysis_result = analyze_follow(
+        hand=hand_suit_cards,
+        lead_cards=lead_cards,
+        trump_suit=trump_suit,
+        trump_rank=trump_rank,
     )
-    played_subs = (
-        decompose(played_suit_cards, trump_suit, trump_rank)
-        if played_suit_cards
-        else []
+    assert isinstance(analysis_result, Ok)
+    analysis = analysis_result.value
+    played_pair_faces: frozenset[CardFace] = (
+        frozenset()
+        if not played_suit_cards
+        else frozenset(
+            analyze_patterns(
+                played_suit_cards, trump_suit, trump_rank
+            ).pair_faces
+        )
     )
-    lead_subs = decompose(lead_cards, trump_suit, trump_rank)
-    lead_pair_count = sum(sub.pair_count for sub in lead_subs)
-    hand_avail_pair_count = sum(sub.pair_count for sub in hand_subs)
-    played_pair_count = sum(sub.pair_count for sub in played_subs)
-
-    pair_floor = min(hand_avail_pair_count, lead_pair_count)
-    if pair_floor > 0 and played_pair_count < pair_floor:
+    hand_pair_count = len(analysis.pair_planner.pair_faces)
+    if len(played_pair_faces) < analysis.pair_floor:
         return MustFollowPairsRejected(
-            lead_pair_count=lead_pair_count,
-            lead_suit=effective_suit(
-                lead_cards[0], trump_suit, trump_rank
-            ),
-            hand_pair_count=hand_avail_pair_count,
-            pair_floor=pair_floor,
+            lead_pair_count=analysis.lead_pair_count,
+            lead_suit=analysis.lead_effective_suit,
+            hand_pair_count=hand_pair_count,
+            pair_floor=analysis.pair_floor,
         )
 
-    if not _verify_follow_sub_play_priority(
-        hand_suit_cards,
-        played_suit_cards,
-        lead_cards,
-        effective_suit(lead_cards[0], trump_suit, trump_rank),
-        trump_suit,
-        trump_rank,
+    if not analysis.pair_planner.pair_selection_is_valid(
+        played_pair_faces
     ):
         return MustFollowHigherPatternRejected(
             _play_shape_info(lead_cards, trump_suit, trump_rank)
@@ -217,19 +209,19 @@ def _play_shape_info(
     if not cards:
         return PlayShapeInfo(kind="empty", suit=None, card_count=0)
     suit = effective_suit(cards[0], trump_suit, trump_rank)
-    subs = decompose(cards, trump_suit, trump_rank)
+    patterns = analyze_patterns(cards, trump_suit, trump_rank).patterns
     if len(cards) == 1:
         return PlayShapeInfo(kind="single", suit=suit, card_count=1)
-    if len(subs) == 1:
-        sub = subs[0]
-        if sub.pair_count >= 2:
+    if len(patterns) == 1:
+        pattern = patterns[0]
+        if pattern.pair_count >= 2:
             return PlayShapeInfo(
                 kind="tractor",
                 suit=suit,
                 card_count=len(cards),
-                pair_count=sub.pair_count,
+                pair_count=pattern.pair_count,
             )
-        if sub.pair_count == 1:
+        if pattern.pair_count == 1:
             return PlayShapeInfo(
                 kind="pair",
                 suit=suit,
@@ -237,197 +229,3 @@ def _play_shape_info(
                 pair_count=1,
             )
     return PlayShapeInfo(kind="cards", suit=suit, card_count=len(cards))
-
-
-def _verify_follow_sub_play_priority(
-    hand_suit_cards: list[Card],
-    played_suit_cards: list[Card],
-    lead_cards: list[Card],
-    lead_eff: EffectiveSuit,
-    trump_suit: Suit | None,
-    trump_rank: Rank,
-) -> bool:
-    """
-    Verify sub-play priority rules when following (spec 6.2 steps
-    7a/7b/7c).
-
-    7a. Pair count floor: played must use at least min(available_pairs,
-    lead_pairs) pairs.
-    7b. Level-by-level: higher-level sub-plays must be used before lower
-    ones.
-    7c. Tractor continuity: partial extraction from a tractor must be
-    contiguous.
-    """
-    if not played_suit_cards:
-        return True
-
-    # Decompose hand and played into SubPlay structures
-    hand_subs = (
-        decompose(hand_suit_cards, trump_suit, trump_rank)
-        if hand_suit_cards
-        else []
-    )
-    played_subs = (
-        decompose(played_suit_cards, trump_suit, trump_rank)
-        if played_suit_cards
-        else []
-    )
-
-    # 7a. Pair count floor check
-    lead_pair_count = sum(
-        s.pair_count
-        for s in decompose(lead_cards, trump_suit, trump_rank)
-    )
-    hand_avail_pair_count = sum(s.pair_count for s in hand_subs)
-    played_pair_count = sum(s.pair_count for s in played_subs)
-
-    pair_floor = min(hand_avail_pair_count, lead_pair_count)
-    if played_pair_count < pair_floor:
-        return False
-
-    # 7b. Level-by-level priority check
-    # For each hand sub-play, determine how many of its cards were
-    # played.
-    # Then check that from highest pair_count level to lowest, the
-    # played set
-    # uses pairs from higher-level sub-plays first.
-
-    played_card_ids = {c.id for c in played_suit_cards}
-
-    # For each hand sub-play, count pairs played from it
-    # pair_count=0 (single): 1 card played if its ID is in played set
-    # pair_count=1 (pair): pair_count played if both cards' IDs are in
-    # played set
-    # pair_count>=2 (tractor): count how many of its ranks have both
-    # cards played
-
-    # Group hand sub-plays by pair_count level, counting how many pairs
-    # from each sub-play are present in the played set
-    hand_pairs_by_level: dict[
-        int, int
-    ] = {}  # pair_count_level -> total pairs available in hand
-    played_pairs_from_hand_by_level: dict[
-        int, int
-    ] = {}  # pair_count_level -> pairs actually played from hand subs
-
-    for sub in hand_subs:
-        pc = sub.pair_count
-        hand_pairs_by_level[pc] = hand_pairs_by_level.get(pc, 0) + pc
-
-        # Count how many cards from this sub-play were played
-        cards_played = sum(
-            1 for c in sub.cards if c.id in played_card_ids
-        )
-
-        if pc == 0:
-            # Single: 1 card = 1 pair at level 0
-            if cards_played == 1:
-                played_pairs_from_hand_by_level[pc] = (
-                    played_pairs_from_hand_by_level.get(pc, 0) + 1
-                )
-        elif pc == 1:
-            # Pair: 2 cards played = 1 pair at level 1
-            if cards_played == 2:
-                played_pairs_from_hand_by_level[pc] = (
-                    played_pairs_from_hand_by_level.get(pc, 0) + 1
-                )
-        else:
-            # Tractor: pc pairs. Count how many ranks have both cards
-            # played
-            tractor_rank_played_count: dict[Rank, int] = {}
-            for c in sub.cards:
-                if c.id in played_card_ids:
-                    tractor_rank_played_count[c.rank] = (
-                        tractor_rank_played_count.get(c.rank, 0) + 1
-                    )
-            pairs_from_tractor = sum(
-                1
-                for count in tractor_rank_played_count.values()
-                if count >= 2
-            )
-            played_pairs_from_hand_by_level[pc] = (
-                played_pairs_from_hand_by_level.get(pc, 0)
-                + pairs_from_tractor
-            )
-
-    # remaining_needed starts at total pairs in lead
-    remaining_needed = lead_pair_count
-
-    # Process from highest level to lowest
-    all_levels = sorted(
-        set(
-            list(hand_pairs_by_level.keys())
-            + list(played_pairs_from_hand_by_level.keys())
-        ),
-        reverse=True,
-    )
-
-    for level in all_levels:
-        hand_count = hand_pairs_by_level.get(level, 0)
-        played_count = played_pairs_from_hand_by_level.get(level, 0)
-
-        if hand_count == 0:
-            continue
-
-        expected = min(hand_count, remaining_needed)
-        if played_count < expected:
-            return False
-
-        remaining_needed -= played_count
-
-    # 7c. Tractor continuity check
-    # For each hand sub-play with pair_count >= 2 (tractor):
-    # if 0 < played_pairs_in_sub < sub.pair_count (partial extraction),
-    # verify the extracted pairs form a contiguous block.
-    for sub in hand_subs:
-        if sub.pair_count < 2:
-            continue
-
-        # Count how many cards from this sub-play were played
-        rank_played_count: dict[Rank, int] = {}
-        for c in sub.cards:
-            if c.id in played_card_ids:
-                rank_played_count[c.rank] = (
-                    rank_played_count.get(c.rank, 0) + 1
-                )
-        pairs_played = sum(
-            1 for count in rank_played_count.values() if count >= 2
-        )
-
-        if pairs_played == 0 or pairs_played == sub.pair_count:
-            # Not extracted at all, or fully extracted -- both fine
-            continue
-
-        # Partial extraction: check contiguity
-        # Get unique ranks that were played as pairs
-        unique_ranks = list(dict.fromkeys(c.rank for c in sub.cards))
-        played_ranks = [
-            r for r in unique_ranks if rank_played_count.get(r, 0) >= 2
-        ]
-
-        if not played_ranks:
-            continue
-
-        # Get positions of the extracted ranks within the tractor's
-        # sorted rank list
-        is_trump_group = lead_eff == "trump"
-        if is_trump_group:
-            sorted_ranks = sorted(
-                unique_ranks,
-                key=lambda rr: rank_order_in_trump_group(rr),
-            )
-        else:
-            sorted_ranks = sorted(
-                unique_ranks,
-                key=lambda rr: non_trump_rank_order(rr, trump_rank),
-            )
-
-        positions = [sorted_ranks.index(r) for r in played_ranks]
-        positions.sort()
-
-        # Check contiguity: positions must form a range [min, max] with
-        # no gaps
-        if positions[-1] - positions[0] != len(positions) - 1:
-            return False
-
-    return True
