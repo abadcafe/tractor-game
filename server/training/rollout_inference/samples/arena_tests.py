@@ -33,6 +33,11 @@ def test_sample_arena_materializes_variable_active_steps() -> None:
         policy_versions=(7, 7, 7),
         observation_batch=_observation_batch(device=device),
         action_sample=action_sample,
+        old_values=torch.tensor(
+            (0.25, -0.5, 1.25),
+            dtype=torch.float32,
+            device=device,
+        ),
     )
     assert isinstance(stored, Ok)
     assert stored.value.choice_counts == (2, 3, 4)
@@ -59,10 +64,13 @@ def test_sample_arena_materializes_variable_active_steps() -> None:
     )
     source_result = arena.ppo_batch_source(
         trajectories=trajectories,
-        value_evaluator=_zero_values,
         gae_lambda=1.0,
     )
     assert isinstance(source_result, Ok)
+    assert torch.equal(
+        source_result.value.old_values,
+        torch.tensor((0.25, -0.5, 1.25), dtype=torch.float32),
+    )
 
     minibatch = source_result.value.select_minibatch(
         indices=torch.tensor((2, 0), dtype=torch.long),
@@ -165,11 +173,3 @@ def _action_sample(*, device: torch.device) -> ActionSampleBatch:
 
 def _tensor_tuple(values: Tensor) -> tuple[int, ...]:
     return tuple(int(value.item()) for value in values)
-
-
-def _zero_values(observation: ObservationTensorBatch) -> Tensor:
-    return torch.zeros(
-        (int(observation.category_ids.shape[0]),),
-        dtype=torch.float32,
-        device=observation.category_ids.device,
-    )

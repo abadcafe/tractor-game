@@ -606,7 +606,6 @@ def _single_card_batch(*, count: int) -> ArenaPPOBatchSource:
     )
     batch_result = store.ppo_batch_source(
         trajectories=trajectories,
-        value_evaluator=_zero_values,
         gae_lambda=1.0,
     )
     assert isinstance(batch_result, Ok)
@@ -683,6 +682,7 @@ def _store_single_card_decision(
         policy_versions=(0,),
         observation_batch=observation_batch,
         action_sample=action_sample,
+        old_values=_zero_values(observation_batch),
     )
     assert isinstance(stored, Ok)
     assert stored.value.row_count() == 1

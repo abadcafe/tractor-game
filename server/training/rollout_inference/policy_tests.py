@@ -90,6 +90,7 @@ async def test_policy_rejects_non_finite_choice_logits() -> None:
 
     result = await TorchTrainingPolicy(
         model=_FixedChoiceModel(choice_logits=logits),
+        value_evaluator=_zero_values,
         device=torch.device("cpu"),
     ).decide(observation, legal, _decision_key())
 
@@ -108,6 +109,7 @@ async def test_policy_uses_one_observation_encoding_for_the_trace() -> (
 
     decision = await TorchTrainingPolicy(
         model=model,
+        value_evaluator=_zero_values,
         device=torch.device("cpu"),
     ).decide(observation, legal, _decision_key())
 
@@ -122,6 +124,23 @@ async def test_policy_uses_one_observation_encoding_for_the_trace() -> (
     )
     assert decision.value.legal_choice_count == 2
     assert decision.value.scored_choice_step_count == 1
+
+
+@pytest.mark.asyncio
+async def test_policy_captures_old_value_during_sampling() -> None:
+    observation, legal, selected_choice_id = _bid_fixture()
+    logits = torch.full((ACTION_CHOICE_COUNT,), -100.0)
+    logits[selected_choice_id] = 100.0
+    evaluator = _RecordingValueEvaluator()
+
+    decision = await TorchTrainingPolicy(
+        model=_FixedChoiceModel(choice_logits=logits),
+        value_evaluator=evaluator,
+        device=torch.device("cpu"),
+    ).decide(observation, legal, _decision_key())
+
+    assert isinstance(decision, Ok)
+    assert evaluator.batch_sizes == [1]
 
 
 @pytest.mark.asyncio
@@ -141,6 +160,7 @@ async def test_policy_does_not_use_torch_multinomial(
         model=_FixedChoiceModel(
             choice_logits=torch.zeros(ACTION_CHOICE_COUNT)
         ),
+        value_evaluator=_zero_values,
         device=torch.device("cpu"),
     ).decide(observation, legal, _decision_key())
 
@@ -204,6 +224,21 @@ class _FixedChoiceModel(PolicyModel):
             device=encoding.device,
             score_batch_sizes=self.score_batch_sizes,
             max_steps=max_steps,
+        )
+
+
+@final
+class _RecordingValueEvaluator:
+    def __init__(self) -> None:
+        self.batch_sizes: list[int] = []
+
+    def __call__(self, observation: ObservationTensorBatch) -> Tensor:
+        batch_size = int(observation.category_ids.shape[0])
+        self.batch_sizes.append(batch_size)
+        return torch.zeros(
+            (batch_size,),
+            dtype=torch.float32,
+            device=observation.category_ids.device,
         )
 
 
@@ -325,4 +360,12 @@ def _request_batch(
 def _sampler(*, batch_size: int) -> ActionSampler:
     return ActionSampler.create(
         batch_capacity=batch_size, device=torch.device("cpu")
+    )
+
+
+def _zero_values(observation: ObservationTensorBatch) -> Tensor:
+    return torch.zeros(
+        (int(observation.category_ids.shape[0]),),
+        dtype=torch.float32,
+        device=observation.category_ids.device,
     )

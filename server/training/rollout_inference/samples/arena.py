@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Protocol
 
 import torch
 from torch import Tensor
@@ -74,14 +73,6 @@ class ArenaPPOBatchSource:
         )
 
 
-class ObservationValueEvaluator(Protocol):
-    """Frozen critic boundary needed while resolving rollout rows."""
-
-    def __call__(
-        self, observation: ObservationTensorBatch
-    ) -> Tensor: ...
-
-
 @dataclass(slots=True)
 class ModelRankSampleArena:
     """Append policy rows and expose exact fixed-vocabulary replay."""
@@ -108,6 +99,7 @@ class ModelRankSampleArena:
     _choice_ids: Tensor | None = None
     _flat_legal_choice_masks: Tensor | None = None
     _old_log_probabilities: Tensor | None = None
+    _old_values: Tensor | None = None
     _decision_materializer: PolicyDecisionMaterializer = field(
         init=False
     )
@@ -129,6 +121,7 @@ class ModelRankSampleArena:
         policy_versions: tuple[int, ...],
         observation_batch: ObservationTensorBatch,
         action_sample: ActionSampleBatch,
+        old_values: Tensor,
     ) -> ModelRankDecisionBatchResult:
         sample_count = len(policy_versions)
         assert sample_count > 0
@@ -143,6 +136,7 @@ class ModelRankSampleArena:
         self._validate_sample(
             observation=observation_batch,
             sample=action_sample,
+            old_values=old_values,
             sample_count=sample_count,
         )
         start = self._row_count
@@ -197,6 +191,7 @@ class ModelRankSampleArena:
         _ = self._old_log_probabilities_tensor()[rows].copy_(
             action_sample.log_probabilities
         )
+        _ = self._old_values_tensor()[rows].copy_(old_values)
         self._row_count = end
         self._step_count = step_end
         return decision_result
@@ -205,7 +200,6 @@ class ModelRankSampleArena:
         self,
         *,
         trajectories: RankTrajectoryBatch,
-        value_evaluator: ObservationValueEvaluator,
         gae_lambda: float,
     ) -> _result.Ok[ArenaPPOBatchSource] | _result.Rejected:
         if trajectories.is_empty():
@@ -230,10 +224,7 @@ class ModelRankSampleArena:
         old_log_probabilities = (
             self._old_log_probabilities_tensor().index_select(0, rows)
         )
-        with torch.no_grad():
-            old_values = value_evaluator(
-                self._select_observation(rows)
-            ).to(dtype=torch.float32)
+        old_values = self._old_values_tensor().index_select(0, rows)
         assert old_values.shape == rows.shape
         gae = terminal_round_gae(
             old_values=old_values,
@@ -428,6 +419,9 @@ class ModelRankSampleArena:
         self._old_log_probabilities = _zeros(
             (row_capacity,), torch.float32, self.device
         )
+        self._old_values = _zeros(
+            (row_capacity,), torch.float32, self.device
+        )
 
     def _write_observation(
         self, *, rows: slice, source: ObservationTensorBatch
@@ -495,11 +489,15 @@ class ModelRankSampleArena:
         *,
         observation: ObservationTensorBatch,
         sample: ActionSampleBatch,
+        old_values: Tensor,
         sample_count: int,
     ) -> None:
         assert int(observation.category_ids.shape[0]) == sample_count
         assert int(sample.choice_ids_padded.shape[0]) == sample_count
         assert sample.legal_choice_masks.shape[1] == ACTION_CHOICE_COUNT
+        assert old_values.shape == (sample_count,)
+        assert old_values.dtype == torch.float32
+        assert old_values.device == self.device
 
     def _validate_return_rows(
         self,
@@ -573,6 +571,9 @@ class ModelRankSampleArena:
         self._old_log_probabilities = _grow_first_dimension(
             self._old_log_probabilities_tensor(), capacity
         )
+        self._old_values = _grow_first_dimension(
+            self._old_values_tensor(), capacity
+        )
         self._capacity = capacity
 
     def _grow_steps(self, capacity: int) -> None:
@@ -637,6 +638,9 @@ class ModelRankSampleArena:
 
     def _old_log_probabilities_tensor(self) -> Tensor:
         return _present(self._old_log_probabilities)
+
+    def _old_values_tensor(self) -> Tensor:
+        return _present(self._old_values)
 
 
 def _single_policy_version(

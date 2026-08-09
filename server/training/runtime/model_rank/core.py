@@ -73,12 +73,14 @@ class ModelReplica:
         self, requests: DevicePolicyRequestBatch
     ) -> _result.Ok[CompactPolicyDecisionBatch] | _result.Rejected:
         """Run batched policy inference on this core's device."""
+        _ = self.state.value_model.eval()
         return sample_policy_batch_into_arena(
             model=self.state.model,
             device=self.device,
             requests=requests,
             sampler=self.sampler,
             sample_arena=self.sample_arena,
+            value_evaluator=self.state.value_model.forward,
             execution_policy=self.execution_policy,
         )
 
@@ -95,7 +97,6 @@ class ModelReplica:
             _ = self.state.value_model.eval()
             source_result = self.sample_arena.ppo_batch_source(
                 trajectories=trajectories,
-                value_evaluator=self.state.value_model.forward,
                 gae_lambda=self.train_config.gae_lambda,
             )
             if isinstance(source_result, Rejected):

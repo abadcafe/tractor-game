@@ -27,6 +27,7 @@ from server.training.rollout_inference.randomness import (
     TrainingDecisionKey,
 )
 from server.training.rollout_inference.sampler import (
+    ObservationValueEvaluator,
     sample_policy_batch_into_arena,
 )
 from server.training.rollout_inference.samples import (
@@ -42,9 +43,11 @@ class TorchTrainingPolicy:
         self,
         *,
         model: PolicyModel,
+        value_evaluator: ObservationValueEvaluator,
         device: torch.device,
     ) -> None:
         self.model = model
+        self.value_evaluator = value_evaluator
         self.device = device
         self.execution_policy = DeviceExecutionPolicy.for_device(device)
         self.sample_arena = ModelRankSampleArena(
@@ -91,6 +94,7 @@ class TorchTrainingPolicy:
             requests=request_result.value,
             sampler=self.sampler,
             sample_arena=self.sample_arena,
+            value_evaluator=self.value_evaluator,
             execution_policy=self.execution_policy,
         )
         if isinstance(decision_result, Rejected):

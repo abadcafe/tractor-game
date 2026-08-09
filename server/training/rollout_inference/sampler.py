@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+from typing import Protocol
+
 import torch
+from torch import Tensor
 
 from server.foundation.result import Ok, Rejected
 from server.policy_model.actions.decoding import (
     ActionSampler,
 )
 from server.policy_model.network import PolicyModel
+from server.policy_model.observation.tensor import (
+    ObservationTensorBatch,
+)
 from server.training.device_execution import DeviceExecutionPolicy
 from server.training.rollout_inference.batch import (
     DevicePolicyRequestBatch,
@@ -23,6 +29,14 @@ type PolicySamplingResult = Ok[PolicySampleColumns] | Rejected
 type PolicySamplingDecisionResult = (
     Ok[CompactPolicyDecisionBatch] | Rejected
 )
+
+
+class ObservationValueEvaluator(Protocol):
+    """Critic operation required by actor-critic rollout sampling."""
+
+    def __call__(
+        self, observation: ObservationTensorBatch
+    ) -> Tensor: ...
 
 
 def sample_policy_batch(
@@ -80,6 +94,7 @@ def sample_policy_batch_into_arena(
     requests: DevicePolicyRequestBatch,
     sampler: ActionSampler,
     sample_arena: ModelRankSampleArena,
+    value_evaluator: ObservationValueEvaluator,
     execution_policy: DeviceExecutionPolicy,
 ) -> PolicySamplingDecisionResult:
     """Sample policy decisions and append replay tensors to an arena."""
@@ -107,8 +122,21 @@ def sample_policy_batch_into_arena(
         if isinstance(action_result, Rejected):
             return action_result
         action = action_result.value
+        del logit_decoder
+        del encoding
+        old_values = value_evaluator(observation_batch).to(
+            dtype=torch.float32
+        )
         return sample_arena.store_sampled_result(
             policy_versions=requests.policy_versions,
             observation_batch=observation_batch,
             action_sample=action,
+            old_values=old_values,
         )
+
+
+__all__ = (
+    "ObservationValueEvaluator",
+    "sample_policy_batch",
+    "sample_policy_batch_into_arena",
+)
