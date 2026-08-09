@@ -26,6 +26,9 @@ class PreparedPPOBatch:
         assert self.source.sample_count() == self.sample_count
         assert self.advantages.ndim == 1
         assert int(self.advantages.shape[0]) == self.sample_count
+        assert self.source.observation_token_counts.shape == (
+            self.sample_count,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +36,7 @@ class PPOEpochSchedule:
     """Deterministic sample order for one PPO epoch."""
 
     indices: Tensor
+    observation_token_counts: Tensor
     sample_count: int
 
     def __post_init__(self) -> None:
@@ -40,6 +44,11 @@ class PPOEpochSchedule:
         assert self.indices.ndim == 1
         assert int(self.indices.shape[0]) == self.sample_count
         assert self.indices.dtype == torch.long
+        assert self.observation_token_counts.device.type == "cpu"
+        assert self.observation_token_counts.dtype == torch.long
+        assert self.observation_token_counts.shape == (
+            self.sample_count,
+        )
 
 
 def prepare_ppo_batch(
@@ -58,16 +67,27 @@ def prepare_ppo_batch(
 
 
 def prepare_ppo_epoch_schedule(
-    *, batch: PreparedPPOBatch, indices: Tensor
+    *,
+    batch: PreparedPPOBatch,
+    indices: Tensor,
+    cpu_indices: Tensor,
 ) -> PPOEpochSchedule:
     """Create one shuffled epoch schedule without rollout copies."""
     assert indices.ndim == 1
+    assert cpu_indices.device.type == "cpu"
+    assert cpu_indices.dtype == torch.long
+    assert cpu_indices.shape == indices.shape
     sample_count = int(indices.shape[0])
     assert sample_count == batch.sample_count
     return PPOEpochSchedule(
         indices=indices.to(
             dtype=torch.long,
             device=batch.advantages.device,
+        ),
+        observation_token_counts=(
+            batch.source.observation_token_counts.index_select(
+                0, cpu_indices
+            )
         ),
         sample_count=sample_count,
     )
@@ -94,6 +114,9 @@ def prepared_ppo_epoch_minibatch(
         indices=schedule.indices[start:end],
         advantages=batch.advantages,
         global_count=global_count,
+        observation_token_count=int(
+            schedule.observation_token_counts[start:end].max().item()
+        ),
     )
 
 

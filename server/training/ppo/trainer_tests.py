@@ -549,6 +549,9 @@ def test_arena_minibatch_selects_exact_fixed_choice_replay() -> None:
         indices=torch.tensor((0, 1), dtype=torch.long),
         advantages=batch.raw_advantages,
         global_count=torch.tensor(2, dtype=torch.long),
+        observation_token_count=int(
+            batch.observation_token_counts[:2].max().item()
+        ),
     )
     assert first.replay is not None
     assert first.replay.active_step_count == 4
@@ -562,6 +565,9 @@ def test_arena_minibatch_selects_exact_fixed_choice_replay() -> None:
         indices=torch.tensor((2,), dtype=torch.long),
         advantages=batch.raw_advantages,
         global_count=torch.tensor(1, dtype=torch.long),
+        observation_token_count=int(
+            batch.observation_token_counts[2:].max().item()
+        ),
     )
 
     assert second.replay is not None

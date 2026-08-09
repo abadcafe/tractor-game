@@ -208,7 +208,7 @@ const optimizationFields = (
   ),
   number(
     "minibatch_size",
-    "Minibatch size",
+    "Global minibatch size",
     "Optimization",
     optional ? "" : "64",
     "1",

@@ -76,6 +76,7 @@ def test_sample_arena_materializes_variable_active_steps() -> None:
         indices=torch.tensor((2, 0), dtype=torch.long),
         advantages=source_result.value.raw_advantages,
         global_count=torch.tensor(2, dtype=torch.long),
+        observation_token_count=2,
     )
 
     replay = minibatch.replay
@@ -95,21 +96,76 @@ def test_sample_arena_materializes_variable_active_steps() -> None:
     )
 
 
+def test_sample_arena_minibatch_uses_batch_local_token_width() -> None:
+    device = torch.device("cpu")
+    arena = ModelRankSampleArena(model_rank_index=0, device=device)
+    stored = arena.store_sampled_result(
+        policy_versions=(7, 7, 7),
+        observation_batch=_observation_batch(
+            device=device,
+            token_count=6,
+            query_indices=(1, 3, 5),
+        ),
+        action_sample=_action_sample(device=device),
+        old_values=torch.zeros((3,), dtype=torch.float32),
+    )
+    assert isinstance(stored, Ok)
+    source_result = arena.ppo_batch_source(
+        trajectories=RankTrajectoryBatch(
+            policy_version=7,
+            model_rank_index=0,
+            row_indices=torch.tensor((0, 1, 2), dtype=torch.long),
+            step_counts=torch.tensor((1, 3, 2), dtype=torch.long),
+            trajectory_offsets=torch.tensor((0,), dtype=torch.long),
+            trajectory_lengths=torch.tensor((3,), dtype=torch.long),
+            terminal_rewards=torch.tensor((3.0,), dtype=torch.float32),
+            round_count=1,
+            total_step_count=6,
+            max_step_count=3,
+        ),
+        gae_lambda=1.0,
+    )
+    assert isinstance(source_result, Ok)
+
+    short = source_result.value.select_minibatch(
+        indices=torch.tensor((0,), dtype=torch.long),
+        advantages=source_result.value.raw_advantages,
+        global_count=torch.tensor(1, dtype=torch.long),
+        observation_token_count=2,
+    )
+    long = source_result.value.select_minibatch(
+        indices=torch.tensor((1, 2), dtype=torch.long),
+        advantages=source_result.value.raw_advantages,
+        global_count=torch.tensor(2, dtype=torch.long),
+        observation_token_count=6,
+    )
+
+    assert short.observation_batch is not None
+    assert short.observation_batch.category_ids.shape[1] == 2
+    assert long.observation_batch is not None
+    assert long.observation_batch.category_ids.shape[1] == 6
+
+
 def _observation_batch(
-    *, device: torch.device
+    *,
+    device: torch.device,
+    token_count: int = 2,
+    query_indices: tuple[int, int, int] = (1, 1, 1),
 ) -> ObservationTensorBatch:
     return ObservationTensorBatch(
         category_ids=torch.zeros(
-            (3, 2, CATEGORY_COUNT), dtype=torch.long, device=device
+            (3, token_count, CATEGORY_COUNT),
+            dtype=torch.long,
+            device=device,
         ),
         scalar_values=torch.zeros(
-            (3, 2), dtype=torch.float32, device=device
+            (3, token_count), dtype=torch.float32, device=device
         ),
         card_rule_values=torch.zeros(
-            (3, 2, 2), dtype=torch.float32, device=device
+            (3, token_count, 2), dtype=torch.float32, device=device
         ),
         encoded_structure_coordinates=torch.zeros(
-            (3, 2, 3), dtype=torch.long, device=device
+            (3, token_count, 3), dtype=torch.long, device=device
         ),
         candidate_category_ids=torch.zeros(
             (3, CARD_CHOICE_COUNT, 3),
@@ -126,8 +182,8 @@ def _observation_batch(
             dtype=torch.float32,
             device=device,
         ),
-        query_indices=torch.zeros(
-            (3,), dtype=torch.long, device=device
+        query_indices=torch.tensor(
+            query_indices, dtype=torch.long, device=device
         ),
     )
 

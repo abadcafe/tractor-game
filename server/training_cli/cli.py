@@ -174,7 +174,12 @@ def _add_init_arguments(parser: argparse.ArgumentParser) -> None:
         "--value-max-grad-norm", type=float, default=0.5
     )
     _ = parser.add_argument("--ppo-epochs", type=int, default=4)
-    _ = parser.add_argument("--minibatch-size", type=int, default=64)
+    _ = parser.add_argument(
+        "--minibatch-size",
+        type=int,
+        default=64,
+        help="global PPO samples per optimizer step (default: 64)",
+    )
     _ = parser.add_argument("--adam-beta1", type=float, default=0.9)
     _ = parser.add_argument("--adam-beta2", type=float, default=0.999)
     _ = parser.add_argument("--weight-decay", type=float, default=0.0)
@@ -220,7 +225,11 @@ def _add_resume_arguments(parser: argparse.ArgumentParser) -> None:
     _ = parser.add_argument("--policy-max-grad-norm", type=float)
     _ = parser.add_argument("--value-max-grad-norm", type=float)
     _ = parser.add_argument("--ppo-epochs", type=int)
-    _ = parser.add_argument("--minibatch-size", type=int)
+    _ = parser.add_argument(
+        "--minibatch-size",
+        type=int,
+        help="global PPO samples per optimizer step",
+    )
     _ = parser.add_argument("--adam-beta1", type=float)
     _ = parser.add_argument("--adam-beta2", type=float)
     _ = parser.add_argument("--weight-decay", type=float)

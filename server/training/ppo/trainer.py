@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import final
 
 import torch
@@ -12,6 +11,10 @@ from torch import Tensor
 from server.foundation import result as _result
 from server.policy_model.network import PolicyModel
 from server.training.config import TrainConfig
+from server.training.ppo.batch_schedule import (
+    MinibatchSpan,
+    plan_distributed_minibatches,
+)
 from server.training.ppo.collectives import (
     all_reduce_max,
     all_reduce_sum,
@@ -52,7 +55,6 @@ from server.training.ppo.stats import (
 )
 from server.training.ppo.sync import (
     positive_count_value,
-    synchronized_count_sum,
     synchronized_count_vector_sum,
 )
 from server.training.ppo.update_input import PPOUpdateInput
@@ -73,20 +75,6 @@ from server.training.ppo.validation import (
 )
 from server.training.ppo.value_model import ObservationValueModel
 from server.training.runtime.config import PPOProfileMode
-
-
-@dataclass(frozen=True, slots=True)
-class _MinibatchSpan:
-    start: int
-    end: int
-
-    def __post_init__(self) -> None:
-        assert self.start >= 0
-        assert self.end >= self.start
-
-    def count(self) -> int:
-        """Return sample count in this contiguous epoch span."""
-        return self.end - self.start
 
 
 @final
@@ -162,20 +150,38 @@ class PPOTrainer:
             device=self.device,
             mode=self.profile_mode,
         )
-        global_sample_count_tensor_result = synchronized_count_sum(
-            value=update_input.local_transition_count(),
+        local_rank_counts = torch.zeros(
+            (self.update_partition.world_size,),
+            dtype=torch.long,
+            device=self.device,
+        )
+        local_rank_counts[self.update_partition.rank] = (
+            update_input.local_transition_count()
+        )
+        rank_sample_counts_result = synchronized_count_vector_sum(
+            values=local_rank_counts,
             partition=self.update_partition,
             device=self.device,
         )
-        if isinstance(
-            global_sample_count_tensor_result, _result.Rejected
-        ):
-            return global_sample_count_tensor_result
+        if isinstance(rank_sample_counts_result, _result.Rejected):
+            return rank_sample_counts_result
         global_sample_count_result = positive_count_value(
-            count=global_sample_count_tensor_result.value
+            count=rank_sample_counts_result.value.sum()
         )
         if isinstance(global_sample_count_result, _result.Rejected):
             return global_sample_count_result
+        rank_sample_counts = _count_tensor_values(
+            rank_sample_counts_result.value
+        )
+        batch_schedule = plan_distributed_minibatches(
+            local_sample_counts=rank_sample_counts,
+            global_minibatch_size=self.train_config.minibatch_size,
+        )
+        global_counts = torch.tensor(
+            batch_schedule.global_counts,
+            dtype=torch.long,
+            device=self.device,
+        )
         batch = update_input.local_batch
         prepared_batch: PreparedPPOBatch | None = None
         raw_advantages = torch.empty(
@@ -245,37 +251,10 @@ class PPOTrainer:
                 epoch=epoch,
                 device=self.device,
             )
-            local_minibatches = _local_epoch_minibatch_spans(
-                epoch_schedule=local_epoch_schedule,
-                minibatch_size=self.train_config.minibatch_size,
+            local_minibatches = batch_schedule.spans_for_rank(
+                self.update_partition.rank
             )
-            minibatch_step_count = _global_minibatch_step_bound(
-                global_sample_count=global_sample_count_result.value,
-                minibatch_size=self.train_config.minibatch_size,
-            )
-            local_counts = _local_minibatch_counts(
-                local_minibatches,
-                step_count=minibatch_step_count,
-                device=self.device,
-            )
-            global_counts_result = synchronized_count_vector_sum(
-                values=local_counts,
-                partition=self.update_partition,
-                device=self.device,
-            )
-            if isinstance(global_counts_result, _result.Rejected):
-                return global_counts_result
-            global_counts = global_counts_result.value
-            global_count_values = _count_tensor_values(global_counts)
-            for step_index, global_count_value in enumerate(
-                global_count_values
-            ):
-                if global_count_value == 0:
-                    break
-                local_span = _local_minibatch_or_empty(
-                    local_minibatches,
-                    step_index=step_index,
-                )
+            for step_index, local_span in enumerate(local_minibatches):
                 local_count = local_span.count()
                 global_count = global_counts[step_index]
                 tensorized_minibatch = _tensorized_minibatch_for_step(
@@ -435,19 +414,7 @@ def _local_epoch_schedule(
     return prepare_ppo_epoch_schedule(
         batch=prepared_batch,
         indices=shuffled_order_tensor,
-    )
-
-
-def _local_epoch_minibatch_spans(
-    *,
-    epoch_schedule: PPOEpochSchedule | None,
-    minibatch_size: int,
-) -> tuple[_MinibatchSpan, ...]:
-    if epoch_schedule is None:
-        return ()
-    return _index_minibatch_spans(
-        sample_count=epoch_schedule.sample_count,
-        minibatch_size=minibatch_size,
+        cpu_indices=torch.tensor(shuffled_order, dtype=torch.long),
     )
 
 
@@ -455,7 +422,7 @@ def _tensorized_minibatch_for_step(
     *,
     prepared_batch: PreparedPPOBatch | None,
     epoch_schedule: PPOEpochSchedule | None,
-    span: _MinibatchSpan,
+    span: MinibatchSpan,
     global_count: Tensor,
     device: torch.device,
 ) -> TensorizedPPOMinibatch:
@@ -485,14 +452,6 @@ def _validate_update_partition(
     return _result.Ok(value=None)
 
 
-def _global_minibatch_step_bound(
-    *, global_sample_count: int, minibatch_size: int
-) -> int:
-    assert global_sample_count > 0
-    assert minibatch_size > 0
-    return (global_sample_count + minibatch_size - 1) // minibatch_size
-
-
 def _count_tensor_values(counts: Tensor) -> tuple[int, ...]:
     assert counts.ndim == 1
     cpu_counts = counts.detach().cpu()
@@ -515,52 +474,6 @@ def _sync_validation_code(
             )
         )
     return _result.Ok(value=all_reduce_max(code))
-
-
-def _index_minibatch_spans(
-    *,
-    sample_count: int,
-    minibatch_size: int,
-) -> tuple[_MinibatchSpan, ...]:
-    assert minibatch_size > 0
-    assert sample_count > 0
-    result: list[_MinibatchSpan] = []
-    for start in range(0, sample_count, minibatch_size):
-        result.append(
-            _MinibatchSpan(
-                start=start,
-                end=min(start + minibatch_size, sample_count),
-            )
-        )
-    return tuple(result)
-
-
-def _local_minibatch_or_empty(
-    minibatches: tuple[_MinibatchSpan, ...],
-    *,
-    step_index: int,
-) -> _MinibatchSpan:
-    assert step_index >= 0
-    if step_index < len(minibatches):
-        return minibatches[step_index]
-    return _MinibatchSpan(start=0, end=0)
-
-
-def _local_minibatch_counts(
-    minibatches: tuple[_MinibatchSpan, ...],
-    *,
-    step_count: int,
-    device: torch.device,
-) -> Tensor:
-    assert step_count >= 0
-    counts = torch.zeros((step_count,), dtype=torch.long, device=device)
-    if not minibatches:
-        return counts
-    values = tuple(minibatch.count() for minibatch in minibatches)
-    counts[: len(values)] = torch.tensor(
-        values, dtype=torch.long, device=device
-    )
-    return counts
 
 
 def _ddp_loss_scale(

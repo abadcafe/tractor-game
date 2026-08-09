@@ -53,7 +53,15 @@ class ArenaPPOBatchSource:
     old_values: Tensor
     raw_advantages: Tensor
     value_targets: Tensor
+    observation_token_counts: Tensor
     max_step_count: int
+
+    def __post_init__(self) -> None:
+        sample_count = int(self.row_indices.shape[0])
+        assert self.observation_token_counts.device.type == "cpu"
+        assert self.observation_token_counts.dtype == torch.long
+        assert self.observation_token_counts.shape == (sample_count,)
+        assert _tensor_bool(self.observation_token_counts.gt(0).all())
 
     def sample_count(self) -> int:
         return int(self.row_indices.shape[0])
@@ -64,12 +72,14 @@ class ArenaPPOBatchSource:
         indices: Tensor,
         advantages: Tensor,
         global_count: Tensor,
+        observation_token_count: int,
     ) -> TensorizedPPOMinibatch:
         return self.arena.select_ppo_minibatch(
             source=self,
             indices=indices,
             advantages=advantages,
             global_count=global_count,
+            observation_token_count=observation_token_count,
         )
 
 
@@ -250,6 +260,13 @@ class ModelRankSampleArena:
                 old_values=old_values,
                 raw_advantages=gae.advantages,
                 value_targets=gae.value_targets,
+                observation_token_counts=(
+                    self._query_indices_tensor()
+                    .index_select(0, rows)
+                    .detach()
+                    .cpu()
+                    + 1
+                ),
                 max_step_count=trajectories.max_step_count,
             )
         )
@@ -273,8 +290,10 @@ class ModelRankSampleArena:
         indices: Tensor,
         advantages: Tensor,
         global_count: Tensor,
+        observation_token_count: int,
     ) -> TensorizedPPOMinibatch:
         assert indices.ndim == 1
+        assert observation_token_count > 0
         local_count = int(indices.shape[0])
         assert local_count > 0
         selected_rows = source.row_indices.index_select(0, indices)
@@ -303,7 +322,14 @@ class ModelRankSampleArena:
             .expand(-1, max_steps)[active_mask]
             + active_step_indices
         )
-        observation = self._select_observation(selected_rows)
+        selected_query_indices = (
+            self._query_indices_tensor().index_select(0, selected_rows)
+        )
+        observation = self._select_observation(
+            rows=selected_rows,
+            query_indices=selected_query_indices,
+            token_count=observation_token_count,
+        )
         replay = PPOReplayTensorBatch(
             sample_count=local_count,
             max_step_count=max_steps,
@@ -453,22 +479,28 @@ class ModelRankSampleArena:
         )
 
     def _select_observation(
-        self, rows: Tensor
+        self,
+        *,
+        rows: Tensor,
+        query_indices: Tensor,
+        token_count: int,
     ) -> ObservationTensorBatch:
+        assert query_indices.shape == rows.shape
+        assert 0 < token_count <= self._token_capacity
         return ObservationTensorBatch(
-            category_ids=self._category_ids_tensor().index_select(
-                0, rows
-            ),
-            scalar_values=self._scalar_values_tensor().index_select(
-                0, rows
-            ),
-            card_rule_values=self._card_rule_values_tensor().index_select(
-                0, rows
-            ),
+            category_ids=self._category_ids_tensor()[
+                :, :token_count
+            ].index_select(0, rows),
+            scalar_values=self._scalar_values_tensor()[
+                :, :token_count
+            ].index_select(0, rows),
+            card_rule_values=self._card_rule_values_tensor()[
+                :, :token_count
+            ].index_select(0, rows),
             encoded_structure_coordinates=(
-                self._encoded_structure_coordinates_tensor().index_select(
-                    0, rows
-                )
+                self._encoded_structure_coordinates_tensor()[
+                    :, :token_count
+                ].index_select(0, rows)
             ),
             candidate_category_ids=self._candidate_category_ids_tensor().index_select(
                 0, rows
@@ -479,9 +511,7 @@ class ModelRankSampleArena:
             candidate_card_rule_values=self._candidate_card_rule_values_tensor().index_select(
                 0, rows
             ),
-            query_indices=self._query_indices_tensor().index_select(
-                0, rows
-            ),
+            query_indices=query_indices,
         )
 
     def _validate_sample(

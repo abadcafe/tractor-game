@@ -22,6 +22,9 @@ class PPOBatchSource(Protocol):
     @property
     def value_targets(self) -> Tensor: ...
 
+    @property
+    def observation_token_counts(self) -> Tensor: ...
+
     def sample_count(self) -> int:
         """Return the number of trainable samples."""
         ...
@@ -32,6 +35,7 @@ class PPOBatchSource(Protocol):
         indices: Tensor,
         advantages: Tensor,
         global_count: Tensor,
+        observation_token_count: int,
     ) -> TensorizedPPOMinibatch:
         """Return one rank-local minibatch view."""
         ...
