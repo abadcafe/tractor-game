@@ -14,6 +14,7 @@ from server.training.checkpoint import (
     read_training_checkpoint_metadata,
 )
 from server.training.config import TrainConfig
+from server.training_cli import cli
 from server.training_cli.cli import main
 
 
@@ -143,3 +144,19 @@ def test_main_requires_one_subcommand(
 
     assert exit_code == 2
     assert "required" in capsys.readouterr().err
+
+
+def test_main_sets_summary_process_title(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    titles: list[str] = []
+
+    def record_title(title: str) -> None:
+        titles.append(title)
+
+    monkeypatch.setattr(cli, "set_process_title", record_title)
+
+    main(("--run-dir", str(tmp_path), "summary"))
+
+    assert titles == ["tractor-summary"]

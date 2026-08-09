@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import torch
 
 from server.foundation import result as _result
+from server.foundation.process_title import set_process_title
 from server.foundation.result import Ok, Rejected
 from server.policy_model.network import ModelConfig
 from server.training.config import TrainConfig
@@ -100,6 +101,11 @@ def run_model_rank_process(
     distributed_rank_config: DistributedRankConfig | None,
 ) -> None:
     """Model-rank process main loop."""
+    assert model_rank_index >= 0
+    assert model_rank_device
+    set_process_title(
+        f"tractor-rank{model_rank_index} [{model_rank_device}]"
+    )
     ignore_terminal_interrupt_in_child_process()
     asyncio.run(
         _run_model_rank_process_async(

@@ -1676,6 +1676,7 @@ def test_start_runtime_pools_cleans_worker_started_before_interrupt(
 
     assert interrupted
     assert starter.start_count == 1
+    assert started_processes[0].name == "tractor-worker0"
     assert all(not process.is_alive() for process in started_processes)
 
 
@@ -1724,6 +1725,7 @@ def test_start_runtime_pools_cleans_model_rank_started_before_interrupt(
 
     assert interrupted
     assert starter.start_count == 1
+    assert started_processes[0].name == "tractor-rank0"
     assert all(not process.is_alive() for process in started_processes)
 
 

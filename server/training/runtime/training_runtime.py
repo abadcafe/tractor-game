@@ -435,6 +435,7 @@ def _start_runtime_pools(
                 else worker_inference_links[index].worker_peer
             )
             process = context.Process(
+                name=f"tractor-worker{index}",
                 target=run_training_worker_process,
                 kwargs={
                     "worker_index": index,
@@ -530,6 +531,7 @@ def _start_model_rank_pool(
                 protocol=_MODEL_RANK_CONTROL_PROTOCOL,
             )
             process = context.Process(
+                name=f"tractor-rank{index}",
                 target=run_model_rank_process,
                 kwargs={
                     "model_rank_index": index,

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 from server.foundation import result as _result
+from server.foundation.process_title import set_process_title
 from server.training_cli.summary import (
     build_training_summary,
     format_training_summary,
@@ -41,6 +42,7 @@ def main(
     run_dir = values.pop("run_dir")
     assert isinstance(command, str)
     assert isinstance(run_dir, Path)
+    set_process_title(_cli_process_title(command))
     try:
         if command == "init":
             from server.training import TrainingInitOptions
@@ -79,6 +81,15 @@ def main(
     _execute_summary(
         parser, run_dir=run_dir, output_format=output_format
     )
+
+
+def _cli_process_title(command: str) -> str:
+    assert command in ("init", "resume", "summary")
+    if command == "init":
+        return "tractor-init"
+    if command == "resume":
+        return "tractor-coordinator"
+    return "tractor-summary"
 
 
 def _execute_init(
