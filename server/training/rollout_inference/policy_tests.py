@@ -34,6 +34,7 @@ from server.policy_model.observation import (
 from server.policy_model.observation.tensor import (
     ObservationTensorBatch,
 )
+from server.training.device_execution import DeviceExecutionPolicy
 from server.training.rollout_inference.batch import (
     DevicePolicyRequestBatch,
     PolicyRequestCompiler,
@@ -64,6 +65,9 @@ def test_batch_sampling_scores_the_fixed_legal_choice_mask() -> None:
         device=torch.device("cpu"),
         requests=_request_batch(observation, legal),
         sampler=_sampler(batch_size=1),
+        execution_policy=DeviceExecutionPolicy.for_device(
+            torch.device("cpu")
+        ),
     )
 
     assert isinstance(result, Ok)
@@ -156,6 +160,9 @@ def test_batch_sampling_encodes_multiple_observations_together() -> (
         device=torch.device("cpu"),
         requests=_request_batch(observation, legal, batch_size=2),
         sampler=_sampler(batch_size=2),
+        execution_policy=DeviceExecutionPolicy.for_device(
+            torch.device("cpu")
+        ),
     )
 
     assert isinstance(result, Ok)
@@ -218,11 +225,6 @@ class _FixedChoiceSession(ActionDecodeSession):
         self._max_steps = max_steps
         self._step_index = 0
 
-    @property
-    @override
-    def unique_prefix_count(self) -> int:
-        return self._batch_size
-
     @override
     def next_choice_logits(
         self,
@@ -244,20 +246,6 @@ class _FixedChoiceSession(ActionDecodeSession):
         selected_choice_ids: Tensor,
         active_rows: Tensor,
     ) -> None:
-        assert selected_choice_ids.shape == (self._batch_size,)
-        assert active_rows.shape == (self._batch_size,)
-        self._step_index += 1
-        assert self._step_index <= self._max_steps
-
-    @override
-    def fork(
-        self,
-        *,
-        parent_rows: Tensor,
-        selected_choice_ids: Tensor,
-        active_rows: Tensor,
-    ) -> None:
-        assert parent_rows.shape == (self._batch_size,)
         assert selected_choice_ids.shape == (self._batch_size,)
         assert active_rows.shape == (self._batch_size,)
         self._step_index += 1

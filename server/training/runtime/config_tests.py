@@ -187,6 +187,18 @@ def test_execution_config_derives_unbound_workers_from_layout() -> None:
     assert config.worker_cpu_set(1) == ()
 
 
+def test_execution_config_caps_model_batch_to_in_flight_supply() -> (
+    None
+):
+    config = ExecutionConfig(
+        model_inference_batch_size=64,
+        game_envs_per_worker=8,
+    )
+
+    assert config.inference_batch_target(assigned_worker_count=4) == 32
+    assert config.inference_batch_target(assigned_worker_count=12) == 64
+
+
 def test_execution_config_maps_workers_by_modulo() -> None:
     config = ExecutionConfig(
         worker_cpu_layout=(4, 5, 6, 7, 8),

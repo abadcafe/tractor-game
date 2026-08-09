@@ -21,6 +21,7 @@ from server.training.runtime.messages import (
     WorkerCommandRejected,
     WorkerResponse,
     WorkerSamplingAlreadyStopped,
+    WorkerSamplingFailed,
     WorkerSamplingStarted,
     WorkerSamplingStopped,
     WorkerSnapshotCompleted,
@@ -145,20 +146,78 @@ async def stop_worker_sampling_session(
     *,
     session: WorkerSamplingSession,
     timeout_seconds: float,
+    excluded_worker_indexes: frozenset[int],
 ) -> _result.Ok[tuple[WorkerSamplingStopped, ...]] | _result.Rejected:
     """Stop a fully started worker sampling session."""
+    handles = tuple(
+        handle
+        for handle in session.started_handles
+        if handle.index not in excluded_worker_indexes
+    )
+    assert len(handles) + len(excluded_worker_indexes) == len(
+        session.started_handles
+    )
+    if not handles:
+        return Ok(value=())
     send_result = await _send_worker_stop_sampling_commands(
-        handles=session.started_handles,
+        handles=handles,
         policy_version=session.policy_version,
         rollout_id=session.rollout_id,
     )
     if isinstance(send_result, Rejected):
         return send_result
     return await _receive_worker_sampling_stopped(
-        handles=session.started_handles,
+        handles=handles,
         policy_version=session.policy_version,
         timeout_seconds=timeout_seconds,
     )
+
+
+async def poll_worker_sampling_failure(
+    *, session: WorkerSamplingSession, timeout_seconds: float
+) -> _result.Ok[WorkerSamplingFailed | None] | _result.Rejected:
+    """Return the first fatal response available in a session."""
+    ready_result = await poll_async_control_responses(
+        endpoints=tuple(
+            handle.control for handle in session.started_handles
+        ),
+        timeout_seconds=timeout_seconds,
+    )
+    if isinstance(ready_result, Rejected):
+        return ready_result
+    if not ready_result.value:
+        return Ok(value=None)
+    control = ready_result.value[0]
+    handle = _worker_handle_for_control(
+        handles=session.started_handles,
+        control=control,
+    )
+    response_result = await control.recv_response()
+    if isinstance(response_result, Rejected):
+        return response_result
+    response = response_result.value
+    if not isinstance(response, WorkerSamplingFailed):
+        return Rejected(
+            reason=_unexpected_worker_response_reason(
+                response=response,
+                stage="active sampling",
+            )
+        )
+    if response.worker_index != handle.index:
+        return Rejected(
+            reason="worker returned mismatched sampling failure index"
+        )
+    if response.policy_version != session.policy_version:
+        return Rejected(
+            reason=(
+                "worker returned stale sampling failure policy version"
+            )
+        )
+    if response.rollout_id != session.rollout_id:
+        return Rejected(
+            reason="worker returned stale sampling failure rollout id"
+        )
+    return Ok(value=response)
 
 
 def _cleanup_rejection(
@@ -269,6 +328,13 @@ async def _receive_worker_sampling_session_started(
                     )
                 started_handles.append(handle)
                 continue
+            if isinstance(response, WorkerSamplingFailed):
+                return Rejected(
+                    reason=(
+                        f"worker-{response.worker_index}: "
+                        f"{response.reason}"
+                    )
+                )
             return await _abort_worker_sampling_start(
                 handles=commanded_handles,
                 policy_version=policy_version,
@@ -428,6 +494,13 @@ async def _receive_worker_sampling_abort_stopped(
                     )
                 pending.remove(handle)
                 continue
+            if isinstance(response, WorkerSamplingFailed):
+                return Rejected(
+                    reason=(
+                        f"worker-{response.worker_index}: "
+                        f"{response.reason}"
+                    )
+                )
             return Rejected(
                 reason=_unexpected_worker_response_reason(
                     response=response,
@@ -476,6 +549,13 @@ async def _receive_worker_sampling_stopped(
                         reason=(
                             "worker returned already-stopped during "
                             "sampling stop"
+                        )
+                    )
+                case WorkerSamplingFailed():
+                    return Rejected(
+                        reason=(
+                            f"worker-{response.worker_index}: "
+                            f"{response.reason}"
                         )
                     )
                 case WorkerUpdateCompleted():
@@ -600,6 +680,8 @@ def _unexpected_worker_response_reason(
         action = "stop"
     elif isinstance(response, WorkerSamplingAlreadyStopped):
         action = "already-stopped"
+    elif isinstance(response, WorkerSamplingFailed):
+        action = "failure"
     elif isinstance(response, WorkerUpdateCompleted):
         action = "update"
     elif isinstance(response, WorkerStateLoaded):

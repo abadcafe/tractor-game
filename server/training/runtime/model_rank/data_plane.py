@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+import time
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 import torch
@@ -74,6 +76,10 @@ class ModelRankDataPlane:
     ]
     request_peers: tuple[AsyncPolicyPeer, ...]
     ingress: PolicyRequestIngress
+    batch_wait_seconds: float
+
+    def __post_init__(self) -> None:
+        assert self.batch_wait_seconds >= 0.0
 
     async def run_until_command(
         self,
@@ -167,12 +173,16 @@ class ModelRankDataPlane:
         initial_ready: tuple[AsyncPolicyPeer, ...],
     ) -> _result.Ok[ModelRankInferenceBatch] | _result.Rejected:
         self.ingress.begin_batch()
+        waited_seconds = 0.0
         pending_result = self.ingress.drain_pending_rows()
         if isinstance(pending_result, Rejected):
             self.ingress.discard_batch()
             return pending_result
         ready_receivers = initial_ready
-        while ready_receivers and self.ingress.can_receive():
+        deadline = (
+            asyncio.get_running_loop().time() + self.batch_wait_seconds
+        )
+        while self.ingress.can_receive():
             for peer in ready_receivers:
                 if not self.ingress.can_receive():
                     break
@@ -180,15 +190,39 @@ class ModelRankDataPlane:
                 if isinstance(receive_result, Rejected):
                     self.ingress.discard_batch()
                     return receive_result
-            if self.ingress.can_receive():
-                ready_result = self._ready_request_peers(
-                    timeout_seconds=0.0
+            if not self.ingress.can_receive():
+                break
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0.0:
+                break
+            wait_started = time.perf_counter()
+            ready_result = await wait_readable_frames(
+                endpoints=tuple(
+                    peer.endpoint for peer in self.request_peers
                 )
-                if isinstance(ready_result, Rejected):
-                    self.ingress.discard_batch()
-                    return ready_result
-                ready_receivers = ready_result
-        return self.ingress.finish_batch()
+                + (self.control.frame_endpoint,),
+                timeout_seconds=remaining,
+            )
+            waited_seconds += max(
+                time.perf_counter() - wait_started, 0.0
+            )
+            if isinstance(ready_result, Rejected):
+                self.ingress.discard_batch()
+                return ready_result
+            ready_receivers = self._request_peers_from_ready(
+                ready_result.value
+            )
+            if not ready_receivers:
+                break
+        batch_result = self.ingress.finish_batch()
+        if isinstance(batch_result, Rejected):
+            return batch_result
+        return Ok(
+            value=replace(
+                batch_result.value,
+                batch_wait_seconds=waited_seconds,
+            )
+        )
 
     def _ready_request_peers(
         self, *, timeout_seconds: float
@@ -305,6 +339,7 @@ def _select_staged_rows(
         h2d_seconds=batch.h2d_seconds,
         device_decode_seconds=batch.device_decode_seconds,
         frame_count=batch.frame_count,
+        batch_wait_seconds=batch.batch_wait_seconds,
     )
 
 
@@ -329,6 +364,7 @@ def _slice_staged_rows(
         h2d_seconds=batch.h2d_seconds,
         device_decode_seconds=batch.device_decode_seconds,
         frame_count=batch.frame_count,
+        batch_wait_seconds=batch.batch_wait_seconds,
     )
 
 
@@ -484,6 +520,7 @@ def _annotate_shape_plan(
         h2d_seconds=batch.h2d_seconds,
         device_decode_seconds=batch.device_decode_seconds,
         frame_count=batch.frame_count,
+        batch_wait_seconds=batch.batch_wait_seconds,
         shape_bucket_count=plan.bucket_count(),
         shape_padding_tokens_saved=plan.saved_padding_tokens(),
     )

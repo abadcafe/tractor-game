@@ -146,6 +146,14 @@ def query_training_metrics(
             )
         }
         selected_rollout_ids.update(_pending_rollout_ids(connection))
+        selected_policy_versions = {
+            policy_version
+            for event in recent_updates
+            if (policy_version := event.policy_version) is not None
+        }
+        selected_policy_versions.update(
+            _pending_policy_versions(connection)
+        )
         round_events = _events(
             connection,
             event_type="round",
@@ -154,7 +162,7 @@ def query_training_metrics(
         inference_events = _events(
             connection,
             event_type="inference.batch",
-            rollout_ids=selected_rollout_ids,
+            policy_versions=selected_policy_versions,
         )
         sampling_events = _events(
             connection,
@@ -253,6 +261,7 @@ def _events(
     *,
     event_type: str,
     rollout_ids: set[str] | None = None,
+    policy_versions: set[int] | None = None,
 ) -> tuple[_Event, ...]:
     conditions = [
         "event_type = ?",
@@ -265,6 +274,12 @@ def _events(
         placeholders = ", ".join("?" for _item in rollout_ids)
         conditions.append(f"rollout_id IN ({placeholders})")
         parameters.extend(sorted(rollout_ids))
+    if policy_versions is not None:
+        if not policy_versions:
+            return ()
+        placeholders = ", ".join("?" for _item in policy_versions)
+        conditions.append(f"policy_version IN ({placeholders})")
+        parameters.extend(sorted(policy_versions))
     rows = _SQL_ROWS.validate_python(
         connection.execute(
             "SELECT sequence, recorded_at_ms, process_index, "
@@ -330,7 +345,7 @@ def _pending_rollout_ids(connection: sqlite3.Connection) -> set[str]:
             "SELECT DISTINCT source.rollout_id "
             + "FROM training_logs AS source "
             + "WHERE source.event_type IN "
-            + "('round', 'sampling', 'inference.batch') "
+            + "('round', 'sampling') "
             + "AND source.rollout_id IS NOT NULL "
             + "AND json_type(source.event_json, '$.error') IS NULL "
             + "AND NOT EXISTS ("
@@ -347,6 +362,33 @@ def _pending_rollout_ids(connection: sqlite3.Connection) -> set[str]:
             raise ValueError("invalid pending rollout id")
         rollout_ids.add(rollout_id)
     return rollout_ids
+
+
+def _pending_policy_versions(
+    connection: sqlite3.Connection,
+) -> set[int]:
+    rows = _SQL_ROWS.validate_python(
+        connection.execute(
+            "SELECT DISTINCT source.policy_version "
+            + "FROM training_logs AS source "
+            + "WHERE source.event_type IN "
+            + "('round', 'sampling', 'inference.batch') "
+            + "AND source.policy_version IS NOT NULL "
+            + "AND json_type(source.event_json, '$.error') IS NULL "
+            + "AND NOT EXISTS ("
+            + "SELECT 1 FROM training_logs AS terminal "
+            + "WHERE terminal.policy_version = source.policy_version "
+            + "AND terminal.event_type = 'update'"
+            + ")",
+        ).fetchall()
+    )
+    policy_versions: set[int] = set()
+    for row in rows:
+        policy_version = row[0]
+        if not isinstance(policy_version, int):
+            raise ValueError("invalid pending policy version")
+        policy_versions.add(policy_version)
+    return policy_versions
 
 
 def _update_points(
@@ -443,6 +485,7 @@ def _inference_points(
         for source, target in (
             ("batch_size", "batch_size"),
             ("fill_ratio", "fill_ratio"),
+            ("batch_wait_seconds", "batch_wait_seconds"),
             ("recv_seconds", "recv_seconds"),
             ("h2d_seconds", "h2d_seconds"),
             ("device_decode_seconds", "decode_seconds"),
@@ -565,11 +608,10 @@ def _rollout_ordinal(
     event: _Event, rollout_ordinals: dict[str, int]
 ) -> int | None:
     rollout_id = event.context.get("rollout_id")
-    if not isinstance(rollout_id, str):
-        return None
-    ordinal = rollout_ordinals.get(rollout_id)
-    if ordinal is not None:
-        return ordinal
+    if isinstance(rollout_id, str):
+        ordinal = rollout_ordinals.get(rollout_id)
+        if ordinal is not None:
+            return ordinal
     if event.policy_version is None:
         return None
     return event.policy_version + 1

@@ -22,20 +22,6 @@ from ..observation_backbone import (
 )
 
 
-def _sorted_unique_inverse(values: Tensor) -> tuple[Tensor, Tensor]:
-    """Return sorted unique values and their inverse mapping."""
-    assert values.ndim == 1
-    assert int(values.shape[0]) > 0
-    sorted_result = torch.sort(values)
-    sorted_values = sorted_result.values
-    starts = torch.ones_like(sorted_values, dtype=torch.bool)
-    starts[1:] = sorted_values[1:] != sorted_values[:-1]
-    groups = starts.to(dtype=torch.long).cumsum(dim=0) - 1
-    inverse = torch.empty_like(groups)
-    _ = inverse.scatter_(0, sorted_result.indices, groups)
-    return sorted_values[starts], inverse
-
-
 @dataclass(frozen=True, slots=True)
 class ActionTraceScores:
     """Fixed-vocabulary logits for every teacher-forced action step."""
@@ -45,9 +31,6 @@ class ActionTraceScores:
 
 class ActionDecodeSession(Protocol):
     """Incremental action-decoding session contract."""
-
-    @property
-    def unique_prefix_count(self) -> int: ...
 
     def next_choice_logits(
         self,
@@ -61,199 +44,69 @@ class ActionDecodeSession(Protocol):
         active_rows: Tensor,
     ) -> None: ...
 
-    def fork(
-        self,
-        *,
-        parent_rows: Tensor,
-        selected_choice_ids: Tensor,
-        active_rows: Tensor,
-    ) -> None: ...
-
 
 @dataclass(slots=True)
 class _ActionDecodeSession:
-    """Incremental decoder state shared by identical action prefixes."""
+    """Fixed-lane decoder state without host synchronization."""
 
     _decoder: ActionDecoder
     _cache: _ActionDecodeCache
-    _base_observation_context: Tensor
-    _base_choice_embeddings: Tensor
-    _base_choice_keys: Tensor
-    _prefix_source_rows: Tensor
-    _lane_to_prefix: Tensor
+    _observation_context: Tensor
+    _choice_embeddings: Tensor
+    _choice_keys: Tensor
     _lane_count: int
     _step_index: int = 0
-
-    @property
-    def unique_prefix_count(self) -> int:
-        """Number of decoder cache rows currently materialized."""
-        return self._cache.batch_size
 
     def next_choice_logits(
         self,
         active_rows: Tensor,
         scored_rows: Tensor,
     ) -> Tensor:
-        """Evaluate every unique active prefix exactly once."""
+        """Evaluate all fixed lanes and mask rows that need no score."""
         assert active_rows.shape == (self._lane_count,)
         assert scored_rows.shape == (self._lane_count,)
         assert active_rows.dtype == torch.bool
         assert scored_rows.dtype == torch.bool
-        assert active_rows.device == self._lane_to_prefix.device
-        assert bool((~scored_rows | active_rows).all().item())
-        logits = torch.zeros(
-            (
-                self._lane_count,
-                int(self._base_choice_keys.shape[1]),
-            ),
-            dtype=self._base_choice_keys.dtype,
-            device=self._base_choice_keys.device,
-        )
-        if not bool(active_rows.any().item()):
-            return logits
-        self._compact_prefixes(active_rows)
-        if not bool(scored_rows.any().item()):
-            return logits
-        scored_lane_rows = torch.nonzero(
-            scored_rows, as_tuple=False
-        ).squeeze(1)
-        scored_prefixes = self._lane_to_prefix.index_select(
-            0, scored_lane_rows
-        )
-        unique_prefixes, scored_inverse = _sorted_unique_inverse(
-            scored_prefixes
-        )
-        scored_cache = self._cache.select_rows(unique_prefixes)
-        source_rows = self._prefix_source_rows.index_select(
-            0, unique_prefixes
-        )
+        assert active_rows.device == self._choice_keys.device
+        assert scored_rows.device == self._choice_keys.device
         prefix_context = self._decoder.decode_live_action_step(
-            cache=scored_cache
+            cache=self._cache
         )
-        prefix_logits = self._decoder.choice_logits_from_prefix_context(
-            observation_context=(
-                self._base_observation_context.index_select(
-                    0, source_rows
-                )
-            ),
+        logits = self._decoder.choice_logits_from_prefix_context(
+            observation_context=self._observation_context,
             prefix_context=prefix_context,
-            choice_keys=self._base_choice_keys.index_select(
-                0, source_rows
-            ),
+            choice_keys=self._choice_keys,
         )
-        _ = logits.index_copy_(
-            0,
-            scored_lane_rows,
-            prefix_logits.index_select(0, scored_inverse),
+        return torch.where(
+            scored_rows.unsqueeze(1),
+            logits,
+            torch.zeros_like(logits),
         )
-        return logits
 
     def advance(
         self,
         selected_choice_ids: Tensor,
         active_rows: Tensor,
     ) -> None:
-        """Fork cache state once per distinct selected child prefix."""
-        parent_rows = torch.arange(
-            self._lane_count,
-            dtype=torch.long,
-            device=self._lane_to_prefix.device,
-        )
-        self.fork(
-            parent_rows=parent_rows,
-            selected_choice_ids=selected_choice_ids,
-            active_rows=active_rows,
-        )
-
-    def fork(
-        self,
-        *,
-        parent_rows: Tensor,
-        selected_choice_ids: Tensor,
-        active_rows: Tensor,
-    ) -> None:
-        """Replace lanes with selected children of arbitrary parents."""
-        assert parent_rows.shape == (self._lane_count,)
+        """Append one selected choice for every fixed lane."""
         assert selected_choice_ids.shape == (self._lane_count,)
         assert active_rows.shape == (self._lane_count,)
-        assert parent_rows.dtype == torch.long
+        assert selected_choice_ids.dtype == torch.long
         assert active_rows.dtype == torch.bool
-        if not bool(active_rows.any().item()):
-            return
+        assert selected_choice_ids.device == self._choice_keys.device
+        assert active_rows.device == self._choice_keys.device
         next_index = self._step_index + 1
         assert next_index < self._cache.max_steps
-        active_lane_rows = torch.nonzero(
-            active_rows, as_tuple=False
-        ).squeeze(1)
-        selected_parent_lanes = parent_rows.index_select(
-            0, active_lane_rows
-        )
-        active_parents = self._lane_to_prefix.index_select(
-            0, selected_parent_lanes
-        )
-        active_choices = selected_choice_ids.index_select(
-            0, active_lane_rows
-        )
-        child_keys = (
-            active_parents * int(self._base_choice_embeddings.shape[1])
-            + active_choices
-        )
-        unique_child_keys, child_inverse = _sorted_unique_inverse(
-            child_keys
-        )
-        choice_count = int(self._base_choice_embeddings.shape[1])
-        parent_rows = torch.div(
-            unique_child_keys,
-            choice_count,
-            rounding_mode="floor",
-        )
-        child_choice_ids = unique_child_keys.remainder(choice_count)
-        child_source_rows = self._prefix_source_rows.index_select(
-            0, parent_rows
-        )
-        cache = self._cache.select_rows(parent_rows)
-        child_choice_embeddings = (
-            self._base_choice_embeddings.index_select(
-                0, child_source_rows
-            )
-        )
         embeddings = self._decoder.embed_selected_choices(
-            choice_embeddings=child_choice_embeddings,
-            choice_ids=child_choice_ids,
+            choice_embeddings=self._choice_embeddings,
+            choice_ids=selected_choice_ids,
             position=next_index,
         )
         self._decoder.append_live_action_choice(
-            cache=cache,
+            cache=self._cache,
             choice_embeddings=embeddings,
         )
-        lane_to_prefix = torch.zeros_like(self._lane_to_prefix)
-        _ = lane_to_prefix.index_copy_(
-            0, active_lane_rows, child_inverse
-        )
-        self._cache = cache
-        self._prefix_source_rows = child_source_rows
-        self._lane_to_prefix = lane_to_prefix
         self._step_index = next_index
-
-    def _compact_prefixes(self, active_rows: Tensor) -> None:
-        active_lane_rows = torch.nonzero(
-            active_rows, as_tuple=False
-        ).squeeze(1)
-        active_prefixes = self._lane_to_prefix.index_select(
-            0, active_lane_rows
-        )
-        unique_prefixes, inverse = _sorted_unique_inverse(
-            active_prefixes
-        )
-        if int(unique_prefixes.shape[0]) == self._cache.batch_size:
-            return
-        self._cache = self._cache.select_rows(unique_prefixes)
-        self._prefix_source_rows = (
-            self._prefix_source_rows.index_select(0, unique_prefixes)
-        )
-        lane_to_prefix = torch.zeros_like(self._lane_to_prefix)
-        _ = lane_to_prefix.index_copy_(0, active_lane_rows, inverse)
-        self._lane_to_prefix = lane_to_prefix
 
 
 @dataclass(slots=True)
@@ -296,32 +149,6 @@ class _ActionDecodeCache:
     @property
     def batch_size(self) -> int:
         return int(self.self_keys.shape[0])
-
-    def select_rows(self, row_indices: Tensor) -> _ActionDecodeCache:
-        """Fork selected prefix rows while retaining projected K/V."""
-        assert row_indices.ndim == 1
-        assert row_indices.dtype == torch.long
-        assert row_indices.device == self.self_keys.device
-        assert int(row_indices.shape[0]) > 0
-        return _ActionDecodeCache(
-            self_keys=self.self_keys.index_select(0, row_indices),
-            self_values=self.self_values.index_select(0, row_indices),
-            memory_keys=self.memory_keys.index_select(0, row_indices),
-            memory_values=self.memory_values.index_select(
-                0, row_indices
-            ),
-            memory_padding_mask=(
-                self.memory_padding_mask.index_select(0, row_indices)
-            ),
-            current_embedding=self.current_embedding.index_select(
-                0, row_indices
-            ),
-            current_query=self.current_query.index_select(
-                0, row_indices
-            ),
-            current_length=self.current_length,
-            max_steps=self.max_steps,
-        )
 
 
 @final
@@ -449,54 +276,45 @@ class ActionDecoder(nn.Module):
         source_rows: Tensor,
         max_steps: int,
     ) -> ActionDecodeSession:
-        """Decode lanes through caches owned by unique root rows."""
+        """Begin fixed-lane decoding without device-to-host reads."""
         assert 0 < max_steps <= MAX_ACTION_STEPS
         assert source_rows.ndim == 1
         assert source_rows.dtype == torch.long
         assert source_rows.device == encoding.device
         assert int(source_rows.shape[0]) > 0
-        assert bool((source_rows >= 0).all().item())
-        assert bool((source_rows < encoding.batch_size).all().item())
         inputs = encoding.action_decoder_inputs()
-        prefix_source_rows, lane_to_prefix = _sorted_unique_inverse(
-            source_rows
+        observation_context = inputs.observation_context.index_select(
+            0, source_rows
         )
-        root_context = inputs.observation_context.index_select(
-            0, prefix_source_rows
-        )
-        seed = call_tensor(self._query_seed, root_context)
+        seed = call_tensor(self._query_seed, observation_context)
         seed = seed + call_tensor(
             self._action_position_embedding,
             torch.zeros(
-                (int(prefix_source_rows.shape[0]),),
+                (int(source_rows.shape[0]),),
                 dtype=torch.long,
                 device=seed.device,
             ),
         )
         cache = self._transformer.begin_decode_cache(
             first_embeddings=seed,
-            memory=inputs.memory.index_select(0, prefix_source_rows),
+            memory=inputs.memory.index_select(0, source_rows),
             memory_padding_mask=(
-                inputs.memory_padding_mask.index_select(
-                    0, prefix_source_rows
-                )
+                inputs.memory_padding_mask.index_select(0, source_rows)
             ),
             max_steps=max_steps,
         )
         choice_embeddings = self._choice_embeddings(
             batch_size=encoding.batch_size,
             inputs=inputs,
-        )
+        ).index_select(0, source_rows)
         return _ActionDecodeSession(
             _decoder=self,
             _cache=cache,
-            _base_observation_context=inputs.observation_context,
-            _base_choice_embeddings=choice_embeddings,
-            _base_choice_keys=call_tensor(
+            _observation_context=observation_context,
+            _choice_embeddings=choice_embeddings,
+            _choice_keys=call_tensor(
                 self._choice_key, choice_embeddings
             ),
-            _prefix_source_rows=prefix_source_rows,
-            _lane_to_prefix=lane_to_prefix,
             _lane_count=int(source_rows.shape[0]),
         )
 

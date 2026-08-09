@@ -87,10 +87,14 @@ async def test_local_policy_client_batches_same_loop() -> None:
 
     client = BatchedPolicyClient(
         worker_index=2,
-        transport=LocalPolicyBatchTransport(replica=replica),
+        transport=LocalPolicyBatchTransport(
+            replica=replica,
+            event_sink=NullEventSink(),
+            model_rank_index=2,
+            configured_batch_size=4,
+        ),
         timeout_seconds=1.0,
         batch_size=4,
-        event_sink=NullEventSink(),
     )
     first_task = asyncio.create_task(
         client.decide(observation, legal_actions, _decision_key())
@@ -132,7 +136,10 @@ async def test_local_policy_client_drains_cancelled_response() -> None:
     legal_actions = _legal_actions(observation)
     transport = _CancelBeforeReceiveLocalTransport(
         LocalPolicyBatchTransport(
-            replica=_FakeReplica(state=_runtime_state())
+            replica=_FakeReplica(state=_runtime_state()),
+            event_sink=NullEventSink(),
+            model_rank_index=0,
+            configured_batch_size=1,
         )
     )
     client = BatchedPolicyClient(
@@ -140,7 +147,6 @@ async def test_local_policy_client_drains_cancelled_response() -> None:
         transport=transport,
         timeout_seconds=1.0,
         batch_size=1,
-        event_sink=NullEventSink(),
     )
     first = asyncio.create_task(
         client.decide(observation, legal_actions, _decision_key())
@@ -198,7 +204,6 @@ async def test_remote_policy_client_roundtrips_async_payload() -> None:
                 ),
                 timeout_seconds=1.0,
                 batch_size=4,
-                event_sink=NullEventSink(),
             ).decide(
                 observation,
                 legal_actions,
@@ -250,7 +255,6 @@ async def test_remote_policy_client_rejects_response_mismatch() -> None:
                 ),
                 timeout_seconds=1.0,
                 batch_size=4,
-                event_sink=NullEventSink(),
             ).decide(
                 observation,
                 legal_actions,
@@ -302,7 +306,6 @@ async def test_remote_policy_client_sends_concurrent_frames() -> None:
             ),
             timeout_seconds=1.0,
             batch_size=1,
-            event_sink=NullEventSink(),
         )
         first = asyncio.create_task(
             client.decide(observation, legal_actions, _decision_key())
@@ -344,6 +347,35 @@ async def test_remote_policy_client_sends_concurrent_frames() -> None:
 
 
 @pytest.mark.asyncio
+async def test_remote_client_registers_before_fast_response() -> None:
+    observation = _observation()
+    legal_actions = _legal_actions(observation)
+    transport = _FastResponseDuringSubmitTransport()
+    client = BatchedPolicyClient(
+        worker_index=2,
+        transport=transport,
+        timeout_seconds=0.1,
+        batch_size=1,
+    )
+    first = asyncio.create_task(
+        client.decide(observation, legal_actions, _decision_key())
+    )
+    second = asyncio.create_task(
+        client.decide(observation, legal_actions, _decision_key())
+    )
+
+    delivered = await transport.wait_second_response_delivered()
+    assert delivered
+    transport.release_second_submit()
+    first_result, second_result = await asyncio.gather(first, second)
+
+    assert isinstance(first_result, Ok)
+    assert isinstance(second_result, Ok)
+    assert first_result.value.action.trace == _pass_trace()
+    assert second_result.value.action.trace == _pass_trace()
+
+
+@pytest.mark.asyncio
 async def test_remote_policy_client_rejects_unsent_route_response() -> (
     None
 ):
@@ -355,7 +387,6 @@ async def test_remote_policy_client_rejects_unsent_route_response() -> (
         transport=transport,
         timeout_seconds=1.0,
         batch_size=1,
-        event_sink=NullEventSink(),
     )
 
     first = asyncio.create_task(
@@ -504,6 +535,66 @@ class _MismatchedFirstResponseTransport:
                 ),
             )
         )
+
+
+@final
+class _FastResponseDuringSubmitTransport:
+    def __init__(self) -> None:
+        self._responses: asyncio.Queue[tuple[PolicyResponse, ...]] = (
+            asyncio.Queue()
+        )
+        self._release_second_submit = asyncio.Event()
+        self._second_response_delivered = asyncio.Event()
+        self._submit_count = 0
+        self._first_route: PolicyRequestRoute | None = None
+
+    async def wait_second_response_delivered(self) -> bool:
+        try:
+            _ = await asyncio.wait_for(
+                self._second_response_delivered.wait(), timeout=5.0
+            )
+        except TimeoutError:
+            return False
+        return True
+
+    def release_second_submit(self) -> None:
+        self._release_second_submit.set()
+
+    async def submit_batch(
+        self, *, batch: BorrowedPolicyRequestBatch
+    ) -> Ok[None]:
+        assert batch.row_count() == 1
+        self._submit_count += 1
+        route = batch.routes[0]
+        if self._submit_count == 1:
+            self._first_route = route
+            return Ok(value=None)
+        assert self._submit_count == 2
+        first_route = self._first_route
+        assert first_route is not None
+        self._responses.put_nowait(
+            (
+                _completed_policy_response(first_route),
+                _completed_policy_response(route),
+            )
+        )
+        _ = await self._release_second_submit.wait()
+        return Ok(value=None)
+
+    async def receive(
+        self, *, timeout_seconds: float
+    ) -> Ok[tuple[PolicyResponse, ...]] | Rejected:
+        try:
+            responses = await asyncio.wait_for(
+                self._responses.get(), timeout=timeout_seconds
+            )
+        except TimeoutError:
+            return Rejected(reason="test response timed out")
+        if any(
+            response.route.request_id == 1 for response in responses
+        ):
+            self._second_response_delivered.set()
+        return Ok(value=responses)
 
 
 @final

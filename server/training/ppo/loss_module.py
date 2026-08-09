@@ -8,9 +8,9 @@ from typing import final, override
 import torch
 from torch import Tensor, nn
 
-from server.foundation import result as _result
 from server.policy_model.network import PolicyModel
 from server.training.config import TrainConfig
+from server.training.device_execution import DeviceExecutionPolicy
 from server.training.ppo.advantages import explained_variance
 from server.training.ppo.evaluation import evaluate_trace_batch
 from server.training.ppo.math import (
@@ -19,10 +19,7 @@ from server.training.ppo.math import (
 )
 from server.training.ppo.minibatch import TensorizedPPOMinibatch
 from server.training.ppo.profile import PPOProfileAccumulator
-from server.training.ppo.validation import (
-    PPO_TRACE_EVALUATION_FAILED,
-    validation_ok,
-)
+from server.training.ppo.validation import validation_ok
 from server.training.ppo.value_model import ObservationValueModel
 
 
@@ -81,6 +78,9 @@ class PPOLossModule(nn.Module):
         self._value_model = value_model
         self._train_config = train_config
         self._device = device
+        self._execution_policy = DeviceExecutionPolicy.for_device(
+            device
+        )
 
     def policy_model(self) -> PolicyModel:
         """Return the owned policy model for inference/checkpointing."""
@@ -93,6 +93,14 @@ class PPOLossModule(nn.Module):
         profile: PPOProfileAccumulator,
     ) -> PPOLossForwardTensors:
         """Return one minibatch PPO objective as DDP-visible tensors."""
+        with self._execution_policy.autocast():
+            return self._forward_minibatch(minibatch, profile)
+
+    def _forward_minibatch(
+        self,
+        minibatch: TensorizedPPOMinibatch,
+        profile: PPOProfileAccumulator,
+    ) -> PPOLossForwardTensors:
         if minibatch.is_empty():
             zero = self._zero_loss_touching_all_parameters()
             return _loss_tensors(
@@ -108,36 +116,17 @@ class PPOLossModule(nn.Module):
                 ),
                 validation_code=validation_ok(self._device),
             )
-        evaluated_result = evaluate_trace_batch(
+        evaluated = evaluate_trace_batch(
             model=self._model,
             minibatch=minibatch,
             device=self._device,
             profile=profile,
         )
-        if isinstance(evaluated_result, _result.Rejected):
-            zero = self._zero_loss_touching_all_parameters()
-            return _loss_tensors(
-                MinibatchLoss(
-                    policy_loss=zero,
-                    value_loss=zero,
-                    entropy=zero,
-                    objective_loss=zero,
-                    approx_kl=zero,
-                    clip_fraction=zero,
-                    value_clip_fraction=zero,
-                    explained_variance=zero,
-                ),
-                validation_code=torch.full(
-                    (),
-                    PPO_TRACE_EVALUATION_FAILED,
-                    dtype=torch.long,
-                    device=self._device,
-                ),
-            )
-        evaluated = evaluated_result.value
         observation_batch = minibatch.observation_batch
         assert observation_batch is not None
-        new_values = self._value_model.forward(observation_batch)
+        new_values = self._value_model.forward(observation_batch).to(
+            dtype=torch.float32
+        )
         objective = clipped_ppo_objective(
             old_log_probabilities=minibatch.old_log_probabilities,
             new_log_probabilities=evaluated.log_probabilities,
@@ -167,7 +156,7 @@ class PPOLossModule(nn.Module):
                     targets=minibatch.value_targets,
                 ),
             ),
-            validation_code=validation_ok(self._device),
+            validation_code=evaluated.validation_code,
         )
 
     def _zero_loss_touching_all_parameters(self) -> Tensor:

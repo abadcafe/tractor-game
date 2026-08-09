@@ -9,6 +9,7 @@ from server.policy_model.actions.decoding import (
     ActionSampler,
 )
 from server.policy_model.network import PolicyModel
+from server.training.device_execution import DeviceExecutionPolicy
 from server.training.rollout_inference.batch import (
     DevicePolicyRequestBatch,
 )
@@ -30,11 +31,12 @@ def sample_policy_batch(
     device: torch.device,
     requests: DevicePolicyRequestBatch,
     sampler: ActionSampler,
+    execution_policy: DeviceExecutionPolicy,
 ) -> PolicySamplingResult:
     """Sample policy decisions for a staged request batch."""
-    _ = device
+    assert execution_policy.device == device
     _ = model.eval()
-    with torch.no_grad():
+    with torch.no_grad(), execution_policy.autocast():
         observation_batch = requests.observation_batch
         encoding = model.encode_observations(observation_batch)
         logit_decoder = model.begin_action_decode_session(
@@ -78,11 +80,12 @@ def sample_policy_batch_into_arena(
     requests: DevicePolicyRequestBatch,
     sampler: ActionSampler,
     sample_arena: ModelRankSampleArena,
+    execution_policy: DeviceExecutionPolicy,
 ) -> PolicySamplingDecisionResult:
     """Sample policy decisions and append replay tensors to an arena."""
-    _ = device
+    assert execution_policy.device == device
     _ = model.eval()
-    with torch.no_grad():
+    with torch.no_grad(), execution_policy.autocast():
         observation_batch = requests.observation_batch
         encoding = model.encode_observations(observation_batch)
         logit_decoder = model.begin_action_decode_session(

@@ -7,19 +7,16 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from server.foundation import result as _result
-from server.policy_model.network import (
-    EncodedObservation,
-    PolicyModel,
-)
+from server.policy_model.network import EncodedObservation, PolicyModel
 from server.training.ppo.minibatch import TensorizedPPOMinibatch
 from server.training.ppo.profile import PPOProfileAccumulator
-from server.training.ppo.replay_tensors import (
-    PPOReplayTensorBatch,
-)
-from server.training.rollout_inference.tensor_validation import (
-    NamedTensorCheck,
-    reject_if_non_finite,
+from server.training.ppo.replay_tensors import PPOReplayTensorBatch
+from server.training.ppo.validation import (
+    PPO_TRACE_EVALUATION_FAILED,
+    TensorValidationCheck,
+    combine_validation_codes,
+    non_finite_validation_code,
+    validation_ok,
 )
 
 
@@ -29,6 +26,7 @@ class TraceBatchEval:
 
     log_probabilities: Tensor
     entropies: Tensor
+    validation_code: Tensor
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +36,7 @@ class ActionStepBatchEval:
     active_positions: Tensor
     log_probabilities: Tensor
     entropies: Tensor
+    validation_code: Tensor
 
 
 def evaluate_trace_batch(
@@ -46,8 +45,8 @@ def evaluate_trace_batch(
     minibatch: TensorizedPPOMinibatch,
     device: torch.device,
     profile: PPOProfileAccumulator,
-) -> _result.Ok[TraceBatchEval] | _result.Rejected:
-    """Evaluate recorded semantic traces under the current model."""
+) -> TraceBatchEval:
+    """Evaluate recorded traces without synchronizing device checks."""
     assert not minibatch.is_empty()
     observation_batch = minibatch.observation_batch
     assert observation_batch is not None
@@ -65,15 +64,12 @@ def evaluate_trace_batch(
     )
     replay = minibatch.replay
     assert replay is not None
-    prefix_eval_result = _action_step_batch_eval(
+    prefix_eval = _action_step_batch_eval(
         model=model,
         encoding=policy_encoding,
         replay=replay,
         profile=profile,
     )
-    if isinstance(prefix_eval_result, _result.Rejected):
-        return prefix_eval_result
-    prefix_eval = prefix_eval_result.value
     _ = log_probability_sums.index_add_(
         dim=0,
         index=prefix_eval.active_positions,
@@ -84,11 +80,10 @@ def evaluate_trace_batch(
         index=prefix_eval.active_positions,
         source=prefix_eval.entropies,
     )
-    return _result.Ok(
-        value=TraceBatchEval(
-            log_probabilities=log_probability_sums,
-            entropies=entropy_sums,
-        )
+    return TraceBatchEval(
+        log_probabilities=log_probability_sums,
+        entropies=entropy_sums,
+        validation_code=prefix_eval.validation_code,
     )
 
 
@@ -98,7 +93,7 @@ def _action_step_batch_eval(
     encoding: EncodedObservation,
     replay: PPOReplayTensorBatch,
     profile: PPOProfileAccumulator,
-) -> _result.Ok[ActionStepBatchEval] | _result.Rejected:
+) -> ActionStepBatchEval:
     assert int(replay.step_counts.shape[0]) > 0
     profile.record_action_trace_lengths(replay.step_counts)
     decode_start = profile.mark()
@@ -118,15 +113,14 @@ def _action_step_batch_eval(
         empty = torch.empty(
             (0,), dtype=torch.float32, device=active_positions.device
         )
-        return _result.Ok(
-            value=ActionStepBatchEval(
-                active_positions=active_positions,
-                log_probabilities=empty,
-                entropies=empty,
-            )
+        return ActionStepBatchEval(
+            active_positions=active_positions,
+            log_probabilities=empty,
+            entropies=empty,
+            validation_code=validation_ok(active_positions.device),
         )
     distribution_start = profile.mark()
-    distribution_result = _evaluate_recorded_choice_batch(
+    distribution = _evaluate_recorded_choice_batch(
         choice_logits=scores.choice_logits[
             replay.active_sample_indices, replay.active_step_indices
         ],
@@ -135,18 +129,14 @@ def _action_step_batch_eval(
             replay.active_sample_indices, replay.active_step_indices
         ],
     )
-    if isinstance(distribution_result, _result.Rejected):
-        return distribution_result
-    distribution = distribution_result.value
     profile.record_elapsed(
         "action_distribution_seconds", distribution_start
     )
-    return _result.Ok(
-        value=ActionStepBatchEval(
-            active_positions=active_positions,
-            log_probabilities=distribution.log_probabilities,
-            entropies=distribution.entropies,
-        )
+    return ActionStepBatchEval(
+        active_positions=active_positions,
+        log_probabilities=distribution.log_probabilities,
+        entropies=distribution.entropies,
+        validation_code=distribution.validation_code,
     )
 
 
@@ -154,6 +144,7 @@ def _action_step_batch_eval(
 class _RecordedChoiceEval:
     log_probabilities: Tensor
     entropies: Tensor
+    validation_code: Tensor
 
 
 def _evaluate_recorded_choice_batch(
@@ -161,20 +152,19 @@ def _evaluate_recorded_choice_batch(
     choice_logits: Tensor,
     legal_choice_masks: Tensor,
     selected_choice_ids: Tensor,
-) -> _result.Ok[_RecordedChoiceEval] | _result.Rejected:
+) -> _RecordedChoiceEval:
     assert legal_choice_masks.shape == choice_logits.shape
     assert selected_choice_ids.shape == (int(choice_logits.shape[0]),)
+    choice_logits = choice_logits.to(dtype=torch.float32)
     valid_logits = choice_logits[legal_choice_masks]
-    logits_check = reject_if_non_finite(
+    logits_code = non_finite_validation_code(
         (
-            NamedTensorCheck(
+            TensorValidationCheck(
                 tensor=valid_logits,
-                reason="policy choice logits must be finite",
+                code=PPO_TRACE_EVALUATION_FAILED,
             ),
         )
     )
-    if isinstance(logits_check, _result.Rejected):
-        return logits_check
     masked_logits = choice_logits.masked_fill(
         ~legal_choice_masks, -torch.inf
     )
@@ -188,31 +178,30 @@ def _evaluate_recorded_choice_batch(
         dim=1, index=selected_choice_ids.unsqueeze(1)
     ).squeeze(1)
     entropies = -(probabilities * log_probabilities).sum(dim=1)
-    distribution_check = reject_if_non_finite(
+    distribution_code = non_finite_validation_code(
         (
-            NamedTensorCheck(
+            TensorValidationCheck(
                 tensor=probabilities,
-                reason="policy choice distribution must be finite",
+                code=PPO_TRACE_EVALUATION_FAILED,
             ),
-            NamedTensorCheck(
+            TensorValidationCheck(
                 tensor=log_probabilities,
-                reason="policy choice distribution must be finite",
+                code=PPO_TRACE_EVALUATION_FAILED,
             ),
-            NamedTensorCheck(
+            TensorValidationCheck(
                 tensor=selected,
-                reason="policy choice distribution must be finite",
+                code=PPO_TRACE_EVALUATION_FAILED,
             ),
-            NamedTensorCheck(
+            TensorValidationCheck(
                 tensor=entropies,
-                reason="policy choice distribution must be finite",
+                code=PPO_TRACE_EVALUATION_FAILED,
             ),
         )
     )
-    if isinstance(distribution_check, _result.Rejected):
-        return distribution_check
-    return _result.Ok(
-        value=_RecordedChoiceEval(
-            log_probabilities=selected,
-            entropies=entropies,
-        )
+    return _RecordedChoiceEval(
+        log_probabilities=selected,
+        entropies=entropies,
+        validation_code=combine_validation_codes(
+            logits_code, distribution_code
+        ),
     )

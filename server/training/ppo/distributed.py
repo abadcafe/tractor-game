@@ -60,21 +60,9 @@ class _TensorLossForwarder(Protocol):
     def zero_grad(self, set_to_none: bool = True) -> None: ...
 
 
-class _AllReduceInPlace(Protocol):
-    def __call__(self, tensor: torch.Tensor, op: object) -> None: ...
-
-
-_all_reduce_in_place = cast(
-    _AllReduceInPlace,
-    cast(object, dist.all_reduce),
-)
-
-
 @dataclass(slots=True)
 class _PPOLossForwarderAdapter:
     module: _TensorLossForwarder
-    partition: PPOUpdatePartition
-    device: torch.device
 
     def __call__(
         self,
@@ -82,17 +70,7 @@ class _PPOLossForwarderAdapter:
         profile: PPOProfileAccumulator,
     ) -> PPOLossForwardOutput:
         tensors = self.module(minibatch, profile)
-        validation_code = tensors[8]
-        if self.partition.world_size > 1:
-            if not dist.is_initialized():
-                raise AssertionError(
-                    "distributed PPO loss sync requires process group"
-                )
-            validation_code = validation_code.detach().clone()
-            _all_reduce_in_place(validation_code, dist.ReduceOp.MAX)
-        return loss_forward_output_from_tensors(
-            (*tensors[:8], validation_code),
-        )
+        return loss_forward_output_from_tensors(tensors)
 
     def train(self, mode: bool = True) -> nn.Module:
         return self.module.train(mode)
@@ -117,8 +95,6 @@ def build_ppo_loss_forwarder(
         return _result.Ok(
             value=_PPOLossForwarderAdapter(
                 module=cast(_TensorLossForwarder, module),
-                partition=partition,
-                device=device,
             )
         )
     if not dist.is_initialized():
@@ -133,6 +109,8 @@ def build_ppo_loss_forwarder(
                 module,
                 device_ids=[device_index],
                 output_device=device_index,
+                broadcast_buffers=False,
+                gradient_as_bucket_view=True,
             )
         except RuntimeError as exc:
             return _result.Rejected(
@@ -141,12 +119,14 @@ def build_ppo_loss_forwarder(
         return _result.Ok(
             value=_PPOLossForwarderAdapter(
                 module=cast(_TensorLossForwarder, ddp),
-                partition=partition,
-                device=device,
             )
         )
     try:
-        ddp = DistributedDataParallel(module)
+        ddp = DistributedDataParallel(
+            module,
+            broadcast_buffers=False,
+            gradient_as_bucket_view=True,
+        )
     except RuntimeError as exc:
         return _result.Rejected(
             reason=f"DDP PPO loss wrapper failed: {exc}"
@@ -154,8 +134,6 @@ def build_ppo_loss_forwarder(
     return _result.Ok(
         value=_PPOLossForwarderAdapter(
             module=cast(_TensorLossForwarder, ddp),
-            partition=partition,
-            device=device,
         )
     )
 

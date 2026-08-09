@@ -12,6 +12,7 @@ from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
 from server.policy_model.network import ModelConfig
 from server.training.config import TrainConfig
+from server.training.device_execution import configure_accelerator_math
 from server.training.ppo.distributed import (
     PPOUpdatePartition,
     single_update_partition,
@@ -66,7 +67,10 @@ from server.training.runtime.shared_rollout_arena import (
     SharedRolloutArenaReader,
     attach_rollout_arena_reader,
 )
+from server.training.runtime.threads import apply_torch_thread_config
 from server.training_events import EventContext, StructuredEventSink
+
+_MODEL_RANK_BATCH_WAIT_SECONDS = 0.004
 
 
 @dataclass(slots=True)
@@ -168,12 +172,16 @@ async def _run_model_rank_process_async(
     update_partition = _model_rank_update_partition(
         distributed_rank_config
     )
+    inference_batch_target = execution_config.inference_batch_target(
+        assigned_worker_count=len(inference_peers)
+    )
     core = create_model_replica(
         model_rank_index=model_rank_index,
         model_config=model_config,
         train_config=train_config,
         execution_config=execution_config,
         device=setup_result.value,
+        inference_batch_capacity=inference_batch_target,
         update_partition=update_partition,
     )
     arena_reader = attach_rollout_arena_reader(
@@ -184,6 +192,12 @@ async def _run_model_rank_process_async(
         fields={
             "model_rank_index": model_rank_index,
             "device": model_rank_device,
+            "inference_batch_target": inference_batch_target,
+            "execution_dtype": (
+                "bfloat16"
+                if core.execution_policy.uses_bfloat16
+                else "float32"
+            ),
         },
     )
     try:
@@ -217,10 +231,23 @@ def _setup_model_rank_runtime(
     model_rank_device: str,
     execution_config: ExecutionConfig,
 ) -> _result.Ok[torch.device] | _result.Rejected:
-    return resolve_model_rank_device(
+    device_result = resolve_model_rank_device(
         model_rank_kind=execution_config.model_ranks.kind,
         model_rank_device=model_rank_device,
     )
+    if isinstance(device_result, Rejected):
+        return device_result
+    device = device_result.value
+    if device.type == "cuda":
+        torch.cuda.set_device(device)
+    thread_result = apply_torch_thread_config(
+        num_threads=1,
+        num_interop_threads=1,
+    )
+    if isinstance(thread_result, Rejected):
+        return thread_result
+    configure_accelerator_math(device)
+    return Ok(value=device)
 
 
 def resolve_model_rank_device(
@@ -284,22 +311,29 @@ async def _run_model_rank_event_loop(
     rollout_arena_reader: SharedRolloutArenaReader,
     event_sink: StructuredEventSink,
 ) -> _result.Ok[None] | _result.Rejected:
+    inference_batch_target = execution_config.inference_batch_target(
+        assigned_worker_count=len(inference_peers)
+    )
     data_plane = ModelRankDataPlane(
         control=control,
         request_peers=inference_peers,
         ingress=PolicyRequestIngress(
-            batch_size=execution_config.model_inference_batch_size,
+            batch_size=inference_batch_target,
             device=core.device,
         ),
+        batch_wait_seconds=_MODEL_RANK_BATCH_WAIT_SECONDS,
     )
 
     async def process_batch(
         batch: ModelRankInferenceBatch,
     ) -> _result.Ok[None] | _result.Rejected:
         return await _process_staged_inference_batch(
+            model_rank_index=model_rank_index,
             core=core,
             staged_batch=batch,
             response_peers=inference_peers,
+            configured_batch_size=inference_batch_target,
+            event_sink=event_sink,
         )
 
     async def reject_batch(
@@ -388,15 +422,80 @@ async def _run_model_rank_event_loop(
 
 async def _process_staged_inference_batch(
     *,
+    model_rank_index: int,
     core: ModelReplica,
     staged_batch: ModelRankInferenceBatch,
     response_peers: tuple[AsyncPolicyPeer, ...],
+    configured_batch_size: int,
+    event_sink: StructuredEventSink,
 ) -> _result.Ok[None] | _result.Rejected:
-    return await _process_inference_batch(
-        core=core,
-        staged_batch=staged_batch,
-        response_peers=response_peers,
+    policy_versions = set(staged_batch.device_batch.policy_versions)
+    assert len(policy_versions) == 1
+    policy_version = staged_batch.device_batch.policy_versions[0]
+    inference_started = time.perf_counter()
+    decision_result = core.decide_batch(staged_batch.device_batch)
+    inference_seconds = max(
+        time.perf_counter() - inference_started, 0.0
     )
+    response_started = time.perf_counter()
+    if isinstance(decision_result, Rejected):
+        send_result = await _send_rejected_inference_batch(
+            routes=staged_batch.routes,
+            reason=decision_result.reason,
+            response_peers=response_peers,
+        )
+        execution_error = decision_result.reason
+    else:
+        send_result = await _send_response_batches(
+            routes=staged_batch.routes,
+            decisions=decision_result.value,
+            response_peers=response_peers,
+        )
+        execution_error = None
+    response_seconds = max(time.perf_counter() - response_started, 0.0)
+    error = (
+        send_result.reason
+        if isinstance(send_result, Rejected)
+        else execution_error
+    )
+    duration_seconds = (
+        staged_batch.batch_wait_seconds
+        + staged_batch.recv_seconds
+        + staged_batch.h2d_seconds
+        + staged_batch.device_decode_seconds
+        + inference_seconds
+        + response_seconds
+    )
+    event_sink.emit(
+        "inference.batch",
+        context=EventContext(
+            policy_version=policy_version,
+            model_rank_index=model_rank_index,
+        ),
+        fields={
+            "batch_size": staged_batch.batch_size(),
+            "fill_ratio": (
+                staged_batch.batch_size() / float(configured_batch_size)
+            ),
+            "frame_count": staged_batch.frame_count,
+            "wire_byte_count": staged_batch.wire_byte_count,
+            "batch_wait_seconds": staged_batch.batch_wait_seconds,
+            "recv_seconds": staged_batch.recv_seconds,
+            "h2d_seconds": staged_batch.h2d_seconds,
+            "device_decode_seconds": (
+                staged_batch.device_decode_seconds
+            ),
+            "inference_seconds": inference_seconds,
+            "response_seconds": response_seconds,
+            "duration_seconds": duration_seconds,
+            "shape_bucket_count": staged_batch.shape_bucket_count,
+            "shape_padding_tokens_saved": (
+                staged_batch.shape_padding_tokens_saved
+            ),
+        },
+        error=error,
+    )
+    return send_result
 
 
 def _cuda_device_index(model_rank_device: str) -> int | None:
@@ -530,26 +629,6 @@ async def _send_rejected_inference_batch(
         if isinstance(send_result, Rejected):
             return send_result
     return Ok(value=None)
-
-
-async def _process_inference_batch(
-    *,
-    core: ModelReplica,
-    staged_batch: ModelRankInferenceBatch,
-    response_peers: tuple[AsyncPolicyPeer, ...],
-) -> _result.Ok[None] | _result.Rejected:
-    decision_result = core.decide_batch(staged_batch.device_batch)
-    if isinstance(decision_result, Rejected):
-        return await _send_rejected_inference_batch(
-            routes=staged_batch.routes,
-            reason=decision_result.reason,
-            response_peers=response_peers,
-        )
-    return await _send_response_batches(
-        routes=staged_batch.routes,
-        decisions=decision_result.value,
-        response_peers=response_peers,
-    )
 
 
 async def _send_response_batches(

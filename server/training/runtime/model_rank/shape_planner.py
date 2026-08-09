@@ -39,22 +39,25 @@ def plan_inference_shape_batches(
     assert rows
     counts = _row_generation_counts(generation_step_counts, rows=rows)
     original_tokens = _padded_token_count(counts)
-    if len(rows) <= 1 or not _should_split_by_shape(counts):
+    exact_buckets = _exact_shape_buckets(rows=rows, counts=counts)
+    if not _should_split_by_shape(
+        exact_buckets,
+        generation_step_counts=generation_step_counts,
+        original_tokens=original_tokens,
+    ):
         return InferenceShapePlan(
             buckets=(rows,),
             original_padded_tokens=original_tokens,
             planned_padded_tokens=original_tokens,
         )
-    exact_buckets = _exact_shape_buckets(rows=rows, counts=counts)
-    buckets = _coalesce_small_shape_buckets(exact_buckets)
     planned_tokens = sum(
         _padded_token_count(
             _row_generation_counts(generation_step_counts, rows=bucket)
         )
-        for bucket in buckets
+        for bucket in exact_buckets
     )
     return InferenceShapePlan(
-        buckets=buckets,
+        buckets=exact_buckets,
         original_padded_tokens=original_tokens,
         planned_padded_tokens=planned_tokens,
     )
@@ -71,13 +74,24 @@ def _padded_token_count(counts: tuple[int, ...]) -> int:
     return len(counts) * max(counts)
 
 
-def _should_split_by_shape(counts: tuple[int, ...]) -> bool:
-    assert counts
-    max_count = max(counts)
-    useful_steps = sum(counts)
-    padded_steps = len(counts) * max_count
-    padding_waste = padded_steps - useful_steps
-    return padding_waste >= max(len(counts), 8)
+def _should_split_by_shape(
+    buckets: tuple[tuple[int, ...], ...],
+    *,
+    generation_step_counts: tuple[int, ...],
+    original_tokens: int,
+) -> bool:
+    assert buckets
+    if sum(len(bucket) for bucket in buckets) < 32:
+        return False
+    if len(buckets) <= 1 or any(len(bucket) < 16 for bucket in buckets):
+        return False
+    planned_tokens = sum(
+        _padded_token_count(
+            _row_generation_counts(generation_step_counts, rows=bucket)
+        )
+        for bucket in buckets
+    )
+    return (original_tokens - planned_tokens) * 4 >= original_tokens
 
 
 def _exact_shape_buckets(
@@ -89,27 +103,3 @@ def _exact_shape_buckets(
             buckets[step_count] = []
         buckets[step_count].append(row)
     return tuple(tuple(bucket) for bucket in buckets.values())
-
-
-def _coalesce_small_shape_buckets(
-    buckets: tuple[tuple[int, ...], ...],
-) -> tuple[tuple[int, ...], ...]:
-    pending: list[int] = []
-    result: list[tuple[int, ...]] = []
-    for bucket in buckets:
-        if len(bucket) >= 4:
-            if pending:
-                result.append(tuple(pending))
-                pending.clear()
-            result.append(bucket)
-            continue
-        pending.extend(bucket)
-        if len(pending) >= 4:
-            result.append(tuple(pending))
-            pending.clear()
-    if pending:
-        if result:
-            result[-1] = (*result[-1], *tuple(pending))
-        else:
-            result.append(tuple(pending))
-    return tuple(result)

@@ -13,6 +13,7 @@ from server.policy_model.actions.decoding import (
 )
 from server.policy_model.network import ModelConfig
 from server.training.config import TrainConfig
+from server.training.device_execution import DeviceExecutionPolicy
 from server.training.lifecycle.state import (
     LoadedTrainingState,
     create_model,
@@ -57,6 +58,7 @@ class ModelReplica:
     device: torch.device
     sample_arena: ModelRankSampleArena
     sampler: ActionSampler
+    execution_policy: DeviceExecutionPolicy
 
     def load_state(
         self,
@@ -77,6 +79,7 @@ class ModelReplica:
             requests=requests,
             sampler=self.sampler,
             sample_arena=self.sample_arena,
+            execution_policy=self.execution_policy,
         )
 
     def update_trajectories(
@@ -128,9 +131,11 @@ def create_model_replica(
     train_config: TrainConfig,
     execution_config: ExecutionConfig,
     device: torch.device,
+    inference_batch_capacity: int,
     update_partition: PPOUpdatePartition | None = None,
 ) -> ModelReplica:
     """Create a model replica on one concrete torch device."""
+    assert inference_batch_capacity > 0
     seed_training_rng(train_config.seed)
     model = create_model(model_config, device)
     value_model = create_value_model(model_config, device)
@@ -164,7 +169,8 @@ def create_model_replica(
             device=device,
         ),
         sampler=ActionSampler.create(
-            batch_capacity=execution_config.model_inference_batch_size,
+            batch_capacity=inference_batch_capacity,
             device=device,
         ),
+        execution_policy=DeviceExecutionPolicy.for_device(device),
     )

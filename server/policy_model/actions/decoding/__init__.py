@@ -15,6 +15,10 @@ from server.policy_model.actions.decoding.sampler import (
     ActionSampler,
     ForcedActionBatch,
 )
+from server.policy_model.actions.decoding.sampling import (
+    ACTION_SAMPLING_UNTERMINATED,
+    action_sampling_error_reason,
+)
 from server.policy_model.actions.decoding.spec import (
     ACTION_FACE_COUNT,
     MAX_PAIR_PLAN_COUNT,
@@ -27,6 +31,7 @@ from server.policy_model.actions.decoding.trace import (
 
 __all__ = (
     "ACTION_FACE_COUNT",
+    "ACTION_SAMPLING_UNTERMINATED",
     "MAX_PAIR_PLAN_COUNT",
     "MAX_TRACE_COUNT",
     "ActionChoiceLogitDecoder",
@@ -36,6 +41,7 @@ __all__ = (
     "DeviceActionPlanBatch",
     "ForcedActionBatch",
     "action_plan_generation_step_count",
+    "action_sampling_error_reason",
     "compile_legal_action_frame",
     "plan_batch_to_device",
     "action_trace_choice_ids",

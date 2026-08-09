@@ -122,6 +122,22 @@ class WorkerSamplingStarted:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkerSamplingFailed:
+    """Fatal failure from an active worker sampling session."""
+
+    worker_index: int
+    policy_version: int
+    rollout_id: str
+    reason: str
+
+    def __post_init__(self) -> None:
+        assert self.worker_index >= 0
+        assert self.policy_version >= 0
+        assert self.rollout_id
+        assert self.reason
+
+
+@dataclass(frozen=True, slots=True)
 class WorkerStateLoaded:
     """Worker acknowledged loading a canonical state."""
 
@@ -204,6 +220,7 @@ class WorkerCommandRejected:
 type WorkerResponse = (
     WorkerStateLoaded
     | WorkerSamplingStarted
+    | WorkerSamplingFailed
     | WorkerUpdateCompleted
     | WorkerSnapshotCompleted
     | WorkerSamplingStopped
@@ -218,6 +235,7 @@ def decode_worker_response(value: object) -> WorkerResponse | None:
         value,
         WorkerStateLoaded
         | WorkerSamplingStarted
+        | WorkerSamplingFailed
         | WorkerUpdateCompleted
         | WorkerSnapshotCompleted
         | WorkerSamplingStopped

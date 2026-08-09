@@ -111,6 +111,7 @@ def wait_rollout_round_target_or_stop(
     target_round_count: int,
     timeout_seconds: float,
     stop_request: TrainingStopRequest,
+    abort_request: TrainingStopRequest,
 ) -> _result.Ok[RolloutWaitOutcome] | _result.Rejected:
     """Block until complete rounds reach the target or stop is set."""
     assert target_round_count > 0
@@ -129,6 +130,8 @@ def wait_rollout_round_target_or_stop(
                 return Ok(RolloutRoundTargetReached(snapshot.value))
             if stop_request.is_requested():
                 return Ok(RolloutStopRequested())
+            if abort_request.is_requested():
+                return Rejected(reason="rollout wait aborted")
             remaining = deadline - time.monotonic()
             if remaining <= 0.0:
                 return Rejected(reason="rollout round target timed out")

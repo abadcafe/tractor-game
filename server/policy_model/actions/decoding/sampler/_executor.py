@@ -36,12 +36,10 @@ from server.policy_model.actions.decoding.frame import (
     ACTION_KIND_TRACE_SET,
 )
 from server.policy_model.actions.decoding.sampling import (
-    action_sampling_error_reason,
+    ACTION_SAMPLING_UNTERMINATED,
     sample_legal_choices,
 )
 from server.policy_model.actions.decoding.spec import ACTION_FACE_COUNT
-
-_ERROR_UNTERMINATED = 1000
 
 
 class ActionChoiceLogitDecoder(Protocol):
@@ -75,6 +73,7 @@ class ActionSampleBatch:
     step_counts: Tensor
     choice_counts: Tensor
     log_probabilities: Tensor
+    error_code: Tensor
 
     def __post_init__(self) -> None:
         batch_size, max_steps = self.choice_ids_padded.shape
@@ -102,6 +101,9 @@ class ActionSampleBatch:
         assert self.step_counts.device == device
         assert self.choice_counts.device == device
         assert self.log_probabilities.device == device
+        assert self.error_code.shape == ()
+        assert self.error_code.dtype == torch.long
+        assert self.error_code.device == device
 
 
 @dataclass(frozen=True, slots=True)
@@ -407,11 +409,10 @@ def _sample_actions(
             logit_decoder.advance(sampled.choice_ids, active_rows)
     final_state = workspace.state_view(batch_size=batch_size)
     error_code = _set_error_if(
-        error_code, (~final_state.done).any(), _ERROR_UNTERMINATED
+        error_code,
+        (~final_state.done).any(),
+        ACTION_SAMPLING_UNTERMINATED,
     )
-    error_value = int(error_code.detach().cpu().item())
-    if error_value != 0:
-        return Rejected(reason=_error_reason(error_value))
     replay = _flat_active_replay(
         workspace=workspace,
         batch_size=batch_size,
@@ -428,6 +429,7 @@ def _sample_actions(
             step_counts=workspace.step_counts[:batch_size],
             choice_counts=workspace.choice_counts[:batch_size],
             log_probabilities=workspace.log_probabilities[:batch_size],
+            error_code=error_code,
         )
     )
 
@@ -664,15 +666,6 @@ def _merge_error_code(current: Tensor, incoming: Tensor) -> Tensor:
     return torch.where(
         (current == 0) & (incoming != 0), incoming, current
     )
-
-
-def _error_reason(error_code: int) -> str:
-    if error_code == _ERROR_UNTERMINATED:
-        return "policy action did not terminate"
-    sampling_reason = action_sampling_error_reason(error_code)
-    if sampling_reason is not None:
-        return sampling_reason
-    return "policy sampling failed"
 
 
 __all__ = (

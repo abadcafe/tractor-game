@@ -256,18 +256,18 @@ def test_metrics_project_live_inference_before_first_update(
     assert isinstance(initialized, Ok)
     sink = StructuredEventSink(
         run_dir=tmp_path,
-        process=ProcessIdentity(kind="worker", index=0),
+        process=ProcessIdentity(kind="model_rank", index=0),
     )
     sink.emit(
         "inference.batch",
         context=EventContext(
             policy_version=0,
-            rollout_id="rollout-a",
-            worker_index=0,
+            model_rank_index=0,
         ),
         fields={
             "batch_size": 4,
             "fill_ratio": 0.5,
+            "batch_wait_seconds": 0.002,
             "inference_seconds": 0.25,
         },
     )
@@ -282,6 +282,7 @@ def test_metrics_project_live_inference_before_first_update(
     point = result.value.datasets.inference[0]
     assert point.update == 1
     assert point.values["batch_size"] == 4.0
+    assert point.values["batch_wait_seconds_avg"] == 0.002
     assert point.values["inference_seconds_avg"] == 0.25
 
 

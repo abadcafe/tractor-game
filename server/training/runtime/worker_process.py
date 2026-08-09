@@ -38,6 +38,7 @@ from server.training.runtime.messages import (
     WorkerLoadStateCommand,
     WorkerResponse,
     WorkerSamplingAlreadyStopped,
+    WorkerSamplingFailed,
     WorkerSamplingStarted,
     WorkerSamplingStopped,
     WorkerSnapshotCommand,
@@ -241,10 +242,18 @@ async def _run_training_worker_process_async(
     )
     try:
         while True:
-            command_result = await control.recv_command()
+            command_result = await _receive_worker_command_or_failure(
+                worker_index=worker_index,
+                runtime=runtime,
+                control=control,
+            )
             if isinstance(command_result, Rejected):
                 return
-            command = command_result.value
+            command_or_failure = command_result.value
+            if isinstance(command_or_failure, WorkerSamplingFailed):
+                _ = await control.send_response(command_or_failure)
+                return
+            command = command_or_failure
             response = await _handle_worker_command(
                 worker_index=worker_index,
                 train_config=train_config,
@@ -258,6 +267,8 @@ async def _run_training_worker_process_async(
             send_result = await control.send_response(response)
             if isinstance(send_result, Rejected):
                 return
+            if isinstance(response, WorkerSamplingFailed):
+                return
     finally:
         await _cancel_active_sampling(runtime=runtime)
         runtime.arena_writer.close()
@@ -265,6 +276,85 @@ async def _run_training_worker_process_async(
         destroy_distributed_rank()
         event_sink.emit("process.stop")
         event_sink.close()
+
+
+async def _receive_worker_command_or_failure(
+    *,
+    worker_index: int,
+    runtime: _WorkerRuntime,
+    control: AsyncChildControlEndpoint[WorkerCommand, WorkerResponse],
+) -> (
+    _result.Ok[WorkerCommand | WorkerSamplingFailed] | _result.Rejected
+):
+    sampling_task = runtime.sampling_task
+    if sampling_task is None:
+        return await _receive_worker_command(control)
+    if sampling_task.done():
+        sampling_result = sampling_task.result()
+        if isinstance(sampling_result, Rejected):
+            return Ok(
+                value=_worker_sampling_failure(
+                    worker_index=worker_index,
+                    runtime=runtime,
+                    reason=sampling_result.reason,
+                )
+            )
+        return await _receive_worker_command(control)
+
+    command_task = asyncio.create_task(control.recv_command())
+    done, _pending = await asyncio.wait(
+        (command_task, sampling_task),
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    if command_task in done:
+        command_result = command_task.result()
+        if isinstance(command_result, Rejected):
+            return command_result
+        return Ok(value=command_result.value)
+    sampling_result = sampling_task.result()
+    if isinstance(sampling_result, Ok):
+        command_result = await command_task
+        if isinstance(command_result, Rejected):
+            return command_result
+        return Ok(value=command_result.value)
+    _ = command_task.cancel()
+    try:
+        await command_task
+    except asyncio.CancelledError:
+        pass
+    return Ok(
+        value=_worker_sampling_failure(
+            worker_index=worker_index,
+            runtime=runtime,
+            reason=sampling_result.reason,
+        )
+    )
+
+
+async def _receive_worker_command(
+    control: AsyncChildControlEndpoint[WorkerCommand, WorkerResponse],
+) -> (
+    _result.Ok[WorkerCommand | WorkerSamplingFailed] | _result.Rejected
+):
+    command_result = await control.recv_command()
+    if isinstance(command_result, Rejected):
+        return command_result
+    return Ok(value=command_result.value)
+
+
+def _worker_sampling_failure(
+    *, worker_index: int, runtime: _WorkerRuntime, reason: str
+) -> WorkerSamplingFailed:
+    policy_version = runtime.sampling_policy_version
+    rollout_id = runtime.sampling_rollout_id
+    assert policy_version is not None
+    assert rollout_id is not None
+    return WorkerSamplingFailed(
+        worker_index=worker_index,
+        policy_version=policy_version,
+        rollout_id=rollout_id,
+        reason=reason,
+    )
 
 
 def _setup_worker_runtime(
@@ -314,7 +404,6 @@ def _create_worker_runtime(
             ),
             timeout_seconds=(execution_config.timeouts.round_seconds),
             batch_size=execution_config.model_inference_batch_size,
-            event_sink=event_sink,
         )
         return Ok(
             value=_WorkerRuntime(
@@ -336,6 +425,9 @@ def _create_worker_runtime(
         train_config=train_config,
         execution_config=execution_config,
         device=device,
+        inference_batch_capacity=execution_config.inference_batch_target(
+            assigned_worker_count=1
+        ),
         update_partition=_worker_update_partition(
             distributed_rank_config
         ),
@@ -343,10 +435,18 @@ def _create_worker_runtime(
     local_model_rank = LocalModelRank(replica=core)
     policy = BatchedPolicyClient(
         worker_index=worker_index,
-        transport=LocalPolicyBatchTransport(replica=core),
+        transport=LocalPolicyBatchTransport(
+            replica=core,
+            event_sink=event_sink,
+            model_rank_index=worker_index,
+            configured_batch_size=(
+                execution_config.inference_batch_target(
+                    assigned_worker_count=1
+                )
+            ),
+        ),
         timeout_seconds=(execution_config.timeouts.round_seconds),
         batch_size=execution_config.model_inference_batch_size,
-        event_sink=event_sink,
     )
     return Ok(
         value=_WorkerRuntime(

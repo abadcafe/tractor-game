@@ -24,8 +24,7 @@ from server.training.ppo.distributed import (
     single_update_partition,
 )
 from server.training.ppo.gradients import (
-    clip_grad_norm_on_device,
-    gradient_norm_on_device,
+    clip_gradient_group,
     non_finite_gradient_reason,
 )
 from server.training.ppo.loss_module import (
@@ -300,21 +299,6 @@ class PPOTrainer:
                     forward_output.validation_code,
                     _loss_validation_code(loss),
                 )
-                loss_validation_code_result = _sync_validation_code(
-                    code=loss_validation_code,
-                    partition=self.update_partition,
-                )
-                if isinstance(
-                    loss_validation_code_result, _result.Rejected
-                ):
-                    loss_forwarder.zero_grad(set_to_none=True)
-                    return loss_validation_code_result
-                loss_rejection = validation_rejection_reason(
-                    loss_validation_code_result.value
-                )
-                if loss_rejection is not None:
-                    loss_forwarder.zero_grad(set_to_none=True)
-                    return _result.Rejected(reason=loss_rejection)
                 backward_start = profile.mark()
                 torch.autograd.backward(
                     loss.objective_loss
@@ -327,26 +311,22 @@ class PPOTrainer:
                 profile.record_elapsed(
                     "backward_seconds", backward_start
                 )
-                preclip_gradient_code = gradient_validation_code(
-                    parameters
-                )
-                policy_grad_norm = gradient_norm_on_device(
-                    policy_parameters
-                )
-                value_grad_norm = gradient_norm_on_device(
-                    value_parameters
-                )
-                clip_grad_norm_on_device(
+                policy_gradients = clip_gradient_group(
                     policy_parameters,
                     max_norm=self.train_config.policy_max_grad_norm,
                 )
-                clip_grad_norm_on_device(
+                value_gradients = clip_gradient_group(
                     value_parameters,
                     max_norm=self.train_config.value_max_grad_norm,
                 )
                 gradient_code = combine_validation_codes(
-                    preclip_gradient_code,
-                    gradient_validation_code(parameters),
+                    loss_validation_code,
+                    gradient_validation_code(
+                        (
+                            policy_gradients.gradients_are_finite,
+                            value_gradients.gradients_are_finite,
+                        )
+                    ),
                 )
                 gradient_code_result = _sync_validation_code(
                     code=gradient_code,
@@ -361,18 +341,15 @@ class PPOTrainer:
                     )
                 )
                 if clipped_gradient_rejection is not None:
-                    stage = (
-                        "before clipping"
-                        if validation_rejection_reason(
-                            preclip_gradient_code
+                    detailed_reason = None
+                    if (
+                        clipped_gradient_rejection
+                        == "PPO gradients must be finite"
+                    ):
+                        detailed_reason = non_finite_gradient_reason(
+                            named_parameters,
+                            stage="before clipping",
                         )
-                        is not None
-                        else "after clipping"
-                    )
-                    detailed_reason = non_finite_gradient_reason(
-                        named_parameters,
-                        stage=stage,
-                    )
                     policy_loss_value = _float_tensor(loss.policy_loss)
                     entropy_value = _float_tensor(loss.entropy)
                     loss_forwarder.zero_grad(set_to_none=True)
@@ -399,8 +376,8 @@ class PPOTrainer:
                 if local_count > 0:
                     stat_sums = stat_sums + _loss_stat_tensor(
                         loss,
-                        policy_grad_norm=policy_grad_norm,
-                        value_grad_norm=value_grad_norm,
+                        policy_grad_norm=policy_gradients.total_norm,
+                        value_grad_norm=value_gradients.total_norm,
                     ) * float(local_count)
                     stat_count = stat_count + torch.tensor(
                         float(local_count),

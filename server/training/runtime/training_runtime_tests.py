@@ -35,6 +35,7 @@ from server.training.runtime.messages import (
     WorkerLoadStateCommand,
     WorkerResponse,
     WorkerSamplingAlreadyStopped,
+    WorkerSamplingFailed,
     WorkerSamplingStarted,
     WorkerSamplingStopped,
     WorkerSnapshotCommand,
@@ -71,6 +72,7 @@ from server.training.runtime.worker_sampling_lifecycle import (
     WorkerSamplingSession,
     WorkerSamplingStartStopped,
     start_worker_sampling_session,
+    stop_worker_sampling_session,
 )
 from server.training.stop import TrainingStopRequest
 from server.training_events import NullEventSink
@@ -490,6 +492,107 @@ async def test_start_sampling_reports_uncleaned_sent_workers() -> None:
         second.close()
 
 
+@pytest.mark.asyncio
+async def test_sampling_stop_excludes_failed_worker() -> None:
+    first = _fake_worker(0)
+    second = _fake_worker(1)
+    session = WorkerSamplingSession(
+        policy_version=7,
+        rollout_id="rollout-7",
+        commanded_handles=(first.handle, second.handle),
+        started_handles=(first.handle, second.handle),
+    )
+    try:
+        task = asyncio.create_task(
+            stop_worker_sampling_session(
+                session=session,
+                timeout_seconds=1.0,
+                excluded_worker_indexes=frozenset((0,)),
+            )
+        )
+        command = await _receive_stop_command(second)
+        assert command.policy_version == 7
+        assert not await first.child.command_ready(0.0)
+        sent = await second.child.send_response(
+            WorkerSamplingStopped(
+                worker_index=1,
+                policy_version=7,
+                cancelled_env_count=2,
+            )
+        )
+        assert isinstance(sent, Ok)
+
+        result = await task
+
+        assert isinstance(result, Ok)
+        assert tuple(
+            response.worker_index for response in result.value
+        ) == (1,)
+    finally:
+        first.close()
+        second.close()
+
+
+@pytest.mark.asyncio
+async def test_rollout_wait_reports_sampling_failure_immediately() -> (
+    None
+):
+    context = mp.get_context("spawn")
+    group_result = create_shared_rollout_arena_group(
+        context=context,
+        worker_count=1,
+        round_capacity_per_worker=1,
+        policy_version=7,
+    )
+    assert isinstance(group_result, Ok)
+    group = group_result.value
+    worker = _fake_worker(0)
+    session = WorkerSamplingSession(
+        policy_version=7,
+        rollout_id="rollout-7",
+        commanded_handles=(worker.handle,),
+        started_handles=(worker.handle,),
+    )
+    try:
+        started = time.perf_counter()
+        task = asyncio.create_task(
+            training_runtime.wait_rollout_round_target_or_stop_async(
+                group=group,
+                session=session,
+                policy_version=7,
+                target_round_count=1,
+                timeout_seconds=5.0,
+                stop_request=TrainingStopRequest(),
+            )
+        )
+        sent = await worker.child.send_response(
+            WorkerSamplingFailed(
+                worker_index=0,
+                policy_version=7,
+                rollout_id="rollout-7",
+                reason=(
+                    "training round timed out after 0.882261 seconds"
+                ),
+            )
+        )
+        assert isinstance(sent, Ok)
+
+        result = await task
+        elapsed = time.perf_counter() - started
+
+        assert isinstance(
+            result, training_runtime.WorkerSamplingWaitFailed
+        )
+        assert result.failed_worker_indexes == frozenset((0,))
+        assert result.rejection.reason == (
+            "worker-0: training round timed out after 0.882261 seconds"
+        )
+        assert elapsed < 0.5
+    finally:
+        worker.close()
+        close_shared_rollout_arenas(group)
+
+
 def test_rollout_round_capacity_per_worker_keeps_aggregate_target() -> (
     None
 ):
@@ -527,12 +630,14 @@ async def test_rollout_round_wait_does_not_block_event_loop(
         target_round_count: int,
         timeout_seconds: float,
         stop_request: TrainingStopRequest,
+        abort_request: TrainingStopRequest,
     ) -> Ok[RolloutWaitOutcome] | Rejected:
         assert group.handles
         assert policy_version == 3
         assert target_round_count == 1
         assert timeout_seconds == 1.0
         assert not stop_request.is_requested()
+        assert not abort_request.is_requested()
         time.sleep(0.2)
         return Ok(
             value=RolloutRoundTargetReached(
@@ -546,11 +651,18 @@ async def test_rollout_round_wait_does_not_block_event_loop(
         blocking_wait_rollout_round_target_or_stop,
     )
 
+    worker = _fake_worker(0)
     try:
         start = time.perf_counter()
         wait_task = asyncio.create_task(
             training_runtime.wait_rollout_round_target_or_stop_async(
                 group=group,
+                session=WorkerSamplingSession(
+                    policy_version=3,
+                    rollout_id="rollout-3",
+                    commanded_handles=(worker.handle,),
+                    started_handles=(worker.handle,),
+                ),
                 policy_version=3,
                 target_round_count=1,
                 timeout_seconds=1.0,
@@ -561,6 +673,7 @@ async def test_rollout_round_wait_does_not_block_event_loop(
         elapsed = time.perf_counter() - start
         result = await wait_task
     finally:
+        worker.close()
         close_shared_rollout_arenas(group)
 
     assert elapsed < 0.1
@@ -757,12 +870,14 @@ async def test_runtime_poisoned_after_sampling_stop_failure(
     async def completed_rollout_wait(
         *,
         group: SharedRolloutArenaGroup,
+        session: WorkerSamplingSession,
         policy_version: int,
         target_round_count: int,
         timeout_seconds: float,
         stop_request: TrainingStopRequest,
     ) -> Ok[RolloutWaitOutcome] | Rejected:
         assert group.handles
+        assert session.policy_version == policy_version
         assert not stop_request.is_requested()
         assert target_round_count == 1
         assert timeout_seconds == 2.0
@@ -773,10 +888,14 @@ async def test_runtime_poisoned_after_sampling_stop_failure(
         )
 
     async def rejected_sampling_stop(
-        *, session: WorkerSamplingSession, timeout_seconds: float
+        *,
+        session: WorkerSamplingSession,
+        timeout_seconds: float,
+        excluded_worker_indexes: frozenset[int],
     ) -> Ok[tuple[WorkerSamplingStopped, ...]] | Rejected:
         assert session.policy_version == 3
         assert timeout_seconds == 3.0
+        assert not excluded_worker_indexes
         return Rejected(reason="sampling stop timed out")
 
     def force_stop_runtime_pools(_pools: object) -> None:
@@ -1007,6 +1126,7 @@ async def test_runtime_poisoned_after_worker_update_partial_broadcast(
     async def completed_rollout_wait(
         *,
         group: SharedRolloutArenaGroup,
+        session: WorkerSamplingSession,
         policy_version: int,
         target_round_count: int,
         timeout_seconds: float,
@@ -1014,6 +1134,7 @@ async def test_runtime_poisoned_after_worker_update_partial_broadcast(
     ) -> Ok[RolloutWaitOutcome] | Rejected:
         _ = timeout_seconds
         assert group.handles
+        assert session.policy_version == policy_version
         assert not stop_request.is_requested()
         assert target_round_count == 1
         return Ok(
@@ -1023,9 +1144,13 @@ async def test_runtime_poisoned_after_worker_update_partial_broadcast(
         )
 
     async def stopped_sampling_session(
-        *, session: WorkerSamplingSession, timeout_seconds: float
+        *,
+        session: WorkerSamplingSession,
+        timeout_seconds: float,
+        excluded_worker_indexes: frozenset[int],
     ) -> Ok[tuple[WorkerSamplingStopped, ...]] | Rejected:
         _ = timeout_seconds
+        assert not excluded_worker_indexes
         return Ok(
             value=tuple(
                 WorkerSamplingStopped(
@@ -1146,6 +1271,7 @@ async def test_runtime_poisoned_after_model_rank_update_partial_send(
     async def completed_rollout_wait(
         *,
         group: SharedRolloutArenaGroup,
+        session: WorkerSamplingSession,
         policy_version: int,
         target_round_count: int,
         timeout_seconds: float,
@@ -1153,6 +1279,7 @@ async def test_runtime_poisoned_after_model_rank_update_partial_send(
     ) -> Ok[RolloutWaitOutcome] | Rejected:
         _ = target_round_count, timeout_seconds
         assert group.handles
+        assert session.policy_version == policy_version
         assert not stop_request.is_requested()
         return Ok(
             value=RolloutRoundTargetReached(
@@ -1161,9 +1288,13 @@ async def test_runtime_poisoned_after_model_rank_update_partial_send(
         )
 
     async def stopped_sampling_session(
-        *, session: WorkerSamplingSession, timeout_seconds: float
+        *,
+        session: WorkerSamplingSession,
+        timeout_seconds: float,
+        excluded_worker_indexes: frozenset[int],
     ) -> Ok[tuple[WorkerSamplingStopped, ...]] | Rejected:
         _ = timeout_seconds
+        assert not excluded_worker_indexes
         return Ok(
             value=(
                 WorkerSamplingStopped(
@@ -1289,6 +1420,7 @@ async def test_runtime_poisoned_after_worker_update_response_timeout(
     async def completed_rollout_wait(
         *,
         group: SharedRolloutArenaGroup,
+        session: WorkerSamplingSession,
         policy_version: int,
         target_round_count: int,
         timeout_seconds: float,
@@ -1296,6 +1428,7 @@ async def test_runtime_poisoned_after_worker_update_response_timeout(
     ) -> Ok[RolloutWaitOutcome] | Rejected:
         _ = target_round_count, timeout_seconds
         assert group.handles
+        assert session.policy_version == policy_version
         assert not stop_request.is_requested()
         return Ok(
             value=RolloutRoundTargetReached(
@@ -1304,9 +1437,13 @@ async def test_runtime_poisoned_after_worker_update_response_timeout(
         )
 
     async def stopped_sampling_session(
-        *, session: WorkerSamplingSession, timeout_seconds: float
+        *,
+        session: WorkerSamplingSession,
+        timeout_seconds: float,
+        excluded_worker_indexes: frozenset[int],
     ) -> Ok[tuple[WorkerSamplingStopped, ...]] | Rejected:
         _ = timeout_seconds
+        assert not excluded_worker_indexes
         return Ok(
             value=tuple(
                 WorkerSamplingStopped(

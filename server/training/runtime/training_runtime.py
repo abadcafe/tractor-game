@@ -37,6 +37,7 @@ from server.training.runtime.messages import (
     WorkerLoadStateCommand,
     WorkerResponse,
     WorkerSamplingAlreadyStopped,
+    WorkerSamplingFailed,
     WorkerSamplingStarted,
     WorkerSamplingStopped,
     WorkerSnapshotCommand,
@@ -85,7 +86,9 @@ from server.training.runtime.worker_process import (
 )
 from server.training.runtime.worker_sampling_lifecycle import (
     WorkerSamplingCleanupFailed,
+    WorkerSamplingSession,
     WorkerSamplingStartStopped,
+    poll_worker_sampling_failure,
     start_worker_sampling_session,
     stop_worker_sampling_session,
 )
@@ -122,6 +125,15 @@ class TrainingStopDiscardedPartialRollout:
             self.snapshot.decision_count
             < self.minimum_trainable_decision_count
         )
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerSamplingWaitFailed:
+    rejection: Rejected
+    failed_worker_indexes: frozenset[int]
+
+    def __post_init__(self) -> None:
+        assert self.rejection.reason
 
 
 type TrainingCycleOutcome = (
@@ -754,6 +766,7 @@ async def _run_training_update(
         stopped_early = False
         target_result = await wait_rollout_round_target_or_stop_async(
             group=pools.rollout_arena_group,
+            session=session_outcome,
             policy_version=policy_version,
             target_round_count=target_round_count,
             timeout_seconds=(
@@ -761,12 +774,33 @@ async def _run_training_update(
             ),
             stop_request=stop_request,
         )
+        if isinstance(target_result, WorkerSamplingWaitFailed):
+            stopped_result = await stop_worker_sampling_session(
+                session=session_outcome,
+                timeout_seconds=(
+                    execution_config.timeouts.sampling_stop_seconds
+                ),
+                excluded_worker_indexes=(
+                    target_result.failed_worker_indexes
+                ),
+            )
+            if isinstance(stopped_result, Rejected):
+                return _UnrecoverableRuntimeFailure(
+                    rejection=_runtime_cleanup_rejection(
+                        failure=target_result.rejection,
+                        cleanup=stopped_result,
+                    )
+                )
+            return _UnrecoverableRuntimeFailure(
+                rejection=target_result.rejection
+            )
         if isinstance(target_result, Rejected):
             stopped_result = await stop_worker_sampling_session(
                 session=session_outcome,
                 timeout_seconds=(
                     execution_config.timeouts.sampling_stop_seconds
                 ),
+                excluded_worker_indexes=frozenset(),
             )
             if isinstance(stopped_result, Rejected):
                 return _UnrecoverableRuntimeFailure(
@@ -789,6 +823,7 @@ async def _run_training_update(
             timeout_seconds=(
                 execution_config.timeouts.sampling_stop_seconds
             ),
+            excluded_worker_indexes=frozenset(),
         )
         if isinstance(stopped_result, Rejected):
             return _UnrecoverableRuntimeFailure(
@@ -833,20 +868,79 @@ async def _run_training_update(
 async def wait_rollout_round_target_or_stop_async(
     *,
     group: SharedRolloutArenaGroup,
+    session: WorkerSamplingSession,
     policy_version: int,
     target_round_count: int,
     timeout_seconds: float,
     stop_request: TrainingStopRequest,
-) -> _result.Ok[RolloutWaitOutcome] | _result.Rejected:
-    """Wait for rollout progress without blocking the event loop."""
-    return await asyncio.to_thread(
-        wait_rollout_round_target_or_stop,
-        group=group,
-        policy_version=policy_version,
-        target_round_count=target_round_count,
-        timeout_seconds=timeout_seconds,
-        stop_request=stop_request,
+) -> (
+    _result.Ok[RolloutWaitOutcome]
+    | _result.Rejected
+    | WorkerSamplingWaitFailed
+):
+    """Wait for rollout progress or an active worker failure."""
+    abort_request = TrainingStopRequest()
+    rollout_task = asyncio.create_task(
+        asyncio.to_thread(
+            wait_rollout_round_target_or_stop,
+            group=group,
+            policy_version=policy_version,
+            target_round_count=target_round_count,
+            timeout_seconds=timeout_seconds,
+            stop_request=stop_request,
+            abort_request=abort_request,
+        )
     )
+    failure_task = asyncio.create_task(
+        poll_worker_sampling_failure(
+            session=session,
+            timeout_seconds=timeout_seconds,
+        )
+    )
+    done, _pending = await asyncio.wait(
+        (rollout_task, failure_task),
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    if failure_task in done:
+        failure_result = failure_task.result()
+        if isinstance(failure_result, Rejected):
+            abort_request.request_stop()
+            _ = await rollout_task
+            return WorkerSamplingWaitFailed(
+                rejection=failure_result,
+                failed_worker_indexes=frozenset(),
+            )
+        failure = failure_result.value
+        if failure is not None:
+            abort_request.request_stop()
+            _ = await rollout_task
+            return WorkerSamplingWaitFailed(
+                rejection=Rejected(
+                    reason=(
+                        f"worker-{failure.worker_index}: "
+                        f"{failure.reason}"
+                    )
+                ),
+                failed_worker_indexes=frozenset(
+                    (failure.worker_index,)
+                ),
+            )
+    if rollout_task in done:
+        await _cancel_async_task(failure_task)
+        return rollout_task.result()
+    return await rollout_task
+
+
+async def _cancel_async_task[ResultT](
+    task: asyncio.Task[ResultT],
+) -> None:
+    if task.done():
+        return
+    _ = task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
 
 
 async def _sync_compute_rank_states(
@@ -1092,7 +1186,8 @@ async def _receive_worker_updates(
                         unexpected_sampling_reason
                     )
                 case (
-                    WorkerSamplingStopped()
+                    WorkerSamplingFailed()
+                    | WorkerSamplingStopped()
                     | WorkerSamplingAlreadyStopped()
                 ):
                     return _runtime_protocol_failure_reason(
@@ -1167,6 +1262,7 @@ async def _sync_worker_states(
                     )
                 case (
                     WorkerSamplingStarted()
+                    | WorkerSamplingFailed()
                     | WorkerSamplingStopped()
                     | WorkerSamplingAlreadyStopped()
                 ):
@@ -1317,6 +1413,7 @@ async def _snapshot_worker_state(
             )
         case (
             WorkerSamplingStarted()
+            | WorkerSamplingFailed()
             | WorkerSamplingStopped()
             | WorkerSamplingAlreadyStopped()
         ):

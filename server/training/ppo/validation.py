@@ -58,28 +58,24 @@ def non_finite_validation_code(
 
 
 def gradient_validation_code(
-    parameters: tuple[Tensor, ...],
+    finite_flags: tuple[Tensor, ...],
 ) -> Tensor:
-    """Return a device scalar describing gradient finiteness."""
-    assert parameters
-    device = parameters[0].device
-    code = validation_ok(device)
-    for parameter in parameters:
-        gradient = parameter.grad
-        if gradient is None:
-            continue
-        failed = ~torch.isfinite(gradient).all()
-        code = torch.where(
-            (code == PPO_VALIDATION_OK) & failed,
-            torch.full(
-                (),
-                PPO_GRADIENTS_NONFINITE,
-                dtype=torch.long,
-                device=device,
-            ),
-            code,
-        )
-    return code
+    """Return a device code from precomputed gradient-group flags."""
+    assert finite_flags
+    assert all(flag.shape == () for flag in finite_flags)
+    device = finite_flags[0].device
+    assert all(flag.device == device for flag in finite_flags)
+    failed = ~torch.stack(finite_flags).all()
+    return torch.where(
+        failed,
+        torch.full(
+            (),
+            PPO_GRADIENTS_NONFINITE,
+            dtype=torch.long,
+            device=device,
+        ),
+        validation_ok(device),
+    )
 
 
 def combine_validation_codes(first: Tensor, second: Tensor) -> Tensor:

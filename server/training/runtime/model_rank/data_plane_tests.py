@@ -395,6 +395,66 @@ async def test_run_until_command_batches_until_batch_size() -> None:
         link2.close()
 
 
+async def test_run_until_command_coalesces_staggered_frames() -> None:
+    control_link = _control_link()
+    link0 = _request_link(worker_index=0)
+    link1 = _request_link(worker_index=1)
+    recorder = _DataPlaneRecorder()
+    try:
+        data_plane = _data_plane(
+            control_link=control_link,
+            request_peers=(
+                link0.model_rank_peer,
+                link1.model_rank_peer,
+            ),
+            batch_size=4,
+            batch_wait_seconds=0.05,
+        )
+        first_sender = asyncio.create_task(
+            _send_request(
+                link=link0,
+                worker_index=0,
+                policy_version=3,
+            )
+        )
+        await _wait_for_ready_requests((link0,))
+
+        async def send_staggered_frame_and_command() -> None:
+            await asyncio.sleep(0.005)
+            await _send_request(
+                link=link1,
+                worker_index=1,
+                policy_version=3,
+            )
+            await asyncio.sleep(0.06)
+            command_sent = await control_link.coordinator.send_command(
+                ModelRankLoadStateCommand(
+                    state=_runtime_state(), policy_version=4
+                )
+            )
+            assert isinstance(command_sent, Ok)
+
+        second_sender = asyncio.create_task(
+            send_staggered_frame_and_command()
+        )
+        command_result = await data_plane.run_until_command(
+            policy_version=3,
+            process_batch=recorder.process,
+            reject_batch=recorder.reject,
+        )
+        await first_sender
+        await second_sender
+
+        assert isinstance(command_result, Ok)
+        assert recorder.processed_workers == [(0, 1)]
+        assert recorder.rejected_workers == []
+    finally:
+        control_link.coordinator.close()
+        control_link.child.close()
+        link0.close()
+        link1.close()
+
+
 async def test_ingress_reuses_cuda_single_frame_slot() -> None:
     if not torch.cuda.is_available():
         return
@@ -537,6 +597,7 @@ def _data_plane(
     control_link: _ModelRankControlLink,
     request_peers: tuple[AsyncPolicyPeer, ...],
     batch_size: int,
+    batch_wait_seconds: float = 0.002,
 ) -> ModelRankDataPlane:
     return ModelRankDataPlane(
         control=control_link.child,
@@ -545,6 +606,7 @@ def _data_plane(
             batch_size=batch_size,
             device=torch.device("cpu"),
         ),
+        batch_wait_seconds=batch_wait_seconds,
     )
 
 

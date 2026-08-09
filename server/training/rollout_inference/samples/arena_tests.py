@@ -159,6 +159,7 @@ def _action_sample(*, device: torch.device) -> ActionSampleBatch:
         log_probabilities=torch.zeros(
             (3,), dtype=torch.float32, device=device
         ),
+        error_code=torch.zeros((), dtype=torch.long, device=device),
     )
 
 

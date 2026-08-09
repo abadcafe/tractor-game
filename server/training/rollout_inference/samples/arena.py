@@ -140,6 +140,27 @@ class ModelRankSampleArena:
             return Rejected(
                 reason="sample arena policy version mismatch"
             )
+        self._validate_sample(
+            observation=observation_batch,
+            sample=action_sample,
+            sample_count=sample_count,
+        )
+        start = self._row_count
+        decision_result = self._decision_materializer.materialize(
+            model_rank_index=self.model_rank_index,
+            policy_versions=policy_versions,
+            row_start=start,
+            choice_ids_padded=action_sample.choice_ids_padded,
+            step_counts=action_sample.step_counts,
+            choice_counts=action_sample.choice_counts,
+            scored_choice_step_counts=_scored_choice_step_counts(
+                action_sample=action_sample,
+                sample_count=sample_count,
+            ),
+            error_code=action_sample.error_code,
+        )
+        if isinstance(decision_result, Rejected):
+            return decision_result
         self._policy_version = policy_version
         self._ensure_capacity(
             observation=observation_batch,
@@ -147,12 +168,6 @@ class ModelRankSampleArena:
             step_needed=self._step_count
             + int(action_sample.legal_choice_masks.shape[0]),
         )
-        self._validate_sample(
-            observation=observation_batch,
-            sample=action_sample,
-            sample_count=sample_count,
-        )
-        start = self._row_count
         end = start + sample_count
         step_start = self._step_count
         step_end = step_start + int(
@@ -184,20 +199,7 @@ class ModelRankSampleArena:
         )
         self._row_count = end
         self._step_count = step_end
-        return Ok(
-            value=self._decision_materializer.materialize(
-                model_rank_index=self.model_rank_index,
-                policy_versions=policy_versions,
-                row_start=start,
-                choice_ids_padded=action_sample.choice_ids_padded,
-                step_counts=action_sample.step_counts,
-                choice_counts=action_sample.choice_counts,
-                scored_choice_step_counts=_scored_choice_step_counts(
-                    action_sample=action_sample,
-                    sample_count=sample_count,
-                ),
-            )
-        )
+        return decision_result
 
     def ppo_batch_source(
         self,

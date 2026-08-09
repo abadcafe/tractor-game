@@ -9,6 +9,11 @@ import torch
 from pydantic import ConfigDict, TypeAdapter
 from torch import Tensor
 
+from server.foundation import result as _result
+from server.foundation.result import Ok, Rejected
+from server.policy_model.actions.decoding import (
+    action_sampling_error_reason,
+)
 from server.training.rollout_inference.samples.records import (
     CompactActionChoiceBatch,
     CompactPolicyDecisionBatch,
@@ -52,7 +57,8 @@ class PolicyDecisionMaterializer:
         step_counts: Tensor,
         choice_counts: Tensor,
         scored_choice_step_counts: Tensor,
-    ) -> CompactPolicyDecisionBatch:
+        error_code: Tensor,
+    ) -> _result.Ok[CompactPolicyDecisionBatch] | _result.Rejected:
         row_count, padded_step_count = choice_ids_padded.shape
         assert model_rank_index >= 0
         assert row_start >= 0
@@ -68,9 +74,12 @@ class PolicyDecisionMaterializer:
         assert step_counts.device == self.device
         assert choice_counts.device == self.device
         assert scored_choice_step_counts.device == self.device
+        assert error_code.shape == ()
+        assert error_code.dtype == torch.long
+        assert error_code.device == self.device
 
         choice_value_count = row_count * padded_step_count
-        required_value_count = choice_value_count + 3 * row_count
+        required_value_count = choice_value_count + 3 * row_count + 1
         self._ensure_capacity(required_value_count)
         device_values = self._device_values[:required_value_count]
         _ = (
@@ -87,25 +96,43 @@ class PolicyDecisionMaterializer:
         _ = device_values[
             choice_count_start:scored_step_count_start
         ].copy_(choice_counts)
-        _ = device_values[scored_step_count_start:].copy_(
-            scored_choice_step_counts
-        )
+        error_code_index = scored_step_count_start + row_count
+        _ = device_values[
+            scored_step_count_start:error_code_index
+        ].copy_(scored_choice_step_counts)
+        _ = device_values[error_code_index].copy_(error_code)
 
         host_values = self._copy_to_host(required_value_count)
-        host_counts = _cpu_int_tuple(host_values[step_start:])
+        error_value = _cpu_int_tuple(
+            host_values[error_code_index:].reshape(1)
+        )[0]
+        error_reason = action_sampling_error_reason(error_value)
+        if error_reason is not None:
+            return Rejected(reason=error_reason)
+        if error_value != 0:
+            return Rejected(reason="policy sampling failed")
+        host_counts = _cpu_int_tuple(
+            host_values[step_start:error_code_index]
+        )
         host_step_counts = host_counts[:row_count]
-        return CompactPolicyDecisionBatch(
-            model_rank_index=model_rank_index,
-            policy_versions=policy_versions,
-            row_indices=tuple(range(row_start, row_start + row_count)),
-            choice_counts=host_counts[row_count : 2 * row_count],
-            scored_choice_step_counts=host_counts[2 * row_count :],
-            action_choice_batch=CompactActionChoiceBatch.from_cpu_tensor(
-                choice_ids=host_values[:choice_value_count].view(
-                    row_count, padded_step_count
+        return Ok(
+            value=CompactPolicyDecisionBatch(
+                model_rank_index=model_rank_index,
+                policy_versions=policy_versions,
+                row_indices=tuple(
+                    range(row_start, row_start + row_count)
                 ),
-                choice_counts=host_step_counts,
-            ),
+                choice_counts=host_counts[row_count : 2 * row_count],
+                scored_choice_step_counts=host_counts[2 * row_count :],
+                action_choice_batch=(
+                    CompactActionChoiceBatch.from_cpu_tensor(
+                        choice_ids=host_values[
+                            :choice_value_count
+                        ].view(row_count, padded_step_count),
+                        choice_counts=host_step_counts,
+                    )
+                ),
+            )
         )
 
     def _ensure_capacity(self, required_value_count: int) -> None:

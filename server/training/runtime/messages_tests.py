@@ -8,6 +8,7 @@ from server.training.runtime.messages import (
     WorkerCommandRejected,
     WorkerLoadStateCommand,
     WorkerSamplingAlreadyStopped,
+    WorkerSamplingFailed,
     WorkerSamplingStarted,
     WorkerSamplingStopped,
     WorkerSnapshotCommand,
@@ -80,6 +81,21 @@ def test_decode_worker_sampling_started_response_accepts_start() -> (
     None
 ):
     response = WorkerSamplingStarted(worker_index=1, policy_version=6)
+
+    decoded = decode_worker_response(response)
+
+    assert decoded is response
+
+
+def test_decode_worker_sampling_failed_response_accepts_failure() -> (
+    None
+):
+    response = WorkerSamplingFailed(
+        worker_index=1,
+        policy_version=6,
+        rollout_id="rollout-6",
+        reason="round timed out",
+    )
 
     decoded = decode_worker_response(response)
 

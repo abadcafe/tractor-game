@@ -97,7 +97,14 @@ class LocalPolicyBatchTransport:
     """Same-process inference transport for CPU worker model ranks."""
 
     replica: ModelReplicaProtocol
+    event_sink: EventSink
+    model_rank_index: int
+    configured_batch_size: int
     _pending_response: tuple[PolicyResponse, ...] | None = None
+
+    def __post_init__(self) -> None:
+        assert self.model_rank_index >= 0
+        assert self.configured_batch_size > 0
 
     async def submit_batch(
         self, *, batch: BorrowedPolicyRequestBatch
@@ -108,8 +115,34 @@ class LocalPolicyBatchTransport:
         )
         if isinstance(request_result, Rejected):
             return request_result
-        decision_result = self.replica.decide_batch(
-            request_result.value
+        requests = request_result.value
+        policy_versions = set(requests.policy_versions)
+        assert len(policy_versions) == 1
+        inference_started = time.perf_counter()
+        decision_result = self.replica.decide_batch(requests)
+        inference_seconds = max(
+            time.perf_counter() - inference_started, 0.0
+        )
+        self.event_sink.emit(
+            "inference.batch",
+            context=EventContext(
+                policy_version=requests.policy_versions[0],
+                model_rank_index=self.model_rank_index,
+            ),
+            fields={
+                "batch_size": len(batch.routes),
+                "fill_ratio": (
+                    len(batch.routes)
+                    / float(self.configured_batch_size)
+                ),
+                "inference_seconds": inference_seconds,
+                "duration_seconds": inference_seconds,
+            },
+            error=(
+                decision_result.reason
+                if isinstance(decision_result, Rejected)
+                else None
+            ),
         )
         if isinstance(decision_result, Rejected):
             responses_result = build_rejected_policy_responses(
@@ -156,17 +189,6 @@ class LocalPolicyBatchTransport:
 class _PendingPolicyRequest:
     legal_actions: LegalActionSpace
     future: asyncio.Future[PolicyDecisionResult]
-    inference_batch: _PendingInferenceBatch
-
-
-@dataclass(slots=True)
-class _PendingInferenceBatch:
-    context: EventContext
-    started_at: float
-    batch_size: int
-    configured_batch_size: int
-    remaining: int
-    error: str | None = None
 
 
 @dataclass(slots=True)
@@ -207,10 +229,6 @@ def _ignored_request_set() -> set[int]:
     return set()
 
 
-def _policy_response_list() -> list[PolicyResponse]:
-    return []
-
-
 @dataclass(slots=True)
 class BatchedPolicyClient:
     """Batch policy requests over one model-rank transport."""
@@ -219,7 +237,6 @@ class BatchedPolicyClient:
     transport: PolicyBatchTransport
     timeout_seconds: float
     batch_size: int
-    event_sink: EventSink
     _next_request_id: int = 0
     _in_flight: dict[int, _PendingPolicyRequest] = field(
         default_factory=_in_flight_request_dict
@@ -230,15 +247,11 @@ class BatchedPolicyClient:
     _ignored_response_request_ids: set[int] = field(
         default_factory=_ignored_request_set
     )
-    _deferred_responses: list[PolicyResponse] = field(
-        default_factory=_policy_response_list
-    )
     _compiler: PolicyRequestCompiler = field(init=False)
     _send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _state_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _send_task: asyncio.Task[None] | None = None
     _receive_task: asyncio.Task[None] | None = None
-    _in_flight_event: asyncio.Event | None = None
     _decision_count: int = 0
     _wait_seconds: float = 0.0
 
@@ -327,13 +340,6 @@ class BatchedPolicyClient:
                 self._receive_loop()
             )
 
-    def _event(self) -> asyncio.Event:
-        event = self._in_flight_event
-        if event is None:
-            event = asyncio.Event()
-            self._in_flight_event = event
-        return event
-
     async def _send_loop(self) -> None:
         try:
             async with self._send_lock:
@@ -356,63 +362,19 @@ class BatchedPolicyClient:
                         )
                         return
                     sent_requests = batch_result.value.requests
-                    rollout_ids = {
-                        item.request.decision_key.rollout_id
-                        for item in sent_requests
-                    }
-                    policy_versions = {
-                        item.request.decision_key.policy_version
-                        for item in sent_requests
-                    }
-                    assert len(rollout_ids) == 1
-                    assert len(policy_versions) == 1
-                    batch_context = EventContext(
-                        policy_version=(
-                            sent_requests[
-                                0
-                            ].request.decision_key.policy_version
-                        ),
-                        rollout_id=(
-                            sent_requests[
-                                0
-                            ].request.decision_key.rollout_id
-                        ),
-                        worker_index=self.worker_index,
-                        batch_id=sent_requests[0].request_id,
+                    await self._register_submitting_requests(
+                        sent_requests,
                     )
-                    inference_started = time.perf_counter()
                     submit_result = await self.transport.submit_batch(
                         batch=batch_result.value.batch,
                     )
                     if isinstance(submit_result, Rejected):
-                        self.event_sink.emit(
-                            "inference.batch",
-                            context=batch_context,
-                            fields={
-                                "batch_size": len(sent_requests),
-                                "duration_seconds": max(
-                                    time.perf_counter()
-                                    - inference_started,
-                                    0.0,
-                                ),
-                            },
-                            error=submit_result.reason,
-                        )
-                        self._reject_queued_requests(
-                            sent_requests, submit_result.reason
+                        await self._reject_registered_requests(
+                            sent_requests,
+                            reason=submit_result.reason,
                         )
                         self._reject_all(submit_result.reason)
                         return
-                    await self._register_sent_requests(
-                        sent_requests,
-                        inference_batch=_PendingInferenceBatch(
-                            context=batch_context,
-                            started_at=inference_started,
-                            batch_size=len(sent_requests),
-                            configured_batch_size=self.batch_size,
-                            remaining=len(sent_requests),
-                        ),
-                    )
                     self._ensure_receive_task()
         finally:
             if self._send_task is asyncio.current_task():
@@ -427,35 +389,38 @@ class BatchedPolicyClient:
         del self._send_queue[:count]
         return queued
 
-    async def _register_sent_requests(
+    async def _register_submitting_requests(
         self,
         requests: tuple[_QueuedPolicyRequest, ...],
-        *,
-        inference_batch: _PendingInferenceBatch,
     ) -> None:
         async with self._state_lock:
             for request in requests:
                 pending = _PendingPolicyRequest(
                     legal_actions=request.legal_actions,
                     future=request.future,
-                    inference_batch=inference_batch,
                 )
                 self._in_flight[request.request_id] = pending
                 if request.future.cancelled():
                     self._ignored_response_request_ids.add(
                         request.request_id
                     )
+
+    async def _reject_registered_requests(
+        self,
+        requests: tuple[_QueuedPolicyRequest, ...],
+        *,
+        reason: str,
+    ) -> None:
+        rejection = Rejected(reason=reason)
+        async with self._state_lock:
+            for request in requests:
+                request_id = request.request_id
+                self._ignored_response_request_ids.discard(request_id)
+                pending = self._in_flight.pop(request_id, None)
+                if pending is None:
                     continue
-            if self._in_flight:
-                self._event().set()
-            if self._deferred_responses:
-                deferred = tuple(self._deferred_responses)
-                self._deferred_responses.clear()
-                dispatch_result = self._dispatch_validated_responses(
-                    deferred
-                )
-                if isinstance(dispatch_result, Rejected):
-                    self._reject_all(dispatch_result.reason)
+                if not pending.future.done():
+                    pending.future.set_result(rejection)
 
     def _build_batch(
         self, active: tuple[_QueuedPolicyRequest, ...]
@@ -521,8 +486,6 @@ class BatchedPolicyClient:
                     route.request_id
                 )
                 pending = self._in_flight.pop(route.request_id, None)
-                if pending is not None:
-                    self._finish_inference_request(pending)
                 continue
             pending = self._in_flight.pop(route.request_id, None)
             if pending is None:
@@ -534,46 +497,17 @@ class BatchedPolicyClient:
             if pending.future.done():
                 continue
             if isinstance(response, RejectedPolicyResponse):
-                pending.inference_batch.error = response.reason
                 pending.future.set_result(
                     Rejected(reason=response.reason)
                 )
-                self._finish_inference_request(pending)
                 continue
             assert isinstance(response, CompletedPolicyResponse)
             decoded = decode_policy_response(
                 legal_actions=pending.legal_actions,
                 response=response,
             )
-            if isinstance(decoded, Rejected):
-                pending.inference_batch.error = decoded.reason
             pending.future.set_result(decoded)
-            self._finish_inference_request(pending)
         return Ok(value=None)
-
-    def _finish_inference_request(
-        self, pending: _PendingPolicyRequest
-    ) -> None:
-        batch = pending.inference_batch
-        assert batch.remaining > 0
-        batch.remaining -= 1
-        if batch.remaining != 0:
-            return
-        elapsed = max(time.perf_counter() - batch.started_at, 0.0)
-        self.event_sink.emit(
-            "inference.batch",
-            context=batch.context,
-            fields={
-                "batch_size": batch.batch_size,
-                "fill_ratio": (
-                    batch.batch_size
-                    / float(batch.configured_batch_size)
-                ),
-                "inference_seconds": elapsed,
-                "duration_seconds": elapsed,
-            },
-            error=batch.error,
-        )
 
     async def _cancel_request(self, *, request_id: int) -> None:
         async with self._state_lock:
@@ -591,10 +525,8 @@ class BatchedPolicyClient:
         for request_id, pending in tuple(self._in_flight.items()):
             if not pending.future.done():
                 pending.future.set_result(rejection)
-            pending.inference_batch.error = reason
-            self._finish_inference_request(pending)
             _ = self._in_flight.pop(request_id, None)
-        self._event().set()
+        self._ignored_response_request_ids.clear()
 
     def _validate_response_routes(
         self, responses: tuple[PolicyResponse, ...]

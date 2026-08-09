@@ -180,6 +180,11 @@ const SPECS: readonly ChartSpec[] = [
     series: [
       { key: "fill_ratio", label: "Fill ratio", color: "#138a72" },
       {
+        key: "batch_wait_seconds_avg",
+        label: "Batch wait avg",
+        color: "#20262d",
+      },
+      {
         key: "recv_seconds_avg",
         label: "Receive avg",
         color: "#1769aa",

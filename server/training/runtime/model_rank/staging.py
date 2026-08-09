@@ -55,6 +55,7 @@ class ModelRankInferenceBatch:
     h2d_seconds: float
     device_decode_seconds: float
     frame_count: int
+    batch_wait_seconds: float = 0.0
     shape_bucket_count: int = 1
     shape_padding_tokens_saved: int = 0
 
@@ -69,6 +70,7 @@ class ModelRankInferenceBatch:
         assert self.h2d_seconds >= 0.0
         assert self.device_decode_seconds >= 0.0
         assert self.frame_count > 0
+        assert self.batch_wait_seconds >= 0.0
         assert self.shape_bucket_count > 0
         assert self.shape_padding_tokens_saved >= 0
 
@@ -147,7 +149,6 @@ class PolicyRequestIngress:
     _single_frame: _ReceivedPolicyRequestFrame | None = field(
         init=False
     )
-    _recv_start: float = field(init=False)
 
     def __post_init__(self) -> None:
         assert self.batch_size > 0
@@ -161,14 +162,12 @@ class PolicyRequestIngress:
         self._single_device_slot = None
         self._pending_frame = None
         self._single_frame = None
-        self._recv_start = 0.0
 
     def begin_batch(self) -> None:
         """Start receiving one data-plane batch."""
         assert self._builder is None
         assert self._single_frame is None
         self._next_slot_index = 0
-        self._recv_start = time.perf_counter()
 
     def can_receive(self) -> bool:
         """Return whether this batch has room for at least one row."""
@@ -189,7 +188,9 @@ class PolicyRequestIngress:
             return self.drain_pending_rows()
         slot = self._acquire_slot()
         frame_view = _host_frame_view(slot.tensor)
+        recv_start = time.perf_counter()
         byte_count_result = await peer.receive_request_into(frame_view)
+        recv_seconds = time.perf_counter() - recv_start
         if isinstance(byte_count_result, Rejected):
             return byte_count_result
         byte_count = byte_count_result.value
@@ -207,7 +208,7 @@ class PolicyRequestIngress:
             slot=slot,
             byte_count=byte_count,
             metadata=metadata,
-            recv_seconds=time.perf_counter() - self._recv_start,
+            recv_seconds=recv_seconds,
             wire_byte_count=byte_count,
         )
         if isinstance(frame_result, Rejected):

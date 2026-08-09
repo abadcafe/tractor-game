@@ -135,6 +135,7 @@ def test_wait_rollout_round_target_uses_aggregate_rounds() -> None:
                 target_round_count=2,
                 timeout_seconds=0.001,
                 stop_request=TrainingStopRequest(),
+                abort_request=TrainingStopRequest(),
             )
             assert isinstance(early_wait, Rejected)
 
@@ -152,6 +153,7 @@ def test_wait_rollout_round_target_uses_aggregate_rounds() -> None:
                 target_round_count=2,
                 timeout_seconds=1.0,
                 stop_request=TrainingStopRequest(),
+                abort_request=TrainingStopRequest(),
             )
             assert isinstance(full_wait, Ok)
             assert isinstance(
@@ -181,6 +183,7 @@ def test_wait_rollout_round_target_returns_requested_stop() -> None:
             target_round_count=2,
             timeout_seconds=1.0,
             stop_request=stop_request,
+            abort_request=TrainingStopRequest(),
         )
     finally:
         close_shared_rollout_arenas(group)

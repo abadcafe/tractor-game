@@ -15,17 +15,28 @@ def test_plan_inference_shape_batches_keeps_uniform_rows() -> None:
     assert plan.saved_padding_tokens() == 0
 
 
-def test_plan_inference_shape_batches_splits_large_padding_waste() -> (
-    None
-):
+def test_shape_planner_keeps_small_heterogeneous_batch() -> None:
     plan = plan_inference_shape_batches(
         (1, 1, 1, 1, 8, 8, 8, 8),
         rows=(0, 1, 2, 3, 4, 5, 6, 7),
     )
 
-    assert plan.buckets == ((0, 1, 2, 3), (4, 5, 6, 7))
+    assert plan.buckets == ((0, 1, 2, 3, 4, 5, 6, 7),)
+    assert plan.bucket_count() == 1
+    assert plan.saved_padding_tokens() == 0
+
+
+def test_plan_inference_shape_batches_splits_large_dense_buckets() -> (
+    None
+):
+    counts = (1,) * 16 + (16,) * 16
+    rows = tuple(range(32))
+
+    plan = plan_inference_shape_batches(counts, rows=rows)
+
+    assert plan.buckets == (tuple(range(16)), tuple(range(16, 32)))
     assert plan.bucket_count() == 2
-    assert plan.saved_padding_tokens() == 28
+    assert plan.saved_padding_tokens() == 240
 
 
 def test_plan_inference_shape_batches_coalesces_small_buckets() -> None:

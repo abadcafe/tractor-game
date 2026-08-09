@@ -119,6 +119,16 @@ class ExecutionConfig:
         assert self.model_ranks.devices
         return worker_index % len(self.model_ranks.devices)
 
+    def inference_batch_target(
+        self, *, assigned_worker_count: int
+    ) -> int:
+        """Return the reachable batch target for assigned workers."""
+        assert assigned_worker_count > 0
+        max_in_flight = (
+            assigned_worker_count * self.game_envs_per_worker
+        )
+        return min(self.model_inference_batch_size, max_in_flight)
+
 
 def parse_worker_cpu_layout(
     text: str,

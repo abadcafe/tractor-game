@@ -1,6 +1,10 @@
 """Black-box tests for teacher-forced and cached action decoding."""
 
+from typing import NoReturn
+
+import pytest
 import torch
+from torch import Tensor
 
 from server.game import Seat
 from server.policy_model.observation import build_observation
@@ -18,6 +22,15 @@ from .observation_backbone import (
     EncodedObservation,
     ObservationBackbone,
 )
+
+
+def _available_test_devices() -> tuple[torch.device, ...]:
+    devices = [torch.device("cpu")]
+    if torch.cuda.is_available():
+        devices.append(torch.device("cuda:0"))
+    if torch.backends.mps.is_available():
+        devices.append(torch.device("mps:0"))
+    return tuple(devices)
 
 
 def test_cached_decode_exactly_matches_causal_teacher_forcing() -> None:
@@ -50,6 +63,39 @@ def test_cached_decode_exactly_matches_causal_teacher_forcing() -> None:
         torch.stack(live_steps, dim=1),
         teacher,
     )
+
+
+@pytest.mark.parametrize("device", _available_test_devices())
+def test_cached_decode_never_reads_device_scalars(
+    device: torch.device,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    decoder = ActionDecoder(d_model=8, heads=1)
+    _ = decoder.to(device)
+    _ = decoder.eval()
+    encoding = _encoding(device=device)
+    source_rows = torch.tensor((0, 0), dtype=torch.long, device=device)
+    active = torch.tensor(
+        (True, False), dtype=torch.bool, device=device
+    )
+    scored = torch.tensor(
+        (True, False), dtype=torch.bool, device=device
+    )
+    choices = torch.tensor((2, 0), dtype=torch.long, device=device)
+    monkeypatch.setattr(Tensor, "item", _reject_tensor_item)
+
+    with torch.no_grad():
+        session = decoder.begin_decode_session(
+            encoding,
+            source_rows=source_rows,
+            max_steps=2,
+        )
+        first = session.next_choice_logits(active, scored)
+        session.advance(choices, active)
+        second = session.next_choice_logits(active, scored)
+
+    assert first.shape == (2, 110)
+    assert second.shape == first.shape
 
 
 def test_teacher_forcing_cannot_see_future_choices() -> None:
@@ -98,7 +144,9 @@ def test_action_decoder_parameters_receive_finite_gradients() -> None:
     )
 
 
-def _encoding() -> EncodedObservation:
+def _encoding(
+    *, device: torch.device = torch.device("cpu")
+) -> EncodedObservation:
     observation = build_observation(
         viewer=Seat.A,
         snapshot=make_snapshot(
@@ -113,9 +161,15 @@ def _encoding() -> EncodedObservation:
             completed_tricks=(),
         ),
     )
-    return ObservationBackbone(d_model=8, layers=1, heads=1).forward(
+    backbone = ObservationBackbone(d_model=8, layers=1, heads=1)
+    _ = backbone.to(device)
+    return backbone.forward(
         tensorize_observation(
             observation=observation,
-            device=torch.device("cpu"),
+            device=device,
         )
     )
+
+
+def _reject_tensor_item(_tensor: Tensor) -> NoReturn:
+    raise AssertionError("device scalar read is forbidden")

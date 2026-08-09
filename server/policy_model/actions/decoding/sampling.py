@@ -31,6 +31,7 @@ def sample_legal_choices(
     active_rows: Tensor,
 ) -> SampledActionChoices:
     """Sample one legal fixed-vocabulary choice per active row."""
+    choice_logits = choice_logits.to(dtype=torch.float32)
     assert choice_logits.ndim == 2
     assert legal_choices.masks.shape == choice_logits.shape
     batch_size = int(choice_logits.shape[0])
@@ -130,6 +131,8 @@ def action_sampling_error_reason(error_code: int) -> str | None:
         return "policy choice logits must be finite"
     if error_code == _ERROR_NONFINITE_DISTRIBUTION:
         return "policy choice distribution must be finite"
+    if error_code == ACTION_SAMPLING_UNTERMINATED:
+        return "policy action did not terminate"
     return None
 
 
@@ -193,10 +196,12 @@ _ERROR_NONFINITE_THRESHOLD = 10
 _ERROR_THRESHOLD_RANGE = 11
 _ERROR_NONFINITE_LOGITS = 20
 _ERROR_NONFINITE_DISTRIBUTION = 21
+ACTION_SAMPLING_UNTERMINATED = 1000
 
 
 __all__ = (
     "SampledActionChoices",
+    "ACTION_SAMPLING_UNTERMINATED",
     "action_sampling_error_reason",
     "sample_legal_choices",
 )

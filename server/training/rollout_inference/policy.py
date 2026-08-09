@@ -13,6 +13,7 @@ from server.policy_model.actions.decoding import (
 )
 from server.policy_model.network import PolicyModel
 from server.policy_model.observation import Observation
+from server.training.device_execution import DeviceExecutionPolicy
 from server.training.rollout.policy import PolicyDecision
 from server.training.rollout_inference.batch import (
     PolicyRequestCompiler,
@@ -45,6 +46,7 @@ class TorchTrainingPolicy:
     ) -> None:
         self.model = model
         self.device = device
+        self.execution_policy = DeviceExecutionPolicy.for_device(device)
         self.sample_arena = ModelRankSampleArena(
             model_rank_index=0,
             device=device,
@@ -89,6 +91,7 @@ class TorchTrainingPolicy:
             requests=request_result.value,
             sampler=self.sampler,
             sample_arena=self.sample_arena,
+            execution_policy=self.execution_policy,
         )
         if isinstance(decision_result, Rejected):
             return decision_result
