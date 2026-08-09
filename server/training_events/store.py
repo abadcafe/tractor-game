@@ -63,8 +63,8 @@ CREATE TABLE training_logs (
     rollout_id TEXT GENERATED ALWAYS AS (
         json_extract(event_json, '$.context.rollout_id')
     ) STORED,
-    episode_id INTEGER GENERATED ALWAYS AS (
-        json_extract(event_json, '$.context.episode_id')
+    round_id INTEGER GENERATED ALWAYS AS (
+        json_extract(event_json, '$.context.round_id')
     ) STORED,
     CHECK (
         json_type(event_json, '$.schema_version') IS 'integer'
@@ -104,10 +104,10 @@ CREATE TABLE training_logs (
         )
     ),
     CHECK (
-        json_type(event_json, '$.context.episode_id') IS NULL
+        json_type(event_json, '$.context.round_id') IS NULL
         OR (
-            json_type(event_json, '$.context.episode_id') IS 'integer'
-            AND json_extract(event_json, '$.context.episode_id') >= 0
+            json_type(event_json, '$.context.round_id') IS 'integer'
+            AND json_extract(event_json, '$.context.round_id') >= 0
         )
     ),
     CHECK (
@@ -149,7 +149,7 @@ CREATE TABLE training_logs (
     CHECK (process_index IS NULL OR process_index >= 0),
     CHECK (policy_version IS NULL OR policy_version >= 0),
     CHECK (rollout_id IS NULL OR length(rollout_id) > 0),
-    CHECK (episode_id IS NULL OR episode_id >= 0)
+    CHECK (round_id IS NULL OR round_id >= 0)
 ) STRICT;
 
 CREATE INDEX training_logs_event_sequence
@@ -161,8 +161,8 @@ ON training_logs(policy_version, event_type, sequence);
 CREATE INDEX training_logs_rollout_event_sequence
 ON training_logs(rollout_id, event_type, sequence);
 
-CREATE INDEX training_logs_episode_sequence
-ON training_logs(episode_id, sequence);
+CREATE INDEX training_logs_round_sequence
+ON training_logs(round_id, sequence);
 
 CREATE INDEX training_logs_recorded_at
 ON training_logs(recorded_at_ms);
@@ -348,7 +348,7 @@ def _schema_is_complete(connection: sqlite3.Connection) -> bool:
         _ = connection.execute(
             "SELECT sequence, event_json, event_type, recorded_at_ms, "
             + "process_kind, process_index, policy_version, "
-            + "rollout_id, episode_id FROM training_logs LIMIT 0"
+            + "rollout_id, round_id FROM training_logs LIMIT 0"
         )
     except sqlite3.Error:
         return False

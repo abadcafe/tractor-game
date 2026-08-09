@@ -135,7 +135,7 @@ def test_default_timeouts_fit_cpu_rollouts() -> None:
     timeouts = ExecutionTimeouts()
 
     assert timeouts.round_seconds == 600.0
-    assert timeouts.rollout_sample_seconds == 900.0
+    assert timeouts.rollout_collection_seconds == 900.0
     assert timeouts.sampling_stop_seconds == 600.0
 
 
@@ -162,12 +162,12 @@ def test_execution_timeouts_reject_non_positive_values() -> None:
 def test_execution_timeouts_keep_sampling_stages_separate() -> None:
     timeouts = ExecutionTimeouts(
         sampling_start_seconds=11.0,
-        rollout_sample_seconds=22.0,
+        rollout_collection_seconds=22.0,
         sampling_stop_seconds=33.0,
     )
 
     assert timeouts.sampling_start_seconds == 11.0
-    assert timeouts.rollout_sample_seconds == 22.0
+    assert timeouts.rollout_collection_seconds == 22.0
     assert timeouts.sampling_stop_seconds == 33.0
 
 

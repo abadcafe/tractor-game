@@ -44,6 +44,7 @@ from server.policy_model.observation.tensor import (
 )
 from server.training.config import TrainConfig
 from server.training.ppo import (
+    ObservationValueModel,
     PPOTrainer,
     PPOUpdateInput,
     PPOUpdateProfile,
@@ -52,7 +53,7 @@ from server.training.ppo.distributed import PPOUpdatePartition
 from server.training.rollout_inference.samples import (
     DecisionHandle,
     ModelRankSampleArena,
-    RankReturnTargets,
+    RankTrajectoryBatch,
 )
 from server.training.rollout_inference.samples.arena import (
     ArenaPPOBatchSource,
@@ -186,6 +187,9 @@ def test_update_returns_stats_and_adamw_state() -> None:
     model = PolicyModel(config=model_config).to(device)
     trainer = PPOTrainer(
         model=model,
+        value_model=ObservationValueModel(config=model_config).to(
+            device
+        ),
         train_config=train_config,
         device=device,
         profile_mode="off",
@@ -217,6 +221,9 @@ def test_update_handles_clipped_policy_ratio_above_float32_range() -> (
     model = PolicyModel(config=model_config).to(device)
     trainer = PPOTrainer(
         model=model,
+        value_model=ObservationValueModel(config=model_config).to(
+            device
+        ),
         train_config=train_config,
         device=device,
         profile_mode="off",
@@ -252,6 +259,9 @@ def test_update_batches_minibatch_model_forwards() -> None:
     _ = model.eval()
     trainer = PPOTrainer(
         model=model,
+        value_model=ObservationValueModel(config=model_config).to(
+            device
+        ),
         train_config=train_config,
         device=device,
         profile_mode="detailed",
@@ -292,6 +302,9 @@ def test_update_rejects_ddp_without_process_group() -> None:
     model = PolicyModel(config=model_config).to(device)
     trainer = PPOTrainer(
         model=model,
+        value_model=ObservationValueModel(config=model_config).to(
+            device
+        ),
         train_config=train_config,
         device=device,
         profile_mode="off",
@@ -319,6 +332,9 @@ def test_update_uses_configured_single_rank_partition() -> None:
     model = CountingPolicyModel(config=model_config).to(device)
     trainer = PPOTrainer(
         model=model,
+        value_model=ObservationValueModel(config=model_config).to(
+            device
+        ),
         train_config=train_config,
         device=device,
         profile_mode="detailed",
@@ -347,6 +363,9 @@ def test_update_rejects_empty_single_rank_input() -> None:
     model = PolicyModel(config=model_config).to(device)
     trainer = PPOTrainer(
         model=model,
+        value_model=ObservationValueModel(config=model_config).to(
+            device
+        ),
         train_config=train_config,
         device=device,
         profile_mode="off",
@@ -377,6 +396,9 @@ def test_update_disables_profile_by_default() -> None:
     model = PolicyModel(config=model_config).to(device)
     trainer = PPOTrainer(
         model=model,
+        value_model=ObservationValueModel(config=model_config).to(
+            device
+        ),
         train_config=train_config,
         device=device,
         profile_mode="off",
@@ -403,6 +425,9 @@ def test_update_basic_profile_records_only_update_seconds() -> None:
     model = PolicyModel(config=model_config).to(device)
     trainer = PPOTrainer(
         model=model,
+        value_model=ObservationValueModel(config=model_config).to(
+            device
+        ),
         train_config=train_config,
         device=device,
         profile_mode="basic",
@@ -443,6 +468,9 @@ def test_update_rejects_non_finite_loss_before_optimizer_step() -> None:
     model = NonFinitePolicyModel(config=model_config).to(device)
     trainer = PPOTrainer(
         model=model,
+        value_model=ObservationValueModel(config=model_config).to(
+            device
+        ),
         train_config=train_config,
         device=device,
         profile_mode="off",
@@ -477,6 +505,9 @@ def test_update_rejects_non_finite_gradients_before_optimizer_step(
     model = PolicyModel(config=model_config).to(device)
     trainer = PPOTrainer(
         model=model,
+        value_model=ObservationValueModel(config=model_config).to(
+            device
+        ),
         train_config=train_config,
         device=device,
         profile_mode="off",
@@ -499,7 +530,7 @@ def test_update_rejects_non_finite_gradients_before_optimizer_step(
     assert (
         "PPO gradients must be finite before clipping" in result.reason
     )
-    assert "parameter=_observation_encoder" in result.reason
+    assert "parameter=policy._observation_backbone" in result.reason
     assert "nan_count=" in result.reason
     assert "parameter_state=finite" in result.reason
     assert "policy_loss=" in result.reason
@@ -556,7 +587,7 @@ def _single_card_batch(*, count: int) -> ArenaPPOBatchSource:
         )
         handles.append(handle)
         return_values.append(1.0 if seat in (Seat.A, Seat.C) else -1.0)
-    returns = RankReturnTargets(
+    trajectories = RankTrajectoryBatch(
         policy_version=0,
         model_rank_index=0,
         row_indices=torch.tensor(
@@ -564,12 +595,20 @@ def _single_card_batch(*, count: int) -> ArenaPPOBatchSource:
             dtype=torch.long,
         ),
         step_counts=torch.full((len(handles),), 2, dtype=torch.long),
-        return_values=torch.tensor(return_values, dtype=torch.float32),
+        trajectory_offsets=torch.arange(count, dtype=torch.long),
+        trajectory_lengths=torch.ones(count, dtype=torch.long),
+        terminal_rewards=torch.tensor(
+            return_values, dtype=torch.float32
+        ),
         round_count=1,
         total_step_count=len(handles) * 2,
         max_step_count=2,
     )
-    batch_result = store.ppo_batch_source(returns=returns)
+    batch_result = store.ppo_batch_source(
+        trajectories=trajectories,
+        value_evaluator=_zero_values,
+        gae_lambda=1.0,
+    )
     assert isinstance(batch_result, Ok)
     return batch_result.value
 
@@ -606,10 +645,11 @@ def _store_single_card_decision(
     seat: Seat,
 ) -> DecisionHandle:
     test_card = card("spades", "A", 1)
+    second_card = card("hearts", "K", 1)
     snapshot = make_snapshot(
         phase="PLAYING",
         awaiting_action="play",
-        hand=[test_card],
+        hand=[test_card, second_card],
     )
     observation = build_observation(
         viewer=seat,
@@ -688,3 +728,11 @@ def _action_sample_for_trace(
     )
     assert isinstance(sample, Ok)
     return sample.value
+
+
+def _zero_values(observation: ObservationTensorBatch) -> Tensor:
+    return torch.zeros(
+        (int(observation.category_ids.shape[0]),),
+        dtype=torch.float32,
+        device=observation.category_ids.device,
+    )

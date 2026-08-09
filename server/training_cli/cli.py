@@ -105,7 +105,9 @@ def _execute_resume(
     value = result.value
     print(f"checkpoint: {value.checkpoint_path}")
     print(f"rounds: {value.total_rounds}")
-    print(f"samples: {value.total_samples}")
+    print(
+        "trainable decisions: " + f"{value.total_trainable_decisions}"
+    )
     print(f"updates: {value.total_updates}")
 
 
@@ -150,9 +152,15 @@ def _add_init_arguments(parser: argparse.ArgumentParser) -> None:
         "--learning-rate", type=float, default=0.0003
     )
     _ = parser.add_argument("--ppo-clip", type=float, default=0.2)
+    _ = parser.add_argument("--value-clip", type=float, default=0.2)
+    _ = parser.add_argument("--gae-lambda", type=float, default=0.95)
+    _ = parser.add_argument("--value-coef", type=float, default=0.5)
     _ = parser.add_argument("--entropy-coef", type=float, default=0.01)
     _ = parser.add_argument(
         "--policy-max-grad-norm", type=float, default=0.5
+    )
+    _ = parser.add_argument(
+        "--value-max-grad-norm", type=float, default=0.5
     )
     _ = parser.add_argument("--ppo-epochs", type=int, default=4)
     _ = parser.add_argument("--minibatch-size", type=int, default=64)
@@ -170,7 +178,7 @@ def _add_resume_arguments(parser: argparse.ArgumentParser) -> None:
         choices=("off", "basic", "detailed"),
         default=None,
     )
-    _ = parser.add_argument("--max-samples", type=int, default=0)
+    _ = parser.add_argument("--max-rounds", type=int, default=0)
     _ = parser.add_argument("--learning-rate", type=float, default=None)
     _ = parser.add_argument(
         "--checkpoint-every-updates",
@@ -184,7 +192,7 @@ def _add_resume_arguments(parser: argparse.ArgumentParser) -> None:
     for name in (
         "round",
         "sampling-start",
-        "rollout-sample",
+        "rollout-collection",
         "sampling-stop",
         "state-sync",
         "update",
@@ -192,10 +200,14 @@ def _add_resume_arguments(parser: argparse.ArgumentParser) -> None:
         _ = parser.add_argument(f"--{name}-timeout-seconds", type=float)
     _ = parser.add_argument("--model-inference-batch-size", type=int)
     _ = parser.add_argument("--game-envs-per-worker", type=int)
-    _ = parser.add_argument("--samples-per-update", type=int)
+    _ = parser.add_argument("--rounds-per-update", type=int)
     _ = parser.add_argument("--ppo-clip", type=float)
+    _ = parser.add_argument("--value-clip", type=float)
+    _ = parser.add_argument("--gae-lambda", type=float)
+    _ = parser.add_argument("--value-coef", type=float)
     _ = parser.add_argument("--entropy-coef", type=float)
     _ = parser.add_argument("--policy-max-grad-norm", type=float)
+    _ = parser.add_argument("--value-max-grad-norm", type=float)
     _ = parser.add_argument("--ppo-epochs", type=int)
     _ = parser.add_argument("--minibatch-size", type=int)
     _ = parser.add_argument("--adam-beta1", type=float)

@@ -13,7 +13,8 @@ from server.foundation.json_value import JsonObject
 from server.policy_model.checkpoint import (
     managed_checkpoint_manifest_paths,
     managed_update_number_from_manifest_path,
-    manifest_state_file_path,
+    manifest_policy_file_path,
+    manifest_trainer_file_path,
     preflight_managed_checkpoints,
     read_checkpoint_manifest,
 )
@@ -37,11 +38,12 @@ class ValidatedTrainingRun(BaseModel):
 
     checkpoint_id: str
     checkpoint_path: Path
-    state_size_bytes: int = Field(ge=0)
+    policy_size_bytes: int = Field(ge=0)
+    trainer_size_bytes: int = Field(ge=0)
     model_config_values: JsonObject
     train_config_values: JsonObject
     total_rounds: int = Field(ge=0)
-    total_samples: int = Field(ge=0)
+    total_trainable_decisions: int = Field(ge=0)
     total_updates: int = Field(ge=0)
 
 
@@ -115,26 +117,37 @@ def validate_training_run(
             reason=f"training database is missing: {run_dir}"
         )
     database.close()
-    state_path = manifest_state_file_path(
+    policy_path = manifest_policy_file_path(
+        manifest_path=latest_path,
+        manifest=latest_manifest,
+    )
+    trainer_path = manifest_trainer_file_path(
         manifest_path=latest_path,
         manifest=latest_manifest,
     )
     try:
-        state_size = state_path.stat().st_size
+        policy_size = policy_path.stat().st_size
+        trainer_size = trainer_path.stat().st_size
     except OSError:
         return _result.Rejected(
-            reason=f"checkpoint state is unreadable: {state_path}"
+            reason=(
+                "checkpoint payloads are unreadable: "
+                + f"{policy_path}, {trainer_path}"
+            )
         )
     metadata = latest_manifest.metadata
     return _result.Ok(
         value=ValidatedTrainingRun(
             checkpoint_id=latest_manifest.checkpoint_id,
             checkpoint_path=latest_path,
-            state_size_bytes=state_size,
+            policy_size_bytes=policy_size,
+            trainer_size_bytes=trainer_size,
             model_config_values=metadata.model_config.to_json(),
             train_config_values=metadata.training_config_values,
             total_rounds=metadata.total_rounds,
-            total_samples=metadata.total_samples,
+            total_trainable_decisions=(
+                metadata.total_trainable_decisions
+            ),
             total_updates=metadata.total_updates,
         )
     )

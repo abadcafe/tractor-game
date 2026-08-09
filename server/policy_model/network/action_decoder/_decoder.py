@@ -16,7 +16,7 @@ from server.policy_model._schema.actions import (
 )
 
 from .._module_call import call_attention, call_tensor
-from ..observation_encoder import (
+from ..observation_backbone import (
     ActionDecoderInputs,
     EncodedObservation,
 )

@@ -16,8 +16,9 @@ from pydantic import (
 
 from server.checkpoint_contract import (
     CHECKPOINT_OBJECTS_DIR,
+    CHECKPOINT_POLICY_FILENAME,
     CHECKPOINT_SCHEMA_VERSION,
-    CHECKPOINT_STATE_FILENAME,
+    CHECKPOINT_TRAINER_FILENAME,
 )
 from server.foundation import result as _result
 from server.foundation.json_value import JsonObject
@@ -34,12 +35,14 @@ class _ManifestDocument(BaseModel):
 
     schema_version: int
     checkpoint_id: str = Field(pattern=_CHECKPOINT_ID_PATTERN)
-    state_path: str = Field(min_length=1)
-    state_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    policy_path: str = Field(min_length=1)
+    policy_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    trainer_path: str = Field(min_length=1)
+    trainer_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     model_config_values: JsonObject = Field(alias="model_config")
     train_config_values: JsonObject = Field(alias="train_config")
     total_rounds: int = Field(ge=0)
-    total_samples: int = Field(ge=0)
+    total_trainable_decisions: int = Field(ge=0)
     total_updates: int = Field(ge=0)
 
     @field_validator("schema_version")
@@ -64,14 +67,19 @@ class CheckpointManifestView(BaseModel):
     valid: bool
     error: str | None
     checkpoint_id: str | None
-    state_path: str | None
-    state_exists: bool
-    state_size_bytes: int | None = Field(ge=0)
+    policy_path: str | None
+    policy_exists: bool
+    policy_size_bytes: int | None = Field(ge=0)
+    trainer_path: str | None
+    trainer_exists: bool
+    trainer_size_bytes: int | None = Field(ge=0)
     modified_at_ms: int | None = Field(ge=0)
-    state_modified_at_ms: int | None = Field(ge=0)
-    state_sha256: str | None
+    policy_modified_at_ms: int | None = Field(ge=0)
+    trainer_modified_at_ms: int | None = Field(ge=0)
+    policy_sha256: str | None
+    trainer_sha256: str | None
     total_rounds: int | None = Field(ge=0)
-    total_samples: int | None = Field(ge=0)
+    total_trainable_decisions: int | None = Field(ge=0)
     total_updates: int | None = Field(ge=0)
     model_config_values: JsonObject | None
     train_config_values: JsonObject | None
@@ -85,11 +93,14 @@ class CheckpointObjectView(BaseModel):
     )
 
     checkpoint_id: str
-    state_path: str
+    policy_path: str
+    trainer_path: str
     valid: bool
     error: str | None
-    state_size_bytes: int | None = Field(ge=0)
-    state_modified_at_ms: int | None = Field(ge=0)
+    policy_size_bytes: int | None = Field(ge=0)
+    trainer_size_bytes: int | None = Field(ge=0)
+    policy_modified_at_ms: int | None = Field(ge=0)
+    trainer_modified_at_ms: int | None = Field(ge=0)
     referenced_by: tuple[str, ...]
     orphan: bool
 
@@ -104,7 +115,7 @@ class CheckpointCatalog(BaseModel):
     checkpoint_directory: Path
     manifests: tuple[CheckpointManifestView, ...]
     objects: tuple[CheckpointObjectView, ...]
-    total_unique_state_bytes: int = Field(ge=0)
+    total_unique_payload_bytes: int = Field(ge=0)
 
 
 def read_checkpoint_catalog(
@@ -126,7 +137,7 @@ def read_checkpoint_catalog(
                     checkpoint_directory=checkpoint_dir,
                     manifests=(),
                     objects=(),
-                    total_unique_state_bytes=0,
+                    total_unique_payload_bytes=0,
                 )
             )
         if not checkpoint_dir.is_dir():
@@ -163,8 +174,10 @@ def read_checkpoint_catalog(
             checkpoint_directory=checkpoint_dir,
             manifests=manifests,
             objects=objects,
-            total_unique_state_bytes=sum(
-                item.state_size_bytes or 0 for item in objects
+            total_unique_payload_bytes=sum(
+                (item.policy_size_bytes or 0)
+                + (item.trainer_size_bytes or 0)
+                for item in objects
             ),
         )
     )
@@ -180,44 +193,66 @@ def _manifest_view(path: Path) -> CheckpointManifestView:
             valid=False,
             error=result.reason,
             checkpoint_id=None,
-            state_path=None,
-            state_exists=False,
-            state_size_bytes=None,
+            policy_path=None,
+            policy_exists=False,
+            policy_size_bytes=None,
+            trainer_path=None,
+            trainer_exists=False,
+            trainer_size_bytes=None,
             modified_at_ms=_mtime_ms(path),
-            state_modified_at_ms=None,
-            state_sha256=None,
+            policy_modified_at_ms=None,
+            trainer_modified_at_ms=None,
+            policy_sha256=None,
+            trainer_sha256=None,
             total_rounds=None,
-            total_samples=None,
+            total_trainable_decisions=None,
             total_updates=None,
             model_config_values=None,
             train_config_values=None,
         )
     manifest = result.value
-    state_path = path.parent / manifest.state_path
-    state_path_error = _state_path_error(state_path)
-    state_stat = (
-        None if state_path_error is not None else _file_stat(state_path)
+    policy_path = path.parent / manifest.policy_path
+    trainer_path = path.parent / manifest.trainer_path
+    policy_error = _payload_path_error(policy_path)
+    trainer_error = _payload_path_error(trainer_path)
+    policy_stat = (
+        None if policy_error is not None else _file_stat(policy_path)
     )
-    state_exists = state_stat is not None
-    error = state_path_error
-    if error is None and not state_exists:
-        error = f"checkpoint state is missing: {state_path}"
+    trainer_stat = (
+        None if trainer_error is not None else _file_stat(trainer_path)
+    )
+    error = policy_error if policy_error is not None else trainer_error
+    if error is None and policy_stat is None:
+        error = f"checkpoint policy is missing: {policy_path}"
+    if error is None and trainer_stat is None:
+        error = f"checkpoint trainer is missing: {trainer_path}"
     return CheckpointManifestView(
         name=path.name,
         kind=kind,
-        valid=state_exists,
+        valid=error is None,
         error=error,
         checkpoint_id=manifest.checkpoint_id,
-        state_path=manifest.state_path,
-        state_exists=state_exists,
-        state_size_bytes=None if state_stat is None else state_stat[0],
+        policy_path=manifest.policy_path,
+        policy_exists=policy_stat is not None,
+        policy_size_bytes=(
+            None if policy_stat is None else policy_stat[0]
+        ),
+        trainer_path=manifest.trainer_path,
+        trainer_exists=trainer_stat is not None,
+        trainer_size_bytes=(
+            None if trainer_stat is None else trainer_stat[0]
+        ),
         modified_at_ms=_mtime_ms(path),
-        state_modified_at_ms=None
-        if state_stat is None
-        else state_stat[1],
-        state_sha256=manifest.state_sha256,
+        policy_modified_at_ms=(
+            None if policy_stat is None else policy_stat[1]
+        ),
+        trainer_modified_at_ms=(
+            None if trainer_stat is None else trainer_stat[1]
+        ),
+        policy_sha256=manifest.policy_sha256,
+        trainer_sha256=manifest.trainer_sha256,
         total_rounds=manifest.total_rounds,
-        total_samples=manifest.total_samples,
+        total_trainable_decisions=manifest.total_trainable_decisions,
         total_updates=manifest.total_updates,
         model_config_values=manifest.model_config_values,
         train_config_values=manifest.train_config_values,
@@ -248,7 +283,8 @@ def _object_views(
         )
     views: list[CheckpointObjectView] = []
     for object_dir in children:
-        state_path = object_dir / CHECKPOINT_STATE_FILENAME
+        policy_path = object_dir / CHECKPOINT_POLICY_FILENAME
+        trainer_path = object_dir / CHECKPOINT_TRAINER_FILENAME
         error: str | None = None
         if (
             re.fullmatch(_CHECKPOINT_ID_PATTERN, object_dir.name)
@@ -257,29 +293,44 @@ def _object_views(
             error = f"invalid checkpoint object id: {object_dir}"
         elif object_dir.is_symlink() or not object_dir.is_dir():
             error = f"invalid checkpoint object: {object_dir}"
-        elif state_path.is_symlink():
+        elif policy_path.is_symlink() or trainer_path.is_symlink():
             error = (
-                f"checkpoint state must not be a symlink: {state_path}"
+                "checkpoint payload must not be a symlink: "
+                + f"{object_dir}"
             )
-        state_stat = (
-            None if error is not None else _file_stat(state_path)
+        policy_stat = (
+            None if error is not None else _file_stat(policy_path)
         )
-        if error is None and state_stat is None:
-            error = f"checkpoint state is missing: {state_path}"
+        trainer_stat = (
+            None if error is not None else _file_stat(trainer_path)
+        )
+        if error is None and policy_stat is None:
+            error = f"checkpoint policy is missing: {policy_path}"
+        if error is None and trainer_stat is None:
+            error = f"checkpoint trainer is missing: {trainer_path}"
         names = tuple(sorted(references.get(object_dir.name, [])))
         views.append(
             CheckpointObjectView(
                 checkpoint_id=object_dir.name,
-                state_path=state_path.relative_to(
+                policy_path=policy_path.relative_to(
+                    checkpoint_dir
+                ).as_posix(),
+                trainer_path=trainer_path.relative_to(
                     checkpoint_dir
                 ).as_posix(),
                 valid=error is None,
                 error=error,
-                state_size_bytes=(
-                    None if state_stat is None else state_stat[0]
+                policy_size_bytes=(
+                    None if policy_stat is None else policy_stat[0]
                 ),
-                state_modified_at_ms=(
-                    None if state_stat is None else state_stat[1]
+                trainer_size_bytes=(
+                    None if trainer_stat is None else trainer_stat[0]
+                ),
+                policy_modified_at_ms=(
+                    None if policy_stat is None else policy_stat[1]
+                ),
+                trainer_modified_at_ms=(
+                    None if trainer_stat is None else trainer_stat[1]
                 ),
                 referenced_by=names,
                 orphan=not names,
@@ -333,19 +384,19 @@ def _read_manifest(
         return _checkpoint_rejection(
             path, "manifest file is not readable"
         )
-    state_path = Path(manifest.state_path)
-    expected = (
-        Path(CHECKPOINT_OBJECTS_DIR)
-        / manifest.checkpoint_id
-        / CHECKPOINT_STATE_FILENAME
-    )
+    policy_path = Path(manifest.policy_path)
+    trainer_path = Path(manifest.trainer_path)
+    expected_dir = Path(CHECKPOINT_OBJECTS_DIR) / manifest.checkpoint_id
     if (
-        state_path.is_absolute()
-        or ".." in state_path.parts
-        or state_path != expected
+        policy_path.is_absolute()
+        or ".." in policy_path.parts
+        or policy_path != expected_dir / CHECKPOINT_POLICY_FILENAME
+        or trainer_path.is_absolute()
+        or ".." in trainer_path.parts
+        or trainer_path != expected_dir / CHECKPOINT_TRAINER_FILENAME
     ):
         return _checkpoint_rejection(
-            path, "manifest state path does not match checkpoint id"
+            path, "manifest payload paths do not match checkpoint id"
         )
     return _result.Ok(value=manifest)
 
@@ -356,9 +407,9 @@ def _checkpoint_rejection(path: Path, reason: str) -> _result.Rejected:
     )
 
 
-def _state_path_error(path: Path) -> str | None:
+def _payload_path_error(path: Path) -> str | None:
     if path.parent.is_symlink() or path.is_symlink():
-        return f"checkpoint state must not traverse a symlink: {path}"
+        return f"checkpoint payload must not traverse a symlink: {path}"
     return None
 
 

@@ -116,7 +116,8 @@ async def test_policy_uses_one_observation_encoding_for_the_trace() -> (
             FaceCount(face=card_face(card("hearts", "2", 1)), count=1),
         ),
     )
-    assert decision.value.choice_count == 2
+    assert decision.value.legal_choice_count == 2
+    assert decision.value.scored_choice_step_count == 1
 
 
 @pytest.mark.asyncio
@@ -298,7 +299,7 @@ def _decision_key(*, decision_index: int = 0) -> TrainingDecisionKey:
         base_seed=0,
         policy_version=0,
         rollout_id="torch-policy-test",
-        episode_id=0,
+        round_id=0,
         seat=Seat.A,
         decision_index=decision_index,
     )

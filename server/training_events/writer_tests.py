@@ -42,9 +42,9 @@ def test_event_sink_batches_typed_json_and_preserves_context(
         context=EventContext(
             policy_version=3,
             worker_index=2,
-            episode_id=7,
+            round_id=7,
         ),
-        fields={"sample_count": 11},
+        fields={"trainable_decision_count": 11},
     )
     sink.close()
 
@@ -64,11 +64,11 @@ def test_event_sink_batches_typed_json_and_preserves_context(
         "context",
         "fields",
     }
-    assert event["schema_version"] == 3
+    assert event["schema_version"] == 4
     assert event["event"] == "round"
     context = event["context"]
     assert isinstance(context, dict)
-    assert context["episode_id"] == 7
+    assert context["round_id"] == 7
     assert "rollout_id" not in context
 
 
@@ -104,14 +104,14 @@ def test_event_context_preserves_typed_identifiers() -> None:
         policy_version=4,
         rollout_id="rollout-7",
         worker_index=2,
-        episode_id=9,
+        round_id=9,
     )
     process = ProcessIdentity(kind="model_rank", index=3)
 
     assert context.policy_version == 4
     assert context.rollout_id == "rollout-7"
     assert context.worker_index == 2
-    assert context.episode_id == 9
+    assert context.round_id == 9
     assert process.kind == "model_rank"
     assert process.index == 3
 
@@ -127,7 +127,10 @@ def test_emit_accepts_finite_domain_fields(
     )
     sink.emit(
         "update",
-        fields={"policy_loss": 0.25, "sample_count": 64},
+        fields={
+            "policy_loss": 0.25,
+            "trainable_decision_count": 64,
+        },
     )
     sink.close()
 

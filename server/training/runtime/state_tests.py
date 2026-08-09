@@ -38,7 +38,7 @@ def test_select_canonical_runtime_state_rejects_model_divergence() -> (
     selected = select_canonical_runtime_training_state((first, second))
 
     assert isinstance(selected, Rejected)
-    assert "model state weight value differs" in selected.reason
+    assert "policy state weight value differs" in selected.reason
 
 
 def test_select_canonical_state_rejects_optimizer_divergence() -> None:
@@ -66,21 +66,29 @@ def test_capture_and_load_runtime_training_state_round_trips() -> None:
     )
     snapshot = capture_runtime_training_state(
         model=source.model,
+        value_model=source.value_model,
         trainer=source.trainer,
     )
 
     load_runtime_training_state(state=target, snapshot=snapshot)
     target_snapshot = capture_runtime_training_state(
         model=target.model,
+        value_model=target.value_model,
         trainer=target.trainer,
     )
 
     assert (
-        snapshot.model_state.keys()
-        == target_snapshot.model_state.keys()
+        snapshot.policy_state.keys()
+        == target_snapshot.policy_state.keys()
     )
-    for key, value in snapshot.model_state.items():
-        assert torch.equal(value, target_snapshot.model_state[key])
+    for key, value in snapshot.policy_state.items():
+        assert torch.equal(value, target_snapshot.policy_state[key])
+    assert (
+        snapshot.value_state.keys()
+        == target_snapshot.value_state.keys()
+    )
+    for key, value in snapshot.value_state.items():
+        assert torch.equal(value, target_snapshot.value_state[key])
 
 
 def _runtime_state(
@@ -89,10 +97,11 @@ def _runtime_state(
     step_count: int,
 ) -> RuntimeTrainingState:
     return RuntimeTrainingState(
-        model_state={
+        policy_state={
             "weight": torch.tensor([weight], dtype=torch.float32),
             "counter": torch.tensor([5], dtype=torch.int64),
         },
+        value_state={"value": torch.tensor([1.0])},
         optimizer_state={
             "kind": "ppo_adamw",
             "step_count": step_count,

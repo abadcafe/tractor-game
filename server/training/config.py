@@ -15,8 +15,12 @@ class TrainConfig:
     seed: int = 0
     learning_rate: float = 0.0003
     ppo_clip: float = 0.2
+    value_clip: float = 0.2
+    gae_lambda: float = 0.95
+    value_coef: float = 0.5
     entropy_coef: float = 0.01
     policy_max_grad_norm: float = 0.5
+    value_max_grad_norm: float = 0.5
     ppo_epochs: int = 4
     minibatch_size: int = 64
     adam_beta1: float = 0.9
@@ -29,10 +33,18 @@ class TrainConfig:
         assert self.learning_rate > 0.0
         assert _is_finite(self.ppo_clip)
         assert 0.0 < self.ppo_clip <= 1.0
+        assert _is_finite(self.value_clip)
+        assert 0.0 < self.value_clip <= 1.0
+        assert _is_finite(self.gae_lambda)
+        assert 0.0 <= self.gae_lambda <= 1.0
+        assert _is_finite(self.value_coef)
+        assert self.value_coef >= 0.0
         assert _is_finite(self.entropy_coef)
         assert self.entropy_coef >= 0.0
         assert _is_finite(self.policy_max_grad_norm)
         assert self.policy_max_grad_norm >= 0.0
+        assert _is_finite(self.value_max_grad_norm)
+        assert self.value_max_grad_norm >= 0.0
         assert self.ppo_epochs > 0
         assert self.minibatch_size > 0
         assert _is_finite(self.adam_beta1)
@@ -47,8 +59,12 @@ class TrainConfig:
             "seed": self.seed,
             "learning_rate": self.learning_rate,
             "ppo_clip": self.ppo_clip,
+            "value_clip": self.value_clip,
+            "gae_lambda": self.gae_lambda,
+            "value_coef": self.value_coef,
             "entropy_coef": self.entropy_coef,
             "policy_max_grad_norm": self.policy_max_grad_norm,
+            "value_max_grad_norm": self.value_max_grad_norm,
             "ppo_epochs": self.ppo_epochs,
             "minibatch_size": self.minibatch_size,
             "adam_beta1": self.adam_beta1,
@@ -62,8 +78,12 @@ class TrainConfig:
             "seed",
             "learning_rate",
             "ppo_clip",
+            "value_clip",
+            "gae_lambda",
+            "value_coef",
             "entropy_coef",
             "policy_max_grad_norm",
+            "value_max_grad_norm",
             "ppo_epochs",
             "minibatch_size",
             "adam_beta1",
@@ -74,9 +94,15 @@ class TrainConfig:
             seed=_int_json_field(data, "seed"),
             learning_rate=_float_json_field(data, "learning_rate"),
             ppo_clip=_float_json_field(data, "ppo_clip"),
+            value_clip=_float_json_field(data, "value_clip"),
+            gae_lambda=_float_json_field(data, "gae_lambda"),
+            value_coef=_float_json_field(data, "value_coef"),
             entropy_coef=_float_json_field(data, "entropy_coef"),
             policy_max_grad_norm=_float_json_field(
                 data, "policy_max_grad_norm"
+            ),
+            value_max_grad_norm=_float_json_field(
+                data, "value_max_grad_norm"
             ),
             ppo_epochs=_int_json_field(data, "ppo_epochs"),
             minibatch_size=_int_json_field(data, "minibatch_size"),

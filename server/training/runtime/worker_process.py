@@ -16,6 +16,12 @@ from server.training.ppo.distributed import (
     PPOUpdatePartition,
     single_update_partition,
 )
+from server.training.rollout import (
+    GameIdentity,
+    RolloutPolicy,
+    RolloutRoundResult,
+    RolloutSession,
+)
 from server.training.runtime.affinity import apply_cpu_affinity
 from server.training.runtime.async_ipc import AsyncChildControlEndpoint
 from server.training.runtime.config import CpuSet, ExecutionConfig
@@ -66,11 +72,6 @@ from server.training.runtime.shared_rollout_arena import (
 from server.training.runtime.threads import (
     apply_worker_torch_thread_config,
 )
-from server.training.self_play.policy import TrainingPolicy
-from server.training.self_play.session import (
-    SelfPlaySession,
-    TrainingRoundResult,
-)
 from server.training_events import EventContext, StructuredEventSink
 
 
@@ -78,10 +79,10 @@ from server.training_events import EventContext, StructuredEventSink
 class _WorkerRuntime:
     policy: BatchedPolicyClient
     local_model_rank: LocalModelRank | None
-    sessions: tuple[SelfPlaySession, ...]
+    sessions: tuple[RolloutSession, ...]
     arena_writer: SharedRolloutArenaWriter
     arena_reader: SharedRolloutArenaReader
-    next_episode_id: int = 0
+    next_round_id: int = 0
     completed_round_count: int = 0
     sampling_task: asyncio.Task[_SamplingTaskResult] | None = None
     sampling_policy_version: int | None = None
@@ -91,8 +92,8 @@ class _WorkerRuntime:
 @dataclass(frozen=True, slots=True)
 class _EnvRoundResult:
     game_env_index: int
-    episode_id: int
-    round_data: TrainingRoundResult
+    round_id: int
+    round_data: RolloutRoundResult
 
 
 type _EnvRoundTaskResult = (
@@ -322,6 +323,8 @@ def _create_worker_runtime(
                 sessions=_create_game_envs(
                     policy=policy,
                     count=execution_config.game_envs_per_worker,
+                    base_seed=train_config.seed,
+                    worker_index=worker_index,
                 ),
                 arena_writer=arena_writer,
                 arena_reader=arena_reader,
@@ -352,6 +355,8 @@ def _create_worker_runtime(
             sessions=_create_game_envs(
                 policy=policy,
                 count=execution_config.game_envs_per_worker,
+                base_seed=train_config.seed,
+                worker_index=worker_index,
             ),
             arena_writer=arena_writer,
             arena_reader=arena_reader,
@@ -360,10 +365,25 @@ def _create_worker_runtime(
 
 
 def _create_game_envs(
-    *, policy: TrainingPolicy, count: int
-) -> tuple[SelfPlaySession, ...]:
+    *,
+    policy: RolloutPolicy,
+    count: int,
+    base_seed: int,
+    worker_index: int,
+) -> tuple[RolloutSession, ...]:
     assert count > 0
-    return tuple(SelfPlaySession(policy=policy) for _ in range(count))
+    return tuple(
+        RolloutSession(
+            policy=policy,
+            identity=GameIdentity(
+                base_seed=base_seed,
+                worker_index=worker_index,
+                game_env_index=game_env_index,
+                game_ordinal=0,
+            ),
+        )
+        for game_env_index in range(count)
+    )
 
 
 def _worker_update_partition(
@@ -397,7 +417,6 @@ async def _handle_worker_command(
     if isinstance(command, WorkerStartSamplingCommand):
         return _start_worker_sampling(
             worker_index=worker_index,
-            train_config=train_config,
             execution_config=execution_config,
             runtime=runtime,
             command=command,
@@ -511,12 +530,12 @@ def _run_worker_update(
         worker_index=worker_index,
     )
     update_started = time.perf_counter()
-    returns_result = runtime.arena_reader.read_rank_batch(
+    trajectories_result = runtime.arena_reader.read_rank_batch(
         policy_version=command.policy_version,
         model_rank_index=worker_index,
         device=torch.device("cpu"),
     )
-    if isinstance(returns_result, Rejected):
+    if isinstance(trajectories_result, Rejected):
         event_sink.emit(
             "update.rank",
             context=context,
@@ -525,16 +544,16 @@ def _run_worker_update(
                     time.perf_counter() - update_started, 0.0
                 )
             },
-            error=returns_result.reason,
+            error=trajectories_result.reason,
         )
         return _worker_rejection(
             worker_index=worker_index,
             command="update",
             policy_version=command.policy_version,
-            reason=returns_result.reason,
+            reason=trajectories_result.reason,
         )
     update_result = runtime.local_model_rank.update(
-        returns=returns_result.value,
+        trajectories=trajectories_result.value,
         policy_version=command.policy_version,
     )
     if isinstance(update_result, Rejected):
@@ -561,11 +580,13 @@ def _run_worker_update(
             "duration_seconds": max(
                 time.perf_counter() - update_started, 0.0
             ),
-            "sample_count": int(
-                returns_result.value.row_indices.shape[0]
+            "trainable_decision_count": int(
+                trajectories_result.value.row_indices.shape[0]
             ),
-            "step_count": returns_result.value.total_step_count,
-            "round_count": returns_result.value.round_count,
+            "trace_step_count": (
+                trajectories_result.value.total_step_count
+            ),
+            "round_count": trajectories_result.value.round_count,
         },
     )
     return WorkerUpdateCompleted(
@@ -630,7 +651,6 @@ def _sampling_summary(
 def _start_worker_sampling(
     *,
     worker_index: int,
-    train_config: TrainConfig,
     execution_config: ExecutionConfig,
     runtime: _WorkerRuntime,
     command: WorkerStartSamplingCommand,
@@ -673,7 +693,6 @@ def _start_worker_sampling(
     runtime.sampling_task = asyncio.create_task(
         _run_sampling_until_stopped(
             worker_index=worker_index,
-            train_config=train_config,
             execution_config=execution_config,
             runtime=runtime,
             command=command,
@@ -785,7 +804,7 @@ async def _stop_worker_sampling(
             "completed_rounds": sampling_result.value.completed_rounds,
             "round_seconds": sampling_result.value.round_seconds,
             "policy_wait_seconds": policy_stats.wait_seconds,
-            "decision_count": policy_stats.decision_count,
+            "policy_request_count": policy_stats.decision_count,
             "arena_append_seconds": (
                 sampling_result.value.append_seconds
             ),
@@ -814,7 +833,6 @@ async def _cancel_active_sampling(*, runtime: _WorkerRuntime) -> None:
 async def _run_sampling_until_stopped(
     *,
     worker_index: int,
-    train_config: TrainConfig,
     execution_config: ExecutionConfig,
     runtime: _WorkerRuntime,
     command: WorkerStartSamplingCommand,
@@ -831,18 +849,17 @@ async def _run_sampling_until_stopped(
         task = _schedule_round(
             session=sessions[game_env_index],
             game_env_index=game_env_index,
-            episode_id=_next_worker_episode_id(
+            round_id=_next_worker_round_id(
                 worker_index=worker_index,
-                local_episode_id=runtime.next_episode_id,
+                local_round_id=runtime.next_round_id,
             ),
-            train_config=train_config,
             execution_config=execution_config,
             policy_version=command.policy_version,
             rollout_id=command.rollout_id,
             worker_index=worker_index,
             event_sink=event_sink,
         )
-        runtime.next_episode_id += 1
+        runtime.next_round_id += 1
         pending[task] = game_env_index
     try:
         while pending:
@@ -868,17 +885,17 @@ async def _run_sampling_until_stopped(
                     return round_result
                 env_round = round_result.value
                 round_data = env_round.round_data
-                completed_rounds += 1
-                round_seconds += round_data.elapsed_seconds
                 if round_data.game_over:
-                    sessions[game_env_index] = SelfPlaySession(
-                        policy=runtime.policy
+                    sessions[game_env_index] = sessions[
+                        game_env_index
+                    ].next_game(
+                        policy=runtime.policy,
                     )
                 append_start = time.perf_counter()
                 append_result = runtime.arena_writer.append_round(
                     policy_version=command.policy_version,
                     metrics=_round_metrics(round_data),
-                    commit=round_data.returns,
+                    trajectory=round_data.trajectory,
                 )
                 append_seconds += max(
                     time.perf_counter() - append_start, 0.0
@@ -896,6 +913,29 @@ async def _run_sampling_until_stopped(
                     )
                     runtime.sessions = tuple(sessions)
                     return append_result
+                if not append_result.value.accepted:
+                    cancelled_count = len(pending)
+                    await _cancel_pending_rounds(
+                        pending=pending,
+                        sessions=sessions,
+                        policy=runtime.policy,
+                    )
+                    cancelled_envs += cancelled_count
+                    runtime.arena_writer.record_cancelled_envs(
+                        cancelled_count
+                    )
+                    runtime.sessions = tuple(sessions)
+                    return Ok(
+                        value=_sampling_summary(
+                            active_game_envs=command.game_env_count,
+                            completed_rounds=completed_rounds,
+                            round_seconds=round_seconds,
+                            append_seconds=append_seconds,
+                            cancelled_envs=cancelled_envs,
+                        )
+                    )
+                completed_rounds += 1
+                round_seconds += round_data.elapsed_seconds
                 runtime.completed_round_count += 1
                 if append_result.value.capacity_reached:
                     cancelled_count = len(pending)
@@ -921,18 +961,17 @@ async def _run_sampling_until_stopped(
                 task = _schedule_round(
                     session=sessions[game_env_index],
                     game_env_index=game_env_index,
-                    episode_id=_next_worker_episode_id(
+                    round_id=_next_worker_round_id(
                         worker_index=worker_index,
-                        local_episode_id=runtime.next_episode_id,
+                        local_round_id=runtime.next_round_id,
                     ),
-                    train_config=train_config,
                     execution_config=execution_config,
                     policy_version=command.policy_version,
                     rollout_id=command.rollout_id,
                     worker_index=worker_index,
                     event_sink=event_sink,
                 )
-                runtime.next_episode_id += 1
+                runtime.next_round_id += 1
                 pending[task] = game_env_index
     except asyncio.CancelledError:
         cancelled_count = len(pending)
@@ -967,10 +1006,9 @@ async def _run_sampling_until_stopped(
 
 def _schedule_round(
     *,
-    session: SelfPlaySession,
+    session: RolloutSession,
     game_env_index: int,
-    episode_id: int,
-    train_config: TrainConfig,
+    round_id: int,
     execution_config: ExecutionConfig,
     policy_version: int,
     rollout_id: str,
@@ -981,8 +1019,7 @@ def _schedule_round(
         _play_worker_round(
             session=session,
             game_env_index=game_env_index,
-            episode_id=episode_id,
-            base_seed=train_config.seed,
+            round_id=round_id,
             policy_version=policy_version,
             rollout_id=rollout_id,
             max_seconds=execution_config.timeouts.round_seconds,
@@ -994,10 +1031,9 @@ def _schedule_round(
 
 async def _play_worker_round(
     *,
-    session: SelfPlaySession,
+    session: RolloutSession,
     game_env_index: int,
-    episode_id: int,
-    base_seed: int,
+    round_id: int,
     policy_version: int,
     rollout_id: str,
     max_seconds: float,
@@ -1010,13 +1046,12 @@ async def _play_worker_round(
         rollout_id=rollout_id,
         worker_index=worker_index,
         game_env_index=game_env_index,
-        episode_id=episode_id,
+        round_id=round_id,
     )
     result = await session.play_round(
-        base_seed=base_seed,
         policy_version=policy_version,
         rollout_id=rollout_id,
-        episode_id=episode_id,
+        round_id=round_id,
         max_seconds=max_seconds,
     )
     if isinstance(result, Rejected):
@@ -1037,23 +1072,25 @@ async def _play_worker_round(
         context=context,
         fields={
             "duration_seconds": round_data.elapsed_seconds,
-            "first_partnership_reward": (
-                round_data.first_partnership_reward
+            "model_reward": round_data.model_reward,
+            "auto_reward": round_data.auto_reward,
+            "model_action_count": round_data.model_action_count,
+            "auto_action_count": round_data.auto_action_count,
+            "forced_action_count": round_data.forced_action_count,
+            "trainable_decision_count": (
+                round_data.trainable_decision_count
             ),
-            "second_partnership_reward": (
-                round_data.second_partnership_reward
+            "scored_choice_step_count": (
+                round_data.scored_choice_step_count
             ),
-            "generated_action_count": round_data.generated_action_count,
-            "accepted_action_count": round_data.accepted_action_count,
-            "action_choice_count": round_data.action_choice_count,
-            "decision_count": round_data.returns.sample_count(),
+            "model_declarer": round_data.model_declarer,
             "game_over": round_data.game_over,
         },
     )
     return Ok(
         value=_EnvRoundResult(
             game_env_index=game_env_index,
-            episode_id=episode_id,
+            round_id=round_id,
             round_data=round_data,
         )
     )
@@ -1062,8 +1099,8 @@ async def _play_worker_round(
 async def _cancel_pending_rounds(
     *,
     pending: dict[asyncio.Task[_EnvRoundTaskResult], int],
-    sessions: list[SelfPlaySession],
-    policy: TrainingPolicy,
+    sessions: list[RolloutSession],
+    policy: RolloutPolicy,
 ) -> None:
     for task in pending:
         _ = task.cancel()
@@ -1073,28 +1110,32 @@ async def _cancel_pending_rounds(
         except asyncio.CancelledError:
             pass
         await sessions[game_env_index].close()
-        sessions[game_env_index] = SelfPlaySession(policy=policy)
+        sessions[game_env_index] = sessions[
+            game_env_index
+        ].discard_game(policy=policy)
     pending.clear()
 
 
-def _next_worker_episode_id(
-    *, worker_index: int, local_episode_id: int
+def _next_worker_round_id(
+    *, worker_index: int, local_round_id: int
 ) -> int:
     assert worker_index >= 0
-    assert local_episode_id >= 0
-    return worker_index * 1_000_000_000 + local_episode_id
+    assert local_round_id >= 0
+    return worker_index * 1_000_000_000 + local_round_id
 
 
 def _round_metrics(
-    round_data: TrainingRoundResult,
+    round_data: RolloutRoundResult,
 ) -> RolloutRoundMetrics:
     return RolloutRoundMetrics(
-        first_partnership_reward=round_data.first_partnership_reward,
-        second_partnership_reward=round_data.second_partnership_reward,
-        generated_action_count=round_data.generated_action_count,
-        accepted_action_count=round_data.accepted_action_count,
-        action_choice_count=round_data.action_choice_count,
-        decision_count=round_data.returns.sample_count(),
+        model_reward=round_data.model_reward,
+        auto_reward=round_data.auto_reward,
+        model_action_count=round_data.model_action_count,
+        auto_action_count=round_data.auto_action_count,
+        forced_action_count=round_data.forced_action_count,
+        trainable_decision_count=round_data.trainable_decision_count,
+        scored_choice_step_count=round_data.scored_choice_step_count,
         elapsed_seconds=round_data.elapsed_seconds,
         game_over=round_data.game_over,
+        model_declarer=round_data.model_declarer,
     )

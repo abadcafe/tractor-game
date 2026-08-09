@@ -27,8 +27,12 @@ def train_config_from_json(
         "seed",
         "learning_rate",
         "ppo_clip",
+        "value_clip",
+        "gae_lambda",
+        "value_coef",
         "entropy_coef",
         "policy_max_grad_norm",
+        "value_max_grad_norm",
         "ppo_epochs",
         "minibatch_size",
         "adam_beta1",
@@ -59,6 +63,21 @@ def train_config_from_json(
     )
     if isinstance(ppo_clip, _result.Rejected):
         return ppo_clip
+    value_clip = _json_float_field(
+        data, "value_clip", path, label="train_config.value_clip"
+    )
+    if isinstance(value_clip, _result.Rejected):
+        return value_clip
+    gae_lambda = _json_float_field(
+        data, "gae_lambda", path, label="train_config.gae_lambda"
+    )
+    if isinstance(gae_lambda, _result.Rejected):
+        return gae_lambda
+    value_coef = _json_float_field(
+        data, "value_coef", path, label="train_config.value_coef"
+    )
+    if isinstance(value_coef, _result.Rejected):
+        return value_coef
     entropy_coef = _json_float_field(
         data, "entropy_coef", path, label="train_config.entropy_coef"
     )
@@ -72,6 +91,14 @@ def train_config_from_json(
     )
     if isinstance(policy_max_grad_norm, _result.Rejected):
         return policy_max_grad_norm
+    value_max_grad_norm = _json_float_field(
+        data,
+        "value_max_grad_norm",
+        path,
+        label="train_config.value_max_grad_norm",
+    )
+    if isinstance(value_max_grad_norm, _result.Rejected):
+        return value_max_grad_norm
     ppo_epochs = _json_int_field(
         data, "ppo_epochs", path, label="train_config.ppo_epochs"
     )
@@ -105,8 +132,12 @@ def train_config_from_json(
         seed=seed.value,
         learning_rate=learning_rate.value,
         ppo_clip=ppo_clip.value,
+        value_clip=value_clip.value,
+        gae_lambda=gae_lambda.value,
+        value_coef=value_coef.value,
         entropy_coef=entropy_coef.value,
         policy_max_grad_norm=policy_max_grad_norm.value,
+        value_max_grad_norm=value_max_grad_norm.value,
         ppo_epochs=ppo_epochs.value,
         minibatch_size=minibatch_size.value,
         adam_beta1=adam_beta1.value,
@@ -120,8 +151,12 @@ def train_config_from_json(
             seed=seed.value,
             learning_rate=learning_rate.value,
             ppo_clip=ppo_clip.value,
+            value_clip=value_clip.value,
+            gae_lambda=gae_lambda.value,
+            value_coef=value_coef.value,
             entropy_coef=entropy_coef.value,
             policy_max_grad_norm=policy_max_grad_norm.value,
+            value_max_grad_norm=value_max_grad_norm.value,
             ppo_epochs=ppo_epochs.value,
             minibatch_size=minibatch_size.value,
             adam_beta1=adam_beta1.value,
@@ -150,7 +185,7 @@ def validate_optimizer_state_payload(
     if set(payload_state) != expected_fields:
         return checkpoint_corruption(
             path,
-            "state payload optimizer_state fields do not match "
+            "trainer payload optimizer_state fields do not match "
             + "the current schema",
         )
     kind = _payload_str_field(
@@ -160,7 +195,7 @@ def validate_optimizer_state_payload(
         return kind
     if kind.value != "ppo_adamw":
         return checkpoint_corruption(
-            path, "state payload optimizer_state.kind is unsupported"
+            path, "trainer payload optimizer_state.kind is unsupported"
         )
     step_count = _payload_int_field(
         payload_state,
@@ -173,7 +208,7 @@ def validate_optimizer_state_payload(
     if step_count.value < 0:
         return checkpoint_corruption(
             path,
-            "state payload optimizer_state.step_count must be >= 0",
+            "trainer payload optimizer_state.step_count must be >= 0",
         )
     exp_avgs = _payload_optional_tensor_list_field(
         payload_state,
@@ -194,14 +229,14 @@ def validate_optimizer_state_payload(
     if len(exp_avgs.value) != len(parameters):
         return checkpoint_corruption(
             path,
-            "state payload optimizer_state.exp_avgs length does not "
+            "trainer payload optimizer_state.exp_avgs length does not "
             + "match model parameters",
         )
     if len(exp_avg_sqs.value) != len(parameters):
         return checkpoint_corruption(
             path,
-            "state payload optimizer_state.exp_avg_sqs length does not "
-            + "match model parameters",
+            "trainer payload optimizer_state.exp_avg_sqs length "
+            + "does not match model parameters",
         )
     for index, parameter in enumerate(parameters):
         exp_avg = exp_avgs.value[index]
@@ -209,7 +244,7 @@ def validate_optimizer_state_payload(
         if (exp_avg is None) != (exp_avg_sq is None):
             return checkpoint_corruption(
                 path,
-                "state payload optimizer moments must be present "
+                "trainer payload optimizer moments must be present "
                 + "as pairs",
             )
         if exp_avg is not None:
@@ -239,8 +274,12 @@ def _validate_train_config_values(
     seed: int,
     learning_rate: float,
     ppo_clip: float,
+    value_clip: float,
+    gae_lambda: float,
+    value_coef: float,
     entropy_coef: float,
     policy_max_grad_norm: float,
+    value_max_grad_norm: float,
     ppo_epochs: int,
     minibatch_size: int,
     adam_beta1: float,
@@ -260,6 +299,20 @@ def _validate_train_config_values(
             path,
             "manifest train_config.ppo_clip must be > 0 and <= 1",
         )
+    if value_clip <= 0.0 or value_clip > 1.0:
+        return checkpoint_corruption(
+            path,
+            "manifest train_config.value_clip must be > 0 and <= 1",
+        )
+    if gae_lambda < 0.0 or gae_lambda > 1.0:
+        return checkpoint_corruption(
+            path,
+            "manifest train_config.gae_lambda must be >= 0 and <= 1",
+        )
+    if value_coef < 0.0:
+        return checkpoint_corruption(
+            path, "manifest train_config.value_coef must be >= 0"
+        )
     if entropy_coef < 0.0:
         return checkpoint_corruption(
             path, "manifest train_config.entropy_coef must be >= 0"
@@ -268,6 +321,11 @@ def _validate_train_config_values(
         return checkpoint_corruption(
             path,
             "manifest train_config.policy_max_grad_norm must be >= 0",
+        )
+    if value_max_grad_norm < 0.0:
+        return checkpoint_corruption(
+            path,
+            "manifest train_config.value_max_grad_norm must be >= 0",
         )
     if ppo_epochs <= 0:
         return checkpoint_corruption(
@@ -304,19 +362,19 @@ def _validate_optimizer_tensor(
     if value.shape != parameter.shape:
         return checkpoint_corruption(
             path,
-            f"state payload {label} tensor shape does not match "
+            f"trainer payload {label} tensor shape does not match "
             + "model parameter",
         )
     if value.dtype != parameter.dtype:
         return checkpoint_corruption(
             path,
-            f"state payload {label} tensor dtype does not match "
+            f"trainer payload {label} tensor dtype does not match "
             + "model parameter",
         )
     if not bool(torch.isfinite(value).all().item()):
         return checkpoint_corruption(
             path,
-            f"state payload {label} tensor must be finite",
+            f"trainer payload {label} tensor must be finite",
         )
     return _result.Ok(value=None)
 
@@ -339,7 +397,7 @@ def _validate_optimizer_second_moment(
     if bool((value < 0.0).any().item()):
         return checkpoint_corruption(
             path,
-            f"state payload {label} tensor must be non-negative",
+            f"trainer payload {label} tensor must be non-negative",
         )
     return _result.Ok(value=None)
 
@@ -354,12 +412,12 @@ def _payload_int_field(
     field_label = field if label is None else label
     if field not in data:
         return checkpoint_corruption(
-            path, f"state payload missing {field_label}"
+            path, f"trainer payload missing {field_label}"
         )
     value = data[field]
     if not isinstance(value, int) or isinstance(value, bool):
         return checkpoint_corruption(
-            path, f"state payload {field_label} is not an int"
+            path, f"trainer payload {field_label} is not an int"
         )
     return _result.Ok(value=value)
 
@@ -374,12 +432,12 @@ def _payload_str_field(
     field_label = field if label is None else label
     if field not in data:
         return checkpoint_corruption(
-            path, f"state payload missing {field_label}"
+            path, f"trainer payload missing {field_label}"
         )
     value = data[field]
     if not isinstance(value, str) or not value:
         return checkpoint_corruption(
-            path, f"state payload {field_label} is not a string"
+            path, f"trainer payload {field_label} is not a string"
         )
     return _result.Ok(value=value)
 
@@ -394,13 +452,13 @@ def _payload_optional_tensor_list_field(
     field_label = field if label is None else label
     if field not in data:
         return checkpoint_corruption(
-            path, f"state payload missing {field_label}"
+            path, f"trainer payload missing {field_label}"
         )
     value = data[field]
     if not _is_optional_tensor_list(value):
         return checkpoint_corruption(
             path,
-            f"state payload {field_label} is not an optional tensor "
+            f"trainer payload {field_label} is not an optional tensor "
             + "list",
         )
     return _result.Ok(value=value)

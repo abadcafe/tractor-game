@@ -56,7 +56,7 @@ def test_validate_training_run_accepts_observation_tail(
     assert result.value.total_updates == 0
 
 
-def test_validate_training_run_rejects_state_hash_mismatch(
+def test_validate_training_run_rejects_policy_hash_mismatch(
     tmp_path: Path,
 ) -> None:
     initialized = initialize_training_run(
@@ -65,10 +65,10 @@ def test_validate_training_run_rejects_state_hash_mismatch(
         train_config=TrainConfig(),
     )
     assert isinstance(initialized, Ok)
-    state_path = next(
-        (tmp_path / "checkpoints" / "objects").glob("*/state.pt")
+    policy_path = next(
+        (tmp_path / "checkpoints" / "objects").glob("*/policy.pt")
     )
-    _ = state_path.write_bytes(b"corrupt")
+    _ = policy_path.write_bytes(b"corrupt")
 
     result = validate_training_run(tmp_path)
 

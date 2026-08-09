@@ -16,20 +16,23 @@ from .action_decoder import (
     ActionTraceScores,
 )
 from .config import ModelConfig
-from .observation_encoder import EncodedObservation, ObservationEncoder
+from .observation_backbone import (
+    EncodedObservation,
+    ObservationBackbone,
+)
 
 
-class _ObservationEncoderCall(Protocol):
+class _ObservationBackboneCall(Protocol):
     def __call__(
         self, observation: ObservationTensorBatch
     ) -> EncodedObservation: ...
 
 
-def _call_observation_encoder(
-    encoder: _ObservationEncoderCall,
+def _call_observation_backbone(
+    backbone: _ObservationBackboneCall,
     observation: ObservationTensorBatch,
 ) -> EncodedObservation:
-    return encoder(observation)
+    return backbone(observation)
 
 
 class PolicyModel(nn.Module):
@@ -41,8 +44,8 @@ class PolicyModel(nn.Module):
         config: ModelConfig,
     ) -> None:
         super().__init__()
-        self._observation_encoder: ObservationEncoder = (
-            ObservationEncoder(
+        self._observation_backbone: ObservationBackbone = (
+            ObservationBackbone(
                 d_model=config.d_model,
                 layers=config.layers,
                 heads=config.heads,
@@ -57,8 +60,8 @@ class PolicyModel(nn.Module):
         self, observation: ObservationTensorBatch
     ) -> EncodedObservation:
         """Encode observations for autoregressive policy decoding."""
-        return _call_observation_encoder(
-            self._observation_encoder, observation
+        return _call_observation_backbone(
+            self._observation_backbone, observation
         )
 
     def score_action_traces(

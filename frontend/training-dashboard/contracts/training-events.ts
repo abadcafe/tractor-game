@@ -32,7 +32,7 @@ export interface EventContext {
   readonly worker_index?: number;
   readonly model_rank_index?: number;
   readonly game_env_index?: number;
-  readonly episode_id?: number;
+  readonly round_id?: number;
   readonly seat?: "a" | "b" | "c" | "d";
   readonly decision_index?: number;
   readonly request_id?: number;
@@ -156,7 +156,7 @@ function parseEventContext(value: unknown): EventContext {
     "worker_index",
     "model_rank_index",
     "game_env_index",
-    "episode_id",
+    "round_id",
     "decision_index",
     "request_id",
     "batch_id",

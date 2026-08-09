@@ -25,8 +25,13 @@ def test_clipped_ppo_objective_returns_finite_scalar_losses() -> None:
         new_log_probabilities=new_log_probabilities,
         advantages=advantages,
         entropies=entropies,
+        old_values=torch.zeros(2),
+        new_values=torch.zeros(2),
+        value_targets=torch.zeros(2),
         config=PPOObjectiveConfig(
             ppo_clip=0.2,
+            value_clip=0.2,
+            value_coef=0.0,
             entropy_coef=0.01,
         ),
     )
@@ -49,8 +54,13 @@ def test_clipped_ppo_objective_clips_policy_ratio() -> None:
         ),
         advantages=torch.tensor([1.0], dtype=torch.float32),
         entropies=torch.tensor([0.0], dtype=torch.float32),
+        old_values=torch.zeros(1),
+        new_values=torch.zeros(1),
+        value_targets=torch.zeros(1),
         config=PPOObjectiveConfig(
             ppo_clip=0.2,
+            value_clip=0.2,
+            value_coef=0.0,
             entropy_coef=0.0,
         ),
     )
@@ -77,8 +87,13 @@ def test_clipped_ppo_objective_matches_ratio_space_gradients() -> None:
         new_log_probabilities=stable_new,
         advantages=advantages,
         entropies=torch.zeros(6),
+        old_values=torch.zeros(6),
+        new_values=torch.zeros(6),
+        value_targets=torch.zeros(6),
         config=PPOObjectiveConfig(
             ppo_clip=0.2,
+            value_clip=0.2,
+            value_coef=0.0,
             entropy_coef=0.0,
         ),
     )
@@ -105,8 +120,13 @@ def test_clipped_ppo_objective_avoids_clipped_exp_overflow() -> None:
         new_log_probabilities=new_log_probabilities,
         advantages=torch.tensor((1.0,)),
         entropies=torch.zeros(1),
+        old_values=torch.zeros(1),
+        new_values=torch.zeros(1),
+        value_targets=torch.zeros(1),
         config=PPOObjectiveConfig(
             ppo_clip=0.2,
+            value_clip=0.2,
+            value_coef=0.0,
             entropy_coef=0.0,
         ),
     )
@@ -144,8 +164,13 @@ def test_clipped_ppo_objective_stabilizes_adverse_exp_tail() -> None:
         new_log_probabilities=new_log_probabilities,
         advantages=torch.tensor((-1.0,)),
         entropies=torch.zeros(1),
+        old_values=torch.zeros(1),
+        new_values=torch.zeros(1),
+        value_targets=torch.zeros(1),
         config=PPOObjectiveConfig(
             ppo_clip=ppo_clip,
+            value_clip=0.2,
+            value_coef=0.0,
             entropy_coef=0.0,
         ),
     )
@@ -173,8 +198,13 @@ def test_clipped_ppo_objective_handles_extreme_zero_advantage() -> None:
         new_log_probabilities=new_log_probabilities,
         advantages=torch.zeros(2),
         entropies=torch.zeros(2),
+        old_values=torch.zeros(2),
+        new_values=torch.zeros(2),
+        value_targets=torch.zeros(2),
         config=PPOObjectiveConfig(
             ppo_clip=0.2,
+            value_clip=0.2,
+            value_coef=0.0,
             entropy_coef=0.0,
         ),
     )
@@ -197,8 +227,13 @@ def test_clipped_ppo_objective_supports_full_clip_range() -> None:
         new_log_probabilities=new_log_probabilities,
         advantages=torch.tensor((-1.0,)),
         entropies=torch.zeros(1),
+        old_values=torch.zeros(1),
+        new_values=torch.zeros(1),
+        value_targets=torch.zeros(1),
         config=PPOObjectiveConfig(
             ppo_clip=1.0,
+            value_clip=0.2,
+            value_coef=0.0,
             entropy_coef=0.0,
         ),
     )

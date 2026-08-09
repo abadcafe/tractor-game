@@ -17,14 +17,19 @@ export interface CheckpointManifest {
   readonly valid: boolean;
   readonly error: string | null;
   readonly checkpoint_id: string | null;
-  readonly state_path: string | null;
-  readonly state_exists: boolean;
-  readonly state_size_bytes: number | null;
+  readonly policy_path: string | null;
+  readonly policy_exists: boolean;
+  readonly policy_size_bytes: number | null;
+  readonly trainer_path: string | null;
+  readonly trainer_exists: boolean;
+  readonly trainer_size_bytes: number | null;
   readonly modified_at_ms: number | null;
-  readonly state_modified_at_ms: number | null;
-  readonly state_sha256: string | null;
+  readonly policy_modified_at_ms: number | null;
+  readonly trainer_modified_at_ms: number | null;
+  readonly policy_sha256: string | null;
+  readonly trainer_sha256: string | null;
   readonly total_rounds: number | null;
-  readonly total_samples: number | null;
+  readonly total_trainable_decisions: number | null;
   readonly total_updates: number | null;
   readonly model_config_values:
     | Readonly<Record<string, JsonPrimitive>>
@@ -36,11 +41,14 @@ export interface CheckpointManifest {
 
 export interface CheckpointObject {
   readonly checkpoint_id: string;
-  readonly state_path: string;
+  readonly policy_path: string;
+  readonly trainer_path: string;
   readonly valid: boolean;
   readonly error: string | null;
-  readonly state_size_bytes: number | null;
-  readonly state_modified_at_ms: number | null;
+  readonly policy_size_bytes: number | null;
+  readonly trainer_size_bytes: number | null;
+  readonly policy_modified_at_ms: number | null;
+  readonly trainer_modified_at_ms: number | null;
   readonly referenced_by: readonly string[];
   readonly orphan: boolean;
 }
@@ -49,7 +57,7 @@ export interface CheckpointCatalog {
   readonly checkpoint_directory: string;
   readonly manifests: readonly CheckpointManifest[];
   readonly objects: readonly CheckpointObject[];
-  readonly total_unique_state_bytes: number;
+  readonly total_unique_payload_bytes: number;
 }
 
 export function parseCheckpointCatalog(
@@ -62,7 +70,7 @@ export function parseCheckpointCatalog(
       "checkpoint_directory",
       "manifests",
       "objects",
-      "total_unique_state_bytes",
+      "total_unique_payload_bytes",
     ],
     "checkpoint catalog",
   );
@@ -77,9 +85,9 @@ export function parseCheckpointCatalog(
     objects: requiredArray(record.objects, "objects").map(
       parseCheckpointObject,
     ),
-    total_unique_state_bytes: nonNegativeInteger(
-      record.total_unique_state_bytes,
-      "total_unique_state_bytes",
+    total_unique_payload_bytes: nonNegativeInteger(
+      record.total_unique_payload_bytes,
+      "total_unique_payload_bytes",
     ),
   };
 }
@@ -94,14 +102,19 @@ function parseCheckpointManifest(value: unknown): CheckpointManifest {
       "valid",
       "error",
       "checkpoint_id",
-      "state_path",
-      "state_exists",
-      "state_size_bytes",
+      "policy_path",
+      "policy_exists",
+      "policy_size_bytes",
+      "trainer_path",
+      "trainer_exists",
+      "trainer_size_bytes",
       "modified_at_ms",
-      "state_modified_at_ms",
-      "state_sha256",
+      "policy_modified_at_ms",
+      "trainer_modified_at_ms",
+      "policy_sha256",
+      "trainer_sha256",
       "total_rounds",
-      "total_samples",
+      "total_trainable_decisions",
       "total_updates",
       "model_config_values",
       "train_config_values",
@@ -121,31 +134,51 @@ function parseCheckpointManifest(value: unknown): CheckpointManifest {
       record.checkpoint_id,
       "checkpoint_id",
     ),
-    state_path: nullableString(record.state_path, "state_path"),
-    state_exists: requiredBoolean(record.state_exists, "state_exists"),
-    state_size_bytes: nullableNonNegativeInteger(
-      record.state_size_bytes,
-      "state_size_bytes",
+    policy_path: nullableString(record.policy_path, "policy_path"),
+    policy_exists: requiredBoolean(
+      record.policy_exists,
+      "policy_exists",
+    ),
+    policy_size_bytes: nullableNonNegativeInteger(
+      record.policy_size_bytes,
+      "policy_size_bytes",
+    ),
+    trainer_path: nullableString(record.trainer_path, "trainer_path"),
+    trainer_exists: requiredBoolean(
+      record.trainer_exists,
+      "trainer_exists",
+    ),
+    trainer_size_bytes: nullableNonNegativeInteger(
+      record.trainer_size_bytes,
+      "trainer_size_bytes",
     ),
     modified_at_ms: nullableNonNegativeInteger(
       record.modified_at_ms,
       "modified_at_ms",
     ),
-    state_modified_at_ms: nullableNonNegativeInteger(
-      record.state_modified_at_ms,
-      "state_modified_at_ms",
+    policy_modified_at_ms: nullableNonNegativeInteger(
+      record.policy_modified_at_ms,
+      "policy_modified_at_ms",
     ),
-    state_sha256: nullableString(
-      record.state_sha256,
-      "state_sha256",
+    trainer_modified_at_ms: nullableNonNegativeInteger(
+      record.trainer_modified_at_ms,
+      "trainer_modified_at_ms",
+    ),
+    policy_sha256: nullableString(
+      record.policy_sha256,
+      "policy_sha256",
+    ),
+    trainer_sha256: nullableString(
+      record.trainer_sha256,
+      "trainer_sha256",
     ),
     total_rounds: nullableNonNegativeInteger(
       record.total_rounds,
       "total_rounds",
     ),
-    total_samples: nullableNonNegativeInteger(
-      record.total_samples,
-      "total_samples",
+    total_trainable_decisions: nullableNonNegativeInteger(
+      record.total_trainable_decisions,
+      "total_trainable_decisions",
     ),
     total_updates: nullableNonNegativeInteger(
       record.total_updates,
@@ -168,11 +201,14 @@ function parseCheckpointObject(value: unknown): CheckpointObject {
     record,
     [
       "checkpoint_id",
-      "state_path",
+      "policy_path",
+      "trainer_path",
       "valid",
       "error",
-      "state_size_bytes",
-      "state_modified_at_ms",
+      "policy_size_bytes",
+      "trainer_size_bytes",
+      "policy_modified_at_ms",
+      "trainer_modified_at_ms",
       "referenced_by",
       "orphan",
     ],
@@ -183,16 +219,25 @@ function parseCheckpointObject(value: unknown): CheckpointObject {
       record.checkpoint_id,
       "checkpoint_id",
     ),
-    state_path: requiredString(record.state_path, "state_path"),
+    policy_path: requiredString(record.policy_path, "policy_path"),
+    trainer_path: requiredString(record.trainer_path, "trainer_path"),
     valid: requiredBoolean(record.valid, "valid"),
     error: nullableString(record.error, "error"),
-    state_size_bytes: nullableNonNegativeInteger(
-      record.state_size_bytes,
-      "state_size_bytes",
+    policy_size_bytes: nullableNonNegativeInteger(
+      record.policy_size_bytes,
+      "policy_size_bytes",
     ),
-    state_modified_at_ms: nullableNonNegativeInteger(
-      record.state_modified_at_ms,
-      "state_modified_at_ms",
+    trainer_size_bytes: nullableNonNegativeInteger(
+      record.trainer_size_bytes,
+      "trainer_size_bytes",
+    ),
+    policy_modified_at_ms: nullableNonNegativeInteger(
+      record.policy_modified_at_ms,
+      "policy_modified_at_ms",
+    ),
+    trainer_modified_at_ms: nullableNonNegativeInteger(
+      record.trainer_modified_at_ms,
+      "trainer_modified_at_ms",
     ),
     referenced_by: stringArray(record.referenced_by, "referenced_by"),
     orphan: requiredBoolean(record.orphan, "orphan"),

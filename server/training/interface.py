@@ -57,8 +57,12 @@ def initialize_run(
             seed=options.seed,
             learning_rate=options.learning_rate,
             ppo_clip=options.ppo_clip,
+            value_clip=options.value_clip,
+            gae_lambda=options.gae_lambda,
+            value_coef=options.value_coef,
             entropy_coef=options.entropy_coef,
             policy_max_grad_norm=options.policy_max_grad_norm,
+            value_max_grad_norm=options.value_max_grad_norm,
             ppo_epochs=options.ppo_epochs,
             minibatch_size=options.minibatch_size,
             adam_beta1=options.adam_beta1,
@@ -138,7 +142,7 @@ def resume_run(
         train_config=resolved.train_config,
         checkpoint_policy=resolved.checkpoint_policy,
         execution_config=resolved.execution_config,
-        max_samples=resolved.max_samples,
+        max_rounds=resolved.max_rounds,
         resume=resolved.run_dir / "checkpoints" / "latest.json",
         stop_request=stop_request,
     )
@@ -149,7 +153,7 @@ def resume_run(
         value=TrainingRunResult(
             checkpoint_path=value.checkpoint_path,
             total_rounds=value.total_rounds,
-            total_samples=value.total_samples,
+            total_trainable_decisions=(value.total_trainable_decisions),
             total_updates=value.total_updates,
         )
     )

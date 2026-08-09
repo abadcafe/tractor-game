@@ -49,12 +49,16 @@ def test_materializer_keeps_trace_and_legal_choice_counts_distinct(
         choice_counts=torch.tensor(
             (2, 5, 4), dtype=torch.long, device=device
         ),
+        scored_choice_step_counts=torch.tensor(
+            (1, 2, 1), dtype=torch.long, device=device
+        ),
     )
 
     assert decision.model_rank_index == 2
     assert decision.policy_versions == (7, 7, 7)
     assert decision.row_indices == (4, 5, 6)
     assert decision.choice_counts == (2, 5, 4)
+    assert decision.scored_choice_step_counts == (1, 2, 1)
     assert decision.action_choice_batch.choice_counts == (1, 3, 2)
     assert tuple(
         decision.action_choice_batch.compact_row(index).to_tuple()
@@ -79,6 +83,9 @@ def test_materializer_does_not_extract_tensor_scalars(
         ),
         step_counts=torch.tensor((2, 1), dtype=torch.long),
         choice_counts=torch.tensor((3, 4), dtype=torch.long),
+        scored_choice_step_counts=torch.tensor(
+            (1, 1), dtype=torch.long
+        ),
     )
 
     assert decision.choice_counts == (3, 4)
@@ -104,6 +111,9 @@ def test_materializer_reuses_workspace_across_batch_shapes(
         choice_counts=torch.tensor(
             (6, 7), dtype=torch.long, device=device
         ),
+        scored_choice_step_counts=torch.tensor(
+            (2, 2), dtype=torch.long, device=device
+        ),
     )
 
     decision = materializer.materialize(
@@ -118,6 +128,9 @@ def test_materializer_reuses_workspace_across_batch_shapes(
         step_counts=torch.tensor((2,), dtype=torch.long, device=device),
         choice_counts=torch.tensor(
             (8,), dtype=torch.long, device=device
+        ),
+        scored_choice_step_counts=torch.tensor(
+            (1,), dtype=torch.long, device=device
         ),
     )
 

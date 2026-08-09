@@ -51,6 +51,7 @@ class PolicyDecisionMaterializer:
         choice_ids_padded: Tensor,
         step_counts: Tensor,
         choice_counts: Tensor,
+        scored_choice_step_counts: Tensor,
     ) -> CompactPolicyDecisionBatch:
         row_count, padded_step_count = choice_ids_padded.shape
         assert model_rank_index >= 0
@@ -62,12 +63,14 @@ class PolicyDecisionMaterializer:
         assert choice_counts.dtype == torch.long
         assert step_counts.shape == (row_count,)
         assert choice_counts.shape == (row_count,)
+        assert scored_choice_step_counts.shape == (row_count,)
         assert choice_ids_padded.device == self.device
         assert step_counts.device == self.device
         assert choice_counts.device == self.device
+        assert scored_choice_step_counts.device == self.device
 
         choice_value_count = row_count * padded_step_count
-        required_value_count = choice_value_count + 2 * row_count
+        required_value_count = choice_value_count + 3 * row_count
         self._ensure_capacity(required_value_count)
         device_values = self._device_values[:required_value_count]
         _ = (
@@ -77,10 +80,16 @@ class PolicyDecisionMaterializer:
         )
         step_start = choice_value_count
         choice_count_start = step_start + row_count
+        scored_step_count_start = choice_count_start + row_count
         _ = device_values[step_start:choice_count_start].copy_(
             step_counts
         )
-        _ = device_values[choice_count_start:].copy_(choice_counts)
+        _ = device_values[
+            choice_count_start:scored_step_count_start
+        ].copy_(choice_counts)
+        _ = device_values[scored_step_count_start:].copy_(
+            scored_choice_step_counts
+        )
 
         host_values = self._copy_to_host(required_value_count)
         host_counts = _cpu_int_tuple(host_values[step_start:])
@@ -89,7 +98,8 @@ class PolicyDecisionMaterializer:
             model_rank_index=model_rank_index,
             policy_versions=policy_versions,
             row_indices=tuple(range(row_start, row_start + row_count)),
-            choice_counts=host_counts[row_count:],
+            choice_counts=host_counts[row_count : 2 * row_count],
+            scored_choice_step_counts=host_counts[2 * row_count :],
             action_choice_batch=CompactActionChoiceBatch.from_cpu_tensor(
                 choice_ids=host_values[:choice_value_count].view(
                     row_count, padded_step_count

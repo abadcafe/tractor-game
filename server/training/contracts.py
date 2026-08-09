@@ -33,10 +33,20 @@ class TrainingInitOptions(BaseModel):
     ppo_clip: float = Field(
         default=0.2, gt=0.0, le=1.0, allow_inf_nan=False
     )
+    value_clip: float = Field(
+        default=0.2, gt=0.0, le=1.0, allow_inf_nan=False
+    )
+    gae_lambda: float = Field(
+        default=0.95, ge=0.0, le=1.0, allow_inf_nan=False
+    )
+    value_coef: float = Field(default=0.5, ge=0.0, allow_inf_nan=False)
     entropy_coef: float = Field(
         default=0.01, ge=0.0, allow_inf_nan=False
     )
     policy_max_grad_norm: float = Field(
+        default=0.5, ge=0.0, allow_inf_nan=False
+    )
+    value_max_grad_norm: float = Field(
         default=0.5, ge=0.0, allow_inf_nan=False
     )
     ppo_epochs: int = Field(default=4, gt=0)
@@ -75,7 +85,7 @@ class TrainingResumeOptions(BaseModel):
     worker_cpus: str | None = None
     model_ranks: str | None = None
     ppo_profile: Literal["off", "basic", "detailed"] | None = None
-    max_samples: int = Field(default=0, ge=0)
+    max_rounds: int = Field(default=0, ge=0)
     learning_rate: float | None = Field(
         default=None, gt=0.0, allow_inf_nan=False
     )
@@ -87,7 +97,7 @@ class TrainingResumeOptions(BaseModel):
     sampling_start_timeout_seconds: float | None = Field(
         default=None, gt=0.0, allow_inf_nan=False
     )
-    rollout_sample_timeout_seconds: float | None = Field(
+    rollout_collection_timeout_seconds: float | None = Field(
         default=None, gt=0.0, allow_inf_nan=False
     )
     sampling_stop_timeout_seconds: float | None = Field(
@@ -101,14 +111,26 @@ class TrainingResumeOptions(BaseModel):
     )
     model_inference_batch_size: int | None = Field(default=None, gt=0)
     game_envs_per_worker: int | None = Field(default=None, gt=0)
-    samples_per_update: int | None = Field(default=None, gt=0)
+    rounds_per_update: int | None = Field(default=None, gt=0)
     ppo_clip: float | None = Field(
         default=None, gt=0.0, le=1.0, allow_inf_nan=False
+    )
+    value_clip: float | None = Field(
+        default=None, gt=0.0, le=1.0, allow_inf_nan=False
+    )
+    gae_lambda: float | None = Field(
+        default=None, ge=0.0, le=1.0, allow_inf_nan=False
+    )
+    value_coef: float | None = Field(
+        default=None, ge=0.0, allow_inf_nan=False
     )
     entropy_coef: float | None = Field(
         default=None, ge=0.0, allow_inf_nan=False
     )
     policy_max_grad_norm: float | None = Field(
+        default=None, ge=0.0, allow_inf_nan=False
+    )
+    value_max_grad_norm: float | None = Field(
         default=None, ge=0.0, allow_inf_nan=False
     )
     ppo_epochs: int | None = Field(default=None, gt=0)
@@ -144,5 +166,5 @@ class TrainingRunResult(BaseModel):
 
     checkpoint_path: Path
     total_rounds: int = Field(ge=0)
-    total_samples: int = Field(ge=0)
+    total_trainable_decisions: int = Field(ge=0)
     total_updates: int = Field(ge=0)

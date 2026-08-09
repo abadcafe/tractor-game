@@ -36,6 +36,7 @@ class CompletedPolicyResponse:
     decision_handle_policy_version: int
     decision_handle_row_index: int
     choice_count: int
+    scored_choice_step_count: int
 
     def __post_init__(self) -> None:
         assert len(self.action_choice_ids) > 0
@@ -43,6 +44,7 @@ class CompletedPolicyResponse:
         assert self.decision_handle_policy_version >= 0
         assert self.decision_handle_row_index >= 0
         assert self.choice_count > 0
+        assert self.scored_choice_step_count > 0
 
 
 @dataclass(frozen=True, slots=True)

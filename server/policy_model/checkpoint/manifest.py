@@ -11,8 +11,9 @@ from pydantic import TypeAdapter, ValidationError
 
 from server.checkpoint_contract import (
     CHECKPOINT_OBJECTS_DIR,
+    CHECKPOINT_POLICY_FILENAME,
     CHECKPOINT_SCHEMA_VERSION,
-    CHECKPOINT_STATE_FILENAME,
+    CHECKPOINT_TRAINER_FILENAME,
 )
 from server.foundation import result as _result
 from server.foundation.json_value import JsonObject, JsonValue
@@ -118,12 +119,14 @@ def read_checkpoint_manifest(
     expected_fields = {
         "schema_version",
         "checkpoint_id",
-        "state_path",
-        "state_sha256",
+        "policy_path",
+        "policy_sha256",
+        "trainer_path",
+        "trainer_sha256",
         "model_config",
         "train_config",
         "total_rounds",
-        "total_samples",
+        "total_trainable_decisions",
         "total_updates",
     }
     if set(loaded) != expected_fields:
@@ -151,32 +154,39 @@ def read_checkpoint_manifest(
     )
     if isinstance(train_config_result, _result.Rejected):
         return train_config_result
-    state_path_result = _json_str_field(loaded, "state_path", path)
-    if isinstance(state_path_result, _result.Rejected):
-        return state_path_result
-    state_path = Path(state_path_result.value)
-    if state_path.is_absolute() or ".." in state_path.parts:
+    policy_path_result = _json_str_field(loaded, "policy_path", path)
+    if isinstance(policy_path_result, _result.Rejected):
+        return policy_path_result
+    trainer_path_result = _json_str_field(loaded, "trainer_path", path)
+    if isinstance(trainer_path_result, _result.Rejected):
+        return trainer_path_result
+    policy_path = Path(policy_path_result.value)
+    trainer_path = Path(trainer_path_result.value)
+    if _path_escapes(policy_path) or _path_escapes(trainer_path):
         return checkpoint_corruption(
-            path, "manifest state path escapes checkpoint directory"
+            path, "manifest payload path escapes checkpoint directory"
         )
     checkpoint_id_result = _json_str_field(
         loaded, "checkpoint_id", path
     )
     if isinstance(checkpoint_id_result, _result.Rejected):
         return checkpoint_id_result
-    state_sha_result = _json_str_field(loaded, "state_sha256", path)
-    if isinstance(state_sha_result, _result.Rejected):
-        return state_sha_result
+    policy_sha_result = _json_str_field(loaded, "policy_sha256", path)
+    if isinstance(policy_sha_result, _result.Rejected):
+        return policy_sha_result
+    trainer_sha_result = _json_str_field(loaded, "trainer_sha256", path)
+    if isinstance(trainer_sha_result, _result.Rejected):
+        return trainer_sha_result
     total_rounds_result = _json_non_negative_int_field(
         loaded, "total_rounds", path
     )
     if isinstance(total_rounds_result, _result.Rejected):
         return total_rounds_result
-    total_samples_result = _json_non_negative_int_field(
-        loaded, "total_samples", path
+    total_decisions_result = _json_non_negative_int_field(
+        loaded, "total_trainable_decisions", path
     )
-    if isinstance(total_samples_result, _result.Rejected):
-        return total_samples_result
+    if isinstance(total_decisions_result, _result.Rejected):
+        return total_decisions_result
     total_updates_result = _json_non_negative_int_field(
         loaded, "total_updates", path
     )
@@ -189,32 +199,41 @@ def read_checkpoint_manifest(
         return parsed_model_config
     manifest = CheckpointManifest(
         checkpoint_id=checkpoint_id_result.value,
-        state_path=state_path,
-        state_sha256=state_sha_result.value,
+        policy_path=policy_path,
+        policy_sha256=policy_sha_result.value,
+        trainer_path=trainer_path,
+        trainer_sha256=trainer_sha_result.value,
         metadata=CheckpointMetadata(
             model_config=parsed_model_config.value,
             training_config_values=train_config_result.value,
             total_rounds=total_rounds_result.value,
-            total_samples=total_samples_result.value,
+            total_trainable_decisions=total_decisions_result.value,
             total_updates=total_updates_result.value,
         ),
     )
-    state_path_check = _assert_manifest_state_path(
+    payload_path_check = _assert_manifest_payload_paths(
         manifest=manifest,
         path=path,
     )
-    if isinstance(state_path_check, _result.Rejected):
-        return state_path_check
+    if isinstance(payload_path_check, _result.Rejected):
+        return payload_path_check
     return _result.Ok(value=manifest)
 
 
-def manifest_state_file_path(
+def manifest_policy_file_path(
     *,
     manifest_path: Path,
     manifest: CheckpointManifest,
 ) -> Path:
-    """Return the state file path for a manifest."""
-    return manifest_path.parent / manifest.state_path
+    """Return the policy payload path for a manifest."""
+    return manifest_path.parent / manifest.policy_path
+
+
+def manifest_trainer_file_path(
+    *, manifest_path: Path, manifest: CheckpointManifest
+) -> Path:
+    """Return the trainer payload path for a manifest."""
+    return manifest_path.parent / manifest.trainer_path
 
 
 def managed_checkpoint_manifest_paths(
@@ -249,33 +268,42 @@ def _manifest_to_json(manifest: CheckpointManifest) -> JsonObject:
     return {
         "schema_version": CHECKPOINT_SCHEMA_VERSION,
         "checkpoint_id": manifest.checkpoint_id,
-        "state_path": manifest.state_path.as_posix(),
-        "state_sha256": manifest.state_sha256,
+        "policy_path": manifest.policy_path.as_posix(),
+        "policy_sha256": manifest.policy_sha256,
+        "trainer_path": manifest.trainer_path.as_posix(),
+        "trainer_sha256": manifest.trainer_sha256,
         "model_config": metadata.model_config.to_json(),
         "train_config": metadata.training_config_values,
         "total_rounds": metadata.total_rounds,
-        "total_samples": metadata.total_samples,
+        "total_trainable_decisions": (
+            metadata.total_trainable_decisions
+        ),
         "total_updates": metadata.total_updates,
     }
 
 
-def _assert_manifest_state_path(
+def _assert_manifest_payload_paths(
     *,
     manifest: CheckpointManifest,
     path: Path,
 ) -> _result.Ok[None] | _result.Rejected:
-    expected = (
-        Path(CHECKPOINT_OBJECTS_DIR)
-        / manifest.checkpoint_id
-        / CHECKPOINT_STATE_FILENAME
-    )
-    if manifest.state_path != expected:
+    expected_dir = Path(CHECKPOINT_OBJECTS_DIR) / manifest.checkpoint_id
+    expected_policy = expected_dir / CHECKPOINT_POLICY_FILENAME
+    expected_trainer = expected_dir / CHECKPOINT_TRAINER_FILENAME
+    if (
+        manifest.policy_path != expected_policy
+        or manifest.trainer_path != expected_trainer
+    ):
         return checkpoint_corruption(
             path,
-            "manifest state path does not match checkpoint id "
+            "manifest payload paths do not match checkpoint id "
             + f"{manifest.checkpoint_id}",
         )
     return _result.Ok(value=None)
+
+
+def _path_escapes(path: Path) -> bool:
+    return path.is_absolute() or ".." in path.parts
 
 
 def managed_update_number_from_manifest_path(path: Path) -> int | None:

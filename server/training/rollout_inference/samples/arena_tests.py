@@ -21,7 +21,7 @@ from server.training.rollout_inference.samples import (
     ModelRankSampleArena,
 )
 from server.training.rollout_inference.samples.records import (
-    RankReturnTargets,
+    RankTrajectoryBatch,
 )
 
 
@@ -36,6 +36,7 @@ def test_sample_arena_materializes_variable_active_steps() -> None:
     )
     assert isinstance(stored, Ok)
     assert stored.value.choice_counts == (2, 3, 4)
+    assert stored.value.scored_choice_step_counts == (1, 1, 1)
     assert stored.value.row_indices == (0, 1, 2)
     assert stored.value.action_choice_batch.compact_row(
         1
@@ -44,19 +45,23 @@ def test_sample_arena_materializes_variable_active_steps() -> None:
         21,
         22,
     )
-    returns = RankReturnTargets(
+    trajectories = RankTrajectoryBatch(
         policy_version=7,
         model_rank_index=0,
         row_indices=torch.tensor((0, 1, 2), dtype=torch.long),
         step_counts=torch.tensor((1, 3, 2), dtype=torch.long),
-        return_values=torch.tensor(
-            (1.0, 2.0, 3.0), dtype=torch.float32
-        ),
+        trajectory_offsets=torch.tensor((0,), dtype=torch.long),
+        trajectory_lengths=torch.tensor((3,), dtype=torch.long),
+        terminal_rewards=torch.tensor((3.0,), dtype=torch.float32),
         round_count=1,
         total_step_count=6,
         max_step_count=3,
     )
-    source_result = arena.ppo_batch_source(returns=returns)
+    source_result = arena.ppo_batch_source(
+        trajectories=trajectories,
+        value_evaluator=_zero_values,
+        gae_lambda=1.0,
+    )
     assert isinstance(source_result, Ok)
 
     minibatch = source_result.value.select_minibatch(
@@ -73,7 +78,13 @@ def test_sample_arena_materializes_variable_active_steps() -> None:
     assert _tensor_tuple(replay.choice_ids_padded[0]) == (30, 31, 0)
     assert _tensor_tuple(replay.choice_ids_padded[1]) == (10, 0, 0)
     selected_legal = replay.legal_choice_masks.nonzero()
-    assert _tensor_tuple(selected_legal[:, 1]) == (30, 31, 10)
+    assert _tensor_tuple(selected_legal[:, 1]) == (
+        30,
+        32,
+        31,
+        10,
+        11,
+    )
 
 
 def _observation_batch(
@@ -118,10 +129,13 @@ def _action_sample(*, device: torch.device) -> ActionSampleBatch:
         (6, ACTION_CHOICE_COUNT), dtype=torch.bool, device=device
     )
     legal_masks[0, 10] = True
+    legal_masks[0, 11] = True
     legal_masks[1, 20] = True
+    legal_masks[1, 23] = True
     legal_masks[2, 21] = True
     legal_masks[3, 22] = True
     legal_masks[4, 30] = True
+    legal_masks[4, 32] = True
     legal_masks[5, 31] = True
     return ActionSampleBatch(
         choice_ids_padded=torch.tensor(
@@ -150,3 +164,11 @@ def _action_sample(*, device: torch.device) -> ActionSampleBatch:
 
 def _tensor_tuple(values: Tensor) -> tuple[int, ...]:
     return tuple(int(value.item()) for value in values)
+
+
+def _zero_values(observation: ObservationTensorBatch) -> Tensor:
+    return torch.zeros(
+        (int(observation.category_ids.shape[0]),),
+        dtype=torch.float32,
+        device=observation.category_ids.device,
+    )

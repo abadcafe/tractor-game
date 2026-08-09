@@ -114,7 +114,7 @@ def _training_log_page() -> TrainingLogHistoryPage:
             worker_index=1,
             model_rank_index=2,
             game_env_index=3,
-            episode_id=4,
+            round_id=4,
             seat="a",
             decision_index=5,
             request_id=6,

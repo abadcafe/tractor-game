@@ -87,7 +87,7 @@ def test_initialize_then_resume_through_public_interface(
 
     assert isinstance(resumed, Ok)
     assert resumed.value.total_rounds == 0
-    assert resumed.value.total_samples == 0
+    assert resumed.value.total_trainable_decisions == 0
     assert resumed.value.total_updates == 0
     assert (
         resumed.value.checkpoint_path

@@ -115,8 +115,8 @@ class ObservationMemory:
             completed_tricks=self._completed_tricks,
         )
 
-    def reset_episode(self) -> None:
-        """Forget all sequence and round state before a new game."""
+    def reset_round(self) -> None:
+        """Forget sequence and observation history for a new round."""
         self._last_seq = None
         self._previous = None
         self._clear_round()

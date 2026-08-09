@@ -361,7 +361,11 @@ def _update_points(
     for group in groups:
         latest = group[-1]
         values = _average_fields(group)
-        for name in ("total_rounds", "total_samples", "total_updates"):
+        for name in (
+            "total_rounds",
+            "total_trainable_decisions",
+            "total_updates",
+        ):
             if name in latest.fields:
                 values[name] = latest.fields[name]
         _alias_rate(
@@ -371,8 +375,8 @@ def _update_points(
         )
         _alias_rate(
             values,
-            source="process_samples_per_second",
-            target="samples_per_second",
+            source="process_trainable_decisions_per_second",
+            target="trainable_decisions_per_second",
         )
         points.append(
             _point(
@@ -589,8 +593,8 @@ def _metric_totals(events: tuple[_Event, ...]) -> JsonObject:
     )
     _alias_rate(
         values,
-        source="process_samples_per_second",
-        target="samples_per_second",
+        source="process_trainable_decisions_per_second",
+        target="trainable_decisions_per_second",
     )
     if "update_seconds" not in values:
         for source in (

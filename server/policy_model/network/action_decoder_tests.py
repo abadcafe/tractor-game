@@ -14,7 +14,10 @@ from tests.support import card, seat_values
 from tests.support import snapshot as make_snapshot
 
 from .action_decoder import ActionDecoder
-from .observation_encoder import EncodedObservation, ObservationEncoder
+from .observation_backbone import (
+    EncodedObservation,
+    ObservationBackbone,
+)
 
 
 def test_cached_decode_exactly_matches_causal_teacher_forcing() -> None:
@@ -110,7 +113,7 @@ def _encoding() -> EncodedObservation:
             completed_tricks=(),
         ),
     )
-    return ObservationEncoder(d_model=8, layers=1, heads=1).forward(
+    return ObservationBackbone(d_model=8, layers=1, heads=1).forward(
         tensorize_observation(
             observation=observation,
             device=torch.device("cpu"),

@@ -75,10 +75,12 @@ class _StoppingRuntime:
         *,
         policy_version: int,
         rollout_id: str,
+        target_round_count: int,
         stop_request: TrainingStopRequest,
     ) -> Ok[TrainingCycleOutcome] | Rejected:
         assert policy_version == 0
         assert rollout_id
+        assert target_round_count > 0
         assert not stop_request.is_requested()
         self.update_calls += 1
         stop_request.request_stop()
@@ -111,7 +113,7 @@ def test_run_training_coordinator_spawns_worker_and_commits_progress(
         every_updates=50, retention_updates=1
     )
     execution_config = ExecutionConfig(
-        samples_per_update=32,
+        rounds_per_update=32,
     )
     initialized = initialize_training_run(
         run_dir=tmp_path,
@@ -127,21 +129,24 @@ def test_run_training_coordinator_spawns_worker_and_commits_progress(
         train_config=train_config,
         checkpoint_policy=checkpoint_policy,
         execution_config=execution_config,
-        max_samples=1,
+        max_rounds=1,
         resume=initialized.value.checkpoint_path,
         stop_request=TrainingStopRequest(),
     )
 
     assert isinstance(result, Ok)
     assert result.value.total_rounds >= 1
-    assert result.value.total_samples > 0
+    assert result.value.total_trainable_decisions > 0
     assert result.value.total_updates == 1
     metadata = read_training_checkpoint_metadata(
         result.value.checkpoint_path
     )
     assert isinstance(metadata, Ok)
     assert metadata.value.total_rounds == result.value.total_rounds
-    assert metadata.value.total_samples == result.value.total_samples
+    assert (
+        metadata.value.total_trainable_decisions
+        == result.value.total_trainable_decisions
+    )
     assert metadata.value.total_updates == 1
     assert not (tmp_path / "checkpoints" / "update-1.json").exists()
     event_types = _event_types(tmp_path)
@@ -165,7 +170,7 @@ def test_run_training_coordinator_synchronizes_cpu_arena_update(
     )
     execution_config = ExecutionConfig(
         worker_cpu_layout=(None, None),
-        samples_per_update=32,
+        rounds_per_update=32,
     )
     initial = create_initial_runtime_checkpoint_state(
         model_config=model_config,
@@ -173,9 +178,13 @@ def test_run_training_coordinator_synchronizes_cpu_arena_update(
         execution_config=execution_config,
     )
     shifted_state = RuntimeTrainingState(
-        model_state={
+        policy_state={
             key: value + torch.full_like(value, 0.125)
-            for key, value in initial.state.model_state.items()
+            for key, value in initial.state.policy_state.items()
+        },
+        value_state={
+            key: value + torch.full_like(value, 0.125)
+            for key, value in initial.state.value_state.items()
         },
         optimizer_state=initial.state.optimizer_state,
     )
@@ -187,7 +196,7 @@ def test_run_training_coordinator_synchronizes_cpu_arena_update(
         train_config=train_config,
         execution_config=execution_config,
         total_rounds=1,
-        total_samples=17,
+        total_trainable_decisions=17,
         total_updates=1,
         retained_update_count=1,
     )
@@ -202,14 +211,14 @@ def test_run_training_coordinator_synchronizes_cpu_arena_update(
         train_config=train_config,
         checkpoint_policy=checkpoint_policy,
         execution_config=execution_config,
-        max_samples=1,
+        max_rounds=1,
         resume=checkpoint_path,
         stop_request=TrainingStopRequest(),
     )
 
     assert isinstance(result, Ok)
     assert result.value.total_rounds >= 2
-    assert result.value.total_samples > 17
+    assert result.value.total_trainable_decisions > 17
     assert result.value.total_updates == 2
 
 
@@ -218,7 +227,7 @@ def test_coordinator_honors_pre_requested_stop_and_saves_checkpoint(
 ) -> None:
     model_config = ModelConfig(d_model=8, layers=1, heads=1)
     train_config = TrainConfig()
-    execution_config = ExecutionConfig(samples_per_update=32)
+    execution_config = ExecutionConfig(rounds_per_update=32)
     initialized = initialize_training_run(
         run_dir=tmp_path,
         model_config=model_config,
@@ -235,7 +244,7 @@ def test_coordinator_honors_pre_requested_stop_and_saves_checkpoint(
         train_config=train_config,
         checkpoint_policy=CheckpointPolicy(every_updates=3),
         execution_config=execution_config,
-        max_samples=0,
+        max_rounds=0,
         resume=initialized.value.checkpoint_path,
         stop_request=stop_request,
     )
@@ -253,7 +262,7 @@ def test_stop_commits_partial_update_and_saves_one_final_checkpoint(
             snapshot=_rollout_snapshot(
                 policy_version=0,
                 round_count=1,
-                sample_count=64,
+                decision_count=64,
             ),
             update_stats=_update_stats(),
         )
@@ -272,15 +281,15 @@ def test_stop_commits_partial_update_and_saves_one_final_checkpoint(
         model_config=_model_config(),
         train_config=TrainConfig(),
         checkpoint_policy=CheckpointPolicy(every_updates=1),
-        execution_config=ExecutionConfig(samples_per_update=1024),
-        max_samples=0,
+        execution_config=ExecutionConfig(rounds_per_update=1024),
+        max_rounds=0,
         resume=initialized.value.checkpoint_path,
         stop_request=TrainingStopRequest(),
     )
 
     assert isinstance(result, Ok)
     assert result.value.total_rounds == 1
-    assert result.value.total_samples == 64
+    assert result.value.total_trainable_decisions == 64
     assert result.value.total_updates == 1
     assert runtime.update_calls == 1
     assert runtime.snapshot_calls == 1
@@ -296,9 +305,9 @@ def test_stop_discards_small_rollout_without_committing_progress(
             snapshot=_rollout_snapshot(
                 policy_version=0,
                 round_count=1,
-                sample_count=63,
+                decision_count=63,
             ),
-            minimum_sample_count=64,
+            minimum_trainable_decision_count=64,
         )
     )
     _install_runtime(monkeypatch=monkeypatch, runtime=runtime)
@@ -315,15 +324,15 @@ def test_stop_discards_small_rollout_without_committing_progress(
         model_config=_model_config(),
         train_config=TrainConfig(),
         checkpoint_policy=CheckpointPolicy(every_updates=1),
-        execution_config=ExecutionConfig(samples_per_update=1024),
-        max_samples=0,
+        execution_config=ExecutionConfig(rounds_per_update=1024),
+        max_rounds=0,
         resume=initialized.value.checkpoint_path,
         stop_request=TrainingStopRequest(),
     )
 
     assert isinstance(result, Ok)
     assert result.value.total_rounds == 0
-    assert result.value.total_samples == 0
+    assert result.value.total_trainable_decisions == 0
     assert result.value.total_updates == 0
     assert runtime.update_calls == 1
     assert runtime.snapshot_calls == 1
@@ -331,8 +340,10 @@ def test_stop_discards_small_rollout_without_committing_progress(
     assert _checkpoint_kinds(tmp_path) == ("final",)
     rollout_fields = _last_event_fields(tmp_path, event_type="rollout")
     assert rollout_fields["termination"] == "stop_requested"
-    assert rollout_fields["discarded_sample_count"] == 63
-    assert rollout_fields["minimum_update_sample_count"] == 64
+    assert rollout_fields["discarded_trainable_decision_count"] == 63
+    assert (
+        rollout_fields["minimum_update_trainable_decision_count"] == 64
+    )
 
 
 @pytest.mark.asyncio
@@ -349,11 +360,11 @@ async def test_runtime_stops_sampling_after_rollout_wait_failure(
         minibatch_size=512,
     )
     execution_config = ExecutionConfig(
-        samples_per_update=4096,
+        rounds_per_update=4096,
         timeouts=ExecutionTimeouts(
             round_seconds=120.0,
             sampling_start_seconds=10.0,
-            rollout_sample_seconds=0.2,
+            rollout_collection_seconds=0.2,
             sampling_stop_seconds=10.0,
             state_sync_seconds=10.0,
             update_seconds=2.0,
@@ -384,11 +395,12 @@ async def test_runtime_stops_sampling_after_rollout_wait_failure(
         update_result = await runtime.run_update(
             policy_version=0,
             rollout_id="rollout-0",
+            target_round_count=execution_config.rounds_per_update,
             stop_request=TrainingStopRequest(),
         )
 
         assert isinstance(update_result, Rejected)
-        assert "rollout sample target timed out" in update_result.reason
+        assert "rollout round target timed out" in update_result.reason
         snapshot_result = await runtime.snapshot(policy_version=0)
         assert isinstance(snapshot_result, Ok)
     finally:
@@ -414,23 +426,29 @@ def _model_config() -> ModelConfig:
 
 
 def _rollout_snapshot(
-    *, policy_version: int, round_count: int, sample_count: int
+    *, policy_version: int, round_count: int, decision_count: int
 ) -> RolloutArenaSnapshot:
     return RolloutArenaSnapshot(
         policy_version=policy_version,
-        capacity=1024,
+        round_capacity=1024,
         round_count=round_count,
-        sample_count=sample_count,
-        generated_action_count=sample_count,
-        accepted_action_count=sample_count,
-        action_choice_count=sample_count,
+        decision_count=decision_count,
+        trajectory_count=round_count,
+        model_action_count=decision_count,
+        auto_action_count=decision_count,
+        forced_action_count=0,
+        trainable_decision_count=decision_count,
+        scored_choice_step_count=decision_count,
         game_over_count=0,
-        dropped_sample_count=0,
+        rejected_round_count=0,
         cancelled_env_count=1,
-        total_step_count=sample_count,
-        max_step_count=1,
-        first_partnership_reward_sum=0.0,
-        second_partnership_reward_sum=0.0,
+        total_trace_step_count=decision_count,
+        max_trace_step_count=1,
+        model_win_count=0,
+        auto_win_count=0,
+        model_declarer_round_count=0,
+        model_reward_sum=0.0,
+        auto_reward_sum=0.0,
         elapsed_seconds_max=1.0,
     )
 
@@ -438,10 +456,15 @@ def _rollout_snapshot(
 def _update_stats() -> PPOUpdateStats:
     return PPOUpdateStats(
         policy_loss=1.0,
+        value_loss=2.0,
         entropy=3.0,
         objective_loss=4.0,
         approx_kl=5.0,
         clip_fraction=0.5,
+        value_clip_fraction=0.25,
+        explained_variance=0.75,
+        policy_grad_norm=1.5,
+        value_grad_norm=1.25,
         profile=blank_update_profile(update_seconds=0.1),
     )
 

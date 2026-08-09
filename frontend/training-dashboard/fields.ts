@@ -16,8 +16,12 @@ export interface InitRequest {
   seed: number;
   learning_rate: number;
   ppo_clip: number;
+  value_clip: number;
+  gae_lambda: number;
+  value_coef: number;
   entropy_coef: number;
   policy_max_grad_norm: number;
+  value_max_grad_norm: number;
   ppo_epochs: number;
   minibatch_size: number;
   adam_beta1: number;
@@ -31,22 +35,26 @@ export interface ResumeRequest {
   worker_cpus: string | null;
   model_ranks: string | null;
   ppo_profile: "off" | "basic" | "detailed" | null;
-  max_samples: number;
+  max_rounds: number;
   learning_rate: number | null;
   checkpoint_every_updates: number | null;
   checkpoint_retention_updates: number;
   round_timeout_seconds: number | null;
   sampling_start_timeout_seconds: number | null;
-  rollout_sample_timeout_seconds: number | null;
+  rollout_collection_timeout_seconds: number | null;
   sampling_stop_timeout_seconds: number | null;
   state_sync_timeout_seconds: number | null;
   update_timeout_seconds: number | null;
   model_inference_batch_size: number | null;
   game_envs_per_worker: number | null;
-  samples_per_update: number | null;
+  rounds_per_update: number | null;
   ppo_clip: number | null;
+  value_clip: number | null;
+  gae_lambda: number | null;
+  value_coef: number | null;
   entropy_coef: number | null;
   policy_max_grad_norm: number | null;
+  value_max_grad_norm: number | null;
   ppo_epochs: number | null;
   minibatch_size: number | null;
   adam_beta1: number | null;
@@ -134,6 +142,35 @@ const optimizationFields = (
     "1",
   ),
   number(
+    "value_clip",
+    "Value clip",
+    "Optimization",
+    optional ? "" : "0.2",
+    "0.000001",
+    "any",
+    optional,
+    "1",
+  ),
+  number(
+    "gae_lambda",
+    "GAE lambda",
+    "Optimization",
+    optional ? "" : "0.95",
+    "0",
+    "any",
+    optional,
+    "1",
+  ),
+  number(
+    "value_coef",
+    "Value loss coefficient",
+    "Optimization",
+    optional ? "" : "0.5",
+    "0",
+    "any",
+    optional,
+  ),
+  number(
     "entropy_coef",
     "Entropy coefficient",
     "Optimization",
@@ -145,6 +182,15 @@ const optimizationFields = (
   number(
     "policy_max_grad_norm",
     "Policy maximum gradient norm",
+    "Optimization",
+    optional ? "" : "0.5",
+    "0",
+    "any",
+    optional,
+  ),
+  number(
+    "value_max_grad_norm",
+    "Value maximum gradient norm",
     "Optimization",
     optional ? "" : "0.5",
     "0",
@@ -229,8 +275,8 @@ export const RESUME_FIELDS: readonly TrainingField[] = [
     false,
   ),
   number(
-    "max_samples",
-    "Maximum samples",
+    "max_rounds",
+    "Maximum rounds",
     "Checkpoint",
     "0",
     "0",
@@ -283,8 +329,8 @@ export const RESUME_FIELDS: readonly TrainingField[] = [
     "1",
   ),
   number(
-    "samples_per_update",
-    "Samples per update",
+    "rounds_per_update",
+    "Rounds per update",
     "Runtime",
     "",
     "1",
@@ -307,8 +353,8 @@ export const RESUME_FIELDS: readonly TrainingField[] = [
     "any",
   ),
   number(
-    "rollout_sample_timeout_seconds",
-    "Rollout sample timeout",
+    "rollout_collection_timeout_seconds",
+    "Rollout collection timeout",
     "Timeouts",
     "",
     "0.001",
@@ -354,10 +400,17 @@ export function initRequestFromForm(
     seed: requiredNumber(form, "seed"),
     learning_rate: requiredNumber(form, "learning_rate"),
     ppo_clip: requiredNumber(form, "ppo_clip"),
+    value_clip: requiredNumber(form, "value_clip"),
+    gae_lambda: requiredNumber(form, "gae_lambda"),
+    value_coef: requiredNumber(form, "value_coef"),
     entropy_coef: requiredNumber(form, "entropy_coef"),
     policy_max_grad_norm: requiredNumber(
       form,
       "policy_max_grad_norm",
+    ),
+    value_max_grad_norm: requiredNumber(
+      form,
+      "value_max_grad_norm",
     ),
     ppo_epochs: requiredNumber(form, "ppo_epochs"),
     minibatch_size: requiredNumber(form, "minibatch_size"),
@@ -384,7 +437,7 @@ export function resumeRequestFromForm(
     worker_cpus: textValue(form, "worker_cpus"),
     model_ranks: textValue(form, "model_ranks"),
     ppo_profile: profile,
-    max_samples: requiredNumber(form, "max_samples"),
+    max_rounds: requiredNumber(form, "max_rounds"),
     learning_rate: optionalNumber(form, "learning_rate"),
     checkpoint_every_updates: optionalNumber(
       form,
@@ -402,9 +455,9 @@ export function resumeRequestFromForm(
       form,
       "sampling_start_timeout_seconds",
     ),
-    rollout_sample_timeout_seconds: optionalNumber(
+    rollout_collection_timeout_seconds: optionalNumber(
       form,
-      "rollout_sample_timeout_seconds",
+      "rollout_collection_timeout_seconds",
     ),
     sampling_stop_timeout_seconds: optionalNumber(
       form,
@@ -423,12 +476,19 @@ export function resumeRequestFromForm(
       "model_inference_batch_size",
     ),
     game_envs_per_worker: optionalNumber(form, "game_envs_per_worker"),
-    samples_per_update: optionalNumber(form, "samples_per_update"),
+    rounds_per_update: optionalNumber(form, "rounds_per_update"),
     ppo_clip: optionalNumber(form, "ppo_clip"),
+    value_clip: optionalNumber(form, "value_clip"),
+    gae_lambda: optionalNumber(form, "gae_lambda"),
+    value_coef: optionalNumber(form, "value_coef"),
     entropy_coef: optionalNumber(form, "entropy_coef"),
     policy_max_grad_norm: optionalNumber(
       form,
       "policy_max_grad_norm",
+    ),
+    value_max_grad_norm: optionalNumber(
+      form,
+      "value_max_grad_norm",
     ),
     ppo_epochs: optionalNumber(form, "ppo_epochs"),
     minibatch_size: optionalNumber(form, "minibatch_size"),

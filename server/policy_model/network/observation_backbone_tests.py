@@ -13,11 +13,11 @@ from server.policy_model.observation.tensor_batch import (
 from tests.support import card, seat_values
 from tests.support import snapshot as make_snapshot
 
-from .observation_encoder import ObservationEncoder
+from .observation_backbone import ObservationBackbone
 
 
 def test_encoder_returns_query_and_all_card_candidates() -> None:
-    encoder = ObservationEncoder(d_model=16, layers=1, heads=2)
+    encoder = ObservationBackbone(d_model=16, layers=1, heads=2)
     observation = build_observation(
         viewer=Seat.A,
         snapshot=make_snapshot(

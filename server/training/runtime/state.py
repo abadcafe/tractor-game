@@ -12,7 +12,7 @@ from torch import Tensor
 from server.foundation import result as _result
 from server.policy_model.network import PolicyModel
 from server.training.lifecycle.state import LoadedTrainingState
-from server.training.ppo import PPOTrainer
+from server.training.ppo import ObservationValueModel, PPOTrainer
 
 type ModelTensorState = dict[str, Tensor]
 type OptimizerPayload = dict[str, object]
@@ -22,19 +22,23 @@ type OptimizerPayload = dict[str, object]
 class RuntimeTrainingState:
     """CPU-resident model and optimizer state sent between processes."""
 
-    model_state: ModelTensorState
+    policy_state: ModelTensorState
+    value_state: ModelTensorState
     optimizer_state: OptimizerPayload
 
 
 def capture_runtime_training_state(
     *,
     model: PolicyModel,
+    value_model: ObservationValueModel,
     trainer: PPOTrainer,
 ) -> RuntimeTrainingState:
     """Capture a CPU snapshot of model and trainer state."""
-    model_state: Mapping[str, Tensor] = model.state_dict()
+    policy_state: Mapping[str, Tensor] = model.state_dict()
+    value_state: Mapping[str, Tensor] = value_model.state_dict()
     return RuntimeTrainingState(
-        model_state=_tensor_state_to_cpu(model_state),
+        policy_state=_tensor_state_to_cpu(policy_state),
+        value_state=_tensor_state_to_cpu(value_state),
         optimizer_state=_optimizer_state_to_cpu(
             trainer.optimizer_state()
         ),
@@ -47,7 +51,8 @@ def load_runtime_training_state(
     snapshot: RuntimeTrainingState,
 ) -> None:
     """Load a runtime snapshot into an already constructed state."""
-    _ = state.model.load_state_dict(snapshot.model_state)
+    _ = state.model.load_state_dict(snapshot.policy_state)
+    _ = state.value_model.load_state_dict(snapshot.value_state)
     state.trainer.load_optimizer_state(snapshot.optimizer_state)
 
 
@@ -111,13 +116,22 @@ def _runtime_training_states_match(
     snapshot: RuntimeTrainingState,
     rank: int,
 ) -> _result.Ok[None] | _result.Rejected:
-    model_result = _model_states_match(
-        reference=reference.model_state,
-        snapshot=snapshot.model_state,
+    policy_result = _model_states_match(
+        reference=reference.policy_state,
+        snapshot=snapshot.policy_state,
         rank=rank,
+        label="policy",
     )
-    if isinstance(model_result, _result.Rejected):
-        return model_result
+    if isinstance(policy_result, _result.Rejected):
+        return policy_result
+    value_result = _model_states_match(
+        reference=reference.value_state,
+        snapshot=snapshot.value_state,
+        rank=rank,
+        label="value",
+    )
+    if isinstance(value_result, _result.Rejected):
+        return value_result
     optimizer_result = _optimizer_states_match(
         reference=reference.optimizer_state,
         snapshot=snapshot.optimizer_state,
@@ -133,24 +147,31 @@ def _model_states_match(
     reference: ModelTensorState,
     snapshot: ModelTensorState,
     rank: int,
+    label: str,
 ) -> _result.Ok[None] | _result.Rejected:
     if tuple(reference.keys()) != tuple(snapshot.keys()):
         return _result.Rejected(
-            reason=f"rank-{rank} model state keys differ"
+            reason=f"rank-{rank} {label} state keys differ"
         )
     for key, value in reference.items():
         other = snapshot[key]
         if value.shape != other.shape:
             return _result.Rejected(
-                reason=f"rank-{rank} model state {key} shape differs"
+                reason=(
+                    f"rank-{rank} {label} state {key} shape differs"
+                )
             )
         if value.dtype != other.dtype:
             return _result.Rejected(
-                reason=f"rank-{rank} model state {key} dtype differs"
+                reason=(
+                    f"rank-{rank} {label} state {key} dtype differs"
+                )
             )
         if not bool(torch.equal(value, other)):
             return _result.Rejected(
-                reason=f"rank-{rank} model state {key} value differs"
+                reason=(
+                    f"rank-{rank} {label} state {key} value differs"
+                )
             )
     return _result.Ok(value=None)
 

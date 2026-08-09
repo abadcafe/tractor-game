@@ -51,7 +51,7 @@ class ExecutionTimeouts:
 
     round_seconds: float = 600.0
     sampling_start_seconds: float = 240.0
-    rollout_sample_seconds: float = 900.0
+    rollout_collection_seconds: float = 900.0
     sampling_stop_seconds: float = 600.0
     state_sync_seconds: float = 300.0
     update_seconds: float = 3600.0
@@ -59,7 +59,7 @@ class ExecutionTimeouts:
     def __post_init__(self) -> None:
         assert _positive_finite(self.round_seconds)
         assert _positive_finite(self.sampling_start_seconds)
-        assert _positive_finite(self.rollout_sample_seconds)
+        assert _positive_finite(self.rollout_collection_seconds)
         assert _positive_finite(self.sampling_stop_seconds)
         assert _positive_finite(self.state_sync_seconds)
         assert _positive_finite(self.update_seconds)
@@ -81,14 +81,14 @@ class ExecutionConfig:
     )
     model_inference_batch_size: int = 64
     game_envs_per_worker: int = 1
-    samples_per_update: int = 1024
+    rounds_per_update: int = 32
 
     def __post_init__(self) -> None:
         assert _worker_cpu_layout_is_valid(self.worker_cpu_layout)
         assert self.ppo_profile in ("off", "basic", "detailed")
         assert self.model_inference_batch_size > 0
         assert self.game_envs_per_worker > 0
-        assert self.samples_per_update > 0
+        assert self.rounds_per_update > 0
 
     def worker_process_count(self) -> int:
         """Return OS worker process count."""

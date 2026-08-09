@@ -50,7 +50,7 @@ def run_training_coordinator(
     train_config: TrainConfig,
     checkpoint_policy: CheckpointPolicy,
     execution_config: ExecutionConfig,
-    max_samples: int,
+    max_rounds: int,
     resume: Path,
     stop_request: TrainingStopRequest,
 ) -> _result.Ok[TrainingLoopResult] | _result.Rejected:
@@ -63,7 +63,7 @@ def run_training_coordinator(
             train_config=train_config,
             checkpoint_policy=checkpoint_policy,
             execution_config=execution_config,
-            max_samples=max_samples,
+            max_rounds=max_rounds,
             resume=resume,
             stop_request=stop_request,
         )
@@ -78,12 +78,12 @@ async def _run_training_coordinator_async(
     train_config: TrainConfig,
     checkpoint_policy: CheckpointPolicy,
     execution_config: ExecutionConfig,
-    max_samples: int,
+    max_rounds: int,
     resume: Path,
     stop_request: TrainingStopRequest,
 ) -> _result.Ok[TrainingLoopResult] | _result.Rejected:
     """Run synchronized worker training inside the async runtime."""
-    assert max_samples >= 0
+    assert max_rounds >= 0
     setup_result = _setup_coordinator_runtime(
         execution_config=execution_config
     )
@@ -131,7 +131,7 @@ async def _run_training_coordinator_async(
             checkpoint_policy=checkpoint_policy,
             execution_config=execution_config,
             state=state_result.value,
-            max_samples=max_samples,
+            max_rounds=max_rounds,
             event_sink=event_sink,
             runtime=runtime,
             stop_request=stop_request,
@@ -156,7 +156,9 @@ async def _run_training_coordinator_async(
                 training_result.value.checkpoint_path
             ),
             "total_rounds": training_result.value.total_rounds,
-            "total_samples": training_result.value.total_samples,
+            "total_trainable_decisions": (
+                training_result.value.total_trainable_decisions
+            ),
             "total_updates": training_result.value.total_updates,
         },
     )
@@ -174,16 +176,16 @@ def _setup_coordinator_runtime(
 
 def _should_continue_training(
     *,
-    max_samples: int,
-    start_total_samples: int,
-    total_samples: int,
+    max_rounds: int,
+    start_total_rounds: int,
+    total_rounds: int,
 ) -> bool:
-    assert max_samples >= 0
-    assert start_total_samples >= 0
-    assert total_samples >= start_total_samples
-    if max_samples == 0:
+    assert max_rounds >= 0
+    assert start_total_rounds >= 0
+    assert total_rounds >= start_total_rounds
+    if max_rounds == 0:
         return True
-    return total_samples - start_total_samples < max_samples
+    return total_rounds - start_total_rounds < max_rounds
 
 
 async def _run_synchronized_training(
@@ -195,7 +197,7 @@ async def _run_synchronized_training(
     checkpoint_policy: CheckpointPolicy,
     execution_config: ExecutionConfig,
     state: RuntimeCheckpointState,
-    max_samples: int,
+    max_rounds: int,
     event_sink: StructuredEventSink,
     runtime: TrainingRuntime,
     stop_request: TrainingStopRequest,
@@ -203,10 +205,10 @@ async def _run_synchronized_training(
     _ = runtime_id
     start = time.monotonic()
     total_rounds = state.total_rounds
-    total_samples = state.total_samples
+    total_trainable_decisions = state.total_trainable_decisions
     total_updates = state.total_updates
     start_total_rounds = total_rounds
-    start_total_samples = total_samples
+    start_total_trainable_decisions = total_trainable_decisions
     load_result = await runtime.load_state(
         state=state.state,
         policy_version=total_updates,
@@ -216,9 +218,9 @@ async def _run_synchronized_training(
     last_checkpoint_path: Path | None = None
     while (
         _should_continue_training(
-            max_samples=max_samples,
-            start_total_samples=start_total_samples,
-            total_samples=total_samples,
+            max_rounds=max_rounds,
+            start_total_rounds=start_total_rounds,
+            total_rounds=total_rounds,
         )
         and not stop_request.is_requested()
     ):
@@ -232,6 +234,12 @@ async def _run_synchronized_training(
         update_result = await runtime.run_update(
             policy_version=total_updates,
             rollout_id=rollout_id,
+            target_round_count=_next_update_round_target(
+                max_rounds=max_rounds,
+                start_total_rounds=start_total_rounds,
+                total_rounds=total_rounds,
+                rounds_per_update=execution_config.rounds_per_update,
+            ),
             stop_request=stop_request,
         )
         if isinstance(update_result, Rejected):
@@ -264,11 +272,11 @@ async def _run_synchronized_training(
                     **_rollout_fields(update.snapshot),
                     "duration_seconds": update_cycle_seconds,
                     "termination": "stop_requested",
-                    "discarded_sample_count": (
-                        update.snapshot.sample_count
+                    "discarded_trainable_decision_count": (
+                        update.snapshot.decision_count
                     ),
-                    "minimum_update_sample_count": (
-                        update.minimum_sample_count
+                    "minimum_update_trainable_decision_count": (
+                        update.minimum_trainable_decision_count
                     ),
                 },
             )
@@ -283,24 +291,26 @@ async def _run_synchronized_training(
         )
         total_updates += 1
         total_rounds += update.snapshot.round_count
-        total_samples += update.snapshot.sample_count
+        total_trainable_decisions += update.snapshot.decision_count
         elapsed = max(time.monotonic() - start, 0.000001)
         _record_update_completed(
             event_sink=event_sink,
             context=context,
             start_total_rounds=start_total_rounds,
-            start_total_samples=start_total_samples,
+            start_total_trainable_decisions=(
+                start_total_trainable_decisions
+            ),
             total_rounds=total_rounds,
-            total_samples=total_samples,
+            total_trainable_decisions=total_trainable_decisions,
             total_updates=total_updates,
             elapsed_seconds=elapsed,
             update_cycle_seconds=update_cycle_seconds,
             update=update,
         )
         if stop_request.is_requested() or not _should_continue_training(
-            max_samples=max_samples,
-            start_total_samples=start_total_samples,
-            total_samples=total_samples,
+            max_rounds=max_rounds,
+            start_total_rounds=start_total_rounds,
+            total_rounds=total_rounds,
         ):
             break
         checkpoint_result = await _maybe_save_checkpoint(
@@ -313,7 +323,7 @@ async def _run_synchronized_training(
             event_sink=event_sink,
             runtime=runtime,
             total_rounds=total_rounds,
-            total_samples=total_samples,
+            total_trainable_decisions=total_trainable_decisions,
             total_updates=total_updates,
         )
         if isinstance(checkpoint_result, Rejected):
@@ -330,7 +340,7 @@ async def _run_synchronized_training(
             runtime=runtime,
             event_sink=event_sink,
             total_rounds=total_rounds,
-            total_samples=total_samples,
+            total_trainable_decisions=total_trainable_decisions,
             total_updates=total_updates,
         )
         if isinstance(final_checkpoint_result, Rejected):
@@ -339,11 +349,28 @@ async def _run_synchronized_training(
     return Ok(
         value=TrainingLoopResult(
             total_rounds=total_rounds,
-            total_samples=total_samples,
+            total_trainable_decisions=total_trainable_decisions,
             total_updates=total_updates,
             checkpoint_path=final_checkpoint_path,
         )
     )
+
+
+def _next_update_round_target(
+    *,
+    max_rounds: int,
+    start_total_rounds: int,
+    total_rounds: int,
+    rounds_per_update: int,
+) -> int:
+    """Return the exact round target for the next atomic update."""
+    assert rounds_per_update > 0
+    assert total_rounds >= start_total_rounds
+    if max_rounds == 0:
+        return rounds_per_update
+    remaining = max_rounds - (total_rounds - start_total_rounds)
+    assert remaining > 0
+    return min(remaining, rounds_per_update)
 
 
 async def _save_final_checkpoint(
@@ -356,7 +383,7 @@ async def _save_final_checkpoint(
     runtime: TrainingRuntime,
     event_sink: StructuredEventSink,
     total_rounds: int,
-    total_samples: int,
+    total_trainable_decisions: int,
     total_updates: int,
 ) -> _result.Ok[Path] | _result.Rejected:
     context = EventContext(policy_version=total_updates)
@@ -385,7 +412,7 @@ async def _save_final_checkpoint(
         execution_config=execution_config,
         state=snapshot_result.value,
         total_rounds=total_rounds,
-        total_samples=total_samples,
+        total_trainable_decisions=total_trainable_decisions,
         total_updates=total_updates,
     )
     if isinstance(result, Rejected):
@@ -408,7 +435,7 @@ async def _save_final_checkpoint(
             "kind": "final",
             "checkpoint_path": str(result.value),
             "total_rounds": total_rounds,
-            "total_samples": total_samples,
+            "total_trainable_decisions": total_trainable_decisions,
             "total_updates": total_updates,
             "duration_seconds": max(time.monotonic() - started, 0.0),
         },
@@ -427,7 +454,7 @@ async def _maybe_save_checkpoint(
     event_sink: StructuredEventSink,
     runtime: TrainingRuntime,
     total_rounds: int,
-    total_samples: int,
+    total_trainable_decisions: int,
     total_updates: int,
 ) -> _result.Ok[Path | None] | _result.Rejected:
     if not _checkpoint_due(
@@ -464,7 +491,7 @@ async def _maybe_save_checkpoint(
         execution_config=execution_config,
         state=snapshot_result.value,
         total_rounds=total_rounds,
-        total_samples=total_samples,
+        total_trainable_decisions=total_trainable_decisions,
         total_updates=total_updates,
     )
     if isinstance(save_result, Rejected):
@@ -487,7 +514,7 @@ async def _maybe_save_checkpoint(
             "kind": "scheduled",
             "checkpoint_path": str(save_result.value),
             "total_rounds": total_rounds,
-            "total_samples": total_samples,
+            "total_trainable_decisions": total_trainable_decisions,
             "total_updates": total_updates,
             "duration_seconds": max(time.monotonic() - started, 0.0),
         },
@@ -511,7 +538,7 @@ def _save_checkpoint(
     execution_config: ExecutionConfig,
     state: RuntimeTrainingState,
     total_rounds: int,
-    total_samples: int,
+    total_trainable_decisions: int,
     total_updates: int,
 ) -> _result.Ok[Path] | _result.Rejected:
     latest_checkpoint = run_dir / _CHECKPOINTS_DIR_NAME / "latest.json"
@@ -536,7 +563,7 @@ def _save_checkpoint(
         train_config=train_config,
         execution_config=execution_config,
         total_rounds=total_rounds,
-        total_samples=total_samples,
+        total_trainable_decisions=total_trainable_decisions,
         total_updates=total_updates,
         retained_update_count=checkpoint_policy.retention_updates,
     )
@@ -573,9 +600,9 @@ def _record_update_completed(
     event_sink: StructuredEventSink,
     context: EventContext,
     start_total_rounds: int,
-    start_total_samples: int,
+    start_total_trainable_decisions: int,
     total_rounds: int,
-    total_samples: int,
+    total_trainable_decisions: int,
     total_updates: int,
     elapsed_seconds: float,
     update_cycle_seconds: float,
@@ -583,9 +610,11 @@ def _record_update_completed(
 ) -> None:
     snapshot = update.snapshot
     process_rounds = total_rounds - start_total_rounds
-    process_samples = total_samples - start_total_samples
+    process_decisions = (
+        total_trainable_decisions - start_total_trainable_decisions
+    )
     assert process_rounds > 0
-    assert process_samples > 0
+    assert process_decisions > 0
     stats = update.update_stats
     profile = stats.profile
     event_sink.emit(
@@ -593,39 +622,47 @@ def _record_update_completed(
         context=context,
         fields={
             "total_rounds": total_rounds,
-            "total_samples": total_samples,
+            "total_trainable_decisions": total_trainable_decisions,
             "total_updates": total_updates,
             "round_count": snapshot.round_count,
-            "sample_count": snapshot.sample_count,
+            "trainable_decision_count": snapshot.decision_count,
             "duration_seconds": update_cycle_seconds,
             "process_rounds_per_second": process_rounds
             / elapsed_seconds,
-            "process_samples_per_second": process_samples
+            "process_trainable_decisions_per_second": process_decisions
             / elapsed_seconds,
             "rollout_decisions_per_second": (
                 0.0
                 if snapshot.elapsed_seconds_max <= 0.0
-                else snapshot.sample_count
+                else snapshot.decision_count
                 / snapshot.elapsed_seconds_max
             ),
-            "first_partnership_reward": (
-                snapshot.average_first_partnership_reward()
+            "model_reward": snapshot.average_model_reward(),
+            "auto_reward": snapshot.average_auto_reward(),
+            "model_action_count": snapshot.model_action_count,
+            "auto_action_count": snapshot.auto_action_count,
+            "forced_action_count": snapshot.forced_action_count,
+            "scored_choice_step_count": (
+                snapshot.scored_choice_step_count
             ),
-            "second_partnership_reward": (
-                snapshot.average_second_partnership_reward()
+            "model_win_rate": snapshot.model_win_count
+            / snapshot.round_count,
+            "auto_win_rate": snapshot.auto_win_count
+            / snapshot.round_count,
+            "model_declarer_rate": (
+                snapshot.model_declarer_round_count
+                / snapshot.round_count
             ),
-            "generated_action_count": snapshot.generated_action_count,
-            "accepted_action_count": snapshot.accepted_action_count,
-            "decision_count": snapshot.sample_count,
-            "average_action_choices": 0.0
-            if snapshot.generated_action_count == 0
-            else snapshot.action_choice_count
-            / snapshot.generated_action_count,
             "policy_loss": stats.policy_loss,
+            "value_loss": stats.value_loss,
             "objective_loss": stats.objective_loss,
             "entropy": stats.entropy,
             "approx_kl": stats.approx_kl,
             "clip_fraction": stats.clip_fraction,
+            "value_clip_fraction": stats.value_clip_fraction,
+            "explained_variance": stats.explained_variance,
+            "policy_grad_norm": stats.policy_grad_norm,
+            "value_grad_norm": stats.value_grad_norm,
             "update_cycle_seconds": update_cycle_seconds,
             "ppo_update_seconds": profile.update_seconds,
             "ppo_minibatch_loss_seconds": (
@@ -672,18 +709,21 @@ def _record_update_completed(
 def _rollout_fields(snapshot: RolloutArenaSnapshot) -> JsonObject:
     return {
         "round_count": snapshot.round_count,
-        "sample_count": snapshot.sample_count,
-        "generated_action_count": snapshot.generated_action_count,
-        "accepted_action_count": snapshot.accepted_action_count,
-        "action_choice_count": snapshot.action_choice_count,
+        "trainable_decision_count": snapshot.decision_count,
+        "trajectory_count": snapshot.trajectory_count,
+        "model_action_count": snapshot.model_action_count,
+        "auto_action_count": snapshot.auto_action_count,
+        "forced_action_count": snapshot.forced_action_count,
+        "scored_choice_step_count": snapshot.scored_choice_step_count,
         "game_over_count": snapshot.game_over_count,
-        "dropped_sample_count": snapshot.dropped_sample_count,
+        "rejected_round_count": snapshot.rejected_round_count,
         "cancelled_env_count": snapshot.cancelled_env_count,
-        "first_partnership_reward": (
-            snapshot.average_first_partnership_reward()
-        ),
-        "second_partnership_reward": (
-            snapshot.average_second_partnership_reward()
+        "model_reward": snapshot.average_model_reward(),
+        "auto_reward": snapshot.average_auto_reward(),
+        "model_win_count": snapshot.model_win_count,
+        "auto_win_count": snapshot.auto_win_count,
+        "model_declarer_round_count": (
+            snapshot.model_declarer_round_count
         ),
         "elapsed_seconds": snapshot.elapsed_seconds_max,
     }

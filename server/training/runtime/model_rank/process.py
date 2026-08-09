@@ -433,13 +433,13 @@ def _run_model_rank_update(
     )
     started = time.perf_counter()
     read_start = time.perf_counter()
-    returns_result = rollout_arena_reader.read_rank_batch(
+    trajectories_result = rollout_arena_reader.read_rank_batch(
         policy_version=command.policy_version,
         model_rank_index=model_rank_index,
         device=core.device,
     )
     arena_read_seconds = time.perf_counter() - read_start
-    if isinstance(returns_result, Rejected):
+    if isinstance(trajectories_result, Rejected):
         event_sink.emit(
             "update.rank",
             context=context,
@@ -448,14 +448,16 @@ def _run_model_rank_update(
                     time.perf_counter() - started, 0.0
                 )
             },
-            error=returns_result.reason,
+            error=trajectories_result.reason,
         )
         return ModelRankRejected(
             model_rank_index=model_rank_index,
-            reason=returns_result.reason,
+            reason=trajectories_result.reason,
         )
     update_start = time.perf_counter()
-    update_result = core.update_returns(returns=returns_result.value)
+    update_result = core.update_trajectories(
+        trajectories=trajectories_result.value
+    )
     update_seconds = time.perf_counter() - update_start
     if isinstance(update_result, Rejected):
         event_sink.emit(
@@ -478,11 +480,13 @@ def _run_model_rank_update(
         fields={
             "arena_read_seconds": arena_read_seconds,
             "update_seconds": update_seconds,
-            "sample_count": int(
-                returns_result.value.row_indices.shape[0]
+            "trainable_decision_count": int(
+                trajectories_result.value.row_indices.shape[0]
             ),
-            "step_count": returns_result.value.total_step_count,
-            "round_count": returns_result.value.round_count,
+            "trace_step_count": (
+                trajectories_result.value.total_step_count
+            ),
+            "round_count": trajectories_result.value.round_count,
         },
     )
     return ModelRankUpdateCompleted(
@@ -622,6 +626,9 @@ def _select_compact_decision_rows(
         row_indices=tuple(decisions.row_indices[row] for row in rows),
         choice_counts=tuple(
             decisions.choice_counts[row] for row in rows
+        ),
+        scored_choice_step_counts=tuple(
+            decisions.scored_choice_step_counts[row] for row in rows
         ),
         action_choice_batch=decisions.action_choice_batch.select_rows(
             rows

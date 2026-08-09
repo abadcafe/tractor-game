@@ -8,8 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from server.foundation.json_value import JsonObject
 
-type TrainingMetricsSchemaVersion = Literal[4]
-TRAINING_METRICS_SCHEMA_VERSION: TrainingMetricsSchemaVersion = 4
+type TrainingMetricsSchemaVersion = Literal[5]
+TRAINING_METRICS_SCHEMA_VERSION: TrainingMetricsSchemaVersion = 5
 
 
 class MetricPoint(BaseModel):

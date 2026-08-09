@@ -25,6 +25,7 @@ from server.training.ppo.distributed import (
 )
 from server.training.ppo.gradients import (
     clip_grad_norm_on_device,
+    gradient_norm_on_device,
     non_finite_gradient_reason,
 )
 from server.training.ppo.loss_module import (
@@ -60,14 +61,18 @@ from server.training.ppo.validation import (
     PPO_APPROX_KL_NONFINITE,
     PPO_CLIP_FRACTION_NONFINITE,
     PPO_ENTROPY_NONFINITE,
+    PPO_EXPLAINED_VARIANCE_NONFINITE,
     PPO_OBJECTIVE_LOSS_NONFINITE,
     PPO_POLICY_LOSS_NONFINITE,
+    PPO_VALUE_CLIP_FRACTION_NONFINITE,
+    PPO_VALUE_LOSS_NONFINITE,
     TensorValidationCheck,
     combine_validation_codes,
     gradient_validation_code,
     non_finite_validation_code,
     validation_rejection_reason,
 )
+from server.training.ppo.value_model import ObservationValueModel
 from server.training.runtime.config import PPOProfileMode
 
 
@@ -93,12 +98,14 @@ class PPOTrainer:
         self,
         *,
         model: PolicyModel,
+        value_model: ObservationValueModel,
         train_config: TrainConfig,
         device: torch.device,
         profile_mode: PPOProfileMode,
         update_partition: PPOUpdatePartition | None = None,
     ) -> None:
         self.model = model
+        self.value_model = value_model
         self.train_config = train_config
         self.device = device
         self.profile_mode: PPOProfileMode = profile_mode
@@ -109,6 +116,7 @@ class PPOTrainer:
         )
         self.loss_module = PPOLossModule(
             model=model,
+            value_model=value_model,
             train_config=train_config,
             device=device,
         )
@@ -124,7 +132,10 @@ class PPOTrainer:
             self._loss_forwarder = forwarder_result.value
             self._loss_forwarder_rejection = None
         self.optimizer = PPOOptimizer(
-            parameters=tuple(self.model.parameters()),
+            parameters=(
+                *tuple(self.model.parameters()),
+                *tuple(self.value_model.parameters()),
+            ),
             learning_rate=train_config.learning_rate,
             beta1=train_config.adam_beta1,
             beta2=train_config.adam_beta2,
@@ -203,16 +214,26 @@ class PPOTrainer:
         if isinstance(partition_check, _result.Rejected):
             return partition_check
         stat_sums = torch.zeros(
-            (5,), dtype=torch.float32, device=self.device
+            (10,), dtype=torch.float32, device=self.device
         )
         stat_count = torch.zeros(
             (), dtype=torch.float32, device=self.device
         )
-        parameters = tuple(self.model.parameters())
+        policy_parameters = tuple(self.model.parameters())
+        value_parameters = tuple(self.value_model.parameters())
+        parameters = (*policy_parameters, *value_parameters)
         parameter_names = {
-            id(parameter): name
+            id(parameter): f"policy.{name}"
             for name, parameter in self.model.named_parameters()
         }
+        parameter_names.update(
+            {
+                id(parameter): f"value.{name}"
+                for name, parameter in (
+                    self.value_model.named_parameters()
+                )
+            }
+        )
         named_parameters = tuple(
             (parameter_names[id(parameter)], parameter)
             for parameter in parameters
@@ -274,7 +295,7 @@ class PPOTrainer:
                     "minibatch_loss_seconds", loss_start
                 )
                 loss = forward_output.loss
-                self.model.zero_grad(set_to_none=True)
+                loss_forwarder.zero_grad(set_to_none=True)
                 loss_validation_code = combine_validation_codes(
                     forward_output.validation_code,
                     _loss_validation_code(loss),
@@ -286,13 +307,13 @@ class PPOTrainer:
                 if isinstance(
                     loss_validation_code_result, _result.Rejected
                 ):
-                    self.model.zero_grad(set_to_none=True)
+                    loss_forwarder.zero_grad(set_to_none=True)
                     return loss_validation_code_result
                 loss_rejection = validation_rejection_reason(
                     loss_validation_code_result.value
                 )
                 if loss_rejection is not None:
-                    self.model.zero_grad(set_to_none=True)
+                    loss_forwarder.zero_grad(set_to_none=True)
                     return _result.Rejected(reason=loss_rejection)
                 backward_start = profile.mark()
                 torch.autograd.backward(
@@ -309,9 +330,19 @@ class PPOTrainer:
                 preclip_gradient_code = gradient_validation_code(
                     parameters
                 )
+                policy_grad_norm = gradient_norm_on_device(
+                    policy_parameters
+                )
+                value_grad_norm = gradient_norm_on_device(
+                    value_parameters
+                )
                 clip_grad_norm_on_device(
-                    parameters,
+                    policy_parameters,
                     max_norm=self.train_config.policy_max_grad_norm,
+                )
+                clip_grad_norm_on_device(
+                    value_parameters,
+                    max_norm=self.train_config.value_max_grad_norm,
                 )
                 gradient_code = combine_validation_codes(
                     preclip_gradient_code,
@@ -322,7 +353,7 @@ class PPOTrainer:
                     partition=self.update_partition,
                 )
                 if isinstance(gradient_code_result, _result.Rejected):
-                    self.model.zero_grad(set_to_none=True)
+                    loss_forwarder.zero_grad(set_to_none=True)
                     return gradient_code_result
                 clipped_gradient_rejection = (
                     validation_rejection_reason(
@@ -344,7 +375,7 @@ class PPOTrainer:
                     )
                     policy_loss_value = _float_tensor(loss.policy_loss)
                     entropy_value = _float_tensor(loss.entropy)
-                    self.model.zero_grad(set_to_none=True)
+                    loss_forwarder.zero_grad(set_to_none=True)
                     return _result.Rejected(
                         reason=(
                             clipped_gradient_rejection
@@ -367,7 +398,9 @@ class PPOTrainer:
                 )
                 if local_count > 0:
                     stat_sums = stat_sums + _loss_stat_tensor(
-                        loss
+                        loss,
+                        policy_grad_norm=policy_grad_norm,
+                        value_grad_norm=value_grad_norm,
                     ) * float(local_count)
                     stat_count = stat_count + torch.tensor(
                         float(local_count),
@@ -621,14 +654,24 @@ def _normalize_advantages(advantages: Tensor) -> Tensor:
     return torch.where(stddev <= 0.000001, centered, normalized)
 
 
-def _loss_stat_tensor(loss: MinibatchLoss) -> Tensor:
+def _loss_stat_tensor(
+    loss: MinibatchLoss,
+    *,
+    policy_grad_norm: Tensor,
+    value_grad_norm: Tensor,
+) -> Tensor:
     return torch.stack(
         (
             loss.policy_loss.detach(),
+            loss.value_loss.detach(),
             loss.entropy.detach(),
             loss.objective_loss.detach(),
             loss.approx_kl.detach(),
             loss.clip_fraction.detach(),
+            loss.value_clip_fraction.detach(),
+            loss.explained_variance.detach(),
+            policy_grad_norm.detach(),
+            value_grad_norm.detach(),
         )
     )
 
@@ -640,7 +683,7 @@ def _finalize_update_stats(
     profile: PPOUpdateProfile,
     partition: PPOUpdatePartition,
 ) -> _result.Ok[PPOUpdateStats] | _result.Rejected:
-    assert stat_sums.shape == (5,)
+    assert stat_sums.shape == (10,)
     assert stat_count.shape == ()
     totals = torch.cat((stat_sums, stat_count.reshape(1)))
     if partition.world_size > 1:
@@ -651,20 +694,25 @@ def _finalize_update_stats(
                 )
             )
         totals = all_reduce_sum(totals)
-    count = totals[5]
+    count = totals[10]
     count_value = _float_tensor(count)
     if count_value <= 0.0:
         return _result.Rejected(
             reason="PPO update stats require rollout decisions"
         )
-    means = totals[:5] / count
+    means = totals[:10] / count
     return _result.Ok(
         value=PPOUpdateStats(
             policy_loss=_float_tensor(means[0]),
-            entropy=_float_tensor(means[1]),
-            objective_loss=_float_tensor(means[2]),
-            approx_kl=_float_tensor(means[3]),
-            clip_fraction=_float_tensor(means[4]),
+            value_loss=_float_tensor(means[1]),
+            entropy=_float_tensor(means[2]),
+            objective_loss=_float_tensor(means[3]),
+            approx_kl=_float_tensor(means[4]),
+            clip_fraction=_float_tensor(means[5]),
+            value_clip_fraction=_float_tensor(means[6]),
+            explained_variance=_float_tensor(means[7]),
+            policy_grad_norm=_float_tensor(means[8]),
+            value_grad_norm=_float_tensor(means[9]),
             profile=profile,
         )
     )
@@ -676,6 +724,10 @@ def _loss_validation_code(loss: MinibatchLoss) -> Tensor:
             TensorValidationCheck(
                 tensor=loss.policy_loss,
                 code=PPO_POLICY_LOSS_NONFINITE,
+            ),
+            TensorValidationCheck(
+                tensor=loss.value_loss,
+                code=PPO_VALUE_LOSS_NONFINITE,
             ),
             TensorValidationCheck(
                 tensor=loss.entropy,
@@ -692,6 +744,14 @@ def _loss_validation_code(loss: MinibatchLoss) -> Tensor:
             TensorValidationCheck(
                 tensor=loss.clip_fraction,
                 code=PPO_CLIP_FRACTION_NONFINITE,
+            ),
+            TensorValidationCheck(
+                tensor=loss.value_clip_fraction,
+                code=PPO_VALUE_CLIP_FRACTION_NONFINITE,
+            ),
+            TensorValidationCheck(
+                tensor=loss.explained_variance,
+                code=PPO_EXPLAINED_VARIANCE_NONFINITE,
             ),
         )
     )

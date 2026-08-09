@@ -47,14 +47,14 @@ const SPECS: readonly ChartSpec[] = [
     unit: "per second",
     series: [
       {
-        key: "samples_per_second",
-        label: "Samples/s",
+        key: "trainable_decisions_per_second",
+        label: "Trainable decisions/s",
         color: "#1769aa",
       },
       { key: "rounds_per_second", label: "Rounds/s", color: "#138a72" },
       {
-        key: "decisions_per_second",
-        label: "Decisions/s",
+        key: "rollout_decisions_per_second",
+        label: "Rollout decisions/s",
         color: "#c26718",
       },
     ],
@@ -65,6 +65,7 @@ const SPECS: readonly ChartSpec[] = [
     unit: "loss",
     series: [
       { key: "policy_loss", label: "Policy loss", color: "#1769aa" },
+      { key: "value_loss", label: "Value loss", color: "#138a72" },
       {
         key: "objective_loss",
         label: "Objective loss",
@@ -81,8 +82,18 @@ const SPECS: readonly ChartSpec[] = [
       { key: "approx_kl", label: "Approx KL", color: "#b23a48" },
       {
         key: "clip_fraction",
-        label: "Clip fraction",
+        label: "Policy clip fraction",
         color: "#7253a6",
+      },
+      {
+        key: "value_clip_fraction",
+        label: "Value clip fraction",
+        color: "#c26718",
+      },
+      {
+        key: "explained_variance",
+        label: "Explained variance",
+        color: "#20262d",
       },
     ],
   },
@@ -123,12 +134,15 @@ const SPECS: readonly ChartSpec[] = [
     dataset: "rollout",
     unit: "count",
     series: [
-      { key: "sample_count", label: "Samples", color: "#1769aa" },
       { key: "round_count", label: "Rounds", color: "#138a72" },
-      { key: "decision_count", label: "Decisions", color: "#c26718" },
       {
-        key: "dropped_sample_count",
-        label: "Dropped",
+        key: "trainable_decision_count",
+        label: "Trainable decisions",
+        color: "#1769aa",
+      },
+      {
+        key: "forced_action_count",
+        label: "Forced actions",
         color: "#b23a48",
       },
     ],
@@ -139,13 +153,13 @@ const SPECS: readonly ChartSpec[] = [
     unit: "reward",
     series: [
       {
-        key: "first_partnership_reward",
-        label: "First partnership",
+        key: "model_reward",
+        label: "Model reward",
         color: "#1769aa",
       },
       {
-        key: "second_partnership_reward",
-        label: "Second partnership",
+        key: "auto_reward",
+        label: "Auto reward",
         color: "#c26718",
       },
     ],

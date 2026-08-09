@@ -19,6 +19,9 @@ class PPOBatchSource(Protocol):
     @property
     def raw_advantages(self) -> Tensor: ...
 
+    @property
+    def value_targets(self) -> Tensor: ...
+
     def sample_count(self) -> int:
         """Return the number of trainable samples."""
         ...

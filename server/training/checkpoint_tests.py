@@ -46,7 +46,7 @@ from server.training.lifecycle.state import (
 from server.training.lifecycle.state import (
     create_training_state as _create_training_state,
 )
-from server.training.ppo import PPOTrainer
+from server.training.ppo import ObservationValueModel, PPOTrainer
 from server.training.runtime import (
     ExecutionConfig,
     ExecutionTimeouts,
@@ -101,11 +101,12 @@ def test_torch_checkpoint_metadata_drives_resume_model_config(
     save_training_checkpoint(
         manifest_paths=(path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=7,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=3,
         retained_update_count=5,
     )
@@ -137,11 +138,12 @@ def test_read_metadata_uses_manifest_without_torch_load(
     save_training_checkpoint(
         manifest_paths=(path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=5,
         retained_update_count=5,
     )
@@ -175,11 +177,12 @@ def test_inference_load_restores_manifest_model_without_optimizer(
     save_training_checkpoint(
         manifest_paths=(path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=13,
-        total_samples=29,
+        total_trainable_decisions=29,
         total_updates=7,
         retained_update_count=5,
     )
@@ -192,7 +195,7 @@ def test_inference_load_restores_manifest_model_without_optimizer(
     assert isinstance(result, Ok)
     assert result.value.model_config == model_config
     assert result.value.metadata.total_rounds == 13
-    assert result.value.metadata.total_samples == 29
+    assert result.value.metadata.total_trainable_decisions == 29
     assert result.value.metadata.total_updates == 7
     assert result.value.model.training is False
     assert _all_tensors_equal(
@@ -227,18 +230,19 @@ def test_torch_checkpoint_save_rejects_payload_write_failure(
     result = _save_training_checkpoint(
         manifest_paths=(tmp_path / "latest.json",),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=1,
         retained_update_count=5,
     )
 
     assert isinstance(result, Rejected)
-    assert "state payload write failed" in result.reason
-    assert _state_paths(tmp_path) == ()
+    assert "policy payload write failed" in result.reason
+    assert _policy_paths(tmp_path) == ()
     assert _object_entries(tmp_path) == ()
 
 
@@ -265,11 +269,12 @@ def test_torch_checkpoint_save_rejects_checkpoint_dir_symlink(
     result = _save_training_checkpoint(
         manifest_paths=(checkpoint_dir / "latest.json",),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=1,
         retained_update_count=5,
     )
@@ -303,11 +308,12 @@ def test_torch_checkpoint_save_rejects_objects_dir_symlink(
     result = _save_training_checkpoint(
         manifest_paths=(tmp_path / "latest.json",),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=1,
         retained_update_count=5,
     )
@@ -338,16 +344,17 @@ def test_torch_checkpoint_save_rolls_back_manifest_write_failure(
     save_training_checkpoint(
         manifest_paths=(latest_path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=1,
         retained_update_count=5,
     )
     latest_before = latest_path.read_bytes()
-    state_paths_before = _state_paths(tmp_path)
+    policy_paths_before = _policy_paths(tmp_path)
     original_writer = _checkpoint_manifest.write_checkpoint_manifest
     write_count = 0
 
@@ -375,11 +382,12 @@ def test_torch_checkpoint_save_rolls_back_manifest_write_failure(
     result = _save_training_checkpoint(
         manifest_paths=(update_path, latest_path),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=2,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=2,
         retained_update_count=5,
     )
@@ -389,7 +397,7 @@ def test_torch_checkpoint_save_rolls_back_manifest_write_failure(
     assert write_count == 2
     assert latest_path.read_bytes() == latest_before
     assert not update_path.exists()
-    assert _state_paths(tmp_path) == state_paths_before
+    assert _policy_paths(tmp_path) == policy_paths_before
 
 
 def test_torch_checkpoint_save_reports_post_commit_prune_unlink_failure(
@@ -413,11 +421,12 @@ def test_torch_checkpoint_save_reports_post_commit_prune_unlink_failure(
     save_training_checkpoint(
         manifest_paths=(update_path, latest_path),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=1,
         retained_update_count=5,
     )
@@ -436,11 +445,12 @@ def test_torch_checkpoint_save_reports_post_commit_prune_unlink_failure(
     result = _save_training_checkpoint(
         manifest_paths=(latest_path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=2,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=2,
         retained_update_count=0,
     )
@@ -476,17 +486,18 @@ def test_torch_checkpoint_save_rejects_prune_symlink_before_commit(
     save_training_checkpoint(
         manifest_paths=(latest_path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=1,
         retained_update_count=5,
     )
     latest_before = latest_path.read_bytes()
-    state_paths_before = _state_paths(tmp_path)
-    target = tmp_path / "external-state"
+    policy_paths_before = _policy_paths(tmp_path)
+    target = tmp_path / "external-checkpoint"
     target.mkdir()
     symlink_path = tmp_path / "objects" / "symlink-object"
     symlink_path.symlink_to(target, target_is_directory=True)
@@ -494,11 +505,12 @@ def test_torch_checkpoint_save_rejects_prune_symlink_before_commit(
     result = _save_training_checkpoint(
         manifest_paths=(latest_path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=2,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=2,
         retained_update_count=5,
     )
@@ -506,7 +518,7 @@ def test_torch_checkpoint_save_rejects_prune_symlink_before_commit(
     assert isinstance(result, Rejected)
     assert "checkpoint object is a symlink" in result.reason
     assert latest_path.read_bytes() == latest_before
-    assert _state_paths(tmp_path) == state_paths_before
+    assert _policy_paths(tmp_path) == policy_paths_before
 
 
 def test_torch_checkpoint_save_rejects_retained_symlink_before_commit(
@@ -529,18 +541,19 @@ def test_torch_checkpoint_save_rejects_retained_symlink_before_commit(
     save_training_checkpoint(
         manifest_paths=(update_path, latest_path),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=1,
         retained_update_count=5,
     )
     latest_before = latest_path.read_bytes()
-    retained_object_dir = _single_state_path(latest_path).parent
+    retained_object_dir = _single_policy_path(latest_path).parent
     retained_object_name = retained_object_dir.name
-    target = tmp_path / "external-state"
+    target = tmp_path / "external-checkpoint"
     target.mkdir()
     shutil.rmtree(retained_object_dir)
     retained_object_dir.symlink_to(target, target_is_directory=True)
@@ -548,11 +561,12 @@ def test_torch_checkpoint_save_rejects_retained_symlink_before_commit(
     result = _save_training_checkpoint(
         manifest_paths=(latest_path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=2,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=2,
         retained_update_count=1,
     )
@@ -585,16 +599,17 @@ def test_torch_checkpoint_save_rejects_retained_file_before_commit(
     save_training_checkpoint(
         manifest_paths=(update_path, latest_path),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=1,
         retained_update_count=5,
     )
     latest_before = latest_path.read_bytes()
-    retained_object_dir = _single_state_path(latest_path).parent
+    retained_object_dir = _single_policy_path(latest_path).parent
     retained_object_name = retained_object_dir.name
     shutil.rmtree(retained_object_dir)
     _ = retained_object_dir.write_bytes(
@@ -604,11 +619,12 @@ def test_torch_checkpoint_save_rejects_retained_file_before_commit(
     result = _save_training_checkpoint(
         manifest_paths=(latest_path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=2,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=2,
         retained_update_count=1,
     )
@@ -641,11 +657,12 @@ def test_torch_checkpoint_save_reports_post_commit_prune_rmtree_failure(
     save_training_checkpoint(
         manifest_paths=(latest_path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=1,
         retained_update_count=5,
     )
@@ -663,11 +680,12 @@ def test_torch_checkpoint_save_reports_post_commit_prune_rmtree_failure(
     result = _save_training_checkpoint(
         manifest_paths=(latest_path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=2,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=2,
         retained_update_count=5,
     )
@@ -682,7 +700,7 @@ def test_torch_checkpoint_save_reports_post_commit_prune_rmtree_failure(
     assert orphan_dir.exists()
 
 
-def test_torch_checkpoint_state_payload_is_weights_only_safe(
+def test_torch_checkpoint_policy_payload_is_weights_only_safe(
     tmp_path: Path,
 ) -> None:
     model_config = ModelConfig(
@@ -701,19 +719,20 @@ def test_torch_checkpoint_state_payload_is_weights_only_safe(
     save_training_checkpoint(
         manifest_paths=(path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=5,
         retained_update_count=5,
     )
 
-    loaded = _load_state_payload(_single_state_path(path))
+    loaded = _load_policy_payload(_single_policy_path(path))
 
     assert isinstance(loaded, dict)
-    assert loaded["schema_version"] == 26
+    assert loaded["schema_version"] == 27
     assert isinstance(loaded["checkpoint_id"], str)
     assert "model_config" not in loaded
     assert "train_config" not in loaded
@@ -721,7 +740,7 @@ def test_torch_checkpoint_state_payload_is_weights_only_safe(
     assert "total_updates" not in loaded
 
 
-def test_torch_checkpoint_alias_manifests_share_one_state_object(
+def test_torch_checkpoint_alias_manifests_share_one_checkpoint_object(
     tmp_path: Path,
 ) -> None:
     model_config = ModelConfig(
@@ -742,18 +761,21 @@ def test_torch_checkpoint_alias_manifests_share_one_state_object(
     save_training_checkpoint(
         manifest_paths=(update_path, latest_path),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=13,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=5,
         retained_update_count=5,
     )
 
     assert latest_path.exists()
     assert update_path.exists()
-    assert _state_paths(tmp_path) == (_single_state_path(latest_path),)
+    assert _policy_paths(tmp_path) == (
+        _single_policy_path(latest_path),
+    )
     latest_metadata = read_training_checkpoint_metadata(latest_path)
     update_metadata = read_training_checkpoint_metadata(update_path)
     assert latest_metadata == update_metadata
@@ -781,11 +803,12 @@ def test_torch_checkpoint_save_rejects_unmanaged_manifest_path(
     result = _save_training_checkpoint(
         manifest_paths=(alias_path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=13,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=5,
         retained_update_count=5,
     )
@@ -816,11 +839,12 @@ def test_torch_checkpoint_save_rejects_zero_update_manifest_path(
     result = _save_training_checkpoint(
         manifest_paths=(update_path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=13,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=0,
         retained_update_count=5,
     )
@@ -852,11 +876,12 @@ def test_torch_checkpoint_save_rejects_update_number_mismatch(
     result = _save_training_checkpoint(
         manifest_paths=(update_path, latest_path),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=13,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=5,
         retained_update_count=5,
     )
@@ -890,30 +915,32 @@ def test_torch_checkpoint_save_removes_overwritten_latest_object(
     save_training_checkpoint(
         manifest_paths=(latest_path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=1,
         retained_update_count=0,
     )
-    first_state_paths = _state_paths(tmp_path)
-    assert len(first_state_paths) == 1
+    first_policy_paths = _policy_paths(tmp_path)
+    assert len(first_policy_paths) == 1
     save_training_checkpoint(
         manifest_paths=(latest_path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=2,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=2,
         retained_update_count=0,
     )
 
-    assert len(_state_paths(tmp_path)) == 1
-    assert _state_paths(tmp_path) != first_state_paths
+    assert len(_policy_paths(tmp_path)) == 1
+    assert _policy_paths(tmp_path) != first_policy_paths
     metadata = read_training_checkpoint_metadata(latest_path)
     assert metadata.total_rounds == 2
     assert metadata.total_updates == 2
@@ -941,11 +968,12 @@ def test_torch_checkpoint_save_keeps_latest_and_recent_updates(
         save_training_checkpoint(
             manifest_paths=(update_path, latest_path),
             model=state.model,
+            value_model=state.value_model,
             trainer=state.trainer,
             model_config=model_config,
             train_config=train_config,
             total_rounds=update_number,
-            total_samples=0,
+            total_trainable_decisions=0,
             total_updates=update_number,
             retained_update_count=2,
         )
@@ -954,7 +982,7 @@ def test_torch_checkpoint_save_keeps_latest_and_recent_updates(
     assert (tmp_path / "update-2.json").exists()
     assert (tmp_path / "update-3.json").exists()
     assert latest_path.exists()
-    assert len(_state_paths(tmp_path)) == 2
+    assert len(_policy_paths(tmp_path)) == 2
     latest_metadata = read_training_checkpoint_metadata(latest_path)
     old_update_metadata = read_training_checkpoint_metadata(
         tmp_path / "update-2.json"
@@ -982,11 +1010,12 @@ def test_torch_checkpoint_save_ignores_unmanaged_json(
     save_training_checkpoint(
         manifest_paths=(latest_path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=1,
         retained_update_count=5,
     )
@@ -997,11 +1026,12 @@ def test_torch_checkpoint_save_ignores_unmanaged_json(
     save_training_checkpoint(
         manifest_paths=(latest_path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=2,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=2,
         retained_update_count=5,
     )
@@ -1030,11 +1060,12 @@ def test_torch_checkpoint_save_ignores_noncanonical_update_json(
     save_training_checkpoint(
         manifest_paths=(latest_path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=1,
         retained_update_count=5,
     )
@@ -1051,11 +1082,12 @@ def test_torch_checkpoint_save_ignores_noncanonical_update_json(
     save_training_checkpoint(
         manifest_paths=(update_path, latest_path),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=2,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=2,
         retained_update_count=5,
     )
@@ -1087,16 +1119,17 @@ def test_torch_checkpoint_save_reports_corrupt_update_manifest(
     save_training_checkpoint(
         manifest_paths=(latest_path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=1,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=1,
         retained_update_count=5,
     )
     latest_before = latest_path.read_text(encoding="utf-8")
-    state_paths_before = _state_paths(tmp_path)
+    policy_paths_before = _policy_paths(tmp_path)
     _ = (tmp_path / "update-1.json").write_text(
         "{not checkpoint json", encoding="utf-8"
     )
@@ -1104,11 +1137,12 @@ def test_torch_checkpoint_save_reports_corrupt_update_manifest(
     result = _save_training_checkpoint(
         manifest_paths=(latest_path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=2,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=2,
         retained_update_count=5,
     )
@@ -1117,7 +1151,7 @@ def test_torch_checkpoint_save_reports_corrupt_update_manifest(
     assert "checkpoint corruption:" in result.reason
     assert "update-1.json" in result.reason
     assert latest_path.read_text(encoding="utf-8") == latest_before
-    assert _state_paths(tmp_path) == state_paths_before
+    assert _policy_paths(tmp_path) == policy_paths_before
     metadata = read_training_checkpoint_metadata(latest_path)
     assert metadata.total_updates == 1
 
@@ -1141,11 +1175,12 @@ def test_torch_checkpoint_read_rejects_unknown_model_config_fields(
     save_training_checkpoint(
         manifest_paths=(path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=5,
         retained_update_count=5,
     )
@@ -1206,14 +1241,14 @@ def test_torch_checkpoint_rejects_unknown_train_config_field(
     )
 
 
-def test_torch_checkpoint_rejects_unknown_state_payload_field(
+def test_torch_checkpoint_rejects_unknown_policy_payload_field(
     tmp_path: Path,
 ) -> None:
     model_config, train_config, path = _saved_checkpoint(tmp_path)
-    state_path = _single_state_path(path)
-    payload = _load_state_payload(state_path)
+    policy_path = _single_policy_path(path)
+    payload = _load_policy_payload(policy_path)
     payload["unexpected"] = True
-    _write_state_payload(path, state_path, payload)
+    _write_policy_payload(path, policy_path, payload)
 
     result = _load_training_checkpoint(
         path=path,
@@ -1225,8 +1260,7 @@ def test_torch_checkpoint_rejects_unknown_state_payload_field(
 
     assert isinstance(result, Rejected)
     assert (
-        "state payload fields do not match the current schema"
-        in result.reason
+        "policy payload fields do not match schema 27" in result.reason
     )
 
 
@@ -1305,11 +1339,12 @@ def test_torch_checkpoint_read_rejects_negative_total_rounds(
     save_training_checkpoint(
         manifest_paths=(path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=5,
         retained_update_count=5,
     )
@@ -1343,11 +1378,12 @@ def test_torch_checkpoint_load_rejects_negative_total_updates(
     save_training_checkpoint(
         manifest_paths=(path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=5,
         retained_update_count=5,
     )
@@ -1368,7 +1404,7 @@ def test_torch_checkpoint_load_rejects_negative_total_updates(
     assert "manifest total_updates is negative" in result.reason
 
 
-def test_torch_checkpoint_load_rejects_state_hash_mismatch(
+def test_torch_checkpoint_load_rejects_policy_hash_mismatch(
     tmp_path: Path,
 ) -> None:
     model_config = ModelConfig(
@@ -1387,15 +1423,16 @@ def test_torch_checkpoint_load_rejects_state_hash_mismatch(
     save_training_checkpoint(
         manifest_paths=(path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=5,
         retained_update_count=5,
     )
-    with _single_state_path(path).open("ab") as file:
+    with _single_policy_path(path).open("ab") as file:
         _ = file.write(b"corrupt")
 
     result = _load_training_checkpoint(
@@ -1408,7 +1445,7 @@ def test_torch_checkpoint_load_rejects_state_hash_mismatch(
 
     assert isinstance(result, Rejected)
     assert "checkpoint corruption:" in result.reason
-    assert "state sha256 does not match manifest" in result.reason
+    assert "sha256 does not match manifest" in result.reason
 
 
 def test_torch_checkpoint_load_rejects_checkpoint_dir_symlink(
@@ -1460,7 +1497,7 @@ def test_torch_checkpoint_load_rejects_checkpoint_object_symlink(
     tmp_path: Path,
 ) -> None:
     model_config, train_config, path = _saved_checkpoint(tmp_path)
-    object_dir = _single_state_path(path).parent
+    object_dir = _single_policy_path(path).parent
     external_object_dir = tmp_path / "external-object"
     _ = object_dir.rename(external_object_dir)
     object_dir.symlink_to(external_object_dir, target_is_directory=True)
@@ -1478,14 +1515,14 @@ def test_torch_checkpoint_load_rejects_checkpoint_object_symlink(
     assert "checkpoint object is a symlink" in result.reason
 
 
-def test_torch_checkpoint_load_rejects_state_file_symlink(
+def test_torch_checkpoint_load_rejects_policy_file_symlink(
     tmp_path: Path,
 ) -> None:
     model_config, train_config, path = _saved_checkpoint(tmp_path)
-    state_path = _single_state_path(path)
-    external_state_path = tmp_path / "external-state.pt"
-    _ = state_path.rename(external_state_path)
-    state_path.symlink_to(external_state_path)
+    policy_path = _single_policy_path(path)
+    external_policy_path = tmp_path / "external-policy.pt"
+    _ = policy_path.rename(external_policy_path)
+    policy_path.symlink_to(external_policy_path)
 
     result = _load_training_checkpoint(
         path=path,
@@ -1497,10 +1534,10 @@ def test_torch_checkpoint_load_rejects_state_file_symlink(
 
     assert isinstance(result, Rejected)
     assert "checkpoint corruption:" in result.reason
-    assert "state file is a symlink" in result.reason
+    assert "payload file is a symlink" in result.reason
 
 
-def test_torch_checkpoint_load_rejects_directory_state_payload(
+def test_torch_checkpoint_load_rejects_directory_policy_payload(
     tmp_path: Path,
 ) -> None:
     model_config = ModelConfig(
@@ -1519,17 +1556,18 @@ def test_torch_checkpoint_load_rejects_directory_state_payload(
     save_training_checkpoint(
         manifest_paths=(path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=5,
         retained_update_count=5,
     )
-    state_path = _single_state_path(path)
-    state_path.unlink()
-    state_path.mkdir()
+    policy_path = _single_policy_path(path)
+    policy_path.unlink()
+    policy_path.mkdir()
 
     result = _load_training_checkpoint(
         path=path,
@@ -1541,10 +1579,10 @@ def test_torch_checkpoint_load_rejects_directory_state_payload(
 
     assert isinstance(result, Rejected)
     assert "checkpoint corruption:" in result.reason
-    assert "state file is not readable" in result.reason
+    assert "checkpoint payload file is not readable" in result.reason
 
 
-def test_torch_checkpoint_load_rejects_non_torch_state_payload(
+def test_torch_checkpoint_load_rejects_non_torch_policy_payload(
     tmp_path: Path,
 ) -> None:
     model_config = ModelConfig(
@@ -1563,17 +1601,18 @@ def test_torch_checkpoint_load_rejects_non_torch_state_payload(
     save_training_checkpoint(
         manifest_paths=(path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=5,
         retained_update_count=5,
     )
-    state_path = _single_state_path(path)
-    _ = state_path.write_bytes(b"not a torch checkpoint")
-    _update_manifest_state_sha(path, state_path)
+    policy_path = _single_policy_path(path)
+    _ = policy_path.write_bytes(b"not a torch checkpoint")
+    _update_manifest_policy_sha(path, policy_path)
 
     result = _load_training_checkpoint(
         path=path,
@@ -1585,7 +1624,7 @@ def test_torch_checkpoint_load_rejects_non_torch_state_payload(
 
     assert isinstance(result, Rejected)
     assert "checkpoint corruption:" in result.reason
-    assert "state payload cannot be loaded" in result.reason
+    assert "payload cannot be loaded" in result.reason
 
 
 def test_torch_checkpoint_load_rejects_incomplete_payload(
@@ -1607,17 +1646,18 @@ def test_torch_checkpoint_load_rejects_incomplete_payload(
     save_training_checkpoint(
         manifest_paths=(path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=5,
         retained_update_count=5,
     )
-    state_path = _single_state_path(path)
-    torch.save({}, state_path)
-    _update_manifest_state_sha(path, state_path)
+    policy_path = _single_policy_path(path)
+    torch.save({}, policy_path)
+    _update_manifest_policy_sha(path, policy_path)
 
     result = _load_training_checkpoint(
         path=path,
@@ -1630,8 +1670,7 @@ def test_torch_checkpoint_load_rejects_incomplete_payload(
     assert isinstance(result, Rejected)
     assert "checkpoint corruption:" in result.reason
     assert (
-        "state payload fields do not match the current schema"
-        in result.reason
+        "policy payload fields do not match schema 27" in result.reason
     )
 
 
@@ -1650,18 +1689,19 @@ def test_torch_checkpoint_load_rejects_mismatched_payload_schema(
     save_training_checkpoint(
         manifest_paths=(path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=5,
         retained_update_count=5,
     )
-    state_path = _single_state_path(path)
-    payload = _load_state_payload(state_path)
+    policy_path = _single_policy_path(path)
+    payload = _load_policy_payload(policy_path)
     payload["schema_version"] = 0
-    _write_state_payload(path, state_path, payload)
+    _write_policy_payload(path, policy_path, payload)
 
     result = _load_training_checkpoint(
         path=path,
@@ -1672,7 +1712,7 @@ def test_torch_checkpoint_load_rejects_mismatched_payload_schema(
     )
 
     assert isinstance(result, Rejected)
-    assert "state payload schema version mismatch" in result.reason
+    assert "payload schema version mismatch" in result.reason
 
 
 def test_torch_checkpoint_save_payload_excludes_rng_state(
@@ -1694,15 +1734,16 @@ def test_torch_checkpoint_save_payload_excludes_rng_state(
     save_training_checkpoint(
         manifest_paths=(path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=5,
         retained_update_count=5,
     )
-    payload = _load_state_payload(_single_state_path(path))
+    payload = _load_policy_payload(_single_policy_path(path))
 
     assert "rng_state" not in payload
 
@@ -1726,16 +1767,17 @@ def test_torch_checkpoint_load_rejects_optimizer_dtype_mismatch(
     save_training_checkpoint(
         manifest_paths=(path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=5,
         retained_update_count=5,
     )
-    state_path = _single_state_path(path)
-    payload = _load_state_payload(state_path)
+    trainer_path = _single_trainer_path(path)
+    payload = _load_trainer_payload(trainer_path)
     optimizer_payload = payload["optimizer_state"]
     assert _is_object_dict(optimizer_payload)
     exp_avgs = optimizer_payload["exp_avgs"]
@@ -1757,7 +1799,7 @@ def test_torch_checkpoint_load_rejects_optimizer_dtype_mismatch(
     updated_optimizer_payload["exp_avgs"] = updated_exp_avgs
     updated_optimizer_payload["exp_avg_sqs"] = updated_exp_avg_sqs
     payload["optimizer_state"] = updated_optimizer_payload
-    _write_state_payload(path, state_path, payload)
+    _write_trainer_payload(path, trainer_path, payload)
 
     result = _load_training_checkpoint(
         path=path,
@@ -1776,19 +1818,20 @@ def test_torch_checkpoint_load_rejects_negative_optimizer_second_moment(
     tmp_path: Path,
 ) -> None:
     model_config, train_config, path = _saved_checkpoint(tmp_path)
-    state_path = _single_state_path(path)
-    payload = _load_state_payload(state_path)
+    trainer_path = _single_trainer_path(path)
+    payload = _load_trainer_payload(trainer_path)
     optimizer_payload = payload["optimizer_state"]
     assert _is_object_dict(optimizer_payload)
     exp_avgs = optimizer_payload["exp_avgs"]
     exp_avg_sqs = optimizer_payload["exp_avg_sqs"]
     assert _is_object_list(exp_avgs)
     assert _is_object_list(exp_avg_sqs)
-    model_state = payload["model_state"]
-    assert _is_object_dict(model_state)
+    policy_payload = _load_policy_payload(_single_policy_path(path))
+    policy_state = policy_payload["policy_state"]
+    assert _is_object_dict(policy_state)
     first_parameter = next(
         value
-        for value in model_state.values()
+        for value in policy_state.values()
         if isinstance(value, torch.Tensor)
     )
     updated_exp_avgs = list(exp_avgs)
@@ -1801,7 +1844,7 @@ def test_torch_checkpoint_load_rejects_negative_optimizer_second_moment(
     updated_optimizer_payload["exp_avgs"] = updated_exp_avgs
     updated_optimizer_payload["exp_avg_sqs"] = updated_exp_avg_sqs
     payload["optimizer_state"] = updated_optimizer_payload
-    _write_state_payload(path, state_path, payload)
+    _write_trainer_payload(path, trainer_path, payload)
 
     result = _load_training_checkpoint(
         path=path,
@@ -1823,25 +1866,25 @@ def test_torch_checkpoint_load_rejects_non_finite_model_parameter(
     tmp_path: Path,
 ) -> None:
     model_config, train_config, path = _saved_checkpoint(tmp_path)
-    state_path = _single_state_path(path)
-    payload = _load_state_payload(state_path)
-    model_state = payload["model_state"]
-    assert _is_object_dict(model_state)
+    policy_path = _single_policy_path(path)
+    payload = _load_policy_payload(policy_path)
+    policy_state = payload["policy_state"]
+    assert _is_object_dict(policy_state)
     parameter_name = next(
         name
-        for name, value in model_state.items()
+        for name, value in policy_state.items()
         if isinstance(name, str)
         and isinstance(value, torch.Tensor)
         and value.is_floating_point()
     )
-    parameter = model_state[parameter_name]
+    parameter = policy_state[parameter_name]
     assert isinstance(parameter, torch.Tensor)
     updated_parameter = parameter.clone()
     updated_parameter.view(-1)[0] = torch.nan
-    updated_model_state: dict[object, object] = dict(model_state)
-    updated_model_state[parameter_name] = updated_parameter
-    payload["model_state"] = updated_model_state
-    _write_state_payload(path, state_path, payload)
+    updated_policy_state: dict[object, object] = dict(policy_state)
+    updated_policy_state[parameter_name] = updated_parameter
+    payload["policy_state"] = updated_policy_state
+    _write_policy_payload(path, policy_path, payload)
 
     result = _load_training_checkpoint(
         path=path,
@@ -1853,7 +1896,7 @@ def test_torch_checkpoint_load_rejects_non_finite_model_parameter(
 
     assert isinstance(result, Rejected)
     assert "checkpoint corruption:" in result.reason
-    assert f"model parameter {parameter_name} must be finite" in (
+    assert f"parameter {parameter_name} must be finite" in (
         result.reason
     )
 
@@ -1878,11 +1921,12 @@ def test_torch_checkpoint_load_does_not_restore_global_rng_state(
     save_training_checkpoint(
         manifest_paths=(path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=7,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=3,
         retained_update_count=5,
     )
@@ -1952,11 +1996,12 @@ def test_torch_checkpoint_load_rejects_seed_mismatch(
     save_training_checkpoint(
         manifest_paths=(path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=7,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=3,
         retained_update_count=5,
     )
@@ -1993,11 +2038,12 @@ def test_torch_checkpoint_load_rejects_model_config_mismatch(
     save_training_checkpoint(
         manifest_paths=(path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=7,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=3,
         retained_update_count=5,
     )
@@ -2039,16 +2085,21 @@ def test_checkpoint_payload_is_always_deserialized_on_cpu(
     save_training_checkpoint(
         manifest_paths=(path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=7,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=3,
         retained_update_count=5,
     )
-    state_path = _single_state_path(path)
-    payload = _load_state_payload(state_path)
+    policy_path = _single_policy_path(path)
+    trainer_path = _single_trainer_path(path)
+    payloads = {
+        policy_path: _load_policy_payload(policy_path),
+        trainer_path: _load_trainer_payload(trainer_path),
+    }
     load_map_locations: list[torch.device] = []
 
     def fake_torch_load(
@@ -2057,11 +2108,12 @@ def test_checkpoint_payload_is_always_deserialized_on_cpu(
         map_location: object,
         weights_only: object,
     ) -> object:
-        assert file_path == state_path
+        assert isinstance(file_path, Path)
+        assert file_path in payloads
         assert isinstance(map_location, torch.device)
         assert weights_only is True
         load_map_locations.append(map_location)
-        return payload
+        return payloads[file_path]
 
     monkeypatch.setattr(torch, "load", fake_torch_load)
 
@@ -2070,7 +2122,10 @@ def test_checkpoint_payload_is_always_deserialized_on_cpu(
     assert isinstance(loaded, Ok)
     assert loaded.value.manifest.metadata.total_rounds == 7
     assert loaded.value.manifest.metadata.total_updates == 3
-    assert load_map_locations == [torch.device("cpu")]
+    assert load_map_locations == [
+        torch.device("cpu"),
+        torch.device("cpu"),
+    ]
 
 
 def test_resolve_execution_config_overrides_process_defaults() -> None:
@@ -2082,7 +2137,7 @@ def test_resolve_execution_config_overrides_process_defaults() -> None:
             ppo_profile="detailed",
             round_timeout_seconds=111.0,
             sampling_start_timeout_seconds=222.0,
-            rollout_sample_timeout_seconds=223.0,
+            rollout_collection_timeout_seconds=223.0,
             sampling_stop_timeout_seconds=224.0,
             state_sync_timeout_seconds=333.0,
             update_timeout_seconds=444.0,
@@ -2094,7 +2149,7 @@ def test_resolve_execution_config_overrides_process_defaults() -> None:
     assert execution.value.timeouts == ExecutionTimeouts(
         round_seconds=111.0,
         sampling_start_seconds=222.0,
-        rollout_sample_seconds=223.0,
+        rollout_collection_seconds=223.0,
         sampling_stop_seconds=224.0,
         state_sync_seconds=333.0,
         update_seconds=444.0,
@@ -2105,22 +2160,24 @@ def save_training_checkpoint(
     *,
     manifest_paths: tuple[Path, ...],
     model: PolicyModel,
+    value_model: ObservationValueModel,
     trainer: PPOTrainer,
     model_config: ModelConfig,
     train_config: TrainConfig,
     total_rounds: int,
-    total_samples: int = 0,
+    total_trainable_decisions: int = 0,
     total_updates: int,
     retained_update_count: int,
 ) -> None:
     result = _save_training_checkpoint(
         manifest_paths=manifest_paths,
         model=model,
+        value_model=value_model,
         trainer=trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=total_rounds,
-        total_samples=total_samples,
+        total_trainable_decisions=total_trainable_decisions,
         total_updates=total_updates,
         retained_update_count=retained_update_count,
     )
@@ -2218,21 +2275,32 @@ def _saved_checkpoint(
     save_training_checkpoint(
         manifest_paths=(path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=11,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=5,
         retained_update_count=5,
     )
     return model_config, train_config, path
 
 
-def _single_state_path(checkpoint_path: Path) -> Path:
-    state_paths = _state_paths(checkpoint_path.parent)
-    assert len(state_paths) == 1
-    return state_paths[0]
+def _single_policy_path(checkpoint_path: Path) -> Path:
+    policy_paths = _policy_paths(checkpoint_path.parent)
+    assert len(policy_paths) == 1
+    return policy_paths[0]
+
+
+def _single_trainer_path(checkpoint_path: Path) -> Path:
+    trainer_paths = tuple(
+        sorted(
+            (checkpoint_path.parent / "objects").glob("*/trainer.pt")
+        )
+    )
+    assert len(trainer_paths) == 1
+    return trainer_paths[0]
 
 
 def _read_json_object(path: Path) -> dict[object, object]:
@@ -2248,18 +2316,29 @@ def _write_json_object(path: Path, data: dict[object, object]) -> None:
     )
 
 
-def _update_manifest_state_sha(
+def _update_manifest_policy_sha(
     manifest_path: Path,
-    state_path: Path,
+    policy_path: Path,
 ) -> None:
     manifest = _read_json_object(manifest_path)
-    manifest["state_sha256"] = hashlib.sha256(
-        state_path.read_bytes()
+    manifest["policy_sha256"] = hashlib.sha256(
+        policy_path.read_bytes()
     ).hexdigest()
     _write_json_object(manifest_path, manifest)
 
 
-def _load_state_payload(path: Path) -> dict[object, object]:
+def _update_manifest_trainer_sha(
+    manifest_path: Path,
+    trainer_path: Path,
+) -> None:
+    manifest = _read_json_object(manifest_path)
+    manifest["trainer_sha256"] = hashlib.sha256(
+        trainer_path.read_bytes()
+    ).hexdigest()
+    _write_json_object(manifest_path, manifest)
+
+
+def _load_policy_payload(path: Path) -> dict[object, object]:
     return _OBJECT_DICT_ADAPTER.validate_python(
         torch.load(
             path,
@@ -2269,18 +2348,31 @@ def _load_state_payload(path: Path) -> dict[object, object]:
     )
 
 
-def _write_state_payload(
+def _load_trainer_payload(path: Path) -> dict[object, object]:
+    return _load_policy_payload(path)
+
+
+def _write_policy_payload(
     manifest_path: Path,
-    state_path: Path,
+    policy_path: Path,
     payload: dict[object, object],
 ) -> None:
-    torch.save(payload, state_path)
-    _update_manifest_state_sha(manifest_path, state_path)
+    torch.save(payload, policy_path)
+    _update_manifest_policy_sha(manifest_path, policy_path)
 
 
-def _state_paths(checkpoint_dir: Path) -> tuple[Path, ...]:
+def _write_trainer_payload(
+    manifest_path: Path,
+    trainer_path: Path,
+    payload: dict[object, object],
+) -> None:
+    torch.save(payload, trainer_path)
+    _update_manifest_trainer_sha(manifest_path, trainer_path)
+
+
+def _policy_paths(checkpoint_dir: Path) -> tuple[Path, ...]:
     return tuple(
-        sorted((checkpoint_dir / "objects").glob("*/state.pt"))
+        sorted((checkpoint_dir / "objects").glob("*/policy.pt"))
     )
 
 

@@ -69,7 +69,7 @@ from server.training.runtime.rendezvous import create_file_rendezvous
 from server.training.runtime.shared_rollout_arena import (
     RolloutArenaHandle,
     RolloutArenaSnapshot,
-    RolloutSampleTargetReached,
+    RolloutRoundTargetReached,
     RolloutStopRequested,
     RolloutWaitOutcome,
     SharedRolloutArenaGroup,
@@ -77,7 +77,7 @@ from server.training.runtime.shared_rollout_arena import (
     create_shared_rollout_arena_group,
     reset_rollout_arenas,
     snapshot_rollout_arenas,
-    wait_rollout_sample_target_or_stop,
+    wait_rollout_round_target_or_stop,
 )
 from server.training.runtime.state import RuntimeTrainingState
 from server.training.runtime.worker_process import (
@@ -111,14 +111,17 @@ class TrainingUpdateResult:
 
 @dataclass(frozen=True, slots=True)
 class TrainingStopDiscardedPartialRollout:
-    """Stop discarded a stable rollout smaller than one minibatch."""
+    """Stop discarded a rollout smaller than one minibatch."""
 
     snapshot: RolloutArenaSnapshot
-    minimum_sample_count: int
+    minimum_trainable_decision_count: int
 
     def __post_init__(self) -> None:
-        assert self.minimum_sample_count > 0
-        assert self.snapshot.sample_count < self.minimum_sample_count
+        assert self.minimum_trainable_decision_count > 0
+        assert (
+            self.snapshot.decision_count
+            < self.minimum_trainable_decision_count
+        )
 
 
 type TrainingCycleOutcome = (
@@ -138,6 +141,7 @@ class TrainingRuntime(Protocol):
         *,
         policy_version: int,
         rollout_id: str,
+        target_round_count: int,
         stop_request: TrainingStopRequest,
     ) -> _result.Ok[TrainingCycleOutcome] | _result.Rejected: ...
 
@@ -237,7 +241,7 @@ _MODEL_RANK_CONTROL_PROTOCOL: ProcessControlProtocol[
 @dataclass(slots=True)
 class _ProcessTrainingRuntime:
     execution_config: ExecutionConfig
-    minimum_update_sample_count: int
+    minimum_update_decision_count: int
     pools: _RuntimePools
     event_sink: EventSink
     _poisoned: Rejected | None = None
@@ -267,8 +271,14 @@ class _ProcessTrainingRuntime:
         *,
         policy_version: int,
         rollout_id: str,
+        target_round_count: int,
         stop_request: TrainingStopRequest,
     ) -> _result.Ok[TrainingCycleOutcome] | _result.Rejected:
+        assert (
+            0
+            < target_round_count
+            <= self.execution_config.rounds_per_update
+        )
         if self._poisoned is not None:
             return self._poisoned
         result = await _run_training_update(
@@ -276,9 +286,10 @@ class _ProcessTrainingRuntime:
             execution_config=self.execution_config,
             policy_version=policy_version,
             rollout_id=rollout_id,
+            target_round_count=target_round_count,
             stop_request=stop_request,
-            minimum_update_sample_count=(
-                self.minimum_update_sample_count
+            minimum_update_decision_count=(
+                self.minimum_update_decision_count
             ),
         )
         if isinstance(result, _UnrecoverableRuntimeFailure):
@@ -341,7 +352,7 @@ def open_training_runtime(
     return Ok(
         value=_ProcessTrainingRuntime(
             execution_config=execution_config,
-            minimum_update_sample_count=train_config.minibatch_size,
+            minimum_update_decision_count=train_config.minibatch_size,
             pools=pools_result.value,
             event_sink=event_sink,
         )
@@ -373,8 +384,8 @@ def _start_runtime_pools(
         arena_group_result = create_shared_rollout_arena_group(
             context=context,
             worker_count=execution_config.worker_process_count(),
-            arena_capacity_per_worker=(
-                rollout_arena_capacity_per_worker(execution_config)
+            round_capacity_per_worker=(
+                rollout_round_capacity_per_worker(execution_config)
             ),
         )
         if isinstance(arena_group_result, Rejected):
@@ -472,22 +483,15 @@ def _start_runtime_pools(
             )
 
 
-def _rollout_arena_slack_sample_count(
+def rollout_round_capacity_per_worker(
     execution_config: ExecutionConfig,
 ) -> int:
-    """Return physical arena slack for already-running game envs."""
-    per_env_slack = 256
-    return execution_config.game_envs_per_worker * per_env_slack
-
-
-def rollout_arena_capacity_per_worker(
-    execution_config: ExecutionConfig,
-) -> int:
-    """Return robust per-worker sample reference capacity."""
-    return (
-        execution_config.samples_per_update
-        + _rollout_arena_slack_sample_count(execution_config)
-    )
+    """Return per-worker round capacity with in-flight slack."""
+    worker_count = execution_config.worker_process_count()
+    target_share = (
+        execution_config.rounds_per_update + worker_count - 1
+    ) // worker_count
+    return target_share + execution_config.game_envs_per_worker
 
 
 def _start_model_rank_pool(
@@ -718,10 +722,12 @@ async def _run_training_update(
     execution_config: ExecutionConfig,
     policy_version: int,
     rollout_id: str,
+    target_round_count: int,
     stop_request: TrainingStopRequest,
-    minimum_update_sample_count: int,
+    minimum_update_decision_count: int,
 ) -> _TrainingUpdateCycleResult:
-    assert minimum_update_sample_count > 0
+    assert minimum_update_decision_count > 0
+    assert 0 < target_round_count <= execution_config.rounds_per_update
     reset_result = reset_rollout_arenas(
         group=pools.rollout_arena_group,
         policy_version=policy_version,
@@ -746,12 +752,12 @@ async def _run_training_update(
         stopped_early = True
     else:
         stopped_early = False
-        target_result = await wait_rollout_sample_target_or_stop_async(
+        target_result = await wait_rollout_round_target_or_stop_async(
             group=pools.rollout_arena_group,
             policy_version=policy_version,
-            target_sample_count=execution_config.samples_per_update,
+            target_round_count=target_round_count,
             timeout_seconds=(
-                execution_config.timeouts.rollout_sample_seconds
+                execution_config.timeouts.rollout_collection_seconds
             ),
             stop_request=stop_request,
         )
@@ -772,7 +778,7 @@ async def _run_training_update(
             return target_result
         wait_outcome = target_result.value
         match wait_outcome:
-            case RolloutSampleTargetReached():
+            case RolloutRoundTargetReached():
                 stopped_early = False
             case RolloutStopRequested():
                 stopped_early = True
@@ -797,12 +803,14 @@ async def _run_training_update(
     snapshot = snapshot_result.value
     if (
         stopped_early
-        and snapshot.sample_count < minimum_update_sample_count
+        and snapshot.decision_count < minimum_update_decision_count
     ):
         return Ok(
             value=TrainingStopDiscardedPartialRollout(
                 snapshot=snapshot,
-                minimum_sample_count=minimum_update_sample_count,
+                minimum_trainable_decision_count=(
+                    minimum_update_decision_count
+                ),
             )
         )
     update_result = await _run_compute_updates(
@@ -822,20 +830,20 @@ async def _run_training_update(
     )
 
 
-async def wait_rollout_sample_target_or_stop_async(
+async def wait_rollout_round_target_or_stop_async(
     *,
     group: SharedRolloutArenaGroup,
     policy_version: int,
-    target_sample_count: int,
+    target_round_count: int,
     timeout_seconds: float,
     stop_request: TrainingStopRequest,
 ) -> _result.Ok[RolloutWaitOutcome] | _result.Rejected:
     """Wait for rollout progress without blocking the event loop."""
     return await asyncio.to_thread(
-        wait_rollout_sample_target_or_stop,
+        wait_rollout_round_target_or_stop,
         group=group,
         policy_version=policy_version,
-        target_sample_count=target_sample_count,
+        target_round_count=target_round_count,
         timeout_seconds=timeout_seconds,
         stop_request=stop_request,
     )
@@ -1632,6 +1640,7 @@ def _aggregate_ppo_update_stats(
     assert stats
     return PPOUpdateStats(
         policy_loss=_mean(tuple(item.policy_loss for item in stats)),
+        value_loss=_mean(tuple(item.value_loss for item in stats)),
         entropy=_mean(tuple(item.entropy for item in stats)),
         objective_loss=_mean(
             tuple(item.objective_loss for item in stats)
@@ -1639,6 +1648,18 @@ def _aggregate_ppo_update_stats(
         approx_kl=_mean(tuple(item.approx_kl for item in stats)),
         clip_fraction=_mean(
             tuple(item.clip_fraction for item in stats)
+        ),
+        value_clip_fraction=_mean(
+            tuple(item.value_clip_fraction for item in stats)
+        ),
+        explained_variance=_mean(
+            tuple(item.explained_variance for item in stats)
+        ),
+        policy_grad_norm=_mean(
+            tuple(item.policy_grad_norm for item in stats)
+        ),
+        value_grad_norm=_mean(
+            tuple(item.value_grad_norm for item in stats)
         ),
         profile=_aggregate_ppo_update_profiles(
             tuple(item.profile for item in stats)

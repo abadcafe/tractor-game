@@ -48,10 +48,22 @@ class TrainingInitRequest(BaseModel):
     ppo_clip: Annotated[
         float, Field(gt=0.0, le=1.0, allow_inf_nan=False)
     ] = 0.2
+    value_clip: Annotated[
+        float, Field(gt=0.0, le=1.0, allow_inf_nan=False)
+    ] = 0.2
+    gae_lambda: Annotated[
+        float, Field(ge=0.0, le=1.0, allow_inf_nan=False)
+    ] = 0.95
+    value_coef: Annotated[float, Field(ge=0.0, allow_inf_nan=False)] = (
+        0.5
+    )
     entropy_coef: Annotated[
         float, Field(ge=0.0, allow_inf_nan=False)
     ] = 0.01
     policy_max_grad_norm: Annotated[
+        float, Field(ge=0.0, allow_inf_nan=False)
+    ] = 0.5
+    value_max_grad_norm: Annotated[
         float, Field(ge=0.0, allow_inf_nan=False)
     ] = 0.5
     ppo_epochs: Annotated[int, Field(gt=0)] = 4
@@ -94,7 +106,7 @@ class TrainingResumeRequest(BaseModel):
     worker_cpus: str | None = None
     model_ranks: str | None = None
     ppo_profile: Literal["off", "basic", "detailed"] | None = None
-    max_samples: Annotated[int, Field(ge=0)] = 0
+    max_rounds: Annotated[int, Field(ge=0)] = 0
     learning_rate: (
         Annotated[float, Field(gt=0.0, allow_inf_nan=False)] | None
     ) = None
@@ -106,7 +118,7 @@ class TrainingResumeRequest(BaseModel):
     sampling_start_timeout_seconds: (
         Annotated[float, Field(gt=0.0, allow_inf_nan=False)] | None
     ) = None
-    rollout_sample_timeout_seconds: (
+    rollout_collection_timeout_seconds: (
         Annotated[float, Field(gt=0.0, allow_inf_nan=False)] | None
     ) = None
     sampling_stop_timeout_seconds: (
@@ -122,15 +134,29 @@ class TrainingResumeRequest(BaseModel):
         None
     )
     game_envs_per_worker: Annotated[int, Field(gt=0)] | None = None
-    samples_per_update: Annotated[int, Field(gt=0)] | None = None
+    rounds_per_update: Annotated[int, Field(gt=0)] | None = None
     ppo_clip: (
         Annotated[float, Field(gt=0.0, le=1.0, allow_inf_nan=False)]
         | None
+    ) = None
+    value_clip: (
+        Annotated[float, Field(gt=0.0, le=1.0, allow_inf_nan=False)]
+        | None
+    ) = None
+    gae_lambda: (
+        Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
+        | None
+    ) = None
+    value_coef: (
+        Annotated[float, Field(ge=0.0, allow_inf_nan=False)] | None
     ) = None
     entropy_coef: (
         Annotated[float, Field(ge=0.0, allow_inf_nan=False)] | None
     ) = None
     policy_max_grad_norm: (
+        Annotated[float, Field(ge=0.0, allow_inf_nan=False)] | None
+    ) = None
+    value_max_grad_norm: (
         Annotated[float, Field(ge=0.0, allow_inf_nan=False)] | None
     ) = None
     ppo_epochs: Annotated[int, Field(gt=0)] | None = None
@@ -153,8 +179,8 @@ class TrainingResumeRequest(BaseModel):
             str(self.run_dir),
             "resume",
             self.checkpoint,
-            "--max-samples",
-            str(self.max_samples),
+            "--max-rounds",
+            str(self.max_rounds),
             "--checkpoint-retention-updates",
             str(self.checkpoint_retention_updates),
         ]
@@ -173,8 +199,8 @@ class TrainingResumeRequest(BaseModel):
                 self.sampling_start_timeout_seconds,
             ),
             (
-                "--rollout-sample-timeout-seconds",
-                self.rollout_sample_timeout_seconds,
+                "--rollout-collection-timeout-seconds",
+                self.rollout_collection_timeout_seconds,
             ),
             (
                 "--sampling-stop-timeout-seconds",
@@ -190,12 +216,19 @@ class TrainingResumeRequest(BaseModel):
                 self.model_inference_batch_size,
             ),
             ("--game-envs-per-worker", self.game_envs_per_worker),
-            ("--samples-per-update", self.samples_per_update),
+            ("--rounds-per-update", self.rounds_per_update),
             ("--ppo-clip", self.ppo_clip),
+            ("--value-clip", self.value_clip),
+            ("--gae-lambda", self.gae_lambda),
+            ("--value-coef", self.value_coef),
             ("--entropy-coef", self.entropy_coef),
             (
                 "--policy-max-grad-norm",
                 self.policy_max_grad_norm,
+            ),
+            (
+                "--value-max-grad-norm",
+                self.value_max_grad_norm,
             ),
             ("--ppo-epochs", self.ppo_epochs),
             ("--minibatch-size", self.minibatch_size),
@@ -240,8 +273,12 @@ def _portable_values(
         ("--seed", request.seed),
         ("--learning-rate", request.learning_rate),
         ("--ppo-clip", request.ppo_clip),
+        ("--value-clip", request.value_clip),
+        ("--gae-lambda", request.gae_lambda),
+        ("--value-coef", request.value_coef),
         ("--entropy-coef", request.entropy_coef),
         ("--policy-max-grad-norm", request.policy_max_grad_norm),
+        ("--value-max-grad-norm", request.value_max_grad_norm),
         ("--ppo-epochs", request.ppo_epochs),
         ("--minibatch-size", request.minibatch_size),
         ("--adam-beta1", request.adam_beta1),

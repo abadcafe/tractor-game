@@ -13,8 +13,8 @@ from server.training_events.contract import (
     ProcessKind,
 )
 
-type TrainingEventSchemaVersion = Literal[3]
-TRAINING_EVENT_SCHEMA_VERSION: TrainingEventSchemaVersion = 3
+type TrainingEventSchemaVersion = Literal[4]
+TRAINING_EVENT_SCHEMA_VERSION: TrainingEventSchemaVersion = 4
 
 
 def _is_none(value: object) -> bool:
@@ -65,7 +65,7 @@ class TrainingEventContext(BaseModel):
         ge=0,
         exclude_if=_is_none,
     )
-    episode_id: int | None = Field(
+    round_id: int | None = Field(
         default=None,
         ge=0,
         exclude_if=_is_none,

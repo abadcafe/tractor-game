@@ -89,9 +89,15 @@ export class MetricsDomain {
     const totals = this.#metrics?.totals ?? {};
     element("metric-strip", HTMLElement).replaceChildren(
       metricCell("Rounds", formatValue(totals.total_rounds)),
-      metricCell("Samples", formatValue(totals.total_samples)),
+      metricCell(
+        "Trainable decisions",
+        formatValue(totals.total_trainable_decisions),
+      ),
       metricCell("Updates", formatValue(totals.total_updates)),
-      metricCell("Samples/s", formatValue(totals.samples_per_second)),
+      metricCell(
+        "Trainable decisions/s",
+        formatValue(totals.trainable_decisions_per_second),
+      ),
       metricCell("Update time", formatSeconds(totals.update_seconds)),
       metricCell(
         "Log integrity",

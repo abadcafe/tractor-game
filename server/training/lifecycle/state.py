@@ -9,7 +9,7 @@ import torch
 from server.foundation import result as _result
 from server.policy_model.network import ModelConfig, PolicyModel
 from server.training.config import TrainConfig
-from server.training.ppo import PPOTrainer
+from server.training.ppo import ObservationValueModel, PPOTrainer
 from server.training.ppo.distributed import PPOUpdatePartition
 from server.training.runtime.config import ExecutionConfig
 from server.training.runtime.seeding import seed_training_rng
@@ -20,9 +20,10 @@ class LoadedTrainingState:
     """Loaded model/trainer state and progress counters."""
 
     model: PolicyModel
+    value_model: ObservationValueModel
     trainer: PPOTrainer
     total_rounds: int
-    total_samples: int
+    total_trainable_decisions: int
     total_updates: int
 
 
@@ -72,6 +73,14 @@ def create_model(
     return model.to(device)
 
 
+def create_value_model(
+    config: ModelConfig, device: torch.device
+) -> ObservationValueModel:
+    """Create an independent critic on the requested device."""
+    model = ObservationValueModel(config=config)
+    return model.to(device)
+
+
 def create_training_state(
     *,
     model_config: ModelConfig,
@@ -86,8 +95,10 @@ def create_training_state(
         resolved_device = torch.device("cpu")
     seed_training_rng(train_config.seed)
     model = create_model(model_config, resolved_device)
+    value_model = create_value_model(model_config, resolved_device)
     trainer = PPOTrainer(
         model=model,
+        value_model=value_model,
         train_config=train_config,
         device=resolved_device,
         profile_mode=execution_config.ppo_profile,
@@ -95,8 +106,9 @@ def create_training_state(
     )
     return LoadedTrainingState(
         model=model,
+        value_model=value_model,
         trainer=trainer,
         total_rounds=0,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=0,
     )

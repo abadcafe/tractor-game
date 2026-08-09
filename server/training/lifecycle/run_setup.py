@@ -57,11 +57,12 @@ def initialize_training_run(
     save_result = save_training_checkpoint(
         manifest_paths=(checkpoint_path,),
         model=state.model,
+        value_model=state.value_model,
         trainer=state.trainer,
         model_config=model_config,
         train_config=train_config,
         total_rounds=0,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=0,
         retained_update_count=0,
     )
@@ -81,7 +82,7 @@ def initialize_training_run(
             "model_config": model_config.to_json(),
             "train_config": train_config.to_json(),
             "total_rounds": 0,
-            "total_samples": 0,
+            "total_trainable_decisions": 0,
             "total_updates": 0,
         },
     )

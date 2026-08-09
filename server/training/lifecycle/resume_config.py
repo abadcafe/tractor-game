@@ -32,8 +32,12 @@ CHECKPOINTS_DIR_NAME = "checkpoints"
 class TrainConfigOverrides:
     learning_rate: float | None = None
     ppo_clip: float | None = None
+    value_clip: float | None = None
+    gae_lambda: float | None = None
+    value_coef: float | None = None
     entropy_coef: float | None = None
     policy_max_grad_norm: float | None = None
+    value_max_grad_norm: float | None = None
     ppo_epochs: int | None = None
     minibatch_size: int | None = None
     adam_beta1: float | None = None
@@ -48,13 +52,13 @@ class ExecutionConfigOverrides:
     ppo_profile: PPOProfileMode | None = None
     round_timeout_seconds: float | None = None
     sampling_start_timeout_seconds: float | None = None
-    rollout_sample_timeout_seconds: float | None = None
+    rollout_collection_timeout_seconds: float | None = None
     sampling_stop_timeout_seconds: float | None = None
     state_sync_timeout_seconds: float | None = None
     update_timeout_seconds: float | None = None
     model_inference_batch_size: int | None = None
     game_envs_per_worker: int | None = None
-    samples_per_update: int | None = None
+    rounds_per_update: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +69,7 @@ class ResolvedTrainingResume:
     train_config: TrainConfig
     checkpoint_policy: CheckpointPolicy
     execution_config: ExecutionConfig
-    max_samples: int
+    max_rounds: int
 
 
 def resolve_resume_options(
@@ -96,7 +100,7 @@ def resolve_resume_options(
                 retention_updates=request.checkpoint_retention_updates,
             ),
             execution_config=execution_result.value,
-            max_samples=request.max_samples,
+            max_rounds=request.max_rounds,
         )
     )
 
@@ -126,9 +130,9 @@ def resolve_execution_config(
                     overrides.sampling_start_timeout_seconds,
                     base.timeouts.sampling_start_seconds,
                 ),
-                rollout_sample_seconds=_or_base(
-                    overrides.rollout_sample_timeout_seconds,
-                    base.timeouts.rollout_sample_seconds,
+                rollout_collection_seconds=_or_base(
+                    overrides.rollout_collection_timeout_seconds,
+                    base.timeouts.rollout_collection_seconds,
                 ),
                 sampling_stop_seconds=_or_base(
                     overrides.sampling_stop_timeout_seconds,
@@ -151,8 +155,8 @@ def resolve_execution_config(
                 overrides.game_envs_per_worker,
                 base.game_envs_per_worker,
             ),
-            samples_per_update=_or_base(
-                overrides.samples_per_update, base.samples_per_update
+            rounds_per_update=_or_base(
+                overrides.rounds_per_update, base.rounds_per_update
             ),
         )
     )
@@ -176,8 +180,8 @@ def _resolve_execution_config(
             sampling_start_timeout_seconds=(
                 request.sampling_start_timeout_seconds
             ),
-            rollout_sample_timeout_seconds=(
-                request.rollout_sample_timeout_seconds
+            rollout_collection_timeout_seconds=(
+                request.rollout_collection_timeout_seconds
             ),
             sampling_stop_timeout_seconds=(
                 request.sampling_stop_timeout_seconds
@@ -186,7 +190,7 @@ def _resolve_execution_config(
             update_timeout_seconds=request.update_timeout_seconds,
             model_inference_batch_size=request.model_inference_batch_size,
             game_envs_per_worker=request.game_envs_per_worker,
-            samples_per_update=request.samples_per_update,
+            rounds_per_update=request.rounds_per_update,
         )
     )
 
@@ -197,8 +201,12 @@ def _train_overrides(
     return TrainConfigOverrides(
         learning_rate=request.learning_rate,
         ppo_clip=request.ppo_clip,
+        value_clip=request.value_clip,
+        gae_lambda=request.gae_lambda,
+        value_coef=request.value_coef,
         entropy_coef=request.entropy_coef,
         policy_max_grad_norm=request.policy_max_grad_norm,
+        value_max_grad_norm=request.value_max_grad_norm,
         ppo_epochs=request.ppo_epochs,
         minibatch_size=request.minibatch_size,
         adam_beta1=request.adam_beta1,
@@ -216,12 +224,19 @@ def _override_train_config(
             overrides.learning_rate, base.learning_rate
         ),
         ppo_clip=_or_base(overrides.ppo_clip, base.ppo_clip),
+        value_clip=_or_base(overrides.value_clip, base.value_clip),
+        gae_lambda=_or_base(overrides.gae_lambda, base.gae_lambda),
+        value_coef=_or_base(overrides.value_coef, base.value_coef),
         entropy_coef=_or_base(
             overrides.entropy_coef, base.entropy_coef
         ),
         policy_max_grad_norm=_or_base(
             overrides.policy_max_grad_norm,
             base.policy_max_grad_norm,
+        ),
+        value_max_grad_norm=_or_base(
+            overrides.value_max_grad_norm,
+            base.value_max_grad_norm,
         ),
         ppo_epochs=_or_base(overrides.ppo_epochs, base.ppo_epochs),
         minibatch_size=_or_base(

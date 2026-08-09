@@ -8,7 +8,7 @@ from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
 from server.training.ppo import PPOUpdateStats
 from server.training.rollout_inference.samples import (
-    RankReturnTargets,
+    RankTrajectoryBatch,
 )
 from server.training.runtime.state import RuntimeTrainingState
 
@@ -18,8 +18,8 @@ class ModelReplicaProtocol(Protocol):
 
     def load_state(self, *, snapshot: RuntimeTrainingState) -> None: ...
 
-    def update_returns(
-        self, *, returns: RankReturnTargets
+    def update_trajectories(
+        self, *, trajectories: RankTrajectoryBatch
     ) -> _result.Ok[PPOUpdateStats] | _result.Rejected: ...
 
     def snapshot(self) -> RuntimeTrainingState: ...
@@ -45,12 +45,14 @@ class LocalModelRank:
     def update(
         self,
         *,
-        returns: RankReturnTargets,
+        trajectories: RankTrajectoryBatch,
         policy_version: int,
     ) -> _result.Ok[PPOUpdateStats] | _result.Rejected:
         assert policy_version >= 0
-        assert returns.policy_version == policy_version
-        update_result = self._replica.update_returns(returns=returns)
+        assert trajectories.policy_version == policy_version
+        update_result = self._replica.update_trajectories(
+            trajectories=trajectories
+        )
         if isinstance(update_result, Rejected):
             return update_result
         return Ok(value=update_result.value)

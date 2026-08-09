@@ -10,9 +10,21 @@ import pytest
 import torch
 
 from server.foundation.result import Ok, Rejected
+from server.game import Partnership, Seat
+from server.policy_model.actions import (
+    ActionChoice,
+    ActionTrace,
+    GeneratedAction,
+)
+from server.training.rollout import (
+    CompletedRoundTrajectory,
+    SeatTrajectory,
+    TrainableDecision,
+)
+from server.training.rollout_inference.samples import DecisionHandle
 from server.training.runtime.shared_rollout_arena import (
     RolloutArenaHandle,
-    RolloutSampleTargetReached,
+    RolloutRoundTargetReached,
     RolloutStopRequested,
     SharedRolloutArenaGroup,
     attach_rollout_arena_reader,
@@ -21,12 +33,11 @@ from server.training.runtime.shared_rollout_arena import (
     create_shared_rollout_arena_group,
     reset_rollout_arenas,
     snapshot_rollout_arenas,
-    wait_rollout_sample_target_or_stop,
+    wait_rollout_round_target_or_stop,
 )
 from server.training.runtime.shared_rollout_arena.types import (
     RolloutRoundMetrics,
 )
-from server.training.self_play.returns import ReturnCommit
 from server.training.stop import TrainingStopRequest
 
 
@@ -43,29 +54,27 @@ def test_read_rank_batch_reads_assigned_worker_arenas() -> None:
             first_append = first_writer.append_round(
                 policy_version=3,
                 metrics=_metrics(decision_count=1),
-                commit=_commit(
+                trajectory=_trajectory(
                     policy_version=3,
-                    model_ranks=(1,),
+                    row_indices=(1,),
                     step_counts=(2,),
-                    return_values=(10.0,),
+                    terminal_rewards=(10.0,),
                 ),
             )
             second_append = second_writer.append_round(
                 policy_version=3,
                 metrics=_metrics(decision_count=1),
-                commit=_commit(
+                trajectory=_trajectory(
                     policy_version=3,
-                    model_ranks=(0,),
+                    row_indices=(0,),
                     step_counts=(3,),
-                    return_values=(20.0,),
+                    terminal_rewards=(20.0,),
                 ),
             )
             assert isinstance(first_append, Ok)
-            assert first_append.value.accepted_sample_count == 1
-            assert first_append.value.dropped_sample_count == 0
+            assert first_append.value.accepted
             assert isinstance(second_append, Ok)
-            assert second_append.value.accepted_sample_count == 1
-            assert second_append.value.dropped_sample_count == 0
+            assert second_append.value.accepted
 
             device = torch.device("cpu")
             rank0 = first_reader.read_rank_batch(
@@ -77,7 +86,7 @@ def test_read_rank_batch_reads_assigned_worker_arenas() -> None:
                 rank0.value.step_counts, torch.tensor((2,))
             )
             assert torch.equal(
-                rank0.value.return_values, torch.tensor((10.0,))
+                rank0.value.terminal_rewards, torch.tensor((10.0,))
             )
             assert rank0.value.total_step_count == 2
             assert rank0.value.max_step_count == 2
@@ -91,7 +100,7 @@ def test_read_rank_batch_reads_assigned_worker_arenas() -> None:
                 rank1.value.step_counts, torch.tensor((3,))
             )
             assert torch.equal(
-                rank1.value.return_values, torch.tensor((20.0,))
+                rank1.value.terminal_rewards, torch.tensor((20.0,))
             )
             assert rank1.value.total_step_count == 3
             assert rank1.value.max_step_count == 3
@@ -104,7 +113,7 @@ def test_read_rank_batch_reads_assigned_worker_arenas() -> None:
         close_shared_rollout_arenas(group)
 
 
-def test_wait_rollout_sample_target_uses_aggregate_samples() -> None:
+def test_wait_rollout_round_target_uses_aggregate_rounds() -> None:
     group_result = _arena_group(worker_count=2, capacity=2)
     assert isinstance(group_result, Ok)
     group = group_result.value
@@ -115,13 +124,15 @@ def test_wait_rollout_sample_target_uses_aggregate_samples() -> None:
             first_append = first_writer.append_round(
                 policy_version=3,
                 metrics=_metrics(decision_count=1),
-                commit=_commit(policy_version=3, model_ranks=(0,)),
+                trajectory=_trajectory(
+                    policy_version=3, row_indices=(0,)
+                ),
             )
             assert isinstance(first_append, Ok)
-            early_wait = wait_rollout_sample_target_or_stop(
+            early_wait = wait_rollout_round_target_or_stop(
                 group=group,
                 policy_version=3,
-                target_sample_count=2,
+                target_round_count=2,
                 timeout_seconds=0.001,
                 stop_request=TrainingStopRequest(),
             )
@@ -130,24 +141,26 @@ def test_wait_rollout_sample_target_uses_aggregate_samples() -> None:
             second_append = second_writer.append_round(
                 policy_version=3,
                 metrics=_metrics(decision_count=1),
-                commit=_commit(policy_version=3, model_ranks=(0,)),
+                trajectory=_trajectory(
+                    policy_version=3, row_indices=(0,)
+                ),
             )
             assert isinstance(second_append, Ok)
-            full_wait = wait_rollout_sample_target_or_stop(
+            full_wait = wait_rollout_round_target_or_stop(
                 group=group,
                 policy_version=3,
-                target_sample_count=2,
+                target_round_count=2,
                 timeout_seconds=1.0,
                 stop_request=TrainingStopRequest(),
             )
             assert isinstance(full_wait, Ok)
             assert isinstance(
-                full_wait.value, RolloutSampleTargetReached
+                full_wait.value, RolloutRoundTargetReached
             )
-            assert full_wait.value.snapshot.sample_count == 2
             assert full_wait.value.snapshot.round_count == 2
-            assert full_wait.value.snapshot.total_step_count == 2
-            assert full_wait.value.snapshot.max_step_count == 1
+            assert full_wait.value.snapshot.round_count == 2
+            assert full_wait.value.snapshot.total_trace_step_count == 2
+            assert full_wait.value.snapshot.max_trace_step_count == 1
         finally:
             first_writer.close()
             second_writer.close()
@@ -155,17 +168,17 @@ def test_wait_rollout_sample_target_uses_aggregate_samples() -> None:
         close_shared_rollout_arenas(group)
 
 
-def test_wait_rollout_sample_target_returns_requested_stop() -> None:
+def test_wait_rollout_round_target_returns_requested_stop() -> None:
     group_result = _arena_group(worker_count=1, capacity=2)
     assert isinstance(group_result, Ok)
     group = group_result.value
     stop_request = TrainingStopRequest()
     stop_request.request_stop()
     try:
-        result = wait_rollout_sample_target_or_stop(
+        result = wait_rollout_round_target_or_stop(
             group=group,
             policy_version=3,
-            target_sample_count=2,
+            target_round_count=2,
             timeout_seconds=1.0,
             stop_request=stop_request,
         )
@@ -189,12 +202,16 @@ def test_snapshot_and_reset_reuse_group_owned_segments(
             first_append = first_writer.append_round(
                 policy_version=3,
                 metrics=_metrics(decision_count=1),
-                commit=_commit(policy_version=3, model_ranks=(0,)),
+                trajectory=_trajectory(
+                    policy_version=3, row_indices=(0,)
+                ),
             )
             second_append = second_writer.append_round(
                 policy_version=3,
                 metrics=_metrics(decision_count=1),
-                commit=_commit(policy_version=3, model_ranks=(0,)),
+                trajectory=_trajectory(
+                    policy_version=3, row_indices=(0,)
+                ),
             )
         finally:
             first_writer.close()
@@ -219,10 +236,10 @@ def test_snapshot_and_reset_reuse_group_owned_segments(
         close_shared_rollout_arenas(group)
 
     assert isinstance(snapshot, Ok)
-    assert snapshot.value.sample_count == 2
+    assert snapshot.value.round_count == 2
     assert isinstance(reset, Ok)
     assert isinstance(reset_snapshot, Ok)
-    assert reset_snapshot.value.sample_count == 0
+    assert reset_snapshot.value.round_count == 0
 
 
 def test_arena_group_uses_explicit_per_worker_capacity() -> None:
@@ -237,12 +254,12 @@ def test_arena_group_uses_explicit_per_worker_capacity() -> None:
         close_shared_rollout_arenas(group)
 
     assert isinstance(snapshot, Ok)
-    assert tuple(handle.capacity for handle in group.handles) == (
+    assert tuple(handle.round_capacity for handle in group.handles) == (
         5,
         5,
         5,
     )
-    assert snapshot.value.capacity == 15
+    assert snapshot.value.round_capacity == 15
 
 
 def test_append_round_notifies_progress_after_arena_write() -> None:
@@ -259,7 +276,9 @@ def test_append_round_notifies_progress_after_arena_write() -> None:
     handle = RolloutArenaHandle(
         worker_index=real_handle.worker_index,
         shared_memory_name=real_handle.shared_memory_name,
-        capacity=real_handle.capacity,
+        round_capacity=real_handle.round_capacity,
+        decision_capacity=real_handle.decision_capacity,
+        trajectory_capacity=real_handle.trajectory_capacity,
         lock=arena_lock,
         progress_condition=progress_condition,
     )
@@ -269,7 +288,9 @@ def test_append_round_notifies_progress_after_arena_write() -> None:
             append = writer.append_round(
                 policy_version=3,
                 metrics=_metrics(decision_count=1),
-                commit=_commit(policy_version=3, model_ranks=(0,)),
+                trajectory=_trajectory(
+                    policy_version=3, row_indices=(0,)
+                ),
             )
         finally:
             writer.close()
@@ -300,7 +321,9 @@ def test_reset_rollout_arenas_notifies_only_progress() -> None:
     handle = RolloutArenaHandle(
         worker_index=real_handle.worker_index,
         shared_memory_name=real_handle.shared_memory_name,
-        capacity=real_handle.capacity,
+        round_capacity=real_handle.round_capacity,
+        decision_capacity=real_handle.decision_capacity,
+        trajectory_capacity=real_handle.trajectory_capacity,
         lock=arena_lock,
         progress_condition=progress_condition,
     )
@@ -325,7 +348,7 @@ def test_reset_rollout_arenas_notifies_only_progress() -> None:
     ]
 
 
-def test_append_round_drops_only_after_capacity() -> None:
+def test_append_round_rejects_whole_round_after_capacity() -> None:
     group_result = _arena_group(worker_count=1, capacity=2)
     assert isinstance(group_result, Ok)
     group = group_result.value
@@ -335,17 +358,23 @@ def test_append_round_drops_only_after_capacity() -> None:
             first_append = writer.append_round(
                 policy_version=3,
                 metrics=_metrics(decision_count=1),
-                commit=_commit(policy_version=3, model_ranks=(0,)),
+                trajectory=_trajectory(
+                    policy_version=3, row_indices=(0,)
+                ),
             )
             second_append = writer.append_round(
                 policy_version=3,
                 metrics=_metrics(decision_count=1),
-                commit=_commit(policy_version=3, model_ranks=(0,)),
+                trajectory=_trajectory(
+                    policy_version=3, row_indices=(0,)
+                ),
             )
             third_append = writer.append_round(
                 policy_version=3,
                 metrics=_metrics(decision_count=1),
-                commit=_commit(policy_version=3, model_ranks=(0,)),
+                trajectory=_trajectory(
+                    policy_version=3, row_indices=(0,)
+                ),
             )
             snapshot = snapshot_rollout_arenas(
                 group=group,
@@ -359,17 +388,15 @@ def test_append_round_drops_only_after_capacity() -> None:
     assert isinstance(first_append, Ok)
     assert not first_append.value.capacity_reached
     assert isinstance(second_append, Ok)
-    assert second_append.value.accepted_sample_count == 1
-    assert second_append.value.dropped_sample_count == 0
+    assert second_append.value.accepted
     assert second_append.value.capacity_reached
     assert isinstance(third_append, Ok)
-    assert third_append.value.accepted_sample_count == 0
-    assert third_append.value.dropped_sample_count == 1
+    assert not third_append.value.accepted
     assert third_append.value.capacity_reached
     assert isinstance(snapshot, Ok)
-    assert snapshot.value.capacity == 2
-    assert snapshot.value.sample_count == 2
-    assert snapshot.value.dropped_sample_count == 1
+    assert snapshot.value.round_capacity == 2
+    assert snapshot.value.round_count == 2
+    assert snapshot.value.rejected_round_count == 1
 
 
 def test_read_rank_batch_allows_partial_assigned_arena() -> None:
@@ -383,7 +410,9 @@ def test_read_rank_batch_allows_partial_assigned_arena() -> None:
             append = writer.append_round(
                 policy_version=3,
                 metrics=_metrics(decision_count=1),
-                commit=_commit(policy_version=3, model_ranks=(0,)),
+                trajectory=_trajectory(
+                    policy_version=3, row_indices=(0,)
+                ),
             )
             assert isinstance(append, Ok)
             assert not append.value.capacity_reached
@@ -420,7 +449,7 @@ def test_read_rank_batch_allows_empty_assigned_shard() -> None:
     assert result.value.model_rank_index == 1
     assert int(result.value.row_indices.shape[0]) == 0
     assert int(result.value.step_counts.shape[0]) == 0
-    assert int(result.value.return_values.shape[0]) == 0
+    assert int(result.value.terminal_rewards.shape[0]) == 0
     assert result.value.round_count == 0
     assert result.value.total_step_count == 0
     assert result.value.max_step_count == 0
@@ -436,7 +465,9 @@ def test_reset_rollout_arenas_allows_new_policy_version() -> None:
             first_append = writer.append_round(
                 policy_version=3,
                 metrics=_metrics(decision_count=1),
-                commit=_commit(policy_version=3, model_ranks=(0,)),
+                trajectory=_trajectory(
+                    policy_version=3, row_indices=(0,)
+                ),
             )
             assert isinstance(first_append, Ok)
             reset_result = reset_rollout_arenas(
@@ -447,7 +478,9 @@ def test_reset_rollout_arenas_allows_new_policy_version() -> None:
             second_append = writer.append_round(
                 policy_version=4,
                 metrics=_metrics(decision_count=1),
-                commit=_commit(policy_version=4, model_ranks=(0,)),
+                trajectory=_trajectory(
+                    policy_version=4, row_indices=(0,)
+                ),
             )
             assert isinstance(second_append, Ok)
             snapshot = snapshot_rollout_arenas(
@@ -455,9 +488,9 @@ def test_reset_rollout_arenas_allows_new_policy_version() -> None:
                 policy_version=4,
             )
             assert isinstance(snapshot, Ok)
-            assert snapshot.value.sample_count == 1
-            assert snapshot.value.total_step_count == 1
-            assert snapshot.value.max_step_count == 1
+            assert snapshot.value.round_count == 1
+            assert snapshot.value.total_trace_step_count == 1
+            assert snapshot.value.max_trace_step_count == 1
         finally:
             writer.close()
     finally:
@@ -471,7 +504,7 @@ def _arena_group(
     return create_shared_rollout_arena_group(
         context=context,
         worker_count=worker_count,
-        arena_capacity_per_worker=capacity,
+        round_capacity_per_worker=capacity,
         policy_version=3,
     )
 
@@ -484,43 +517,69 @@ def _reject_group_shared_memory_attach(*, name: str) -> NoReturn:
 
 def _metrics(*, decision_count: int) -> RolloutRoundMetrics:
     return RolloutRoundMetrics(
-        first_partnership_reward=1.0,
-        second_partnership_reward=-1.0,
-        generated_action_count=decision_count,
-        accepted_action_count=decision_count,
-        action_choice_count=decision_count * 2,
-        decision_count=decision_count,
+        model_reward=1.0,
+        auto_reward=-1.0,
+        model_action_count=decision_count,
+        auto_action_count=decision_count,
+        forced_action_count=0,
+        trainable_decision_count=decision_count,
+        scored_choice_step_count=decision_count,
         elapsed_seconds=0.25,
         game_over=False,
+        model_declarer=True,
     )
 
 
-def _commit(
+def _trajectory(
     *,
     policy_version: int,
-    model_ranks: tuple[int, ...],
+    row_indices: tuple[int, ...],
     step_counts: tuple[int, ...] | None = None,
-    return_values: tuple[float, ...] | None = None,
-) -> ReturnCommit:
+    terminal_rewards: tuple[float, ...] | None = None,
+) -> CompletedRoundTrajectory:
     values = (
-        tuple(float(index + 1) for index in range(len(model_ranks)))
-        if return_values is None
-        else return_values
+        tuple(float(index + 1) for index in range(len(row_indices)))
+        if terminal_rewards is None
+        else terminal_rewards
     )
-    assert len(values) == len(model_ranks)
+    assert len(values) == len(row_indices)
     counts = (
-        tuple(1 for _ in model_ranks)
+        tuple(1 for _ in row_indices)
         if step_counts is None
         else step_counts
     )
-    assert len(counts) == len(model_ranks)
-    return ReturnCommit(
+    assert len(counts) == len(row_indices)
+    decisions = tuple(
+        TrainableDecision(
+            seat=Seat.A,
+            seq=index,
+            action=GeneratedAction(
+                action_kind="pass",
+                message_type="bid",
+                face_counts=(),
+                trace=ActionTrace(choices=(ActionChoice("pass"),)),
+                is_pass=True,
+            ),
+            replay=DecisionHandle(
+                model_rank_index=0,
+                policy_version=policy_version,
+                row_index=row_index,
+            ),
+            trace_step_count=counts[index],
+            legal_choice_count=2,
+            scored_choice_step_count=1,
+        )
+        for index, row_index in enumerate(row_indices)
+    )
+    return CompletedRoundTrajectory(
         policy_version=policy_version,
-        first_episode_id=0,
-        episode_count=1,
-        row_indices=tuple(index for index in range(len(model_ranks))),
-        step_counts=counts,
-        return_values=values,
+        round_id=0,
+        model_partnership=Partnership.FIRST,
+        seats=(
+            SeatTrajectory(seat=Seat.A, decisions=decisions),
+            SeatTrajectory(seat=Seat.C, decisions=()),
+        ),
+        terminal_reward=values[0],
     )
 
 

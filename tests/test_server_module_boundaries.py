@@ -74,6 +74,16 @@ def test_game_runtime_and_bots_follow_dependency_direction() -> None:
             "server.web",
         ),
     )
+    assert not _matching(
+        _package_imports("game_auto"),
+        (
+            "server.game_ai",
+            "server.game_bots",
+            "server.game_runtime",
+            "server.training",
+            "server.web",
+        ),
+    )
 
 
 def test_game_domain_has_no_io_or_synchronization_dependencies() -> (

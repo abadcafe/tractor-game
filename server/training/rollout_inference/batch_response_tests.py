@@ -44,6 +44,7 @@ def test_response_wire_round_trips_completed_and_rejected_rows() -> (
         decision_handle_policy_version=5,
         decision_handle_row_index=13,
         choice_count=1,
+        scored_choice_step_count=1,
     )
     rejected = RejectedPolicyResponse(
         route=PolicyRequestRoute(worker_index=3, request_id=8),
@@ -68,6 +69,7 @@ def test_completed_response_batch_keeps_fixed_choice_ids() -> None:
         policy_versions=(4, 4),
         row_indices=(10, 11),
         choice_counts=(1, 1),
+        scored_choice_step_counts=(1, 1),
         action_choice_batch=CompactActionChoiceBatch.from_cpu_tensor(
             choice_ids=choice_ids,
             choice_counts=(1, 1),
@@ -110,6 +112,7 @@ def test_worker_decodes_card_then_finish_through_legal_rules() -> None:
         decision_handle_policy_version=6,
         decision_handle_row_index=9,
         choice_count=2,
+        scored_choice_step_count=2,
     )
 
     decoded = decode_policy_response(

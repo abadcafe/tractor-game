@@ -51,7 +51,7 @@ from server.training.rollout_inference.samples import (
     CompactActionChoiceBatch,
     CompactActionChoiceIds,
     CompactPolicyDecisionBatch,
-    RankReturnTargets,
+    RankTrajectoryBatch,
 )
 from server.training.runtime.async_ipc import create_async_socket_pair
 from server.training.runtime.model_rank import (
@@ -109,8 +109,8 @@ async def test_local_policy_client_batches_same_loop() -> None:
     assert second_result.value.action.trace == _pass_trace()
     assert first_result.value.decision_handle.row_index == 0
     assert second_result.value.decision_handle.row_index == 1
-    assert first_result.value.choice_count == 1
-    assert second_result.value.choice_count == 1
+    assert first_result.value.legal_choice_count == 2
+    assert second_result.value.legal_choice_count == 2
     assert replica.calls == ("decide_batch",)
     assert replica.batch_sizes == (2,)
 
@@ -166,7 +166,7 @@ def test_local_model_rank_loads_updates_and_snapshots_replica() -> None:
 
     load_result = rank.load_state(state=state, policy_version=3)
     update_result = rank.update(
-        returns=_return_batch(),
+        trajectories=_trajectory_batch(),
         policy_version=3,
     )
     snapshot_result = rank.snapshot()
@@ -176,7 +176,7 @@ def test_local_model_rank_loads_updates_and_snapshots_replica() -> None:
     assert isinstance(snapshot_result, Ok)
     assert replica.calls == (
         "load_state",
-        "update_returns",
+        "update_trajectories",
         "snapshot",
     )
     assert update_result.value == _ppo_update_stats()
@@ -230,7 +230,8 @@ async def test_remote_policy_client_roundtrips_async_payload() -> None:
         assert isinstance(result, Ok)
         assert result.value.action.trace == _pass_trace()
         assert result.value.decision_handle.row_index == 0
-        assert result.value.choice_count == 1
+        assert result.value.legal_choice_count == 2
+        assert result.value.scored_choice_step_count == 1
     finally:
         peers.close()
 
@@ -570,11 +571,11 @@ class _FakeReplica:
             value=_compact_policy_decision_batch(row_count=batch_size)
         )
 
-    def update_returns(
-        self, *, returns: RankReturnTargets
+    def update_trajectories(
+        self, *, trajectories: RankTrajectoryBatch
     ) -> Ok[PPOUpdateStats]:
-        assert not returns.is_empty()
-        self._calls.append("update_returns")
+        assert not trajectories.is_empty()
+        self._calls.append("update_trajectories")
         return Ok(value=_ppo_update_stats())
 
     def snapshot(self) -> RuntimeTrainingState:
@@ -592,7 +593,8 @@ def _compact_policy_decision_batch(
         model_rank_index=0,
         policy_versions=tuple(0 for _ in range(row_count)),
         row_indices=tuple(range(row_count)),
-        choice_counts=tuple(1 for _ in range(row_count)),
+        choice_counts=tuple(2 for _ in range(row_count)),
+        scored_choice_step_counts=tuple(1 for _ in range(row_count)),
         action_choice_batch=CompactActionChoiceBatch(
             encoded_i64_rows=action_choice_ids.encoded_i64 * row_count,
             row_count=row_count,
@@ -613,6 +615,9 @@ def _completed_policy_response(
         decision_handle_policy_version=decisions.policy_versions[0],
         decision_handle_row_index=decisions.row_indices[0],
         choice_count=decisions.choice_counts[0],
+        scored_choice_step_count=(
+            decisions.scored_choice_step_counts[0]
+        ),
     )
 
 
@@ -657,19 +662,21 @@ def _decision_key() -> TrainingDecisionKey:
         base_seed=0,
         policy_version=0,
         rollout_id="rollout-0",
-        episode_id=0,
+        round_id=0,
         seat=Seat.A,
         decision_index=0,
     )
 
 
-def _return_batch() -> RankReturnTargets:
-    return RankReturnTargets(
+def _trajectory_batch() -> RankTrajectoryBatch:
+    return RankTrajectoryBatch(
         policy_version=3,
         model_rank_index=0,
         row_indices=torch.tensor((0,), dtype=torch.long),
         step_counts=torch.tensor((1,), dtype=torch.long),
-        return_values=torch.tensor((1.0,), dtype=torch.float32),
+        trajectory_offsets=torch.tensor((0,), dtype=torch.long),
+        trajectory_lengths=torch.tensor((1,), dtype=torch.long),
+        terminal_rewards=torch.tensor((1.0,), dtype=torch.float32),
         round_count=1,
         total_step_count=1,
         max_step_count=1,
@@ -678,7 +685,8 @@ def _return_batch() -> RankReturnTargets:
 
 def _runtime_state() -> RuntimeTrainingState:
     return RuntimeTrainingState(
-        model_state={"weight": torch.tensor([1.0])},
+        policy_state={"weight": torch.tensor([1.0])},
+        value_state={"weight": torch.tensor([2.0])},
         optimizer_state={
             "kind": "adamw",
             "step_count": 0,
@@ -691,10 +699,15 @@ def _runtime_state() -> RuntimeTrainingState:
 def _ppo_update_stats() -> PPOUpdateStats:
     return PPOUpdateStats(
         policy_loss=0.0,
+        value_loss=0.0,
         entropy=0.0,
         objective_loss=0.0,
         approx_kl=0.0,
         clip_fraction=0.0,
+        value_clip_fraction=0.0,
+        explained_variance=0.0,
+        policy_grad_norm=0.0,
+        value_grad_norm=0.0,
         profile=PPOUpdateProfile(
             update_seconds=0.0,
             minibatch_loss_seconds=0.0,

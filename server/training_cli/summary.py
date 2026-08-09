@@ -137,8 +137,8 @@ def _finish_summary(lines: list[str], summary: TrainingSummary) -> str:
             f"  invalid manifests: {invalid_manifests}",
             f"  objects: {len(summary.checkpoints.objects)}",
             f"  orphan objects: {orphan_objects}",
-            "  unique state bytes: "
-            + f"{summary.checkpoints.total_unique_state_bytes}",
+            "  unique payload bytes: "
+            + f"{summary.checkpoints.total_unique_payload_bytes}",
         )
     )
     latest = next(
@@ -155,7 +155,10 @@ def _finish_summary(lines: list[str], summary: TrainingSummary) -> str:
             lines.append(f"  latest error: {latest.error}")
         for label, value in (
             ("latest rounds", latest.total_rounds),
-            ("latest samples", latest.total_samples),
+            (
+                "latest trainable decisions",
+                latest.total_trainable_decisions,
+            ),
             ("latest updates", latest.total_updates),
         ):
             if value is not None:

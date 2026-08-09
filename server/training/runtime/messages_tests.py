@@ -44,7 +44,8 @@ def test_decode_worker_stop_sampling_command_accepts_stop() -> None:
 
 def test_worker_load_state_command_carries_state_snapshot() -> None:
     state = RuntimeTrainingState(
-        model_state={"weight": torch.tensor([1.0])},
+        policy_state={"weight": torch.tensor([1.0])},
+        value_state={"weight": torch.tensor([2.0])},
         optimizer_state={
             "kind": "adamw",
             "step_count": 0,

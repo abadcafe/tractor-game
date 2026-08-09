@@ -41,7 +41,8 @@ def test_model_rank_snapshot_command_carries_no_state_snapshot() -> (
 
 def _runtime_state() -> RuntimeTrainingState:
     return RuntimeTrainingState(
-        model_state={"weight": torch.tensor([1.0])},
+        policy_state={"weight": torch.tensor([1.0])},
+        value_state={"weight": torch.tensor([2.0])},
         optimizer_state={
             "kind": "adamw",
             "step_count": 0,

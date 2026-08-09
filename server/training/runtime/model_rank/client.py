@@ -13,6 +13,7 @@ from server.foundation.result import Ok, Rejected
 from server.game import seat_id
 from server.policy_model.actions import LegalActionSpace
 from server.policy_model.observation import Observation
+from server.training.rollout.policy import PolicyDecision
 from server.training.rollout_inference.batch import (
     BorrowedPolicyRequestBatch,
     CompletedPolicyResponse,
@@ -37,7 +38,6 @@ from server.training.rollout_inference.samples import (
 from server.training.runtime.model_rank.inference_transport import (
     AsyncPolicyPeer,
 )
-from server.training.self_play.policy import PolicyDecision
 from server.training_events import EventContext, EventSink
 
 type PolicyDecisionResult = Ok[PolicyDecision] | Rejected
@@ -278,7 +278,7 @@ class BatchedPolicyClient:
             policy_version=decision_key.policy_version,
             rollout_id=decision_key.rollout_id,
             worker_index=self.worker_index,
-            episode_id=decision_key.episode_id,
+            round_id=decision_key.round_id,
             seat=seat_id(decision_key.seat),
             decision_index=decision_key.decision_index,
             request_id=request_id,
@@ -311,7 +311,12 @@ class BatchedPolicyClient:
                     context=context,
                     fields={
                         "wait_seconds": wait_seconds,
-                        "choice_count": result.value.choice_count,
+                        "legal_choice_count": (
+                            result.value.legal_choice_count
+                        ),
+                        "scored_choice_step_count": (
+                            result.value.scored_choice_step_count
+                        ),
                         "model_rank_index": (
                             result.value.decision_handle.model_rank_index
                         ),

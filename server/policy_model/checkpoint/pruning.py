@@ -83,7 +83,7 @@ def prune_checkpoints(
     checkpoint_dir: Path,
     retained_update_count: int,
 ) -> _result.Ok[None] | _result.Rejected:
-    """Delete expired manifests and unreferenced state objects."""
+    """Delete expired manifests and unreferenced checkpoint objects."""
     assert retained_update_count >= 0
     dir_check = validate_checkpoint_dir(checkpoint_dir)
     if isinstance(dir_check, _result.Rejected):

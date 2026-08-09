@@ -159,18 +159,18 @@ def validate_checkpoint_object_dir(
     return _result.Ok(value=True)
 
 
-def validate_checkpoint_state_file(
-    state_path: Path,
+def validate_checkpoint_payload_file(
+    payload_path: Path,
 ) -> _result.Ok[None] | _result.Rejected:
-    """Validate one checkpoint state file path before reading it."""
+    """Validate one checkpoint payload path before reading it."""
     try:
-        state_is_symlink = state_path.is_symlink()
+        payload_is_symlink = payload_path.is_symlink()
     except OSError:
         return checkpoint_corruption(
-            state_path, "state file is not readable"
+            payload_path, "payload file is not readable"
         )
-    if state_is_symlink:
+    if payload_is_symlink:
         return checkpoint_corruption(
-            state_path, "state file is a symlink"
+            payload_path, "payload file is a symlink"
         )
     return _result.Ok(value=None)

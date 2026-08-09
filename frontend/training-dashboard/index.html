@@ -153,11 +153,11 @@
               <div class="chart" id="chart-throughput"></div>
             </section>
             <section class="chart-panel">
-              <h2>Optimization loss</h2>
+              <h2>Actor–critic loss</h2>
               <div class="chart" id="chart-loss"></div>
             </section>
             <section class="chart-panel">
-              <h2>Policy behavior</h2>
+              <h2>PPO diagnostics</h2>
               <div class="chart" id="chart-policy"></div>
             </section>
             <section class="chart-panel chart-wide">
@@ -169,7 +169,7 @@
               <div class="chart" id="chart-rollout"></div>
             </section>
             <section class="chart-panel">
-              <h2>Rewards</h2>
+              <h2>Model vs Auto rewards</h2>
               <div class="chart" id="chart-rewards"></div>
             </section>
           </div>
@@ -233,8 +233,8 @@
                   <tr>
                     <th>Manifest</th>
                     <th>Update</th>
-                    <th>Samples</th>
-                    <th>State</th>
+                    <th>Trainable decisions</th>
+                    <th>Payloads</th>
                     <th>Size</th>
                     <th>Condition</th>
                     <th>Actions</th>
@@ -253,7 +253,7 @@
                 <thead>
                   <tr>
                     <th>Checkpoint ID</th>
-                    <th>State path</th>
+                    <th>Policy / trainer paths</th>
                     <th>Size</th>
                     <th>References</th>
                     <th>Condition</th>

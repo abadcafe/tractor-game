@@ -1,4 +1,4 @@
-"""Binary layout for shared rollout arenas."""
+"""Binary layout for atomic completed-round rollout arenas."""
 
 from __future__ import annotations
 
@@ -7,10 +7,20 @@ from dataclasses import dataclass
 
 from pydantic import ConfigDict, TypeAdapter
 
-HEADER_STRUCT = struct.Struct("<qqqqqqqqqqqqddd")
+MAX_TRAINABLE_DECISIONS_PER_ROUND = 1024
+
+_HEADER = struct.Struct("<" + "q" * 20 + "d" * 3)
 _I64 = struct.Struct("<q")
 _F32 = struct.Struct("<f")
 type _HeaderValues = tuple[
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
+    int,
     int,
     int,
     int,
@@ -31,357 +41,369 @@ _HEADER_VALUES: TypeAdapter[_HeaderValues] = TypeAdapter(
     _HeaderValues,
     config=ConfigDict(strict=True),
 )
-_I64_VALUES = TypeAdapter(
-    tuple[int, ...],
-    config=ConfigDict(strict=True),
-)
-_F32_VALUES = TypeAdapter(
-    tuple[float, ...],
-    config=ConfigDict(strict=True),
-)
 
 
 @dataclass(frozen=True, slots=True)
 class RolloutArenaHeader:
-    """Shared counters for one worker-owned rollout arena."""
+    """Shared counters for one worker-owned arena."""
 
     policy_version: int
-    sample_count: int
-    capacity: int
+    decision_count: int
+    decision_capacity: int
+    trajectory_count: int
+    trajectory_capacity: int
     round_count: int
-    generated_action_count: int
-    accepted_action_count: int
-    action_choice_count: int
+    round_capacity: int
+    model_action_count: int
+    auto_action_count: int
+    forced_action_count: int
+    trainable_decision_count: int
+    scored_choice_step_count: int
     game_over_count: int
-    dropped_sample_count: int
+    rejected_round_count: int
     cancelled_env_count: int
-    total_step_count: int
-    max_step_count: int
-    first_partnership_reward_sum: float
-    second_partnership_reward_sum: float
+    total_trace_step_count: int
+    max_trace_step_count: int
+    model_win_count: int
+    auto_win_count: int
+    model_declarer_round_count: int
+    model_reward_sum: float
+    auto_reward_sum: float
     elapsed_seconds_max: float
 
     def __post_init__(self) -> None:
         assert self.policy_version >= 0
-        assert self.sample_count >= 0
-        assert self.capacity > 0
-        assert self.sample_count <= self.capacity
-        assert self.round_count >= 0
-        assert self.generated_action_count >= 0
-        assert self.accepted_action_count >= 0
-        assert self.action_choice_count >= 0
+        assert 0 <= self.decision_count <= self.decision_capacity
+        assert self.decision_capacity > 0
+        assert 0 <= self.trajectory_count <= self.trajectory_capacity
+        assert self.trajectory_capacity > 0
+        assert 0 <= self.round_count <= self.round_capacity
+        assert self.round_capacity > 0
+        assert self.model_action_count >= 0
+        assert self.auto_action_count >= 0
+        assert self.forced_action_count >= 0
+        assert self.trainable_decision_count >= 0
+        assert self.scored_choice_step_count >= 0
         assert self.game_over_count >= 0
-        assert self.dropped_sample_count >= 0
+        assert self.rejected_round_count >= 0
         assert self.cancelled_env_count >= 0
-        assert self.total_step_count >= 0
-        assert self.max_step_count >= 0
+        assert self.total_trace_step_count >= 0
+        assert self.max_trace_step_count >= 0
+        assert self.model_win_count >= 0
+        assert self.auto_win_count >= 0
+        assert self.model_declarer_round_count >= 0
 
 
 @dataclass(frozen=True, slots=True)
-class SampleReferenceColumnViews:
-    """Byte views for committed sample reference columns."""
+class RolloutColumnViews:
+    """Direct byte views of committed trajectory columns."""
 
     row_indices: memoryview[int]
     step_counts: memoryview[int]
-    return_values: memoryview[int]
+    trajectory_offsets: memoryview[int]
+    trajectory_lengths: memoryview[int]
+    terminal_rewards: memoryview[int]
 
 
-@dataclass(frozen=True, slots=True)
-class SampleReferenceColumnWriter:
-    """Append sample reference columns into one arena range."""
-
-    buffer: memoryview[int]
-    capacity: int
-    start_index: int
-    count: int
-
-    def __post_init__(self) -> None:
-        assert self.capacity > 0
-        assert self.start_index >= 0
-        assert self.count >= 0
-        assert self.start_index + self.count <= self.capacity
-
-    def write(
-        self,
-        *,
-        row_indices: tuple[int, ...],
-        step_counts: tuple[int, ...],
-        return_values: tuple[float, ...],
-    ) -> None:
-        """Write all sample reference columns for this range."""
-        assert len(row_indices) == self.count
-        assert len(step_counts) == self.count
-        assert len(return_values) == self.count
-        assert all(value >= 0 for value in row_indices)
-        assert all(value > 0 for value in step_counts)
-        self.write_row_indices(row_indices)
-        self.write_step_counts(step_counts)
-        self.write_return_values(return_values)
-
-    def write_row_indices(self, values: tuple[int, ...]) -> None:
-        """Write replay row indices."""
-        assert len(values) == self.count
-        _pack_i64_values(
-            buffer=self.buffer,
-            offset=(
-                _row_indices_offset(self.capacity)
-                + self.start_index * _I64.size
-            ),
-            values=values,
+def arena_byte_size(
+    *, decision_capacity: int, trajectory_capacity: int
+) -> int:
+    """Return bytes required by one fixed-capacity arena."""
+    assert decision_capacity > 0
+    assert trajectory_capacity > 0
+    return (
+        _terminal_rewards_offset(
+            decision_capacity=decision_capacity,
+            trajectory_capacity=trajectory_capacity,
         )
-
-    def write_step_counts(self, values: tuple[int, ...]) -> None:
-        """Write replay step counts."""
-        assert len(values) == self.count
-        _pack_i64_values(
-            buffer=self.buffer,
-            offset=(
-                _step_counts_offset(self.capacity)
-                + self.start_index * _I64.size
-            ),
-            values=values,
-        )
-
-    def write_return_values(self, values: tuple[float, ...]) -> None:
-        """Write return values."""
-        assert len(values) == self.count
-        _pack_f32_values(
-            buffer=self.buffer,
-            offset=(
-                _return_values_offset(self.capacity)
-                + self.start_index * _F32.size
-            ),
-            values=values,
-        )
+        + trajectory_capacity * _F32.size
+    )
 
 
-def arena_byte_size(*, capacity: int) -> int:
-    """Return the shared memory bytes needed for one arena."""
-    assert capacity > 0
-    return _return_values_offset(capacity) + capacity * _F32.size
-
-
-def pack_sample_references(
-    *,
-    buffer: memoryview,
-    capacity: int,
-    start_index: int,
-    row_indices: tuple[int, ...],
-    step_counts: tuple[int, ...],
-    return_values: tuple[float, ...],
-) -> None:
-    """Write sample reference columns into one arena range."""
-    assert capacity > 0
-    assert start_index >= 0
-    count = len(return_values)
-    assert len(row_indices) == count
-    assert len(step_counts) == count
-    assert start_index + count <= capacity
-    SampleReferenceColumnWriter(
-        buffer=buffer,
-        capacity=capacity,
-        start_index=start_index,
-        count=count,
-    ).write(
-        row_indices=row_indices,
-        step_counts=step_counts,
-        return_values=return_values,
+def empty_header(
+    *, policy_version: int, round_capacity: int
+) -> RolloutArenaHeader:
+    """Return an empty header for one update policy version."""
+    assert round_capacity > 0
+    return RolloutArenaHeader(
+        policy_version=policy_version,
+        decision_count=0,
+        decision_capacity=(
+            round_capacity * MAX_TRAINABLE_DECISIONS_PER_ROUND
+        ),
+        trajectory_count=0,
+        trajectory_capacity=round_capacity * 2,
+        round_count=0,
+        round_capacity=round_capacity,
+        model_action_count=0,
+        auto_action_count=0,
+        forced_action_count=0,
+        trainable_decision_count=0,
+        scored_choice_step_count=0,
+        game_over_count=0,
+        rejected_round_count=0,
+        cancelled_env_count=0,
+        total_trace_step_count=0,
+        max_trace_step_count=0,
+        model_win_count=0,
+        auto_win_count=0,
+        model_declarer_round_count=0,
+        model_reward_sum=0.0,
+        auto_reward_sum=0.0,
+        elapsed_seconds_max=0.0,
     )
 
 
 def pack_header(
     buffer: memoryview, *, header: RolloutArenaHeader
 ) -> None:
-    """Write one header into a shared memory buffer."""
-    HEADER_STRUCT.pack_into(
+    """Write one header into shared memory."""
+    _HEADER.pack_into(
         buffer,
         0,
         header.policy_version,
-        header.sample_count,
-        header.capacity,
+        header.decision_count,
+        header.decision_capacity,
+        header.trajectory_count,
+        header.trajectory_capacity,
         header.round_count,
-        header.generated_action_count,
-        header.accepted_action_count,
-        header.action_choice_count,
+        header.round_capacity,
+        header.model_action_count,
+        header.auto_action_count,
+        header.forced_action_count,
+        header.trainable_decision_count,
+        header.scored_choice_step_count,
         header.game_over_count,
-        header.dropped_sample_count,
+        header.rejected_round_count,
         header.cancelled_env_count,
-        header.total_step_count,
-        header.max_step_count,
-        header.first_partnership_reward_sum,
-        header.second_partnership_reward_sum,
+        header.total_trace_step_count,
+        header.max_trace_step_count,
+        header.model_win_count,
+        header.auto_win_count,
+        header.model_declarer_round_count,
+        header.model_reward_sum,
+        header.auto_reward_sum,
         header.elapsed_seconds_max,
     )
 
 
 def unpack_header(buffer: memoryview) -> RolloutArenaHeader:
-    """Read one header from a shared memory buffer."""
+    """Read one header from shared memory."""
     values = _HEADER_VALUES.validate_python(
-        HEADER_STRUCT.unpack_from(buffer, 0)
+        _HEADER.unpack_from(buffer, 0)
     )
     return RolloutArenaHeader(
         policy_version=values[0],
-        sample_count=values[1],
-        capacity=values[2],
-        round_count=values[3],
-        generated_action_count=values[4],
-        accepted_action_count=values[5],
-        action_choice_count=values[6],
-        game_over_count=values[7],
-        dropped_sample_count=values[8],
-        cancelled_env_count=values[9],
-        total_step_count=values[10],
-        max_step_count=values[11],
-        first_partnership_reward_sum=values[12],
-        second_partnership_reward_sum=values[13],
-        elapsed_seconds_max=values[14],
+        decision_count=values[1],
+        decision_capacity=values[2],
+        trajectory_count=values[3],
+        trajectory_capacity=values[4],
+        round_count=values[5],
+        round_capacity=values[6],
+        model_action_count=values[7],
+        auto_action_count=values[8],
+        forced_action_count=values[9],
+        trainable_decision_count=values[10],
+        scored_choice_step_count=values[11],
+        game_over_count=values[12],
+        rejected_round_count=values[13],
+        cancelled_env_count=values[14],
+        total_trace_step_count=values[15],
+        max_trace_step_count=values[16],
+        model_win_count=values[17],
+        auto_win_count=values[18],
+        model_declarer_round_count=values[19],
+        model_reward_sum=values[20],
+        auto_reward_sum=values[21],
+        elapsed_seconds_max=values[22],
     )
 
 
-def empty_header(
-    *, policy_version: int, capacity: int
-) -> RolloutArenaHeader:
-    """Return an empty arena header for one policy version."""
-    return RolloutArenaHeader(
-        policy_version=policy_version,
-        sample_count=0,
-        capacity=capacity,
-        round_count=0,
-        generated_action_count=0,
-        accepted_action_count=0,
-        action_choice_count=0,
-        game_over_count=0,
-        dropped_sample_count=0,
-        cancelled_env_count=0,
-        total_step_count=0,
-        max_step_count=0,
-        first_partnership_reward_sum=0.0,
-        second_partnership_reward_sum=0.0,
-        elapsed_seconds_max=0.0,
-    )
-
-
-def sample_reference_column_views(
-    *, buffer: memoryview[int], capacity: int, count: int
-) -> SampleReferenceColumnViews:
-    """Return direct byte views for committed sample columns."""
-    assert capacity > 0
-    assert count >= 0
-    assert count <= capacity
-    i64_bytes = count * _I64.size
-    f32_bytes = count * _F32.size
-    return SampleReferenceColumnViews(
-        row_indices=_column_view(
-            buffer=buffer,
-            offset=_row_indices_offset(capacity),
-            byte_count=i64_bytes,
-        ),
-        step_counts=_column_view(
-            buffer=buffer,
-            offset=_step_counts_offset(capacity),
-            byte_count=i64_bytes,
-        ),
-        return_values=_column_view(
-            buffer=buffer,
-            offset=_return_values_offset(capacity),
-            byte_count=f32_bytes,
-        ),
-    )
-
-
-def unpack_row_indices(
-    *, buffer: memoryview, capacity: int, count: int
-) -> tuple[int, ...]:
-    """Read committed sample row indices from the arena columns."""
-    assert count >= 0
-    assert count <= capacity
-    return _unpack_i64_values(
+def pack_decisions(
+    *,
+    buffer: memoryview,
+    decision_capacity: int,
+    start: int,
+    row_indices: tuple[int, ...],
+    step_counts: tuple[int, ...],
+) -> None:
+    """Write replay references for an atomic round."""
+    assert len(row_indices) == len(step_counts)
+    assert 0 <= start <= decision_capacity
+    assert start + len(row_indices) <= decision_capacity
+    assert all(value >= 0 for value in row_indices)
+    assert all(value > 0 for value in step_counts)
+    _pack_i64(
         buffer=buffer,
-        offset=_row_indices_offset(capacity),
-        count=count,
+        offset=_row_indices_offset() + start * _I64.size,
+        values=row_indices,
     )
-
-
-def unpack_step_counts(
-    *, buffer: memoryview, capacity: int, count: int
-) -> tuple[int, ...]:
-    """Read committed replay step counts from the arena columns."""
-    assert count >= 0
-    assert count <= capacity
-    return _unpack_i64_values(
+    _pack_i64(
         buffer=buffer,
-        offset=_step_counts_offset(capacity),
-        count=count,
+        offset=(
+            _step_counts_offset(decision_capacity) + start * _I64.size
+        ),
+        values=step_counts,
     )
 
 
-def unpack_return_values(
-    *, buffer: memoryview, capacity: int, count: int
-) -> tuple[float, ...]:
-    """Read committed return values from the arena columns."""
-    assert count >= 0
-    assert count <= capacity
-    return _unpack_f32_values(
+def pack_trajectories(
+    *,
+    buffer: memoryview,
+    decision_capacity: int,
+    trajectory_capacity: int,
+    start: int,
+    offsets: tuple[int, ...],
+    lengths: tuple[int, ...],
+    terminal_rewards: tuple[float, ...],
+) -> None:
+    """Write complete seat-trajectory descriptors."""
+    count = len(offsets)
+    assert len(lengths) == count
+    assert len(terminal_rewards) == count
+    assert 0 <= start <= trajectory_capacity
+    assert start + count <= trajectory_capacity
+    assert all(value >= 0 for value in offsets)
+    assert all(value > 0 for value in lengths)
+    _pack_i64(
         buffer=buffer,
-        offset=_return_values_offset(capacity),
-        count=count,
+        offset=(
+            _trajectory_offsets_offset(decision_capacity)
+            + start * _I64.size
+        ),
+        values=offsets,
+    )
+    _pack_i64(
+        buffer=buffer,
+        offset=(
+            _trajectory_lengths_offset(
+                decision_capacity=decision_capacity,
+                trajectory_capacity=trajectory_capacity,
+            )
+            + start * _I64.size
+        ),
+        values=lengths,
+    )
+    _pack_f32(
+        buffer=buffer,
+        offset=(
+            _terminal_rewards_offset(
+                decision_capacity=decision_capacity,
+                trajectory_capacity=trajectory_capacity,
+            )
+            + start * _F32.size
+        ),
+        values=terminal_rewards,
     )
 
 
-def _pack_i64_values(
+def rollout_column_views(
+    *, buffer: memoryview[int], header: RolloutArenaHeader
+) -> RolloutColumnViews:
+    """Return views of committed decision and trajectory rows."""
+    decision_i64_bytes = header.decision_count * _I64.size
+    trajectory_i64_bytes = header.trajectory_count * _I64.size
+    trajectory_f32_bytes = header.trajectory_count * _F32.size
+    return RolloutColumnViews(
+        row_indices=_view(
+            buffer,
+            _row_indices_offset(),
+            decision_i64_bytes,
+        ),
+        step_counts=_view(
+            buffer,
+            _step_counts_offset(header.decision_capacity),
+            decision_i64_bytes,
+        ),
+        trajectory_offsets=_view(
+            buffer,
+            _trajectory_offsets_offset(header.decision_capacity),
+            trajectory_i64_bytes,
+        ),
+        trajectory_lengths=_view(
+            buffer,
+            _trajectory_lengths_offset(
+                decision_capacity=header.decision_capacity,
+                trajectory_capacity=header.trajectory_capacity,
+            ),
+            trajectory_i64_bytes,
+        ),
+        terminal_rewards=_view(
+            buffer,
+            _terminal_rewards_offset(
+                decision_capacity=header.decision_capacity,
+                trajectory_capacity=header.trajectory_capacity,
+            ),
+            trajectory_f32_bytes,
+        ),
+    )
+
+
+def _pack_i64(
     *, buffer: memoryview, offset: int, values: tuple[int, ...]
 ) -> None:
-    if not values:
-        return
-    data = struct.pack(f"<{len(values)}q", *values)
-    buffer[offset : offset + len(data)] = data
+    if values:
+        data = struct.pack(f"<{len(values)}q", *values)
+        buffer[offset : offset + len(data)] = data
 
 
-def _pack_f32_values(
+def _pack_f32(
     *, buffer: memoryview, offset: int, values: tuple[float, ...]
 ) -> None:
-    if not values:
-        return
-    data = struct.pack(f"<{len(values)}f", *values)
-    buffer[offset : offset + len(data)] = data
+    if values:
+        data = struct.pack(f"<{len(values)}f", *values)
+        buffer[offset : offset + len(data)] = data
 
 
-def _unpack_i64_values(
-    *, buffer: memoryview, offset: int, count: int
-) -> tuple[int, ...]:
-    if count == 0:
-        return ()
-    return _I64_VALUES.validate_python(
-        struct.unpack_from(f"<{count}q", buffer, offset)
-    )
-
-
-def _unpack_f32_values(
-    *, buffer: memoryview, offset: int, count: int
-) -> tuple[float, ...]:
-    if count == 0:
-        return ()
-    return _F32_VALUES.validate_python(
-        struct.unpack_from(f"<{count}f", buffer, offset)
-    )
-
-
-def _column_view(
-    *, buffer: memoryview[int], offset: int, byte_count: int
+def _view(
+    buffer: memoryview[int], offset: int, byte_count: int
 ) -> memoryview[int]:
-    assert offset >= 0
-    assert byte_count >= 0
     return buffer[offset : offset + byte_count]
 
 
-def _row_indices_offset(capacity: int) -> int:
-    assert capacity > 0
-    return HEADER_STRUCT.size
+def _row_indices_offset() -> int:
+    return _HEADER.size
 
 
-def _return_values_offset(capacity: int) -> int:
-    return _step_counts_offset(capacity) + capacity * _I64.size
+def _step_counts_offset(decision_capacity: int) -> int:
+    return _row_indices_offset() + decision_capacity * _I64.size
 
 
-def _step_counts_offset(capacity: int) -> int:
-    return _row_indices_offset(capacity) + capacity * _I64.size
+def _trajectory_offsets_offset(decision_capacity: int) -> int:
+    return _step_counts_offset(decision_capacity) + (
+        decision_capacity * _I64.size
+    )
+
+
+def _trajectory_lengths_offset(
+    *, decision_capacity: int, trajectory_capacity: int
+) -> int:
+    return _trajectory_offsets_offset(decision_capacity) + (
+        trajectory_capacity * _I64.size
+    )
+
+
+def _terminal_rewards_offset(
+    *, decision_capacity: int, trajectory_capacity: int
+) -> int:
+    return (
+        _trajectory_lengths_offset(
+            decision_capacity=decision_capacity,
+            trajectory_capacity=trajectory_capacity,
+        )
+        + trajectory_capacity * _I64.size
+    )
+
+
+__all__ = (
+    "MAX_TRAINABLE_DECISIONS_PER_ROUND",
+    "RolloutArenaHeader",
+    "RolloutColumnViews",
+    "arena_byte_size",
+    "empty_header",
+    "pack_decisions",
+    "pack_header",
+    "pack_trajectories",
+    "rollout_column_views",
+    "unpack_header",
+)

@@ -26,9 +26,9 @@ def test_training_event_serializes_exact_current_envelope() -> None:
         fields={"total_updates": 4},
     )
 
-    assert TRAINING_EVENT_SCHEMA_VERSION == 3
+    assert TRAINING_EVENT_SCHEMA_VERSION == 4
     assert event.model_dump(mode="json") == {
-        "schema_version": 3,
+        "schema_version": 4,
         "event": "update",
         "recorded_at_ms": 11,
         "process": {
@@ -42,7 +42,7 @@ def test_training_event_serializes_exact_current_envelope() -> None:
 
 
 def test_training_event_rejects_non_current_schema() -> None:
-    for schema_version in (2, 4):
+    for schema_version in (3, 5):
         rejected = False
         try:
             _ = TrainingEvent.model_validate(
@@ -69,7 +69,7 @@ def test_training_event_rejects_unknown_envelope_field() -> None:
     try:
         _ = TrainingEvent.model_validate(
             {
-                "schema_version": 3,
+                "schema_version": 4,
                 "event": "update",
                 "recorded_at_ms": 11,
                 "process": {
@@ -96,7 +96,7 @@ def test_training_event_rejects_missing_required_envelope_fields() -> (
         "pid": 7,
     }
     base: dict[str, object] = {
-        "schema_version": 3,
+        "schema_version": 4,
         "event": "update",
         "recorded_at_ms": 11,
         "process": base_process,

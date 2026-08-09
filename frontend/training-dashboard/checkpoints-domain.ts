@@ -130,7 +130,7 @@ export class CheckpointsDomain {
       ),
       metricCell(
         "Unique storage",
-        formatBytes(this.#catalog?.total_unique_state_bytes ?? 0),
+        formatBytes(this.#catalog?.total_unique_payload_bytes ?? 0),
       ),
     );
     element("manifest-rows", HTMLTableSectionElement).replaceChildren(
@@ -156,10 +156,15 @@ export class CheckpointsDomain {
           [
             manifest.name,
             formatValue(manifest.total_updates),
-            formatValue(manifest.total_samples),
-            manifest.state_exists ? "Available" : "Missing",
-            formatBytes(manifest.state_size_bytes),
-            manifest.error ?? "Manifest valid / state present",
+            formatValue(manifest.total_trainable_decisions),
+            manifest.policy_exists && manifest.trainer_exists
+              ? "Available"
+              : "Missing",
+            formatBytes(
+              (manifest.policy_size_bytes ?? 0) +
+                (manifest.trainer_size_bytes ?? 0),
+            ),
+            manifest.error ?? "Manifest and payloads valid",
           ],
           actions,
           manifest.valid ? "" : "invalid-row",
@@ -170,8 +175,11 @@ export class CheckpointsDomain {
       ...(this.#catalog?.objects ?? []).map((item) =>
         row([
           item.checkpoint_id,
-          item.state_path,
-          formatBytes(item.state_size_bytes),
+          `${item.policy_path} / ${item.trainer_path}`,
+          formatBytes(
+            (item.policy_size_bytes ?? 0) +
+              (item.trainer_size_bytes ?? 0),
+          ),
           item.referenced_by.join(", ") || "None",
           item.error ?? (item.orphan ? "Orphan" : "Referenced"),
         ], item.valid ? "" : "invalid-row")

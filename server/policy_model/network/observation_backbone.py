@@ -69,9 +69,13 @@ class EncodedObservation:
             card_choice_embeddings=self._card_choice_embeddings,
         )
 
+    def observation_context(self) -> Tensor:
+        """Return the query-position representation for scalar heads."""
+        return self._observation_context
+
 
 @final
-class ObservationEncoder(nn.Module):
+class ObservationBackbone(nn.Module):
     """Own token encoding and structure-aware attention."""
 
     def __init__(
@@ -161,4 +165,4 @@ def _shared_candidate_rows(
     return slice(None)
 
 
-__all__ = ("EncodedObservation", "ObservationEncoder")
+__all__ = ("EncodedObservation", "ObservationBackbone")

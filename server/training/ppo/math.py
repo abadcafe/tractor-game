@@ -14,6 +14,8 @@ class PPOObjectiveConfig:
     """Scalar coefficients for clipped PPO objective calculation."""
 
     ppo_clip: float
+    value_clip: float
+    value_coef: float
     entropy_coef: float
 
 
@@ -26,6 +28,8 @@ class PPOObjectiveTensors:
     objective_loss: Tensor
     approx_kl: Tensor
     clip_fraction: Tensor
+    value_loss: Tensor
+    value_clip_fraction: Tensor
 
 
 def clipped_ppo_objective(
@@ -34,6 +38,9 @@ def clipped_ppo_objective(
     new_log_probabilities: Tensor,
     advantages: Tensor,
     entropies: Tensor,
+    old_values: Tensor,
+    new_values: Tensor,
+    value_targets: Tensor,
     config: PPOObjectiveConfig,
 ) -> PPOObjectiveTensors:
     """Calculate clipped PPO policy loss and diagnostics."""
@@ -59,13 +66,46 @@ def clipped_ppo_objective(
         (log_ratio < lower_log_ratio) | (log_ratio > upper_log_ratio)
     ).to(dtype=torch.float32)
     objective_loss = policy_loss - config.entropy_coef * entropy
+    value_loss, value_clip_fraction = clipped_value_loss(
+        old_values=old_values,
+        new_values=new_values,
+        value_targets=value_targets,
+        value_clip=config.value_clip,
+    )
+    objective_loss = objective_loss + config.value_coef * value_loss
     return PPOObjectiveTensors(
         policy_loss=policy_loss,
         entropy=entropy,
         objective_loss=objective_loss,
         approx_kl=approx_kl.mean(),
         clip_fraction=clip_fraction.mean(),
+        value_loss=value_loss,
+        value_clip_fraction=value_clip_fraction,
     )
+
+
+def clipped_value_loss(
+    *,
+    old_values: Tensor,
+    new_values: Tensor,
+    value_targets: Tensor,
+    value_clip: float,
+) -> tuple[Tensor, Tensor]:
+    """Return standard clipped critic regression loss and clip rate."""
+    assert old_values.shape == new_values.shape
+    assert value_targets.shape == new_values.shape
+    assert 0.0 < value_clip <= 1.0
+    value_delta = new_values - old_values
+    clipped_values = old_values + torch.clamp(
+        value_delta,
+        min=-value_clip,
+        max=value_clip,
+    )
+    plain_errors = (new_values - value_targets).square()
+    clipped_errors = (clipped_values - value_targets).square()
+    loss = 0.5 * torch.maximum(plain_errors, clipped_errors).mean()
+    fraction = value_delta.abs().gt(value_clip).to(torch.float32).mean()
+    return loss, fraction
 
 
 def _log_ratio_bounds(

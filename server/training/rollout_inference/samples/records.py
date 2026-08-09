@@ -185,6 +185,7 @@ class CompactPolicyDecisionBatch:
     policy_versions: tuple[int, ...]
     row_indices: tuple[int, ...]
     choice_counts: tuple[int, ...]
+    scored_choice_step_counts: tuple[int, ...]
     action_choice_batch: CompactActionChoiceBatch
 
     def __post_init__(self) -> None:
@@ -193,23 +194,29 @@ class CompactPolicyDecisionBatch:
         assert len(self.policy_versions) == rows
         assert len(self.row_indices) == rows
         assert len(self.choice_counts) == rows
+        assert len(self.scored_choice_step_counts) == rows
         assert all(version >= 0 for version in self.policy_versions)
         assert all(row >= 0 for row in self.row_indices)
         assert all(count > 0 for count in self.choice_counts)
+        assert all(
+            count > 0 for count in self.scored_choice_step_counts
+        )
 
     def row_count(self) -> int:
         return self.action_choice_batch.row_count
 
 
 @dataclass(frozen=True, slots=True)
-class RankReturnTargets:
-    """Rank-local return targets materialized on one compute device."""
+class RankTrajectoryBatch:
+    """Rank-local completed seat trajectories on one compute device."""
 
     policy_version: int
     model_rank_index: int
     row_indices: Tensor
     step_counts: Tensor
-    return_values: Tensor
+    trajectory_offsets: Tensor
+    trajectory_lengths: Tensor
+    terminal_rewards: Tensor
     round_count: int
     total_step_count: int
     max_step_count: int
@@ -219,19 +226,29 @@ class RankReturnTargets:
         assert self.model_rank_index >= 0
         assert self.row_indices.ndim == 1
         assert self.step_counts.shape == self.row_indices.shape
-        assert self.return_values.shape == self.row_indices.shape
+        assert self.trajectory_offsets.ndim == 1
+        assert self.trajectory_lengths.shape == (
+            self.trajectory_offsets.shape
+        )
+        assert self.terminal_rewards.shape == (
+            self.trajectory_offsets.shape
+        )
         assert self.row_indices.dtype == torch.long
         assert self.step_counts.dtype == torch.long
-        assert self.return_values.dtype == torch.float32
+        assert self.trajectory_offsets.dtype == torch.long
+        assert self.trajectory_lengths.dtype == torch.long
+        assert self.terminal_rewards.dtype == torch.float32
         assert self.round_count >= 0
         assert self.total_step_count >= 0
         assert self.max_step_count >= 0
         if self.is_empty():
             assert self.total_step_count == 0
             assert self.max_step_count == 0
+            assert int(self.trajectory_offsets.shape[0]) == 0
         else:
             assert self.total_step_count > 0
             assert self.max_step_count > 0
+            assert int(self.trajectory_offsets.shape[0]) > 0
 
     def is_empty(self) -> bool:
         return int(self.row_indices.shape[0]) == 0
@@ -243,5 +260,5 @@ __all__ = (
     "CompactPolicyDecisionBatch",
     "DecisionHandle",
     "PolicySampleColumns",
-    "RankReturnTargets",
+    "RankTrajectoryBatch",
 )

@@ -33,6 +33,7 @@ def test_model_package_exposes_only_complete_model_api() -> None:
         "EncodedObservation",
         "MIN_ATTENTION_HEAD_DIMENSION",
         "ModelConfig",
+        "ObservationBackbone",
         "PolicyModel",
     )
 

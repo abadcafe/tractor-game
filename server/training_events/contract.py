@@ -68,7 +68,7 @@ class EventContext:
     worker_index: int | None = None
     model_rank_index: int | None = None
     game_env_index: int | None = None
-    episode_id: int | None = None
+    round_id: int | None = None
     seat: EventSeat | None = None
     decision_index: int | None = None
     request_id: int | None = None
@@ -84,7 +84,7 @@ class EventContext:
             self.worker_index,
             self.model_rank_index,
             self.game_env_index,
-            self.episode_id,
+            self.round_id,
             self.decision_index,
             self.request_id,
             self.batch_id,

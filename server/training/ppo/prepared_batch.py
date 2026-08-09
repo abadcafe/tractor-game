@@ -109,7 +109,9 @@ def empty_ppo_minibatch(
         replay=None,
         sample_indices=empty_long,
         old_log_probabilities=empty_float,
+        old_values=empty_float,
         advantages=empty_float,
+        value_targets=empty_float,
         local_count=0,
         global_count=global_count,
     )

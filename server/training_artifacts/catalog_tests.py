@@ -23,10 +23,11 @@ def test_read_checkpoint_catalog_lists_manifest_object_and_orphan(
 ) -> None:
     current_id = "a" * 32
     orphan_id = "b" * 32
-    _write_checkpoint(tmp_path, "latest.json", current_id, b"state")
+    _write_checkpoint(tmp_path, "latest.json", current_id, b"p", b"t")
     orphan = tmp_path / "checkpoints" / "objects" / orphan_id
     orphan.mkdir(parents=True)
-    _ = orphan.joinpath("state.pt").write_bytes(b"orphan")
+    _ = orphan.joinpath("policy.pt").write_bytes(b"p")
+    _ = orphan.joinpath("trainer.pt").write_bytes(b"t")
 
     result = read_checkpoint_catalog(tmp_path)
 
@@ -40,7 +41,7 @@ def test_read_checkpoint_catalog_lists_manifest_object_and_orphan(
         orphan_id,
     ]
     assert result.value.objects[1].orphan is True
-    assert result.value.total_unique_state_bytes == 11
+    assert result.value.total_unique_payload_bytes == 4
 
 
 def test_invalid_object_id_is_visible_but_never_valid(
@@ -48,7 +49,7 @@ def test_invalid_object_id_is_visible_but_never_valid(
 ) -> None:
     invalid = tmp_path / "checkpoints" / "objects" / "foo"
     invalid.mkdir(parents=True)
-    _ = invalid.joinpath("state.pt").write_bytes(b"state")
+    _ = invalid.joinpath("policy.pt").write_bytes(b"policy")
 
     result = read_checkpoint_catalog(tmp_path)
 
@@ -57,7 +58,7 @@ def test_invalid_object_id_is_visible_but_never_valid(
     assert result.value.objects[0].checkpoint_id == "foo"
     assert result.value.objects[0].valid is False
     assert result.value.objects[0].error is not None
-    assert result.value.total_unique_state_bytes == 0
+    assert result.value.total_unique_payload_bytes == 0
 
 
 def test_read_checkpoint_catalog_keeps_invalid_manifest_visible(
@@ -79,11 +80,13 @@ def test_read_checkpoint_catalog_rejects_mismatched_schema_manifest(
     tmp_path: Path,
 ) -> None:
     checkpoint_id = "a" * 32
-    _write_checkpoint(tmp_path, "latest.json", checkpoint_id, b"state")
+    _write_checkpoint(
+        tmp_path, "latest.json", checkpoint_id, b"policy", b"trainer"
+    )
     manifest_path = tmp_path / "checkpoints" / "latest.json"
     current = manifest_path.read_text(encoding="utf-8")
     stale = current.replace(
-        '"schema_version": 26', '"schema_version": 0'
+        '"schema_version": 27', '"schema_version": 0'
     )
     assert stale != current
     _ = manifest_path.write_text(stale, encoding="utf-8")
@@ -95,7 +98,7 @@ def test_read_checkpoint_catalog_rejects_mismatched_schema_manifest(
     manifest = result.value.manifests[0]
     assert manifest.valid is False
     assert manifest.error is not None
-    assert "Input should be 26" in manifest.error
+    assert "Input should be 27" in manifest.error
 
 
 def test_web_application_import_does_not_load_torch() -> None:
@@ -120,24 +123,31 @@ def _write_checkpoint(
     run_dir: Path,
     manifest_name: str,
     checkpoint_id: str,
-    state: bytes,
+    policy: bytes,
+    trainer: bytes,
 ) -> None:
     checkpoint_dir = run_dir / "checkpoints"
-    state_path = Path("objects") / checkpoint_id / "state.pt"
-    absolute_state = checkpoint_dir / state_path
-    absolute_state.parent.mkdir(parents=True)
-    _ = absolute_state.write_bytes(state)
+    object_dir = Path("objects") / checkpoint_id
+    policy_path = object_dir / "policy.pt"
+    trainer_path = object_dir / "trainer.pt"
+    absolute_policy = checkpoint_dir / policy_path
+    absolute_trainer = checkpoint_dir / trainer_path
+    absolute_policy.parent.mkdir(parents=True)
+    _ = absolute_policy.write_bytes(policy)
+    _ = absolute_trainer.write_bytes(trainer)
     result = write_checkpoint_manifest(
         path=checkpoint_dir / manifest_name,
         manifest=CheckpointManifest(
             checkpoint_id=checkpoint_id,
-            state_path=state_path,
-            state_sha256=hashlib.sha256(state).hexdigest(),
+            policy_path=policy_path,
+            policy_sha256=hashlib.sha256(policy).hexdigest(),
+            trainer_path=trainer_path,
+            trainer_sha256=hashlib.sha256(trainer).hexdigest(),
             metadata=CheckpointMetadata(
                 model_config=ModelConfig(),
                 training_config_values=TrainConfig().to_json(),
                 total_rounds=10,
-                total_samples=20,
+                total_trainable_decisions=20,
                 total_updates=2,
             ),
         ),

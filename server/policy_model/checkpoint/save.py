@@ -1,4 +1,4 @@
-"""Atomic checkpoint save transaction."""
+"""Atomic schema-27 checkpoint save transaction."""
 
 from __future__ import annotations
 
@@ -14,7 +14,8 @@ from torch import Tensor
 import server.policy_model.checkpoint.manifest as checkpoint_manifest
 from server.checkpoint_contract import (
     CHECKPOINT_OBJECTS_DIR,
-    CHECKPOINT_STATE_FILENAME,
+    CHECKPOINT_POLICY_FILENAME,
+    CHECKPOINT_TRAINER_FILENAME,
 )
 from server.foundation import result as _result
 from server.policy_model.checkpoint.manifest import (
@@ -22,7 +23,8 @@ from server.policy_model.checkpoint.manifest import (
     managed_update_number_from_manifest_path,
 )
 from server.policy_model.checkpoint.payload import (
-    write_checkpoint_payload,
+    write_policy_payload,
+    write_trainer_payload,
 )
 from server.policy_model.checkpoint.pruning import (
     preflight_checkpoint_pruning,
@@ -33,7 +35,7 @@ from server.policy_model.checkpoint.schema import (
     CheckpointManifest,
     CheckpointMetadata,
     checkpoint_corruption,
-    sha256_file,
+    sha256_checkpoint_file,
 )
 
 
@@ -45,10 +47,7 @@ class _ManifestBackup:
 
 @dataclass(frozen=True, slots=True)
 class CheckpointSaveResult:
-    """Committed checkpoint save result.
-
-    Post-commit pruning failures do not undo the saved checkpoint.
-    """
+    """Committed checkpoint save result."""
 
     post_commit_prune_failure: _result.Rejected | None
 
@@ -56,12 +55,13 @@ class CheckpointSaveResult:
 def save_checkpoint(
     *,
     manifest_paths: tuple[Path, ...],
-    model_state: Mapping[str, Tensor],
+    policy_state: Mapping[str, Tensor],
+    value_state: Mapping[str, Tensor],
     optimizer_state: dict[str, object],
     metadata: CheckpointMetadata,
     retained_update_count: int,
 ) -> _result.Ok[CheckpointSaveResult] | _result.Rejected:
-    """Save one state object and write each manifest atomically."""
+    """Commit one immutable policy/trainer object and its manifests."""
     assert retained_update_count >= 0
     checkpoint_dir_result = checkpoint_dir_from_manifest_paths(
         manifest_paths
@@ -87,59 +87,68 @@ def save_checkpoint(
     backup_result = _capture_manifest_backups(manifest_paths)
     if isinstance(backup_result, _result.Rejected):
         return backup_result
-    manifest_backups = backup_result.value
     checkpoint_id = uuid.uuid4().hex
-    relative_state_path = (
-        Path(CHECKPOINT_OBJECTS_DIR)
-        / checkpoint_id
-        / CHECKPOINT_STATE_FILENAME
-    )
-    state_path = checkpoint_dir / relative_state_path
+    relative_object_dir = Path(CHECKPOINT_OBJECTS_DIR) / checkpoint_id
+    object_dir = checkpoint_dir / relative_object_dir
+    policy_path = object_dir / CHECKPOINT_POLICY_FILENAME
+    trainer_path = object_dir / CHECKPOINT_TRAINER_FILENAME
     try:
-        state_path.parent.mkdir(parents=True, exist_ok=False)
+        object_dir.mkdir(parents=True, exist_ok=False)
     except OSError:
         return checkpoint_corruption(
-            state_path.parent,
-            "state object directory cannot be created",
+            object_dir, "checkpoint object directory cannot be created"
         )
-    payload_result = write_checkpoint_payload(
-        path=state_path,
+    policy_write = write_policy_payload(
+        path=policy_path,
         checkpoint_id=checkpoint_id,
-        model_state=model_state,
+        policy_state=policy_state,
+    )
+    if isinstance(policy_write, _result.Rejected):
+        _discard_object(object_dir)
+        return policy_write
+    trainer_write = write_trainer_payload(
+        path=trainer_path,
+        checkpoint_id=checkpoint_id,
+        value_state=value_state,
         optimizer_state=optimizer_state,
     )
-    if isinstance(payload_result, _result.Rejected):
-        _discard_state_object(state_path)
-        return payload_result
-    try:
-        state_sha256 = sha256_file(state_path)
-    except OSError:
-        _discard_state_object(state_path)
-        return checkpoint_corruption(
-            state_path, "state payload is not readable after write"
-        )
+    if isinstance(trainer_write, _result.Rejected):
+        _discard_object(object_dir)
+        return trainer_write
+    policy_digest = sha256_checkpoint_file(policy_path)
+    if isinstance(policy_digest, _result.Rejected):
+        _discard_object(object_dir)
+        return policy_digest
+    trainer_digest = sha256_checkpoint_file(trainer_path)
+    if isinstance(trainer_digest, _result.Rejected):
+        _discard_object(object_dir)
+        return trainer_digest
     manifest = CheckpointManifest(
         checkpoint_id=checkpoint_id,
-        state_path=relative_state_path,
-        state_sha256=state_sha256,
+        policy_path=(relative_object_dir / CHECKPOINT_POLICY_FILENAME),
+        policy_sha256=policy_digest.value,
+        trainer_path=(
+            relative_object_dir / CHECKPOINT_TRAINER_FILENAME
+        ),
+        trainer_sha256=trainer_digest.value,
         metadata=metadata,
     )
-    pruning_preflight_result = preflight_checkpoint_pruning(
+    pruning_preflight = preflight_checkpoint_pruning(
         checkpoint_dir=checkpoint_dir,
         retained_update_count=retained_update_count,
         pending_manifest_paths=manifest_paths,
         pending_checkpoint_id=checkpoint_id,
     )
-    if isinstance(pruning_preflight_result, _result.Rejected):
-        _discard_state_object(state_path)
-        return pruning_preflight_result
+    if isinstance(pruning_preflight, _result.Rejected):
+        _discard_object(object_dir)
+        return pruning_preflight
     for manifest_path in manifest_paths:
         manifest_result = checkpoint_manifest.write_checkpoint_manifest(
             path=manifest_path, manifest=manifest
         )
         if isinstance(manifest_result, _result.Rejected):
-            _restore_manifest_backups(manifest_backups)
-            _discard_state_object(state_path)
+            _restore_manifest_backups(backup_result.value)
+            _discard_object(object_dir)
             return manifest_result
     prune_result = prune_checkpoints(
         checkpoint_dir=checkpoint_dir,
@@ -147,19 +156,15 @@ def save_checkpoint(
     )
     if isinstance(prune_result, _result.Rejected):
         return _result.Ok(
-            value=CheckpointSaveResult(
-                post_commit_prune_failure=prune_result
-            )
+            CheckpointSaveResult(post_commit_prune_failure=prune_result)
         )
     return _result.Ok(
-        value=CheckpointSaveResult(post_commit_prune_failure=None)
+        CheckpointSaveResult(post_commit_prune_failure=None)
     )
 
 
 def _validate_update_manifest_paths(
-    *,
-    manifest_paths: tuple[Path, ...],
-    total_updates: int,
+    *, manifest_paths: tuple[Path, ...], total_updates: int
 ) -> _result.Ok[None] | _result.Rejected:
     for path in manifest_paths:
         update_number = managed_update_number_from_manifest_path(path)
@@ -170,7 +175,7 @@ def _validate_update_manifest_paths(
                 path,
                 "update manifest number must equal total_updates",
             )
-    return _result.Ok(value=None)
+    return _result.Ok(None)
 
 
 def _capture_manifest_backups(
@@ -188,7 +193,7 @@ def _capture_manifest_backups(
                 "manifest file is not readable before checkpoint write",
             )
         backups.append(_ManifestBackup(path=path, content=content))
-    return _result.Ok(value=tuple(backups))
+    return _result.Ok(tuple(backups))
 
 
 def _restore_manifest_backups(
@@ -198,29 +203,25 @@ def _restore_manifest_backups(
         if backup.content is None:
             _discard_file(backup.path)
             continue
-        tmp_path = backup.path.with_suffix(
+        temporary = backup.path.with_suffix(
             f"{backup.path.suffix}.rollback"
         )
         try:
-            _ = tmp_path.write_bytes(backup.content)
-            os.replace(tmp_path, backup.path)
+            _ = temporary.write_bytes(backup.content)
+            os.replace(temporary, backup.path)
         except OSError:
-            _discard_file(tmp_path)
+            _discard_file(temporary)
 
 
-def _discard_state_object(state_path: Path) -> None:
+def _discard_object(object_dir: Path) -> None:
     try:
-        shutil.rmtree(state_path.parent)
-    except FileNotFoundError:
-        return
-    except OSError:
+        shutil.rmtree(object_dir)
+    except FileNotFoundError, OSError:
         return
 
 
 def _discard_file(path: Path) -> None:
     try:
         path.unlink()
-    except FileNotFoundError:
-        return
-    except OSError:
+    except FileNotFoundError, OSError:
         return

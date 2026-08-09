@@ -96,7 +96,7 @@ def test_text_summary_uses_injected_time_for_process_uptime(
             checkpoint_directory=tmp_path / "checkpoints",
             manifests=(),
             objects=(),
-            total_unique_state_bytes=0,
+            total_unique_payload_bytes=0,
         ),
     )
 

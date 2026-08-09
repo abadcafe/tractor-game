@@ -40,7 +40,7 @@ def test_runtime_checkpoint_state_round_trips_torch_checkpoint(
         train_config=train_config,
         execution_config=execution_config,
         total_rounds=7,
-        total_samples=111,
+        total_trainable_decisions=111,
         total_updates=3,
         retained_update_count=1,
     )
@@ -54,7 +54,7 @@ def test_runtime_checkpoint_state_round_trips_torch_checkpoint(
     assert isinstance(saved, Ok)
     assert isinstance(loaded, Ok)
     assert loaded.value.total_rounds == 7
-    assert loaded.value.total_samples == 111
+    assert loaded.value.total_trainable_decisions == 111
     assert loaded.value.total_updates == 3
     state_match = select_canonical_runtime_training_state(
         (created.state, loaded.value.state)
@@ -82,7 +82,7 @@ def test_save_runtime_checkpoint_state_preserves_cpu_rng_state(
         train_config=train_config,
         execution_config=execution_config,
         total_rounds=0,
-        total_samples=0,
+        total_trainable_decisions=0,
         total_updates=0,
         retained_update_count=1,
     )

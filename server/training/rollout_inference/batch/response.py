@@ -13,6 +13,7 @@ from server.policy_model.actions import LegalActionSpace
 from server.policy_model.actions.decoding import (
     action_trace_from_choice_ids,
 )
+from server.training.rollout.policy import PolicyDecision
 from server.training.rollout_inference.batch.response_types import (
     CompletedPolicyResponse,
     PolicyResponse,
@@ -27,9 +28,8 @@ from server.training.rollout_inference.samples import (
     CompactPolicyDecisionBatch,
     DecisionHandle,
 )
-from server.training.self_play.policy import PolicyDecision
 
-WIRE_RESPONSE_BATCH_MAGIC = 0x5452504F4C4F4333
+WIRE_RESPONSE_BATCH_MAGIC = 0x5452504F4C4F4334
 
 _I64 = struct.Struct("<q")
 _I64_VALUE = TypeAdapter(
@@ -137,6 +137,9 @@ def build_completed_policy_responses(
                     row_index
                 ],
                 choice_count=decisions.choice_counts[row_index],
+                scored_choice_step_count=(
+                    decisions.scored_choice_step_counts[row_index]
+                ),
             )
         )
     return Ok(value=tuple(responses))
@@ -224,7 +227,10 @@ def decode_policy_response(
                 policy_version=response.decision_handle_policy_version,
                 row_index=response.decision_handle_row_index,
             ),
-            choice_count=response.choice_count,
+            legal_choice_count=response.choice_count,
+            scored_choice_step_count=(
+                response.scored_choice_step_count
+            ),
         )
     )
 
@@ -260,6 +266,8 @@ class _ResponseLayout:
         self.row_indices_offset = offset
         offset += row_count * _I64.size
         self.choice_counts_offset = offset
+        offset += row_count * _I64.size
+        self.scored_choice_step_counts_offset = offset
         offset += row_count * _I64.size
         self.action_choice_counts_offset = offset
         offset += row_count * _I64.size
@@ -353,6 +361,12 @@ def _write_completed_row(
         layout.choice_counts_offset,
         row_index,
         response.choice_count,
+    )
+    _write_i64_column(
+        data,
+        layout.scored_choice_step_counts_offset,
+        row_index,
+        response.scored_choice_step_count,
     )
     _write_i64_column(
         data,
@@ -492,11 +506,15 @@ def _decode_completed_response(
     choice_count = _read_i64_column(
         data, layout.choice_counts_offset, row_index
     )
+    scored_choice_step_count = _read_i64_column(
+        data, layout.scored_choice_step_counts_offset, row_index
+    )
     if (
         model_rank_index < 0
         or policy_version < 0
         or row_index_value < 0
         or choice_count <= 0
+        or scored_choice_step_count <= 0
     ):
         return Rejected(reason="policy response handle is invalid")
     choice_start = (
@@ -518,6 +536,7 @@ def _decode_completed_response(
             decision_handle_policy_version=policy_version,
             decision_handle_row_index=row_index_value,
             choice_count=choice_count,
+            scored_choice_step_count=scored_choice_step_count,
         )
     )
 

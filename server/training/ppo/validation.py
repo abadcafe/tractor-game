@@ -15,6 +15,9 @@ PPO_OBJECTIVE_LOSS_NONFINITE = 4
 PPO_APPROX_KL_NONFINITE = 5
 PPO_CLIP_FRACTION_NONFINITE = 6
 PPO_GRADIENTS_NONFINITE = 7
+PPO_VALUE_LOSS_NONFINITE = 8
+PPO_VALUE_CLIP_FRACTION_NONFINITE = 9
+PPO_EXPLAINED_VARIANCE_NONFINITE = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,4 +109,10 @@ def validation_rejection_reason(code: Tensor) -> str | None:
         return "PPO clip_fraction must be finite"
     if value == PPO_GRADIENTS_NONFINITE:
         return "PPO gradients must be finite"
+    if value == PPO_VALUE_LOSS_NONFINITE:
+        return "PPO value_loss must be finite"
+    if value == PPO_VALUE_CLIP_FRACTION_NONFINITE:
+        return "PPO value_clip_fraction must be finite"
+    if value == PPO_EXPLAINED_VARIANCE_NONFINITE:
+        return "PPO explained_variance must be finite"
     return "PPO validation failed"

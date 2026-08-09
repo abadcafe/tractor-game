@@ -13,6 +13,7 @@ from server.policy_model.actions.decoding import (
 )
 from server.policy_model.network import PolicyModel
 from server.policy_model.observation import Observation
+from server.training.rollout.policy import PolicyDecision
 from server.training.rollout_inference.batch import (
     PolicyRequestCompiler,
     PolicyRequestInput,
@@ -30,7 +31,6 @@ from server.training.rollout_inference.sampler import (
 from server.training.rollout_inference.samples import (
     ModelRankSampleArena,
 )
-from server.training.self_play.policy import PolicyDecision
 
 
 @final

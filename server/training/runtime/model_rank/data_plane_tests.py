@@ -675,7 +675,7 @@ def _decision_key(*, policy_version: int) -> TrainingDecisionKey:
         base_seed=0,
         policy_version=policy_version,
         rollout_id=f"rollout-{policy_version}",
-        episode_id=0,
+        round_id=0,
         seat=Seat.A,
         decision_index=0,
     )
@@ -683,7 +683,8 @@ def _decision_key(*, policy_version: int) -> TrainingDecisionKey:
 
 def _runtime_state() -> RuntimeTrainingState:
     return RuntimeTrainingState(
-        model_state={"weight": torch.tensor([1.0])},
+        policy_state={"weight": torch.tensor([1.0])},
+        value_state={"weight": torch.tensor([2.0])},
         optimizer_state={
             "kind": "adamw",
             "step_count": 0,

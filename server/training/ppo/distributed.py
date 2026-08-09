@@ -82,7 +82,7 @@ class _PPOLossForwarderAdapter:
         profile: PPOProfileAccumulator,
     ) -> PPOLossForwardOutput:
         tensors = self.module(minibatch, profile)
-        validation_code = tensors[5]
+        validation_code = tensors[8]
         if self.partition.world_size > 1:
             if not dist.is_initialized():
                 raise AssertionError(
@@ -91,7 +91,7 @@ class _PPOLossForwarderAdapter:
             validation_code = validation_code.detach().clone()
             _all_reduce_in_place(validation_code, dist.ReduceOp.MAX)
         return loss_forward_output_from_tensors(
-            (*tensors[:5], validation_code),
+            (*tensors[:8], validation_code),
         )
 
     def train(self, mode: bool = True) -> nn.Module:

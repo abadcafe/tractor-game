@@ -9,7 +9,7 @@ from server.training.rollout_inference.samples.records import (
     CompactPolicyDecisionBatch,
     DecisionHandle,
     PolicySampleColumns,
-    RankReturnTargets,
+    RankTrajectoryBatch,
 )
 
 __all__ = (
@@ -19,5 +19,5 @@ __all__ = (
     "DecisionHandle",
     "ModelRankSampleArena",
     "PolicySampleColumns",
-    "RankReturnTargets",
+    "RankTrajectoryBatch",
 )

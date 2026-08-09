@@ -156,7 +156,7 @@ def _request(
             base_seed=11,
             policy_version=4,
             rollout_id="request-wire-test",
-            episode_id=2,
+            round_id=2,
             seat=Seat.A,
             decision_index=request_id,
         ),

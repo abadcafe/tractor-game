@@ -1,4 +1,4 @@
-"""Deterministic random streams for self-play policy decisions.
+"""Deterministic random streams for rollout policy decisions.
 
 The sampler derives randomness from explicit keys instead of process,
 device, or torch global RNG state.  This makes checkpoint resume
@@ -22,7 +22,7 @@ class TrainingDecisionKey:
     base_seed: int
     policy_version: int
     rollout_id: str
-    episode_id: int
+    round_id: int
     seat: Seat
     decision_index: int
 
@@ -30,7 +30,7 @@ class TrainingDecisionKey:
         assert self.base_seed >= 0
         assert self.policy_version >= 0
         assert self.rollout_id
-        assert self.episode_id >= 0
+        assert self.round_id >= 0
         assert self.decision_index >= 0
 
 
@@ -46,7 +46,7 @@ def policy_choice_threshold(
             "policy",
             key.base_seed,
             key.policy_version,
-            key.episode_id,
+            key.round_id,
             seat_id(key.seat),
             key.decision_index,
             step_index,

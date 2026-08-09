@@ -35,7 +35,7 @@ def test_history_pages_backward_and_preserves_store_identity(
     assert latest.value.store_id is not None
     assert [item.sequence for item in latest.value.events] == [2, 3]
     assert all(
-        item.event.schema_version == 3 for item in latest.value.events
+        item.event.schema_version == 4 for item in latest.value.events
     )
     assert latest.value.next_before_sequence == 2
     older = query_training_log_history(

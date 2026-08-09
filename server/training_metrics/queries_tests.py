@@ -33,10 +33,10 @@ def test_metrics_project_all_updates(
         context=EventContext(policy_version=0, rollout_id="rollout-a"),
         fields={
             "total_rounds": 4,
-            "total_samples": 32,
+            "total_trainable_decisions": 32,
             "total_updates": 1,
             "process_rounds_per_second": 2.0,
-            "process_samples_per_second": 16.0,
+            "process_trainable_decisions_per_second": 16.0,
             "policy_loss": 0.25,
             "update_cycle_seconds": 3.0,
         },
@@ -49,8 +49,8 @@ def test_metrics_project_all_updates(
 
     assert isinstance(result, Ok)
     assert result.value.store_id is not None
-    assert result.value.totals["total_samples"] == 32
-    assert result.value.totals["samples_per_second"] == 16.0
+    assert result.value.totals["total_trainable_decisions"] == 32
+    assert result.value.totals["trainable_decisions_per_second"] == 16.0
     assert result.value.totals["update_seconds"] == 3.0
     point = result.value.datasets.throughput[0]
     assert point.update == 1
@@ -74,7 +74,7 @@ def test_metrics_join_late_cross_process_events_by_rollout_id(
             ),
             fields={
                 "total_rounds": 1,
-                "total_samples": 4,
+                "total_trainable_decisions": 4,
                 "total_updates": 1,
             },
         )
@@ -141,7 +141,7 @@ def test_metric_summary_projects_latest_update_without_series(
     sink.emit(
         "update",
         context=EventContext(policy_version=0, rollout_id="rollout-a"),
-        fields={"total_updates": 1, "total_samples": 32},
+        fields={"total_updates": 1, "total_trainable_decisions": 32},
     )
     sink.emit(
         "inference.batch",
@@ -153,8 +153,8 @@ def test_metric_summary_projects_latest_update_without_series(
         context=EventContext(policy_version=1, rollout_id="rollout-b"),
         fields={
             "total_updates": 2,
-            "total_samples": 64,
-            "process_samples_per_second": 16.0,
+            "total_trainable_decisions": 64,
+            "process_trainable_decisions_per_second": 16.0,
         },
     )
     sink.emit("logging.drop", fields={"count": 2})
@@ -168,8 +168,8 @@ def test_metric_summary_projects_latest_update_without_series(
     assert result.value.complete is False
     assert result.value.dropped_event_count == 2
     assert result.value.totals["total_updates"] == 2
-    assert result.value.totals["total_samples"] == 64
-    assert result.value.totals["samples_per_second"] == 16.0
+    assert result.value.totals["total_trainable_decisions"] == 64
+    assert result.value.totals["trainable_decisions_per_second"] == 16.0
 
 
 def test_metrics_project_live_inference_before_first_update(

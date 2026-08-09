@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Protocol
 
 import torch
 from torch import Tensor
@@ -22,6 +23,7 @@ from server.policy_model.observation import (
 from server.policy_model.observation.tensor import (
     ObservationTensorBatch,
 )
+from server.training.ppo.advantages import terminal_round_gae
 from server.training.ppo.minibatch import TensorizedPPOMinibatch
 from server.training.ppo.replay_tensors import PPOReplayTensorBatch
 from server.training.rollout_inference.samples.materializer import (
@@ -29,7 +31,7 @@ from server.training.rollout_inference.samples.materializer import (
 )
 from server.training.rollout_inference.samples.records import (
     CompactPolicyDecisionBatch,
-    RankReturnTargets,
+    RankTrajectoryBatch,
 )
 
 _INITIAL_CAPACITY = 256
@@ -49,7 +51,9 @@ class ArenaPPOBatchSource:
     row_indices: Tensor
     step_counts: Tensor
     old_log_probabilities: Tensor
+    old_values: Tensor
     raw_advantages: Tensor
+    value_targets: Tensor
     max_step_count: int
 
     def sample_count(self) -> int:
@@ -68,6 +72,14 @@ class ArenaPPOBatchSource:
             advantages=advantages,
             global_count=global_count,
         )
+
+
+class ObservationValueEvaluator(Protocol):
+    """Frozen critic boundary needed while resolving rollout rows."""
+
+    def __call__(
+        self, observation: ObservationTensorBatch
+    ) -> Tensor: ...
 
 
 @dataclass(slots=True)
@@ -180,54 +192,79 @@ class ModelRankSampleArena:
                 choice_ids_padded=action_sample.choice_ids_padded,
                 step_counts=action_sample.step_counts,
                 choice_counts=action_sample.choice_counts,
+                scored_choice_step_counts=_scored_choice_step_counts(
+                    action_sample=action_sample,
+                    sample_count=sample_count,
+                ),
             )
         )
 
     def ppo_batch_source(
-        self, *, returns: RankReturnTargets
+        self,
+        *,
+        trajectories: RankTrajectoryBatch,
+        value_evaluator: ObservationValueEvaluator,
+        gae_lambda: float,
     ) -> _result.Ok[ArenaPPOBatchSource] | _result.Rejected:
-        if returns.is_empty():
-            return Rejected(reason="return commit has no decisions")
-        if returns.model_rank_index != self.model_rank_index:
+        if trajectories.is_empty():
+            return Rejected(reason="trajectory batch has no decisions")
+        if trajectories.model_rank_index != self.model_rank_index:
             return Rejected(
-                reason="return batch targets the wrong model rank"
+                reason="trajectory batch targets the wrong model rank"
             )
-        rows = returns.row_indices.to(
+        rows = trajectories.row_indices.to(
             dtype=torch.long, device=self.device
         )
-        steps = returns.step_counts.to(
+        steps = trajectories.step_counts.to(
             dtype=torch.long, device=self.device
         )
         valid = self._validate_return_rows(
-            policy_version=returns.policy_version,
+            policy_version=trajectories.policy_version,
             rows=rows,
             step_counts=steps,
         )
         if isinstance(valid, Rejected):
             return valid
-        return_values = returns.return_values.to(
-            dtype=torch.float32, device=self.device
-        )
         old_log_probabilities = (
             self._old_log_probabilities_tensor().index_select(0, rows)
+        )
+        with torch.no_grad():
+            old_values = value_evaluator(
+                self._select_observation(rows)
+            ).to(dtype=torch.float32)
+        assert old_values.shape == rows.shape
+        gae = terminal_round_gae(
+            old_values=old_values,
+            trajectory_offsets=trajectories.trajectory_offsets.to(
+                dtype=torch.long, device=self.device
+            ),
+            trajectory_lengths=trajectories.trajectory_lengths.to(
+                dtype=torch.long, device=self.device
+            ),
+            terminal_rewards=trajectories.terminal_rewards.to(
+                dtype=torch.float32, device=self.device
+            ),
+            gae_lambda=gae_lambda,
         )
         return Ok(
             value=ArenaPPOBatchSource(
                 arena=self,
-                policy_version=returns.policy_version,
+                policy_version=trajectories.policy_version,
                 model_rank_index=self.model_rank_index,
                 row_indices=rows,
                 step_counts=steps,
                 old_log_probabilities=old_log_probabilities,
-                raw_advantages=return_values,
-                max_step_count=returns.max_step_count,
+                old_values=old_values,
+                raw_advantages=gae.advantages,
+                value_targets=gae.value_targets,
+                max_step_count=trajectories.max_step_count,
             )
         )
 
     def discard_return_batch(
-        self, *, returns: RankReturnTargets
+        self, *, trajectories: RankTrajectoryBatch
     ) -> None:
-        if returns.model_rank_index != self.model_rank_index:
+        if trajectories.model_rank_index != self.model_rank_index:
             return
 
     def discard_uncommitted_policy_version(
@@ -295,7 +332,9 @@ class ModelRankSampleArena:
             old_log_probabilities=source.old_log_probabilities.index_select(
                 0, indices
             ),
+            old_values=source.old_values.index_select(0, indices),
             advantages=advantages.index_select(0, indices),
+            value_targets=source.value_targets.index_select(0, indices),
             local_count=local_count,
             global_count=global_count,
         )
@@ -605,6 +644,25 @@ def _single_policy_version(
     if any(value != versions[0] for value in versions):
         return Rejected(reason="sample batch mixes policy versions")
     return Ok(value=versions[0])
+
+
+def _scored_choice_step_counts(
+    *, action_sample: ActionSampleBatch, sample_count: int
+) -> Tensor:
+    """Count trace positions whose legal set contains a real choice."""
+    result = torch.zeros(
+        (sample_count,),
+        dtype=torch.long,
+        device=action_sample.choice_ids_padded.device,
+    )
+    scored = action_sample.legal_choice_masks.sum(dim=1).gt(1)
+    _ = result.index_add_(
+        0,
+        action_sample.active_sample_indices,
+        scored.to(dtype=torch.long),
+    )
+    assert _tensor_bool(result.gt(0).all())
+    return result
 
 
 def _zeros(

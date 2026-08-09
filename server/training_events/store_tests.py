@@ -72,7 +72,7 @@ def test_schema_rejects_incomplete_event_envelopes(
     result = initialize_database(tmp_path)
     assert isinstance(result, Ok)
     base: JsonObject = {
-        "schema_version": 3,
+        "schema_version": 4,
         "event": "update",
         "recorded_at_ms": 1,
         "process": {"kind": "coordinator", "pid": 1},

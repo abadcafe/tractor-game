@@ -1,16 +1,19 @@
-"""Worker-side append operations for shared rollout arenas."""
+"""Worker-side atomic completed-round arena writes."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from multiprocessing import shared_memory
 
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
+from server.training.rollout import CompletedRoundTrajectory
 from server.training.runtime.shared_rollout_arena.schema import (
+    MAX_TRAINABLE_DECISIONS_PER_ROUND,
     RolloutArenaHeader,
+    pack_decisions,
     pack_header,
-    pack_sample_references,
+    pack_trajectories,
     unpack_header,
 )
 from server.training.runtime.shared_rollout_arena.types import (
@@ -18,12 +21,11 @@ from server.training.runtime.shared_rollout_arena.types import (
     RolloutArenaHandle,
     RolloutRoundMetrics,
 )
-from server.training.self_play.returns import ReturnCommit
 
 
 @dataclass(slots=True)
 class SharedRolloutArenaWriter:
-    """Append completed worker samples to one shared arena."""
+    """Append whole rounds to one worker-owned shared arena."""
 
     handle: RolloutArenaHandle
     _segment: shared_memory.SharedMemory
@@ -33,72 +35,106 @@ class SharedRolloutArenaWriter:
         *,
         policy_version: int,
         metrics: RolloutRoundMetrics,
-        commit: ReturnCommit,
+        trajectory: CompletedRoundTrajectory,
     ) -> _result.Ok[RolloutArenaAppendResult] | _result.Rejected:
-        """Append as many rows from a completed round as fit."""
+        """Accept all trajectory rows or write none of them."""
         assert policy_version >= 0
-        if commit.policy_version != policy_version:
+        if trajectory.policy_version != policy_version:
             return Rejected(
-                reason="return commit policy version mismatch"
+                reason="round trajectory policy version mismatch"
             )
-        notify_progress = False
-        result: _result.Ok[RolloutArenaAppendResult] | _result.Rejected
+        decisions = trajectory.decisions()
+        decision_count = len(decisions)
+        if decision_count == 0:
+            return Rejected(
+                reason="completed round has no trainable decisions"
+            )
+        if decision_count > MAX_TRAINABLE_DECISIONS_PER_ROUND:
+            return Rejected(
+                reason="completed round exceeds rollout decision bound"
+            )
+        seat_trajectories = tuple(
+            item for item in trajectory.seats if item.decisions
+        )
+        assert seat_trajectories
+        assert len(seat_trajectories) <= 2
+        if metrics.trainable_decision_count != decision_count:
+            return Rejected(reason="round trajectory metric mismatch")
         _ = self.handle.lock.acquire()
         try:
             buffer = _segment_buffer(self._segment)
             header = unpack_header(buffer)
             if header.policy_version != policy_version:
-                result = Rejected(
+                return Rejected(
                     reason="rollout arena policy version mismatch"
                 )
-            elif header.sample_count >= header.capacity:
-                dropped = commit.sample_count()
-                updated = _add_dropped_samples(header, dropped)
-                pack_header(buffer, header=updated)
-                notify_progress = True
+            if not _round_fits(
+                header=header,
+                decision_count=decision_count,
+                trajectory_count=len(seat_trajectories),
+            ):
+                pack_header(
+                    buffer,
+                    header=_reject_round(header),
+                )
                 result = Ok(
-                    value=RolloutArenaAppendResult(
-                        accepted_sample_count=0,
-                        dropped_sample_count=dropped,
+                    RolloutArenaAppendResult(
+                        accepted=False,
                         capacity_reached=True,
                     )
                 )
             else:
-                remaining = header.capacity - header.sample_count
-                accepted = min(remaining, commit.sample_count())
-                dropped = commit.sample_count() - accepted
-                _write_commit_rows(
-                    buffer=buffer,
-                    capacity=header.capacity,
-                    start_index=header.sample_count,
-                    commit=commit,
-                    accepted_count=accepted,
+                row_indices = tuple(
+                    item.replay.row_index for item in decisions
                 )
-                updated = _advance_header(
+                step_counts = tuple(
+                    item.trace_step_count for item in decisions
+                )
+                offsets, lengths = _trajectory_spans(
+                    decision_start=header.decision_count,
+                    trajectory=trajectory,
+                )
+                pack_decisions(
+                    buffer=buffer,
+                    decision_capacity=header.decision_capacity,
+                    start=header.decision_count,
+                    row_indices=row_indices,
+                    step_counts=step_counts,
+                )
+                pack_trajectories(
+                    buffer=buffer,
+                    decision_capacity=header.decision_capacity,
+                    trajectory_capacity=header.trajectory_capacity,
+                    start=header.trajectory_count,
+                    offsets=offsets,
+                    lengths=lengths,
+                    terminal_rewards=tuple(
+                        trajectory.terminal_reward for _ in offsets
+                    ),
+                )
+                updated = _accept_round(
                     header=header,
                     metrics=metrics,
-                    accepted_step_counts=commit.step_counts[:accepted],
-                    accepted_sample_count=accepted,
-                    dropped_sample_count=dropped,
+                    step_counts=step_counts,
+                    trajectory_count=len(offsets),
                 )
                 pack_header(buffer, header=updated)
-                notify_progress = True
                 result = Ok(
-                    value=RolloutArenaAppendResult(
-                        accepted_sample_count=accepted,
-                        dropped_sample_count=dropped,
-                        capacity_reached=updated.sample_count
-                        >= updated.capacity,
+                    RolloutArenaAppendResult(
+                        accepted=True,
+                        capacity_reached=(
+                            updated.round_count
+                            >= updated.round_capacity
+                        ),
                     )
                 )
         finally:
             self.handle.lock.release()
-        if notify_progress:
-            _notify_progress(self.handle)
+        _notify_progress(self.handle)
         return result
 
     def record_cancelled_envs(self, count: int) -> None:
-        """Add cancelled game-env count after an arena reaches full."""
+        """Record game environments cancelled at update boundary."""
         assert count >= 0
         if count == 0:
             return
@@ -106,42 +142,153 @@ class SharedRolloutArenaWriter:
         try:
             buffer = _segment_buffer(self._segment)
             header = unpack_header(buffer)
-            updated = RolloutArenaHeader(
-                policy_version=header.policy_version,
-                sample_count=header.sample_count,
-                capacity=header.capacity,
-                round_count=header.round_count,
-                generated_action_count=header.generated_action_count,
-                accepted_action_count=header.accepted_action_count,
-                action_choice_count=header.action_choice_count,
-                game_over_count=header.game_over_count,
-                dropped_sample_count=header.dropped_sample_count,
-                cancelled_env_count=header.cancelled_env_count + count,
-                total_step_count=header.total_step_count,
-                max_step_count=header.max_step_count,
-                first_partnership_reward_sum=header.first_partnership_reward_sum,
-                second_partnership_reward_sum=header.second_partnership_reward_sum,
-                elapsed_seconds_max=header.elapsed_seconds_max,
+            pack_header(
+                buffer,
+                header=replace(
+                    header,
+                    cancelled_env_count=(
+                        header.cancelled_env_count + count
+                    ),
+                ),
             )
-            pack_header(buffer, header=updated)
         finally:
             self.handle.lock.release()
         _notify_progress(self.handle)
 
     def close(self) -> None:
-        """Detach this process from the shared memory segment."""
         self._segment.close()
 
 
 def attach_rollout_arena_writer(
     handle: RolloutArenaHandle,
 ) -> SharedRolloutArenaWriter:
-    """Attach a worker process to its rollout arena."""
     return SharedRolloutArenaWriter(
         handle=handle,
         _segment=shared_memory.SharedMemory(
             name=handle.shared_memory_name
         ),
+    )
+
+
+def _round_fits(
+    *,
+    header: RolloutArenaHeader,
+    decision_count: int,
+    trajectory_count: int,
+) -> bool:
+    return (
+        header.round_count < header.round_capacity
+        and header.decision_count + decision_count
+        <= header.decision_capacity
+        and header.trajectory_count + trajectory_count
+        <= header.trajectory_capacity
+    )
+
+
+def _trajectory_spans(
+    *, decision_start: int, trajectory: CompletedRoundTrajectory
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    offsets: list[int] = []
+    lengths: list[int] = []
+    next_offset = decision_start
+    for seat_trajectory in trajectory.seats:
+        length = len(seat_trajectory.decisions)
+        if length == 0:
+            continue
+        offsets.append(next_offset)
+        lengths.append(length)
+        next_offset += length
+    assert next_offset == decision_start + trajectory.decision_count()
+    return tuple(offsets), tuple(lengths)
+
+
+def _accept_round(
+    *,
+    header: RolloutArenaHeader,
+    metrics: RolloutRoundMetrics,
+    step_counts: tuple[int, ...],
+    trajectory_count: int,
+) -> RolloutArenaHeader:
+    decision_count = len(step_counts)
+    return RolloutArenaHeader(
+        policy_version=header.policy_version,
+        decision_count=header.decision_count + decision_count,
+        decision_capacity=header.decision_capacity,
+        trajectory_count=header.trajectory_count + trajectory_count,
+        trajectory_capacity=header.trajectory_capacity,
+        round_count=header.round_count + 1,
+        round_capacity=header.round_capacity,
+        model_action_count=(
+            header.model_action_count + metrics.model_action_count
+        ),
+        auto_action_count=(
+            header.auto_action_count + metrics.auto_action_count
+        ),
+        forced_action_count=(
+            header.forced_action_count + metrics.forced_action_count
+        ),
+        trainable_decision_count=(
+            header.trainable_decision_count
+            + metrics.trainable_decision_count
+        ),
+        scored_choice_step_count=(
+            header.scored_choice_step_count
+            + metrics.scored_choice_step_count
+        ),
+        game_over_count=header.game_over_count + int(metrics.game_over),
+        rejected_round_count=header.rejected_round_count,
+        cancelled_env_count=header.cancelled_env_count,
+        total_trace_step_count=(
+            header.total_trace_step_count + sum(step_counts)
+        ),
+        max_trace_step_count=max(
+            header.max_trace_step_count,
+            max(step_counts),
+        ),
+        model_win_count=(
+            header.model_win_count + int(metrics.model_reward > 0.0)
+        ),
+        auto_win_count=(
+            header.auto_win_count + int(metrics.auto_reward > 0.0)
+        ),
+        model_declarer_round_count=(
+            header.model_declarer_round_count
+            + int(metrics.model_declarer)
+        ),
+        model_reward_sum=header.model_reward_sum + metrics.model_reward,
+        auto_reward_sum=header.auto_reward_sum + metrics.auto_reward,
+        elapsed_seconds_max=max(
+            header.elapsed_seconds_max,
+            metrics.elapsed_seconds,
+        ),
+    )
+
+
+def _reject_round(header: RolloutArenaHeader) -> RolloutArenaHeader:
+    return RolloutArenaHeader(
+        policy_version=header.policy_version,
+        decision_count=header.decision_count,
+        decision_capacity=header.decision_capacity,
+        trajectory_count=header.trajectory_count,
+        trajectory_capacity=header.trajectory_capacity,
+        round_count=header.round_count,
+        round_capacity=header.round_capacity,
+        model_action_count=header.model_action_count,
+        auto_action_count=header.auto_action_count,
+        forced_action_count=header.forced_action_count,
+        trainable_decision_count=header.trainable_decision_count,
+        scored_choice_step_count=header.scored_choice_step_count,
+        game_over_count=header.game_over_count,
+        rejected_round_count=header.rejected_round_count + 1,
+        cancelled_env_count=header.cancelled_env_count,
+        total_trace_step_count=header.total_trace_step_count,
+        max_trace_step_count=header.max_trace_step_count,
+        model_win_count=header.model_win_count,
+        auto_win_count=header.auto_win_count,
+        model_declarer_round_count=header.model_declarer_round_count,
+        model_reward_sum=header.model_reward_sum,
+        auto_reward_sum=header.auto_reward_sum,
+        elapsed_seconds_max=header.elapsed_seconds_max,
     )
 
 
@@ -161,113 +308,4 @@ def _notify_progress(handle: RolloutArenaHandle) -> None:
         handle.progress_condition.release()
 
 
-def _write_commit_rows(
-    *,
-    buffer: memoryview,
-    capacity: int,
-    start_index: int,
-    commit: ReturnCommit,
-    accepted_count: int,
-) -> None:
-    assert capacity > 0
-    assert start_index >= 0
-    assert accepted_count >= 0
-    pack_sample_references(
-        buffer=buffer,
-        capacity=capacity,
-        start_index=start_index,
-        row_indices=commit.row_indices[:accepted_count],
-        step_counts=commit.step_counts[:accepted_count],
-        return_values=commit.return_values[:accepted_count],
-    )
-
-
-def _advance_header(
-    *,
-    header: RolloutArenaHeader,
-    metrics: RolloutRoundMetrics,
-    accepted_step_counts: tuple[int, ...],
-    accepted_sample_count: int,
-    dropped_sample_count: int,
-) -> RolloutArenaHeader:
-    assert accepted_sample_count >= 0
-    assert dropped_sample_count >= 0
-    assert len(accepted_step_counts) == accepted_sample_count
-    assert all(count > 0 for count in accepted_step_counts)
-    new_count = header.sample_count + accepted_sample_count
-    accepted_round = accepted_sample_count > 0
-    accepted_total_steps = sum(accepted_step_counts)
-    accepted_max_steps = max(accepted_step_counts, default=0)
-    return RolloutArenaHeader(
-        policy_version=header.policy_version,
-        sample_count=new_count,
-        capacity=header.capacity,
-        round_count=header.round_count + (1 if accepted_round else 0),
-        generated_action_count=(
-            header.generated_action_count
-            + (metrics.generated_action_count if accepted_round else 0)
-        ),
-        accepted_action_count=(
-            header.accepted_action_count
-            + (metrics.accepted_action_count if accepted_round else 0)
-        ),
-        action_choice_count=(
-            header.action_choice_count
-            + (metrics.action_choice_count if accepted_round else 0)
-        ),
-        game_over_count=(
-            header.game_over_count
-            + (1 if accepted_round and metrics.game_over else 0)
-        ),
-        dropped_sample_count=(
-            header.dropped_sample_count + dropped_sample_count
-        ),
-        cancelled_env_count=header.cancelled_env_count,
-        total_step_count=(
-            header.total_step_count + accepted_total_steps
-        ),
-        max_step_count=max(header.max_step_count, accepted_max_steps),
-        first_partnership_reward_sum=(
-            header.first_partnership_reward_sum
-            + (
-                metrics.first_partnership_reward
-                if accepted_round
-                else 0.0
-            )
-        ),
-        second_partnership_reward_sum=(
-            header.second_partnership_reward_sum
-            + (
-                metrics.second_partnership_reward
-                if accepted_round
-                else 0.0
-            )
-        ),
-        elapsed_seconds_max=max(
-            header.elapsed_seconds_max,
-            metrics.elapsed_seconds if accepted_round else 0.0,
-        ),
-    )
-
-
-def _add_dropped_samples(
-    header: RolloutArenaHeader, count: int
-) -> RolloutArenaHeader:
-    assert count >= 0
-    return RolloutArenaHeader(
-        policy_version=header.policy_version,
-        sample_count=header.sample_count,
-        capacity=header.capacity,
-        round_count=header.round_count,
-        generated_action_count=header.generated_action_count,
-        accepted_action_count=header.accepted_action_count,
-        action_choice_count=header.action_choice_count,
-        game_over_count=header.game_over_count,
-        dropped_sample_count=header.dropped_sample_count + count,
-        cancelled_env_count=header.cancelled_env_count,
-        total_step_count=header.total_step_count,
-        max_step_count=header.max_step_count,
-        first_partnership_reward_sum=header.first_partnership_reward_sum,
-        second_partnership_reward_sum=header.second_partnership_reward_sum,
-        elapsed_seconds_max=header.elapsed_seconds_max,
-    )
+__all__ = ("SharedRolloutArenaWriter", "attach_rollout_arena_writer")

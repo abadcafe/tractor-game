@@ -1,4 +1,4 @@
-"""Model-rank read operations for shared rollout arenas."""
+"""Model-rank reads of atomic rollout trajectories."""
 
 from __future__ import annotations
 
@@ -11,9 +11,11 @@ from torch import Tensor
 
 from server.foundation import result as _result
 from server.foundation.result import Ok, Rejected
-from server.training.rollout_inference.samples import RankReturnTargets
+from server.training.rollout_inference.samples import (
+    RankTrajectoryBatch,
+)
 from server.training.runtime.shared_rollout_arena.schema import (
-    sample_reference_column_views,
+    rollout_column_views,
     unpack_header,
 )
 from server.training.runtime.shared_rollout_arena.types import (
@@ -23,12 +25,12 @@ from server.training.runtime.shared_rollout_arena.types import (
 
 @dataclass(slots=True)
 class SharedRolloutArenaReader:
-    """Read committed rollout handles for one model rank."""
+    """Materialize rank-local completed trajectories on demand."""
 
     handles: tuple[RolloutArenaHandle, ...]
     _segments: tuple[shared_memory.SharedMemory, ...]
-    _workspace: "_RankReturnTransferWorkspace" = field(
-        default_factory=lambda: _RankReturnTransferWorkspace()
+    _workspace: _RankTrajectoryTransferWorkspace = field(
+        default_factory=lambda: _RankTrajectoryTransferWorkspace()
     )
 
     def read_rank_batch(
@@ -37,16 +39,17 @@ class SharedRolloutArenaReader:
         policy_version: int,
         model_rank_index: int,
         device: torch.device,
-    ) -> _result.Ok[RankReturnTargets] | _result.Rejected:
-        """Return every row from this rank's assigned worker arenas."""
-        assert policy_version >= 0
-        assert model_rank_index >= 0
+    ) -> _result.Ok[RankTrajectoryBatch] | _result.Rejected:
+        """Return every committed trajectory assigned to this rank."""
         row_indices: list[_ColumnBlock] = []
         step_counts: list[_ColumnBlock] = []
-        return_values: list[_ColumnBlock] = []
+        trajectory_offsets: list[_ColumnBlock] = []
+        trajectory_lengths: list[_ColumnBlock] = []
+        terminal_rewards: list[_ColumnBlock] = []
         round_count = 0
         total_step_count = 0
         max_step_count = 0
+        decision_base = 0
         for handle, segment in zip(
             self.handles, self._segments, strict=True
         ):
@@ -58,55 +61,79 @@ class SharedRolloutArenaReader:
                     return Rejected(
                         reason="rollout arena policy version mismatch"
                     )
-                round_count += header.round_count
-                total_step_count += header.total_step_count
-                max_step_count = max(
-                    max_step_count, header.max_step_count
-                )
-                columns = sample_reference_column_views(
+                columns = rollout_column_views(
                     buffer=buffer,
-                    capacity=header.capacity,
-                    count=header.sample_count,
+                    header=header,
                 )
                 row_indices.append(
                     _ColumnBlock(
-                        values=columns.row_indices,
-                        count=header.sample_count,
+                        columns.row_indices, header.decision_count
                     )
                 )
                 step_counts.append(
                     _ColumnBlock(
-                        values=columns.step_counts,
-                        count=header.sample_count,
+                        columns.step_counts, header.decision_count
                     )
                 )
-                return_values.append(
+                trajectory_offsets.append(
                     _ColumnBlock(
-                        values=columns.return_values,
-                        count=header.sample_count,
+                        columns.trajectory_offsets,
+                        header.trajectory_count,
+                        addend=decision_base,
                     )
+                )
+                trajectory_lengths.append(
+                    _ColumnBlock(
+                        columns.trajectory_lengths,
+                        header.trajectory_count,
+                    )
+                )
+                terminal_rewards.append(
+                    _ColumnBlock(
+                        columns.terminal_rewards,
+                        header.trajectory_count,
+                    )
+                )
+                decision_base += header.decision_count
+                round_count += header.round_count
+                total_step_count += header.total_trace_step_count
+                max_step_count = max(
+                    max_step_count,
+                    header.max_trace_step_count,
                 )
             finally:
                 handle.lock.release()
         return Ok(
-            value=RankReturnTargets(
+            RankTrajectoryBatch(
                 policy_version=policy_version,
                 model_rank_index=model_rank_index,
-                row_indices=self._workspace.materialize_column(
+                row_indices=self._workspace.materialize(
                     name="row_indices",
                     blocks=tuple(row_indices),
                     dtype=torch.long,
                     device=device,
                 ),
-                step_counts=self._workspace.materialize_column(
+                step_counts=self._workspace.materialize(
                     name="step_counts",
                     blocks=tuple(step_counts),
                     dtype=torch.long,
                     device=device,
                 ),
-                return_values=self._workspace.materialize_column(
-                    name="return_values",
-                    blocks=tuple(return_values),
+                trajectory_offsets=self._workspace.materialize(
+                    name="trajectory_offsets",
+                    blocks=tuple(trajectory_offsets),
+                    dtype=torch.long,
+                    device=device,
+                ),
+                trajectory_lengths=self._workspace.materialize(
+                    name="trajectory_lengths",
+                    blocks=tuple(trajectory_lengths),
+                    dtype=torch.long,
+                    device=device,
+                ),
+                terminal_rewards=self._workspace.materialize(
+                    name="terminal_rewards",
+                    blocks=tuple(terminal_rewards),
                     dtype=torch.float32,
                     device=device,
                 ),
@@ -117,7 +144,6 @@ class SharedRolloutArenaReader:
         )
 
     def close(self) -> None:
-        """Detach this process from all shared memory segments."""
         for segment in self._segments:
             segment.close()
 
@@ -125,7 +151,6 @@ class SharedRolloutArenaReader:
 def attach_rollout_arena_reader(
     handles: tuple[RolloutArenaHandle, ...],
 ) -> SharedRolloutArenaReader:
-    """Attach a compute rank to its assigned worker arenas."""
     return SharedRolloutArenaReader(
         handles=handles,
         _segments=tuple(
@@ -135,32 +160,15 @@ def attach_rollout_arena_reader(
     )
 
 
-def _segment_buffer(
-    segment: shared_memory.SharedMemory,
-) -> memoryview[int]:
-    buffer = segment.buf
-    assert buffer is not None
-    return buffer
-
-
 @dataclass(frozen=True, slots=True)
 class _ColumnBlock:
     values: memoryview[int]
     count: int
-
-    def __post_init__(self) -> None:
-        assert self.count >= 0
-
-
-type _ReturnColumnName = Literal[
-    "row_indices",
-    "step_counts",
-    "return_values",
-]
+    addend: int = 0
 
 
 @dataclass(slots=True)
-class _TransferColumnWorkspace:
+class _TransferWorkspace:
     host: Tensor | None = None
     device_tensor: Tensor | None = None
 
@@ -174,33 +182,24 @@ class _TransferColumnWorkspace:
         count = sum(block.count for block in blocks)
         if count == 0:
             return torch.empty((0,), dtype=dtype, device=device)
-        if device.type == "cuda":
-            host = self._host_buffer(
-                count=count, dtype=dtype, pin_memory=True
-            )
-            _copy_blocks_to_host(
-                blocks=blocks, dtype=dtype, target=host
-            )
-            device_tensor = self._device_buffer(
-                count=count, dtype=dtype, device=device
-            )
-            _ = device_tensor[:count].copy_(
-                host[:count], non_blocking=True
-            )
-            return device_tensor[:count]
-        if device.type == "cpu":
-            host = self._host_buffer(
-                count=count, dtype=dtype, pin_memory=False
-            )
-            _copy_blocks_to_host(
-                blocks=blocks, dtype=dtype, target=host
-            )
-            return host[:count]
         host = self._host_buffer(
-            count=count, dtype=dtype, pin_memory=False
+            count=count,
+            dtype=dtype,
+            pin_memory=device.type == "cuda",
         )
-        _copy_blocks_to_host(blocks=blocks, dtype=dtype, target=host)
-        return host[:count].to(device=device)
+        _copy_blocks(blocks=blocks, dtype=dtype, target=host)
+        if device.type == "cpu":
+            return host[:count]
+        target = self._device_buffer(
+            count=count,
+            dtype=dtype,
+            device=device,
+        )
+        _ = target[:count].copy_(
+            host[:count],
+            non_blocking=device.type == "cuda",
+        )
+        return target[:count]
 
     def _host_buffer(
         self, *, count: int, dtype: torch.dtype, pin_memory: bool
@@ -233,46 +232,63 @@ class _TransferColumnWorkspace:
         return current
 
 
+type _ColumnName = Literal[
+    "row_indices",
+    "step_counts",
+    "trajectory_offsets",
+    "trajectory_lengths",
+    "terminal_rewards",
+]
+
+
 @dataclass(slots=True)
-class _RankReturnTransferWorkspace:
-    row_indices: _TransferColumnWorkspace = field(
-        default_factory=_TransferColumnWorkspace
+class _RankTrajectoryTransferWorkspace:
+    row_indices: _TransferWorkspace = field(
+        default_factory=_TransferWorkspace
     )
-    step_counts: _TransferColumnWorkspace = field(
-        default_factory=_TransferColumnWorkspace
+    step_counts: _TransferWorkspace = field(
+        default_factory=_TransferWorkspace
     )
-    return_values: _TransferColumnWorkspace = field(
-        default_factory=_TransferColumnWorkspace
+    trajectory_offsets: _TransferWorkspace = field(
+        default_factory=_TransferWorkspace
+    )
+    trajectory_lengths: _TransferWorkspace = field(
+        default_factory=_TransferWorkspace
+    )
+    terminal_rewards: _TransferWorkspace = field(
+        default_factory=_TransferWorkspace
     )
 
-    def materialize_column(
+    def materialize(
         self,
         *,
-        name: _ReturnColumnName,
+        name: _ColumnName,
         blocks: tuple[_ColumnBlock, ...],
         dtype: torch.dtype,
         device: torch.device,
     ) -> Tensor:
-        workspace = self._column(name)
-        return workspace.materialize(
+        return self._column(name).materialize(
             blocks=blocks,
             dtype=dtype,
             device=device,
         )
 
-    def _column(
-        self, name: _ReturnColumnName
-    ) -> _TransferColumnWorkspace:
-        if name == "row_indices":
-            return self.row_indices
-        if name == "step_counts":
-            return self.step_counts
-        if name == "return_values":
-            return self.return_values
+    def _column(self, name: _ColumnName) -> _TransferWorkspace:
+        match name:
+            case "row_indices":
+                return self.row_indices
+            case "step_counts":
+                return self.step_counts
+            case "trajectory_offsets":
+                return self.trajectory_offsets
+            case "trajectory_lengths":
+                return self.trajectory_lengths
+            case "terminal_rewards":
+                return self.terminal_rewards
         assert_never(name)
 
 
-def _copy_blocks_to_host(
+def _copy_blocks(
     *,
     blocks: tuple[_ColumnBlock, ...],
     dtype: torch.dtype,
@@ -283,7 +299,23 @@ def _copy_blocks_to_host(
         if block.count == 0:
             continue
         source = torch.frombuffer(
-            block.values, dtype=dtype, count=block.count
+            block.values,
+            dtype=dtype,
+            count=block.count,
         )
-        _ = target[offset : offset + block.count].copy_(source)
+        selected = target[offset : offset + block.count]
+        _ = selected.copy_(source)
+        if block.addend != 0:
+            _ = selected.add_(block.addend)
         offset += block.count
+
+
+def _segment_buffer(
+    segment: shared_memory.SharedMemory,
+) -> memoryview[int]:
+    buffer = segment.buf
+    assert buffer is not None
+    return buffer
+
+
+__all__ = ("SharedRolloutArenaReader", "attach_rollout_arena_reader")

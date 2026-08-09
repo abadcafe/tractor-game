@@ -113,7 +113,7 @@ Deno.test("replacement messages preserve strict store generations", () => {
 
 Deno.test("metrics stream frames are complete snapshots", () => {
   const metrics = parseMetrics({
-    schema_version: 4,
+    schema_version: 5,
     store_id: null,
     through_sequence: 0,
     complete: true,
@@ -137,7 +137,7 @@ Deno.test("metrics stream frames are complete snapshots", () => {
 });
 
 Deno.test("metrics parser rejects every non-current schema", () => {
-  for (const schemaVersion of [3, 5]) {
+  for (const schemaVersion of [4, 6]) {
     let rejected = false;
     try {
       parseMetrics({
@@ -172,7 +172,7 @@ Deno.test("structured log parser accepts the terminal event protocol", () => {
   const event = parseLogEntry({
     sequence: 7,
     event: {
-      schema_version: 3,
+      schema_version: 4,
       event: "update",
       recorded_at_ms: 1,
       process: { kind: "coordinator", index: null, pid: 9 },
@@ -186,7 +186,7 @@ Deno.test("structured log parser accepts the terminal event protocol", () => {
 });
 
 Deno.test("structured log parser rejects every non-current schema", () => {
-  for (const schemaVersion of [2, 4]) {
+  for (const schemaVersion of [3, 5]) {
     let rejected = false;
     try {
       parseLogEntry({
@@ -217,7 +217,7 @@ Deno.test("event parser rejects unknown correlation fields", () => {
     parseLogEntry({
       sequence: 7,
       event: {
-        schema_version: 3,
+        schema_version: 4,
         event: "update",
         recorded_at_ms: 1,
         process: { kind: "coordinator", index: null, pid: 9 },

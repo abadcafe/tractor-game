@@ -18,22 +18,24 @@ class CheckpointMetadata:
     model_config: ModelConfig
     training_config_values: JsonObject
     total_rounds: int
-    total_samples: int
+    total_trainable_decisions: int
     total_updates: int
 
     def __post_init__(self) -> None:
         assert self.total_rounds >= 0
-        assert self.total_samples >= 0
+        assert self.total_trainable_decisions >= 0
         assert self.total_updates >= 0
 
 
 @dataclass(frozen=True, slots=True)
 class CheckpointManifest:
-    """Manifest record pointing at one immutable state payload."""
+    """Manifest binding independent policy and trainer payloads."""
 
     checkpoint_id: str
-    state_path: Path
-    state_sha256: str
+    policy_path: Path
+    policy_sha256: str
+    trainer_path: Path
+    trainer_sha256: str
     metadata: CheckpointMetadata
 
 
@@ -63,6 +65,10 @@ def sha256_checkpoint_file(
     try:
         return _result.Ok(value=sha256_file(path))
     except FileNotFoundError:
-        return checkpoint_corruption(path, "state file is missing")
+        return checkpoint_corruption(
+            path, "checkpoint payload file is missing"
+        )
     except OSError:
-        return checkpoint_corruption(path, "state file is not readable")
+        return checkpoint_corruption(
+            path, "checkpoint payload file is not readable"
+        )

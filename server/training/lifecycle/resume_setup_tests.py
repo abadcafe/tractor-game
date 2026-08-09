@@ -52,11 +52,12 @@ def test_canonicalize_resume_timeline_removes_future_state(
                 tmp_path / "checkpoints" / "latest.json",
             ),
             model=loaded.value.model,
+            value_model=loaded.value.value_model,
             trainer=loaded.value.trainer,
             model_config=model_config,
             train_config=train_config,
             total_rounds=update * 10,
-            total_samples=update * 100,
+            total_trainable_decisions=update * 100,
             total_updates=update,
             retained_update_count=5,
         )

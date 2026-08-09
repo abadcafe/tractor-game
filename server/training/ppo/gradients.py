@@ -152,6 +152,21 @@ def clip_grad_norm_on_device(
             )
 
 
+def gradient_norm_on_device(parameters: tuple[Tensor, ...]) -> Tensor:
+    """Return the finite global L2 norm on the parameter device."""
+    assert parameters
+    gradients = _gradients(parameters)
+    device = parameters[0].device
+    if not gradients:
+        return torch.zeros((), dtype=torch.float32, device=device)
+    assert all(gradient.device == device for gradient in gradients)
+    total = torch.zeros((), dtype=torch.float32, device=device)
+    for gradient in gradients:
+        values = gradient.detach().to(dtype=torch.float32)
+        total = total + (values * values).sum()
+    return torch.sqrt(total)
+
+
 def _gradients(parameters: tuple[Tensor, ...]) -> tuple[Tensor, ...]:
     return tuple(
         gradient
