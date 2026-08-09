@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 
-from server.game import commands
+from server.game import Seat, commands
 from server.game.rules import bidding, play
 from server.game.rules.cards import CardId
 from server.game.snapshots import PlayerSnapshot
@@ -20,12 +20,19 @@ type AutoCommand = (
 
 
 def choose_auto_command(
+    *,
+    actor: Seat,
     snapshot: PlayerSnapshot,
     random_source: random.Random,
 ) -> AutoCommand:
     """Choose one rule-legal strategic command without runtime state."""
     action = snapshot.awaiting_action
     if action == "bid":
+        if (
+            snapshot.bid_winner is not None
+            and snapshot.bid_winner.actor == actor
+        ):
+            return commands.PassBid()
         current = (
             None
             if snapshot.bid_winner is None

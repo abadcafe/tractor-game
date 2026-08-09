@@ -240,8 +240,9 @@ class RolloutSession:
                 self._model_actor(seat).accept(decision.value)
                 continue
             auto_command = choose_auto_command(
-                observe(self._state, seat),
-                self._auto_random_source(seat),
+                actor=seat,
+                snapshot=observe(self._state, seat),
+                random_source=self._auto_random_source(seat),
             )
             accepted = self._apply(actor=seat, command=auto_command)
             if isinstance(accepted, _result.Rejected):

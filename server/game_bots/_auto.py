@@ -30,7 +30,11 @@ class AutoPolicy:
     ) -> Ok[DecisionCommand] | Rejected:
         """Choose one legal strategic command."""
         return Ok(
-            choose_auto_command(request.view.snapshot, self._random)
+            choose_auto_command(
+                actor=request.view.viewer,
+                snapshot=request.view.snapshot,
+                random_source=self._random,
+            )
         )
 
 
