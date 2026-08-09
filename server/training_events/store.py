@@ -16,7 +16,7 @@ from server.training_events.envelope import (
 
 DATABASE_FILENAME = "training.sqlite3"
 APPLICATION_ID = 0x54524149
-TRAINING_EVENT_STORE_SCHEMA_VERSION = 4
+TRAINING_EVENT_STORE_SCHEMA_VERSION = 5
 
 type _SqlRow = tuple[object, ...]
 _OPTIONAL_SQL_ROW: TypeAdapter[_SqlRow | None] = TypeAdapter(
@@ -111,14 +111,6 @@ CREATE TABLE training_logs (
         )
     ),
     CHECK (
-        json_type(event_json, '$.context.seat') IS NULL
-        OR (
-            json_type(event_json, '$.context.seat') IS 'text'
-            AND json_extract(event_json, '$.context.seat')
-                IN ('a', 'b', 'c', 'd')
-        )
-    ),
-    CHECK (
         json_type(event_json, '$.context.rollout_id') IS NULL
         OR (
             json_type(event_json, '$.context.rollout_id') IS 'text'
@@ -149,7 +141,29 @@ CREATE TABLE training_logs (
     CHECK (process_index IS NULL OR process_index >= 0),
     CHECK (policy_version IS NULL OR policy_version >= 0),
     CHECK (rollout_id IS NULL OR length(rollout_id) > 0),
-    CHECK (round_id IS NULL OR round_id >= 0)
+    CHECK (round_id IS NULL OR round_id >= 0),
+    CHECK ((event_type = 'round') = (round_id IS NOT NULL)),
+    CHECK (
+        event_type != 'round'
+        OR (
+            process_kind = 'worker'
+            AND process_index IS NOT NULL
+            AND policy_version IS NOT NULL
+            AND rollout_id IS NOT NULL
+            AND json_type(
+                event_json, '$.context.worker_index'
+            ) IS 'integer'
+            AND json_extract(
+                event_json, '$.context.worker_index'
+            ) = process_index
+            AND json_type(
+                event_json, '$.context.game_env_index'
+            ) IS 'integer'
+            AND json_extract(
+                event_json, '$.context.game_env_index'
+            ) >= 0
+        )
+    )
 ) STRICT;
 
 CREATE INDEX training_logs_event_sequence
@@ -161,8 +175,9 @@ ON training_logs(policy_version, event_type, sequence);
 CREATE INDEX training_logs_rollout_event_sequence
 ON training_logs(rollout_id, event_type, sequence);
 
-CREATE INDEX training_logs_round_sequence
-ON training_logs(round_id, sequence);
+CREATE UNIQUE INDEX training_logs_round_identity
+ON training_logs(rollout_id, round_id)
+WHERE event_type = 'round';
 
 CREATE INDEX training_logs_recorded_at
 ON training_logs(recorded_at_ms);

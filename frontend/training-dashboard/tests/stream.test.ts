@@ -113,7 +113,7 @@ Deno.test("replacement messages preserve strict store generations", () => {
 
 Deno.test("metrics stream frames are complete snapshots", () => {
   const metrics = parseMetrics({
-    schema_version: 5,
+    schema_version: 6,
     store_id: null,
     through_sequence: 0,
     complete: true,
@@ -123,7 +123,7 @@ Deno.test("metrics stream frames are complete snapshots", () => {
       throughput: [],
       optimization: [],
       ppo_timing: [],
-      rollout: [],
+      rounds: [],
       rewards: [],
       inference: [],
       processes: [],
@@ -137,7 +137,7 @@ Deno.test("metrics stream frames are complete snapshots", () => {
 });
 
 Deno.test("metrics parser rejects every non-current schema", () => {
-  for (const schemaVersion of [4, 6]) {
+  for (const schemaVersion of [5, 7]) {
     let rejected = false;
     try {
       parseMetrics({
@@ -151,7 +151,7 @@ Deno.test("metrics parser rejects every non-current schema", () => {
           throughput: [],
           optimization: [],
           ppo_timing: [],
-          rollout: [],
+          rounds: [],
           rewards: [],
           inference: [],
           processes: [],
@@ -172,7 +172,7 @@ Deno.test("structured log parser accepts the terminal event protocol", () => {
   const event = parseLogEntry({
     sequence: 7,
     event: {
-      schema_version: 4,
+      schema_version: 5,
       event: "update",
       recorded_at_ms: 1,
       process: { kind: "coordinator", index: null, pid: 9 },
@@ -186,7 +186,7 @@ Deno.test("structured log parser accepts the terminal event protocol", () => {
 });
 
 Deno.test("structured log parser rejects every non-current schema", () => {
-  for (const schemaVersion of [3, 5]) {
+  for (const schemaVersion of [4, 6]) {
     let rejected = false;
     try {
       parseLogEntry({
@@ -217,7 +217,7 @@ Deno.test("event parser rejects unknown correlation fields", () => {
     parseLogEntry({
       sequence: 7,
       event: {
-        schema_version: 4,
+        schema_version: 5,
         event: "update",
         recorded_at_ms: 1,
         process: { kind: "coordinator", index: null, pid: 9 },

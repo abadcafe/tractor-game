@@ -101,11 +101,11 @@ def _json_contract_fixture() -> str:
 def _training_log_page() -> TrainingLogHistoryPage:
     event = TrainingEvent(
         schema_version=TRAINING_EVENT_SCHEMA_VERSION,
-        event="update",
+        event="round",
         recorded_at_ms=1234,
         process=TrainingEventProcess(
-            kind="coordinator",
-            index=0,
+            kind="worker",
+            index=1,
             pid=17,
         ),
         context=TrainingEventContext(
@@ -115,9 +115,6 @@ def _training_log_page() -> TrainingLogHistoryPage:
             model_rank_index=2,
             game_env_index=3,
             round_id=4,
-            seat="a",
-            decision_index=5,
-            request_id=6,
             batch_id=7,
         ),
         fields={
@@ -167,7 +164,7 @@ def _training_metrics() -> TrainingMetrics:
             throughput=(point,),
             optimization=(point,),
             ppo_timing=(point,),
-            rollout=(point,),
+            rounds=(point,),
             rewards=(point,),
             inference=(point,),
             processes=(point,),

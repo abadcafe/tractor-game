@@ -33,9 +33,6 @@ export interface EventContext {
   readonly model_rank_index?: number;
   readonly game_env_index?: number;
   readonly round_id?: number;
-  readonly seat?: "a" | "b" | "c" | "d";
-  readonly decision_index?: number;
-  readonly request_id?: number;
   readonly batch_id?: number;
 }
 
@@ -123,6 +120,9 @@ function parseEvent(value: unknown): TrainingEvent {
   if (!isTrainingEventName(event)) {
     throw new Error(`Unknown training event: ${event}`);
   }
+  const process = parseEventProcess(record.process);
+  const context = parseEventContext(record.context);
+  validateRoundIdentity(event, process, context);
   return {
     schema_version: TRAINING_EVENT_SCHEMA_VERSION,
     event,
@@ -130,11 +130,35 @@ function parseEvent(value: unknown): TrainingEvent {
       record.recorded_at_ms,
       "recorded_at_ms",
     ),
-    process: parseEventProcess(record.process),
-    context: parseEventContext(record.context),
+    process,
+    context,
     fields: jsonObject(record.fields, "fields"),
     ...(error === undefined ? {} : { error }),
   };
+}
+
+function validateRoundIdentity(
+  event: TrainingEventName,
+  process: EventProcess,
+  context: EventContext,
+): void {
+  if (event !== "round") {
+    if (context.round_id !== undefined) {
+      throw new Error("Only round events may carry round_id");
+    }
+    return;
+  }
+  if (
+    process.kind !== "worker" ||
+    process.index === null ||
+    context.policy_version === undefined ||
+    context.rollout_id === undefined ||
+    context.worker_index !== process.index ||
+    context.game_env_index === undefined ||
+    context.round_id === undefined
+  ) {
+    throw new Error("Round event identity is incomplete");
+  }
 }
 
 function parseEventProcess(value: unknown): EventProcess {
@@ -157,13 +181,11 @@ function parseEventContext(value: unknown): EventContext {
     "model_rank_index",
     "game_env_index",
     "round_id",
-    "decision_index",
-    "request_id",
     "batch_id",
   ] as const;
   rejectUnknownKeys(
     record,
-    [...numberKeys, "rollout_id", "seat"],
+    [...numberKeys, "rollout_id"],
     "event context",
   );
   const result: Record<string, number | string> = {};
@@ -177,13 +199,6 @@ function parseEventContext(value: unknown): EventContext {
       record.rollout_id,
       "context.rollout_id",
     );
-  }
-  if (record.seat !== undefined) {
-    const seat = requiredString(record.seat, "context.seat");
-    if (seat !== "a" && seat !== "b" && seat !== "c" && seat !== "d") {
-      throw new Error("Invalid context.seat");
-    }
-    result.seat = seat;
   }
   return result;
 }

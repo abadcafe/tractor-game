@@ -41,7 +41,9 @@ def test_event_sink_batches_typed_json_and_preserves_context(
         "round",
         context=EventContext(
             policy_version=3,
+            rollout_id="rollout-3",
             worker_index=2,
+            game_env_index=1,
             round_id=7,
         ),
         fields={"trainable_decision_count": 11},
@@ -64,12 +66,12 @@ def test_event_sink_batches_typed_json_and_preserves_context(
         "context",
         "fields",
     }
-    assert event["schema_version"] == 4
+    assert event["schema_version"] == 5
     assert event["event"] == "round"
     context = event["context"]
     assert isinstance(context, dict)
     assert context["round_id"] == 7
-    assert "rollout_id" not in context
+    assert context["rollout_id"] == "rollout-3"
 
 
 def test_failed_event_uses_same_name_and_top_level_error(
@@ -79,9 +81,20 @@ def test_failed_event_uses_same_name_and_top_level_error(
     assert isinstance(initialized, Ok)
     sink = StructuredEventSink(
         run_dir=tmp_path,
-        process=ProcessIdentity(kind="worker"),
+        process=ProcessIdentity(kind="worker", index=0),
     )
-    sink.emit("round", fields={"duration_seconds": 1.0}, error="boom")
+    sink.emit(
+        "round",
+        context=EventContext(
+            policy_version=0,
+            rollout_id="rollout-0",
+            worker_index=0,
+            game_env_index=0,
+            round_id=1,
+        ),
+        fields={"duration_seconds": 1.0},
+        error="boom",
+    )
     sink.close()
 
     with sqlite3.connect(database_path(tmp_path)) as connection:
@@ -144,7 +157,18 @@ def test_emit_accepts_finite_domain_fields(
 def test_null_sink_accepts_every_typed_event_name() -> None:
     sink = NullEventSink()
     for event_name in EVENT_NAMES:
-        sink.emit(event_name)
+        sink.emit(
+            event_name,
+            context=EventContext(
+                policy_version=0,
+                rollout_id="rollout-0",
+                worker_index=0,
+                game_env_index=0,
+                round_id=0,
+            )
+            if event_name == "round"
+            else None,
+        )
 
 
 def test_store_accepts_every_contract_event_name(
@@ -152,10 +176,21 @@ def test_store_accepts_every_contract_event_name(
 ) -> None:
     sink = StructuredEventSink(
         run_dir=tmp_path,
-        process=ProcessIdentity(kind="coordinator"),
+        process=ProcessIdentity(kind="worker", index=0),
     )
     for event_name in EVENT_NAMES:
-        sink.emit(event_name)
+        sink.emit(
+            event_name,
+            context=EventContext(
+                policy_version=0,
+                rollout_id="rollout-0",
+                worker_index=0,
+                game_env_index=0,
+                round_id=0,
+            )
+            if event_name == "round"
+            else None,
+        )
     sink.close()
 
     with sqlite3.connect(database_path(tmp_path)) as connection:

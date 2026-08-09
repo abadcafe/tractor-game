@@ -57,6 +57,80 @@ def test_metrics_project_all_updates(
     assert point.values["rounds_per_second"] == 2.0
 
 
+def test_metrics_project_each_committed_round_as_one_record(
+    tmp_path: Path,
+) -> None:
+    initialized = initialize_database(tmp_path)
+    assert isinstance(initialized, Ok)
+    sink = StructuredEventSink(
+        run_dir=tmp_path,
+        process=ProcessIdentity(kind="worker", index=0),
+    )
+    context = EventContext(
+        policy_version=0,
+        rollout_id="rollout-a",
+        worker_index=0,
+        game_env_index=0,
+        round_id=9,
+    )
+    sink.emit(
+        "round",
+        context=context,
+        fields={
+            "model_reward": 2.0,
+            "auto_reward": -2.0,
+            "model_action_count": 40,
+            "auto_action_count": 39,
+            "forced_action_count": 3,
+            "trainable_decision_count": 37,
+        },
+    )
+    sink.emit(
+        "round",
+        context=EventContext(
+            policy_version=0,
+            rollout_id="rollout-a",
+            worker_index=0,
+            game_env_index=0,
+            round_id=10,
+        ),
+        fields={
+            "model_reward": -1.0,
+            "auto_reward": 1.0,
+            "model_action_count": 38,
+            "auto_action_count": 41,
+            "forced_action_count": 2,
+            "trainable_decision_count": 36,
+        },
+    )
+    sink.emit(
+        "update",
+        context=EventContext(
+            policy_version=0,
+            rollout_id="rollout-a",
+        ),
+        fields={"total_updates": 1},
+    )
+    sink.close()
+
+    result = query_training_metrics(
+        tmp_path, update_limit=200, series_points=200
+    )
+
+    assert isinstance(result, Ok)
+    points = result.value.datasets.rounds
+    assert len(points) == 2
+    assert [point.update for point in points] == [1, 1]
+    assert [point.values["model_reward"] for point in points] == [
+        2.0,
+        -1.0,
+    ]
+    assert [
+        point.values["trainable_decision_count"] for point in points
+    ] == [37.0, 36.0]
+    assert result.value.datasets.rewards == points
+
+
 def test_metrics_join_late_cross_process_events_by_rollout_id(
     tmp_path: Path,
 ) -> None:
@@ -107,7 +181,10 @@ def test_metrics_join_late_cross_process_events_by_rollout_id(
                 rollout_id=rollout_id,
                 worker_index=1,
             ),
-            fields={"completed_rounds": 2, "decision_count": 8},
+            fields={
+                "completed_rounds": 2,
+                "policy_request_count": 8,
+            },
         )
     worker.close()
 
@@ -126,7 +203,7 @@ def test_metrics_join_late_cross_process_events_by_rollout_id(
     assert math.isclose(float(second_latency), 0.2)
     process = result.value.datasets.processes[0]
     assert process.values["completed_rounds"] == 4.0
-    assert process.values["decision_count"] == 16.0
+    assert process.values["policy_request_count"] == 16.0
 
 
 def test_metric_summary_projects_latest_update_without_series(
@@ -247,10 +324,7 @@ def test_metrics_snapshot_and_cursor_ignore_non_metric_events(
         context=EventContext(policy_version=0, rollout_id="rollout-a"),
         fields={"batch_size": 1},
     )
-    sink.emit(
-        "decision",
-        context=EventContext(policy_version=0, rollout_id="rollout-a"),
-    )
+    sink.emit("process.start")
     sink.close()
 
     snapshot = query_training_metrics(

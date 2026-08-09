@@ -8,7 +8,6 @@ from pathlib import Path
 from uuid import uuid4
 
 from server.foundation import result as _result
-from server.foundation.json_value import JsonObject
 from server.foundation.result import Ok, Rejected
 from server.policy_model.network import ModelConfig
 from server.training.config import (
@@ -22,9 +21,6 @@ from server.training.runtime.checkpoint_state import (
 )
 from server.training.runtime.config import ExecutionConfig
 from server.training.runtime.result import TrainingLoopResult
-from server.training.runtime.shared_rollout_arena import (
-    RolloutArenaSnapshot,
-)
 from server.training.runtime.state import RuntimeTrainingState
 from server.training.runtime.training_runtime import (
     TrainingRuntime,
@@ -247,12 +243,6 @@ async def _run_synchronized_training(
                 time.monotonic() - update_cycle_start, 0.0
             )
             event_sink.emit(
-                "rollout",
-                context=context,
-                fields={"duration_seconds": duration_seconds},
-                error=update_result.reason,
-            )
-            event_sink.emit(
                 "update",
                 context=context,
                 fields={"duration_seconds": duration_seconds},
@@ -265,30 +255,7 @@ async def _run_synchronized_training(
         )
         if isinstance(update, TrainingStopDiscardedPartialRollout):
             assert stop_request.is_requested()
-            event_sink.emit(
-                "rollout",
-                context=context,
-                fields={
-                    **_rollout_fields(update.snapshot),
-                    "duration_seconds": update_cycle_seconds,
-                    "termination": "stop_requested",
-                    "discarded_trainable_decision_count": (
-                        update.snapshot.decision_count
-                    ),
-                    "minimum_update_trainable_decision_count": (
-                        update.minimum_trainable_decision_count
-                    ),
-                },
-            )
             break
-        event_sink.emit(
-            "rollout",
-            context=context,
-            fields={
-                **_rollout_fields(update.snapshot),
-                "duration_seconds": update_cycle_seconds,
-            },
-        )
         total_updates += 1
         total_rounds += update.snapshot.round_count
         total_trainable_decisions += update.snapshot.decision_count
@@ -631,27 +598,11 @@ def _record_update_completed(
             / elapsed_seconds,
             "process_trainable_decisions_per_second": process_decisions
             / elapsed_seconds,
-            "rollout_decisions_per_second": (
+            "collection_trainable_decisions_per_second": (
                 0.0
                 if snapshot.elapsed_seconds_max <= 0.0
                 else snapshot.decision_count
                 / snapshot.elapsed_seconds_max
-            ),
-            "model_reward": snapshot.average_model_reward(),
-            "auto_reward": snapshot.average_auto_reward(),
-            "model_action_count": snapshot.model_action_count,
-            "auto_action_count": snapshot.auto_action_count,
-            "forced_action_count": snapshot.forced_action_count,
-            "scored_choice_step_count": (
-                snapshot.scored_choice_step_count
-            ),
-            "model_win_rate": snapshot.model_win_count
-            / snapshot.round_count,
-            "auto_win_rate": snapshot.auto_win_count
-            / snapshot.round_count,
-            "model_declarer_rate": (
-                snapshot.model_declarer_round_count
-                / snapshot.round_count
             ),
             "policy_loss": stats.policy_loss,
             "value_loss": stats.value_loss,
@@ -704,26 +655,3 @@ def _record_update_completed(
             ),
         },
     )
-
-
-def _rollout_fields(snapshot: RolloutArenaSnapshot) -> JsonObject:
-    return {
-        "round_count": snapshot.round_count,
-        "trainable_decision_count": snapshot.decision_count,
-        "trajectory_count": snapshot.trajectory_count,
-        "model_action_count": snapshot.model_action_count,
-        "auto_action_count": snapshot.auto_action_count,
-        "forced_action_count": snapshot.forced_action_count,
-        "scored_choice_step_count": snapshot.scored_choice_step_count,
-        "game_over_count": snapshot.game_over_count,
-        "rejected_round_count": snapshot.rejected_round_count,
-        "cancelled_env_count": snapshot.cancelled_env_count,
-        "model_reward": snapshot.average_model_reward(),
-        "auto_reward": snapshot.average_auto_reward(),
-        "model_win_count": snapshot.model_win_count,
-        "auto_win_count": snapshot.auto_win_count,
-        "model_declarer_round_count": (
-            snapshot.model_declarer_round_count
-        ),
-        "elapsed_seconds": snapshot.elapsed_seconds_max,
-    }

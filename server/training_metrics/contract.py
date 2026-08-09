@@ -8,8 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from server.foundation.json_value import JsonObject
 
-type TrainingMetricsSchemaVersion = Literal[5]
-TRAINING_METRICS_SCHEMA_VERSION: TrainingMetricsSchemaVersion = 5
+type TrainingMetricsSchemaVersion = Literal[6]
+TRAINING_METRICS_SCHEMA_VERSION: TrainingMetricsSchemaVersion = 6
 
 
 class MetricPoint(BaseModel):
@@ -36,7 +36,7 @@ class MetricDatasets(BaseModel):
     throughput: tuple[MetricPoint, ...]
     optimization: tuple[MetricPoint, ...]
     ppo_timing: tuple[MetricPoint, ...]
-    rollout: tuple[MetricPoint, ...]
+    rounds: tuple[MetricPoint, ...]
     rewards: tuple[MetricPoint, ...]
     inference: tuple[MetricPoint, ...]
     processes: tuple[MetricPoint, ...]

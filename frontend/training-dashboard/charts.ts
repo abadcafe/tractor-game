@@ -53,8 +53,8 @@ const SPECS: readonly ChartSpec[] = [
       },
       { key: "rounds_per_second", label: "Rounds/s", color: "#138a72" },
       {
-        key: "rollout_decisions_per_second",
-        label: "Rollout decisions/s",
+        key: "collection_trainable_decisions_per_second",
+        label: "Collection decisions/s",
         color: "#c26718",
       },
     ],
@@ -130,11 +130,20 @@ const SPECS: readonly ChartSpec[] = [
     ],
   },
   {
-    elementId: "chart-rollout",
-    dataset: "rollout",
+    elementId: "chart-rounds",
+    dataset: "rounds",
     unit: "count",
     series: [
-      { key: "round_count", label: "Rounds", color: "#138a72" },
+      {
+        key: "model_action_count",
+        label: "Model actions",
+        color: "#138a72",
+      },
+      {
+        key: "auto_action_count",
+        label: "Auto actions",
+        color: "#c26718",
+      },
       {
         key: "trainable_decision_count",
         label: "Trainable decisions",
@@ -199,7 +208,11 @@ const SPECS: readonly ChartSpec[] = [
     unit: "count / seconds",
     series: [
       { key: "completed_rounds", label: "Rounds", color: "#138a72" },
-      { key: "decision_count", label: "Decisions", color: "#1769aa" },
+      {
+        key: "policy_request_count",
+        label: "Policy requests",
+        color: "#1769aa",
+      },
       {
         key: "policy_wait_seconds",
         label: "Policy wait",
@@ -266,7 +279,11 @@ function processOption(points: readonly MetricPoint[]): EChartsOption {
   );
   const series = [
     { key: "completed_rounds", name: "Rounds", color: "#138a72" },
-    { key: "decision_count", name: "Decisions", color: "#1769aa" },
+    {
+      key: "policy_request_count",
+      name: "Policy requests",
+      color: "#1769aa",
+    },
     {
       key: "policy_wait_seconds",
       name: "Policy wait (s)",

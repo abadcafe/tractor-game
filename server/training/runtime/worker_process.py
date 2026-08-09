@@ -901,6 +901,14 @@ async def _run_sampling_until_stopped(
                     time.perf_counter() - append_start, 0.0
                 )
                 if isinstance(append_result, Rejected):
+                    _record_completed_round(
+                        event_sink=event_sink,
+                        worker_index=worker_index,
+                        policy_version=command.policy_version,
+                        rollout_id=command.rollout_id,
+                        env_round=env_round,
+                        error=append_result.reason,
+                    )
                     cancelled_count = len(pending)
                     await _cancel_pending_rounds(
                         pending=pending,
@@ -914,6 +922,14 @@ async def _run_sampling_until_stopped(
                     runtime.sessions = tuple(sessions)
                     return append_result
                 if not append_result.value.accepted:
+                    _record_completed_round(
+                        event_sink=event_sink,
+                        worker_index=worker_index,
+                        policy_version=command.policy_version,
+                        rollout_id=command.rollout_id,
+                        env_round=env_round,
+                        error="completed round exceeded arena capacity",
+                    )
                     cancelled_count = len(pending)
                     await _cancel_pending_rounds(
                         pending=pending,
@@ -934,6 +950,14 @@ async def _run_sampling_until_stopped(
                             cancelled_envs=cancelled_envs,
                         )
                     )
+                _record_completed_round(
+                    event_sink=event_sink,
+                    worker_index=worker_index,
+                    policy_version=command.policy_version,
+                    rollout_id=command.rollout_id,
+                    env_round=env_round,
+                    error=None,
+                )
                 completed_rounds += 1
                 round_seconds += round_data.elapsed_seconds
                 runtime.completed_round_count += 1
@@ -1066,11 +1090,36 @@ async def _play_worker_round(
             error=result.reason,
         )
         return result
-    round_data = result.value
+    return Ok(
+        value=_EnvRoundResult(
+            game_env_index=game_env_index,
+            round_id=round_id,
+            round_data=result.value,
+        )
+    )
+
+
+def _record_completed_round(
+    *,
+    event_sink: StructuredEventSink,
+    worker_index: int,
+    policy_version: int,
+    rollout_id: str,
+    env_round: _EnvRoundResult,
+    error: str | None,
+) -> None:
+    round_data = env_round.round_data
     event_sink.emit(
         "round",
-        context=context,
+        context=EventContext(
+            policy_version=policy_version,
+            rollout_id=rollout_id,
+            worker_index=worker_index,
+            game_env_index=env_round.game_env_index,
+            round_id=env_round.round_id,
+        ),
         fields={
+            "round_count": 1,
             "duration_seconds": round_data.elapsed_seconds,
             "model_reward": round_data.model_reward,
             "auto_reward": round_data.auto_reward,
@@ -1080,19 +1129,16 @@ async def _play_worker_round(
             "trainable_decision_count": (
                 round_data.trainable_decision_count
             ),
+            "legal_choice_count": round_data.legal_choice_count,
             "scored_choice_step_count": (
                 round_data.scored_choice_step_count
             ),
-            "model_declarer": round_data.model_declarer,
+            "model_win_rate": float(round_data.model_reward > 0.0),
+            "auto_win_rate": float(round_data.auto_reward > 0.0),
+            "model_declarer_rate": float(round_data.model_declarer),
             "game_over": round_data.game_over,
         },
-    )
-    return Ok(
-        value=_EnvRoundResult(
-            game_env_index=game_env_index,
-            round_id=round_id,
-            round_data=round_data,
-        )
+        error=error,
     )
 
 
@@ -1120,7 +1166,7 @@ def _next_worker_round_id(
     *, worker_index: int, local_round_id: int
 ) -> int:
     assert worker_index >= 0
-    assert local_round_id >= 0
+    assert 0 <= local_round_id < 1_000_000_000
     return worker_index * 1_000_000_000 + local_round_id
 
 

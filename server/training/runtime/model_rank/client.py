@@ -10,7 +10,6 @@ from typing import Protocol
 import torch
 
 from server.foundation.result import Ok, Rejected
-from server.game import seat_id
 from server.policy_model.actions import LegalActionSpace
 from server.policy_model.observation import Observation
 from server.training.rollout.policy import PolicyDecision
@@ -274,15 +273,6 @@ class BatchedPolicyClient:
             legal_actions=legal_actions,
             decision_key=decision_key,
         )
-        context = EventContext(
-            policy_version=decision_key.policy_version,
-            rollout_id=decision_key.rollout_id,
-            worker_index=self.worker_index,
-            round_id=decision_key.round_id,
-            seat=seat_id(decision_key.seat),
-            decision_index=decision_key.decision_index,
-            request_id=request_id,
-        )
         self._send_queue.append(
             _QueuedPolicyRequest(
                 request_id=request_id,
@@ -295,36 +285,7 @@ class BatchedPolicyClient:
         wait_start = time.perf_counter()
         try:
             result = await asyncio.shield(future)
-            wait_seconds = self._record_wait(wait_start=wait_start)
-            if isinstance(result, Rejected):
-                self.event_sink.emit(
-                    "decision",
-                    context=context,
-                    fields={
-                        "wait_seconds": wait_seconds,
-                    },
-                    error=result.reason,
-                )
-            else:
-                self.event_sink.emit(
-                    "decision",
-                    context=context,
-                    fields={
-                        "wait_seconds": wait_seconds,
-                        "legal_choice_count": (
-                            result.value.legal_choice_count
-                        ),
-                        "scored_choice_step_count": (
-                            result.value.scored_choice_step_count
-                        ),
-                        "model_rank_index": (
-                            result.value.decision_handle.model_rank_index
-                        ),
-                        "row_index": (
-                            result.value.decision_handle.row_index
-                        ),
-                    },
-                )
+            _ = self._record_wait(wait_start=wait_start)
             return result
         except asyncio.CancelledError:
             await self._cancel_request(request_id=request_id)

@@ -24,7 +24,7 @@ export interface MetricDatasets {
   readonly throughput: readonly MetricPoint[];
   readonly optimization: readonly MetricPoint[];
   readonly ppo_timing: readonly MetricPoint[];
-  readonly rollout: readonly MetricPoint[];
+  readonly rounds: readonly MetricPoint[];
   readonly rewards: readonly MetricPoint[];
   readonly inference: readonly MetricPoint[];
   readonly processes: readonly MetricPoint[];
@@ -65,7 +65,7 @@ export function parseMetrics(value: unknown): TrainingMetrics {
       "throughput",
       "optimization",
       "ppo_timing",
-      "rollout",
+      "rounds",
       "rewards",
       "inference",
       "processes",
@@ -92,7 +92,7 @@ export function parseMetrics(value: unknown): TrainingMetrics {
         "optimization",
       ),
       ppo_timing: metricPoints(datasets.ppo_timing, "ppo_timing"),
-      rollout: metricPoints(datasets.rollout, "rollout"),
+      rounds: metricPoints(datasets.rounds, "rounds"),
       rewards: metricPoints(datasets.rewards, "rewards"),
       inference: metricPoints(datasets.inference, "inference"),
       processes: metricPoints(datasets.processes, "processes"),

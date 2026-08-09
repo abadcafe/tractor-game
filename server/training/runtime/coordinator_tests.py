@@ -152,7 +152,20 @@ def test_run_training_coordinator_spawns_worker_and_commits_progress(
     event_types = _event_types(tmp_path)
     assert "update" in event_types
     assert "training" in event_types
-    assert "decision" in event_types
+    assert "round" in event_types
+    assert "decision" not in event_types
+    assert "rollout" not in event_types
+    committed_rounds = tuple(
+        event
+        for event in _events(tmp_path)
+        if event["event"] == "round" and "error" not in event
+    )
+    assert len(committed_rounds) == result.value.total_rounds
+    for event in committed_rounds:
+        fields = event["fields"]
+        assert isinstance(fields, dict)
+        assert fields["round_count"] == 1
+        assert isinstance(fields["legal_choice_count"], int)
 
 
 @pytest.mark.timeout(180.0)
@@ -338,12 +351,7 @@ def test_stop_discards_small_rollout_without_committing_progress(
     assert runtime.snapshot_calls == 1
     assert runtime.close_calls == 1
     assert _checkpoint_kinds(tmp_path) == ("final",)
-    rollout_fields = _last_event_fields(tmp_path, event_type="rollout")
-    assert rollout_fields["termination"] == "stop_requested"
-    assert rollout_fields["discarded_trainable_decision_count"] == 63
-    assert (
-        rollout_fields["minimum_update_trainable_decision_count"] == 64
-    )
+    assert "rollout" not in _event_types(tmp_path)
 
 
 @pytest.mark.asyncio
@@ -504,15 +512,3 @@ def _checkpoint_kinds(run_dir: Path) -> tuple[str, ...]:
         assert isinstance(kind, str)
         kinds.append(kind)
     return tuple(kinds)
-
-
-def _last_event_fields(run_dir: Path, *, event_type: str) -> JsonObject:
-    matches = tuple(
-        event
-        for event in _events(run_dir)
-        if event["event"] == event_type
-    )
-    assert matches
-    fields = matches[-1]["fields"]
-    assert isinstance(fields, dict)
-    return fields

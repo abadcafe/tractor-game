@@ -37,7 +37,7 @@ def test_initialize_database_creates_strict_schema(
         )
     assert application_id == (APPLICATION_ID,)
     assert user_version == (TRAINING_EVENT_STORE_SCHEMA_VERSION,)
-    assert TRAINING_EVENT_STORE_SCHEMA_VERSION == 4
+    assert TRAINING_EVENT_STORE_SCHEMA_VERSION == 5
     assert tables == [
         ("sqlite_sequence",),
         ("training_log_store",),
@@ -72,7 +72,7 @@ def test_schema_rejects_incomplete_event_envelopes(
     result = initialize_database(tmp_path)
     assert isinstance(result, Ok)
     base: JsonObject = {
-        "schema_version": 4,
+        "schema_version": 5,
         "event": "update",
         "recorded_at_ms": 1,
         "process": {"kind": "coordinator", "pid": 1},
@@ -103,6 +103,12 @@ def test_schema_rejects_incomplete_event_envelopes(
     unknown_process = dict(base)
     unknown_process["process"] = {"kind": "unknown", "pid": 1}
     invalid.append(unknown_process)
+    incomplete_round = dict(base)
+    incomplete_round["event"] = "round"
+    invalid.append(incomplete_round)
+    misplaced_round_id = dict(base)
+    misplaced_round_id["context"] = {"round_id": 1}
+    invalid.append(misplaced_round_id)
     with sqlite3.connect(database_path(tmp_path)) as connection:
         for payload in invalid:
             _ = connection.execute(
@@ -116,7 +122,39 @@ def test_schema_rejects_incomplete_event_envelopes(
     assert stored == (0,)
 
 
-def test_initialize_database_rejects_fake_v3_without_store(
+def test_database_has_one_record_per_rollout_round_identity(
+    tmp_path: Path,
+) -> None:
+    result = initialize_database(tmp_path)
+    assert isinstance(result, Ok)
+    event: JsonObject = {
+        "schema_version": 5,
+        "event": "round",
+        "recorded_at_ms": 1,
+        "process": {"kind": "worker", "index": 0, "pid": 1},
+        "context": {
+            "policy_version": 0,
+            "rollout_id": "rollout-0",
+            "worker_index": 0,
+            "game_env_index": 0,
+            "round_id": 1,
+        },
+        "fields": {"round_count": 1},
+    }
+    with sqlite3.connect(database_path(tmp_path)) as connection:
+        for _index in range(2):
+            _ = connection.execute(
+                "INSERT OR IGNORE INTO training_logs(event_json) "
+                + "VALUES (?)",
+                (json.dumps(event),),
+            )
+        stored = fetch_optional_row(
+            connection.execute("SELECT count(*) FROM training_logs")
+        )
+    assert stored == (1,)
+
+
+def test_initialize_database_rejects_incomplete_current_store(
     tmp_path: Path,
 ) -> None:
     with sqlite3.connect(database_path(tmp_path)) as connection:

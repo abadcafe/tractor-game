@@ -65,7 +65,7 @@ async def test_training_logs_have_rest_history_and_cursor_tail(
     rest_entry = events[0]
     rest_event = rest_entry["event"]
     assert _is_dict(rest_event)
-    assert rest_event["schema_version"] == 4
+    assert rest_event["schema_version"] == 5
     store_id = document["store_id"]
     assert isinstance(store_id, str)
     response = await _read_sse(
@@ -121,7 +121,7 @@ async def test_training_metrics_events_send_complete_snapshot(
     assert response.events[0].name == "metrics"
     snapshot = response.events[0].json()
     assert _is_dict(snapshot)
-    assert snapshot["schema_version"] == 5
+    assert snapshot["schema_version"] == 6
     assert snapshot["store_id"] is None
     assert snapshot["through_sequence"] == 0
     assert _is_dict(snapshot["datasets"])

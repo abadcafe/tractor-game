@@ -17,13 +17,13 @@ Deno.test("frontend accepts the exact backend-generated contracts", async () => 
 
   if (
     logs.events.length !== 2 ||
-    logs.events[0]?.event.schema_version !== 4 ||
+    logs.events[0]?.event.schema_version !== 5 ||
     logs.events[1]?.event.error !== "checkpoint rejected"
   ) {
     throw new Error("Generated event contract was not preserved");
   }
   if (
-    metrics.schema_version !== 5 ||
+    metrics.schema_version !== 6 ||
     metrics.datasets.optimization.length !== 1
   ) {
     throw new Error("Generated metrics contract was not preserved");

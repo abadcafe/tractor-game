@@ -4,17 +4,19 @@ from __future__ import annotations
 
 from typing import ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-
-from server.foundation.json_value import JsonObject
-from server.training_events.contract import (
-    EventName,
-    EventSeat,
-    ProcessKind,
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
 )
 
-type TrainingEventSchemaVersion = Literal[4]
-TRAINING_EVENT_SCHEMA_VERSION: TrainingEventSchemaVersion = 4
+from server.foundation.json_value import JsonObject
+from server.training_events.contract import EventName, ProcessKind
+
+type TrainingEventSchemaVersion = Literal[5]
+TRAINING_EVENT_SCHEMA_VERSION: TrainingEventSchemaVersion = 5
 
 
 def _is_none(value: object) -> bool:
@@ -70,20 +72,6 @@ class TrainingEventContext(BaseModel):
         ge=0,
         exclude_if=_is_none,
     )
-    seat: EventSeat | None = Field(
-        default=None,
-        exclude_if=_is_none,
-    )
-    decision_index: int | None = Field(
-        default=None,
-        ge=0,
-        exclude_if=_is_none,
-    )
-    request_id: int | None = Field(
-        default=None,
-        ge=0,
-        exclude_if=_is_none,
-    )
     batch_id: int | None = Field(
         default=None,
         ge=0,
@@ -118,6 +106,23 @@ class TrainingEvent(BaseModel):
         min_length=1,
         exclude_if=_is_none,
     )
+
+    @model_validator(mode="after")
+    def _validate_round_identity(self) -> TrainingEvent:
+        if self.event == "round":
+            if (
+                self.process.kind != "worker"
+                or self.process.index is None
+                or self.context.policy_version is None
+                or self.context.rollout_id is None
+                or self.context.worker_index != self.process.index
+                or self.context.game_env_index is None
+                or self.context.round_id is None
+            ):
+                raise ValueError("round event identity is incomplete")
+        elif self.context.round_id is not None:
+            raise ValueError("only round events may carry round_id")
+        return self
 
     @field_validator("error")
     @classmethod

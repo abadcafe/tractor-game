@@ -39,7 +39,7 @@ _OPTIONAL_SQL_ROW: TypeAdapter[_SqlRow | None] = TypeAdapter(
 _METRICS_CURSOR_QUERY = (
     "SELECT coalesce(max(sequence), 0) FROM training_logs "
     "WHERE event_type IN "
-    "('update', 'training', 'logging.drop', 'rollout', "
+    "('update', 'training', 'logging.drop', 'round', "
     "'sampling', 'inference.batch')"
 )
 
@@ -146,9 +146,9 @@ def query_training_metrics(
             )
         }
         selected_rollout_ids.update(_pending_rollout_ids(connection))
-        rollout_events = _events(
+        round_events = _events(
             connection,
-            event_type="rollout",
+            event_type="round",
             rollout_ids=selected_rollout_ids,
         )
         inference_events = _events(
@@ -181,8 +181,8 @@ def query_training_metrics(
             rollout_id := event.context.get("rollout_id"), str
         )
     }
-    rollout_points = _event_points(
-        rollout_events,
+    round_points = _event_points(
+        round_events,
         rollout_ordinals=rollout_ordinals,
         started_at_ms=started_at_ms,
         series_points=series_points,
@@ -211,8 +211,8 @@ def query_training_metrics(
                 throughput=update_points,
                 optimization=update_points,
                 ppo_timing=update_points,
-                rollout=rollout_points,
-                rewards=rollout_points,
+                rounds=round_points,
+                rewards=round_points,
                 inference=inference_points,
                 processes=process_points,
             ),
@@ -330,7 +330,7 @@ def _pending_rollout_ids(connection: sqlite3.Connection) -> set[str]:
             "SELECT DISTINCT source.rollout_id "
             + "FROM training_logs AS source "
             + "WHERE source.event_type IN "
-            + "('rollout', 'sampling', 'inference.batch') "
+            + "('round', 'sampling', 'inference.batch') "
             + "AND source.rollout_id IS NOT NULL "
             + "AND json_type(source.event_json, '$.error') IS NULL "
             + "AND NOT EXISTS ("
@@ -487,7 +487,7 @@ def _process_points(
         values: JsonObject = {"worker_index": process_index}
         for name in (
             "completed_rounds",
-            "decision_count",
+            "policy_request_count",
             "policy_wait_seconds",
             "round_seconds",
         ):
@@ -652,7 +652,7 @@ def _empty_metrics(*, through_sequence: int = 0) -> TrainingMetrics:
             throughput=(),
             optimization=(),
             ppo_timing=(),
-            rollout=(),
+            rounds=(),
             rewards=(),
             inference=(),
             processes=(),

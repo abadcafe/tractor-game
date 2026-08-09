@@ -192,8 +192,16 @@ class StructuredEventSink:
         error: str | None = None,
     ) -> None:
         assert event_type in EVENT_NAMES
+        if event_type == "round":
+            assert self.process.kind == "worker"
+            assert self.process.index is not None
+            assert context is not None
+            assert context.worker_index == self.process.index
         emitted_fields = _validate_event(
-            fields=fields, context=context, error=error
+            event_type=event_type,
+            fields=fields,
+            context=context,
+            error=error,
         )
         state = _writer_state(self.run_dir)
         state.offer(
@@ -241,7 +249,12 @@ class NullEventSink:
         error: str | None = None,
     ) -> None:
         assert event_type in EVENT_NAMES
-        _ = _validate_event(fields=fields, context=context, error=error)
+        _ = _validate_event(
+            event_type=event_type,
+            fields=fields,
+            context=context,
+            error=error,
+        )
 
 
 def _writer_state(run_dir: Path) -> _WriterState:
@@ -279,9 +292,6 @@ def _persisted_context(context: EventContext) -> TrainingEventContext:
         model_rank_index=context.model_rank_index,
         game_env_index=context.game_env_index,
         round_id=context.round_id,
-        seat=context.seat,
-        decision_index=context.decision_index,
-        request_id=context.request_id,
         batch_id=context.batch_id,
     )
 
@@ -294,9 +304,6 @@ def _context_json(context: EventContext) -> JsonObject:
         ("model_rank_index", context.model_rank_index),
         ("game_env_index", context.game_env_index),
         ("round_id", context.round_id),
-        ("seat", context.seat),
-        ("decision_index", context.decision_index),
-        ("request_id", context.request_id),
         ("batch_id", context.batch_id),
     )
     return {key: value for key, value in values if value is not None}
@@ -317,11 +324,20 @@ def _assert_finite_json(value: JsonValue) -> None:
 
 def _validate_event(
     *,
+    event_type: EventName,
     fields: JsonObject | None,
     context: EventContext | None,
     error: str | None,
 ) -> JsonObject:
     assert error is None or (error.strip() == error and error)
+    round_id = None if context is None else context.round_id
+    assert (event_type == "round") == (round_id is not None)
+    if event_type == "round":
+        assert context is not None
+        assert context.policy_version is not None
+        assert context.rollout_id is not None
+        assert context.worker_index is not None
+        assert context.game_env_index is not None
     if context is not None:
         _ = _context_json(context)
     emitted_fields = fields or {}

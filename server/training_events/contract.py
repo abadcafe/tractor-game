@@ -10,33 +10,28 @@ type EventName = Literal[
     "training",
     "process.start",
     "process.stop",
-    "rollout",
     "sampling",
     "round",
     "update",
     "update.rank",
     "checkpoint",
     "inference.batch",
-    "decision",
     "logging.drop",
 ]
 type ProcessKind = Literal[
     "initializer", "coordinator", "worker", "model_rank"
 ]
-type EventSeat = Literal["a", "b", "c", "d"]
 EVENT_NAMES: tuple[EventName, ...] = (
     "initialize",
     "training",
     "process.start",
     "process.stop",
-    "rollout",
     "sampling",
     "round",
     "update",
     "update.rank",
     "checkpoint",
     "inference.batch",
-    "decision",
     "logging.drop",
 )
 PROCESS_KINDS: tuple[ProcessKind, ...] = (
@@ -69,9 +64,6 @@ class EventContext:
     model_rank_index: int | None = None
     game_env_index: int | None = None
     round_id: int | None = None
-    seat: EventSeat | None = None
-    decision_index: int | None = None
-    request_id: int | None = None
     batch_id: int | None = None
 
     def __post_init__(self) -> None:
@@ -85,9 +77,6 @@ class EventContext:
             self.model_rank_index,
             self.game_env_index,
             self.round_id,
-            self.decision_index,
-            self.request_id,
             self.batch_id,
         ):
             assert value is None or value >= 0
-        assert self.seat is None or self.seat in ("a", "b", "c", "d")

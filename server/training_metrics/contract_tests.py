@@ -21,22 +21,22 @@ def test_training_metrics_owns_independent_current_schema() -> None:
             throughput=(),
             optimization=(),
             ppo_timing=(),
-            rollout=(),
+            rounds=(),
             rewards=(),
             inference=(),
             processes=(),
         ),
     )
 
-    assert TRAINING_METRICS_SCHEMA_VERSION == 5
-    assert snapshot.schema_version == 5
+    assert TRAINING_METRICS_SCHEMA_VERSION == 6
+    assert snapshot.schema_version == 6
 
 
 def test_training_metrics_rejects_missing_or_non_current_schema() -> (
     None
 ):
     base: dict[str, object] = {
-        "schema_version": 5,
+        "schema_version": 6,
         "store_id": None,
         "through_sequence": 0,
         "complete": True,
@@ -46,7 +46,7 @@ def test_training_metrics_rejects_missing_or_non_current_schema() -> (
             "throughput": [],
             "optimization": [],
             "ppo_timing": [],
-            "rollout": [],
+            "rounds": [],
             "rewards": [],
             "inference": [],
             "processes": [],
@@ -58,8 +58,8 @@ def test_training_metrics_rejects_missing_or_non_current_schema() -> (
             for key, value in base.items()
             if key != "schema_version"
         },
-        {**base, "schema_version": 4},
-        {**base, "schema_version": 6},
+        {**base, "schema_version": 5},
+        {**base, "schema_version": 7},
     )
     for payload in payloads:
         rejected = False
