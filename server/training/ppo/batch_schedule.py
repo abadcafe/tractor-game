@@ -77,7 +77,7 @@ def plan_distributed_minibatches(
     step_index = 0
     while (remaining_count := sum(remaining)) > 0:
         global_count = min(global_minibatch_size, remaining_count)
-        allocations = _fair_step_allocations(
+        allocations = _proportional_step_allocations(
             remaining=tuple(remaining),
             target=global_count,
             first_rank=step_index % len(remaining),
@@ -97,26 +97,28 @@ def plan_distributed_minibatches(
     )
 
 
-def _fair_step_allocations(
+def _proportional_step_allocations(
     *, remaining: tuple[int, ...], target: int, first_rank: int
 ) -> tuple[int, ...]:
     assert remaining
     assert all(count >= 0 for count in remaining)
     assert 0 < target <= sum(remaining)
     assert 0 <= first_rank < len(remaining)
-    allocations = [0 for _count in remaining]
-    unallocated = target
-    while unallocated > 0:
-        allocated_before = unallocated
-        for offset in range(len(remaining)):
-            rank = (first_rank + offset) % len(remaining)
-            if allocations[rank] >= remaining[rank]:
-                continue
-            allocations[rank] += 1
-            unallocated -= 1
-            if unallocated == 0:
-                break
-        assert unallocated < allocated_before
+    total = sum(remaining)
+    products = tuple(target * count for count in remaining)
+    allocations = [product // total for product in products]
+    unallocated = target - sum(allocations)
+    remainder_order = sorted(
+        (rank for rank, count in enumerate(remaining) if count > 0),
+        key=lambda rank: (
+            -(products[rank] % total),
+            (rank - first_rank) % len(remaining),
+        ),
+    )
+    assert unallocated <= len(remainder_order)
+    for rank in remainder_order[:unallocated]:
+        assert allocations[rank] < remaining[rank]
+        allocations[rank] += 1
     return tuple(allocations)
 
 

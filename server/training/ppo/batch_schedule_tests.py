@@ -18,10 +18,10 @@ def test_plan_distributed_minibatches_enforces_global_batch_size() -> (
     assert schedule.global_counts == (4, 4, 2)
     assert tuple(
         (span.start, span.end) for span in schedule.spans_for_rank(0)
-    ) == ((0, 2), (2, 4), (4, 6))
+    ) == ((0, 2), (2, 5), (5, 6))
     assert tuple(
         (span.start, span.end) for span in schedule.spans_for_rank(1)
-    ) == ((0, 2), (2, 4), (4, 4))
+    ) == ((0, 2), (2, 3), (3, 4))
 
 
 def test_plan_distributed_minibatches_preserves_unbalanced() -> None:
@@ -33,10 +33,10 @@ def test_plan_distributed_minibatches_preserves_unbalanced() -> None:
     assert schedule.global_counts == (4, 4, 2)
     assert tuple(
         span.count() for span in schedule.spans_for_rank(0)
-    ) == (1, 0, 0)
+    ) == (0, 1, 0)
     assert tuple(
         span.count() for span in schedule.spans_for_rank(1)
-    ) == (3, 4, 2)
+    ) == (4, 3, 2)
     assert sum(schedule.global_counts) == 10
 
 
