@@ -10,6 +10,7 @@ function makeStateMessage(): ServerMessage {
   return {
     type: "state",
     seq: 1,
+    status: "running",
     state: {
       phase: "DEAL_BID",
       round_number: 1,
@@ -35,6 +36,7 @@ function makeStateMessage(): ServerMessage {
       mandatory_levels: ["A"],
       next_round_confirmed: [],
     },
+    error: null,
   };
 }
 

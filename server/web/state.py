@@ -18,31 +18,35 @@ from server.training_control.process_control import (
     TrainingProcessControl,
 )
 from server.web.game_composition import GameInstance
+from server.web.tasks import ApplicationTasks
 
 
 def _game_registry() -> GameRegistry[GameInstance]:
     return GameRegistry()
 
 
-def _ai_service() -> AIService:
-    return AIService(ai_config_from_env())
-
-
 @dataclass(slots=True)
 class ServerState:
+    tasks: ApplicationTasks = field(default_factory=ApplicationTasks)
     registry: GameRegistry[GameInstance] = field(
         default_factory=_game_registry
     )
     training_control_config: TrainingControlConfig = field(
         default_factory=training_control_config
     )
-    ai_service: AIService = field(default_factory=_ai_service)
+    ai_service: AIService = field(init=False)
     training_process_control: TrainingProcessControl = field(init=False)
     ai_sessions: RemoteSessionRegistry = field(init=False)
 
     def __post_init__(self) -> None:
-        self.training_process_control = TrainingProcessControl()
-        self.ai_sessions = RemoteSessionRegistry(self.ai_service)
+        self.ai_service = AIService(ai_config_from_env(), self.tasks)
+        self.training_process_control = TrainingProcessControl(
+            self.tasks
+        )
+        self.ai_sessions = RemoteSessionRegistry(
+            self.ai_service,
+            self.tasks,
+        )
 
     async def cleanup_expired_games(
         self, *, max_age_seconds: int

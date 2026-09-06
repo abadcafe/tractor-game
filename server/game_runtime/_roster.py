@@ -184,11 +184,8 @@ class SeatRoster:
             )
         )
 
-    async def close_unstarted(self) -> None:
-        """Stop every player when a room closes before session start."""
+    def close_unstarted(self) -> None:
+        """Release players that never acquired runtime resources."""
         assert not self._frozen
-        players = tuple(self._players.values())
         self._players.clear()
         self._humans.clear()
-        for player in players:
-            await player.stop()

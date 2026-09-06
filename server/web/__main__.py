@@ -11,7 +11,10 @@ import uvicorn
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from server.web.app import WebApplication
-from server.web.logging_config import configure_server_logging
+from server.web.logging_config import (
+    configure_server_logging,
+    shutdown_server_logging,
+)
 
 
 class _Options(BaseModel):
@@ -68,12 +71,16 @@ def _main(arguments: Sequence[str] | None = None) -> None:
         port=options.port,
         ws="websockets-sansio",
         lifespan="on",
+        access_log=False,
     )
     server = _Server(config, application)
     try:
-        server.run()
-    except KeyboardInterrupt:
-        pass
+        try:
+            server.run()
+        except KeyboardInterrupt:
+            pass
+    finally:
+        shutdown_server_logging()
     if not server.started:
         raise SystemExit(1)
 

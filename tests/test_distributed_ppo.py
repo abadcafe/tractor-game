@@ -99,7 +99,6 @@ def _run_ppo_rank(
         world_size=2,
     )
     try:
-        torch.manual_seed(0)
         device = torch.device("cpu")
         model_config = ModelConfig(d_model=8, layers=1, heads=1)
         train_config = TrainConfig(
@@ -107,11 +106,18 @@ def _run_ppo_rank(
             minibatch_size=4,
         )
         model = _RecordingPolicyModel(config=model_config).to(device)
+        value_model = ObservationValueModel(config=model_config).to(
+            device
+        )
+        with torch.no_grad():
+            for parameter in (
+                *model.parameters(),
+                *value_model.parameters(),
+            ):
+                _ = parameter.fill_(0.01)
         trainer = PPOTrainer(
             model=model,
-            value_model=ObservationValueModel(config=model_config).to(
-                device
-            ),
+            value_model=value_model,
             train_config=train_config,
             device=device,
             profile_mode="off",
@@ -132,7 +138,7 @@ def _run_ppo_rank(
         assert isinstance(update_result, Ok)
         step_count = trainer.optimizer_state()["step_count"]
         assert isinstance(step_count, int)
-        result_path.write_text(
+        _ = result_path.write_text(
             ",".join(str(size) for size in model.encode_batch_sizes)
             + f"|{step_count}"
         )

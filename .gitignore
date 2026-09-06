@@ -1,15 +1,11 @@
 /target/
 /logs/
-/*.sublime-*
 /tmp/
 /working/
-**/__pycache__/
 /archived/
-/.claude/worktrees/
 /node_modules/
 /static/
-/server/sessions/
 /test-results/
 /training_runs/
-*.pyc
-.env
+/*.sublime-*
+__pycache__/

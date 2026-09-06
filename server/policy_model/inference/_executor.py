@@ -29,9 +29,12 @@ class TorchBatchExecutor:
         *,
         model: PolicyModel,
         device: torch.device,
+        model_id: str,
     ) -> None:
+        assert model_id
         self._model = model
         self._device = device
+        self._model_id = model_id
         self._max_batch_rows = inference_batch_row_limit(device.type)
         self._sampler: ActionSampler | None = None
         self._sampler_capacity = 0
@@ -58,8 +61,19 @@ class TorchBatchExecutor:
             cls(
                 model=loaded.value.model,
                 device=device.value,
+                model_id=loaded.value.checkpoint_id,
             )
         )
+
+    @property
+    def model_id(self) -> str:
+        """Return the checkpoint or in-memory model identity."""
+        return self._model_id
+
+    @property
+    def device_type(self) -> str:
+        """Return the concrete execution device type."""
+        return self._device.type
 
     def decide(
         self,

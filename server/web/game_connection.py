@@ -28,14 +28,23 @@ _DYNAMIC_OBJECT = TypeAdapter(object)
 class WebSocketTransport(HumanTransport):
     """Encode runtime deliveries onto one WebSocket."""
 
-    def __init__(self, websocket: WebSocket) -> None:
+    def __init__(
+        self,
+        websocket: WebSocket,
+        *,
+        game_id: str,
+        seat: Seat,
+    ) -> None:
         self._websocket = websocket
+        self._game_id = game_id
+        self._seat = seat
 
     @override
     async def send(self, view: PlayerView) -> None:
         message = encode_state(
             viewer=view.viewer,
             seq=view.seq,
+            status=view.status,
             snapshot=view.snapshot,
             error=view.error,
         )
@@ -44,7 +53,11 @@ class WebSocketTransport(HumanTransport):
                 message.model_dump(mode="json")
             )
         except WebSocketDisconnect, OSError:
-            logger.debug("game websocket send failed")
+            logger.info(
+                "game.websocket game_id=%s seat=%s error=send failed",
+                self._game_id,
+                self._seat.value,
+            )
 
     @override
     async def close(self, reason: ConnectionCloseReason) -> None:
@@ -54,7 +67,12 @@ class WebSocketTransport(HumanTransport):
                 reason=reason.value,
             )
         except WebSocketDisconnect, OSError:
-            logger.debug("game websocket already disconnected")
+            logger.debug(
+                "game.websocket game_id=%s seat=%s "
+                + "error=already disconnected",
+                self._game_id,
+                self._seat.value,
+            )
 
 
 async def handle_game_connection(
@@ -65,7 +83,11 @@ async def handle_game_connection(
     user_id: UserId,
 ) -> None:
     """Own one human WebSocket until disconnect or takeover."""
-    transport = WebSocketTransport(websocket)
+    transport = WebSocketTransport(
+        websocket,
+        game_id=room.game_id.value,
+        seat=seat,
+    )
     await websocket.accept()
     connected = await room.connect_seat(
         seat=seat,
@@ -73,11 +95,22 @@ async def handle_game_connection(
         transport=transport,
     )
     if isinstance(connected, Rejected):
+        logger.info(
+            "game.websocket game_id=%s seat=%s error=%s",
+            room.game_id.value,
+            seat.value,
+            connected.reason,
+        )
         await websocket.close(
             code=_rejection_code(connected.reason),
             reason=connected.reason,
         )
         return
+    logger.info(
+        "game.websocket game_id=%s seat=%s connected=true",
+        room.game_id.value,
+        seat.value,
+    )
     try:
         while True:
             try:
@@ -99,6 +132,11 @@ async def handle_game_connection(
             seat=seat,
             user_id=user_id,
             transport=transport,
+        )
+        logger.info(
+            "game.websocket game_id=%s seat=%s connected=false",
+            room.game_id.value,
+            seat.value,
         )
 
 

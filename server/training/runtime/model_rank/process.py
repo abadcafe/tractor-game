@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 
@@ -11,6 +12,7 @@ import torch
 from server.foundation import result as _result
 from server.foundation.process_title import set_process_title
 from server.foundation.result import Ok, Rejected
+from server.foundation.runtime_logging import configure_stderr_logging
 from server.policy_model.network import ModelConfig
 from server.training.config import TrainConfig
 from server.training.device_execution import configure_accelerator_math
@@ -72,6 +74,7 @@ from server.training.runtime.threads import apply_torch_thread_config
 from server.training_events import EventContext, StructuredEventSink
 
 _MODEL_RANK_BATCH_WAIT_SECONDS = 0.004
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -103,6 +106,7 @@ def run_model_rank_process(
     """Model-rank process main loop."""
     assert model_rank_index >= 0
     assert model_rank_device
+    configure_stderr_logging()
     set_process_title(
         f"tractor-rank{model_rank_index} [{model_rank_device}]"
     )
@@ -149,6 +153,14 @@ async def _run_model_rank_process_async(
         execution_config=execution_config,
     )
     if isinstance(setup_result, Rejected):
+        _LOGGER.error(
+            "training.model_rank.failed run_id=%s rank=%d "
+            + "device=%s error=%s",
+            run_id,
+            model_rank_index,
+            model_rank_device,
+            setup_result.reason,
+        )
         event_sink.emit(
             "process.start",
             error=setup_result.reason,
@@ -163,6 +175,14 @@ async def _run_model_rank_process_async(
         return
     sync_result = initialize_distributed_rank(distributed_rank_config)
     if isinstance(sync_result, Rejected):
+        _LOGGER.error(
+            "training.model_rank.failed run_id=%s rank=%d "
+            + "device=%s error=%s",
+            run_id,
+            model_rank_index,
+            model_rank_device,
+            sync_result.reason,
+        )
         event_sink.emit(
             "process.start",
             error=sync_result.reason,
@@ -206,6 +226,14 @@ async def _run_model_rank_process_async(
             ),
         },
     )
+    _LOGGER.info(
+        "training.model_rank.ready run_id=%s rank=%d "
+        + "device=%s batch_target=%d",
+        run_id,
+        model_rank_index,
+        model_rank_device,
+        inference_batch_target,
+    )
     try:
         loop_result = await _run_model_rank_event_loop(
             model_rank_index=model_rank_index,
@@ -230,6 +258,12 @@ async def _run_model_rank_process_async(
         destroy_distributed_rank()
         event_sink.emit("process.stop")
         event_sink.close()
+        _LOGGER.info(
+            "training.model_rank.stopped run_id=%s rank=%d device=%s",
+            run_id,
+            model_rank_index,
+            model_rank_device,
+        )
 
 
 def _setup_model_rank_runtime(

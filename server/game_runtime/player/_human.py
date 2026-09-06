@@ -1,4 +1,4 @@
-"""Persistent human player with a replaceable transport."""
+"""Human player with one replaceable network transport."""
 
 from __future__ import annotations
 
@@ -9,14 +9,14 @@ from ._contracts import (
     CommandDecoder,
     ConnectionCloseReason,
     HumanTransport,
+    PlayerInbox,
     PlayerPort,
-    PlayerView,
 )
 from ._views import PlayerDescription, UserId
 
 
 @dataclass(frozen=True, slots=True)
-class _New:
+class _NotRunning:
     pass
 
 
@@ -25,12 +25,7 @@ class _Running:
     port: PlayerPort
 
 
-@dataclass(frozen=True, slots=True)
-class _Stopped:
-    pass
-
-
-type _Lifecycle = _New | _Running | _Stopped
+type _Lifecycle = _NotRunning | _Running
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,7 +47,7 @@ class HumanPlayer:
 
     def __init__(self, user_id: UserId) -> None:
         self._user_id = user_id
-        self._lifecycle: _Lifecycle = _New()
+        self._lifecycle: _Lifecycle = _NotRunning()
         self._connection: _Connection = _Disconnected()
 
     @property
@@ -71,10 +66,32 @@ class HumanPlayer:
             "mine": requester == self._user_id,
         }
 
-    async def start(self, port: PlayerPort) -> None:
-        """Bind the human to the session exactly once."""
-        assert isinstance(self._lifecycle, _New)
+    async def run(
+        self,
+        port: PlayerPort,
+        inbox: PlayerInbox,
+    ) -> None:
+        """Forward Session-owned views to the active transport."""
+        assert isinstance(self._lifecycle, _NotRunning)
         self._lifecycle = _Running(port)
+        await port.player_ready()
+        await port.player_initialized()
+        try:
+            while True:
+                view = await inbox.receive()
+                if view is None:
+                    return
+                connection = self._connection
+                if isinstance(connection, _Connected):
+                    await connection.transport.send(view)
+        finally:
+            self._lifecycle = _NotRunning()
+            connection = self._connection
+            self._connection = _Disconnected()
+            if isinstance(connection, _Connected):
+                await connection.transport.close(
+                    ConnectionCloseReason.SESSION_CLOSED
+                )
 
     async def connect(self, transport: HumanTransport) -> None:
         """Replace the transport without replacing the player."""
@@ -115,25 +132,6 @@ class HumanPlayer:
             await lifecycle.port.request_view()
             return
         await lifecycle.port.submit(seq, decoder)
-
-    async def update(self, view: PlayerView) -> None:
-        """Forward state only when a transport is connected."""
-        assert isinstance(self._lifecycle, _Running)
-        connection = self._connection
-        if isinstance(connection, _Connected):
-            await connection.transport.send(view)
-
-    async def stop(self) -> None:
-        """Stop the player and close its active transport once."""
-        if isinstance(self._lifecycle, _Stopped):
-            return
-        self._lifecycle = _Stopped()
-        connection = self._connection
-        self._connection = _Disconnected()
-        if isinstance(connection, _Connected):
-            await connection.transport.close(
-                ConnectionCloseReason.SESSION_CLOSED
-            )
 
 
 __all__ = ("HumanPlayer",)

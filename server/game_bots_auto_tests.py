@@ -30,6 +30,7 @@ def _request(
             viewer=Seat.A,
             seq=1,
             snapshot=state,
+            status="running",
             error=None,
         ),
         action=action,
@@ -42,12 +43,13 @@ def test_policy_observes_every_view_without_state() -> None:
         viewer=Seat.A,
         seq=1,
         snapshot=snapshot(awaiting_action=None),
+        status="running",
         error="previous rejection",
     )
 
-    result = policy.observe(view)
+    policy.observe(view)
 
-    assert isinstance(result, Ok)
+    assert view.seq == 1
 
 
 async def test_policy_passes_bid_without_legal_reveal() -> None:

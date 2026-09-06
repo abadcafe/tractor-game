@@ -11,6 +11,7 @@ from server.foundation.result import Rejected
 from server.game import SeatId, seat_from_id, seat_id
 from server.game_runtime import (
     BotPolicyName,
+    GameId,
     SeatStatus,
     UserId,
 )
@@ -50,9 +51,13 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
 
     async def create_game() -> dict[str, str]:
         game_id = state.registry.create(
-            create_game_instance(state.ai_service)
+            lambda identity: create_game_instance(
+                identity,
+                state.ai_service,
+                state.tasks,
+            )
         )
-        return {"game_id": game_id}
+        return {"game_id": game_id.value}
 
     async def list_games(
         user_id: str | None = None,
@@ -62,7 +67,7 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
             "games": [
                 _listed_game_response(
                     state.registry.get(game_id),
-                    game_id,
+                    game_id.value,
                     requester,
                 )
                 for game_id in state.registry.list_ids()
@@ -70,7 +75,10 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
         }
 
     async def delete_game(game_id: str) -> dict[str, bool]:
-        instance = state.registry.delete(game_id)
+        parsed = GameId.parse(game_id)
+        instance = (
+            None if parsed is None else state.registry.delete(parsed)
+        )
         if instance is not None:
             await instance.close()
         return {"ok": True}
@@ -80,7 +88,7 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
         seat_id: str,
         user_id: str | None = None,
     ) -> JSONResponse:
-        instance = state.registry.get(game_id)
+        instance = _game_instance(state, game_id)
         if instance is None:
             return _seat_error_response("game not found")
         seat = seat_from_id(seat_id)
@@ -102,7 +110,7 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
         seat_id: str,
         user_id: str | None = None,
     ) -> JSONResponse:
-        instance = state.registry.get(game_id)
+        instance = _game_instance(state, game_id)
         if instance is None:
             return _seat_error_response("game not found")
         seat = seat_from_id(seat_id)
@@ -124,7 +132,7 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
         policy: str | None = None,
         user_id: str | None = None,
     ) -> JSONResponse:
-        instance = state.registry.get(game_id)
+        instance = _game_instance(state, game_id)
         if instance is None:
             return _seat_error_response("game not found")
         policy_name = _bot_policy_response(policy)
@@ -147,7 +155,7 @@ def register_game_routes(app: FastAPI, state: ServerState) -> None:
         seat_id: str,
         user_id: str | None = None,
     ) -> None:
-        instance = state.registry.get(game_id)
+        instance = _game_instance(state, game_id)
         if instance is None:
             await websocket.close(code=4404, reason="game not found")
             return
@@ -212,6 +220,16 @@ def _listed_game_response(
         "user_seats": user_seats,
         "seats": room_seats,
     }
+
+
+def _game_instance(
+    state: ServerState,
+    game_id: str,
+) -> GameInstance | None:
+    parsed = GameId.parse(game_id)
+    if parsed is None:
+        return None
+    return state.registry.get(parsed)
 
 
 def _room_seats(

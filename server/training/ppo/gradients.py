@@ -142,8 +142,9 @@ def clip_gradient_group(
     )
     scaled_gradients = _foreach_div(gradients, safe_scale)
     scaled_component_norms = _foreach_norm(scaled_gradients, 2.0)
-    scaled_norm = torch.linalg.vector_norm(
-        torch.stack(scaled_component_norms), ord=2
+    scaled_components = torch.stack(scaled_component_norms)
+    scaled_norm = torch.sqrt(
+        torch.sum(scaled_components * scaled_components)
     )
     gradients_are_finite = finite_max & torch.isfinite(scaled_norm)
     if max_norm > 0.0:

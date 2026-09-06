@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from collections.abc import Coroutine
 from pathlib import Path
 
 import pytest
@@ -19,13 +20,27 @@ from server.training_control.process_inspection import (
 )
 
 
+class _TaskOwner:
+    def create_task(
+        self,
+        coroutine: Coroutine[object, object, None],
+        *,
+        name: str,
+    ) -> asyncio.Task[None]:
+        return asyncio.create_task(coroutine, name=name)
+
+
+def _control() -> TrainingProcessControl:
+    return TrainingProcessControl(_TaskOwner())
+
+
 @pytest.mark.asyncio
 async def test_initialize_is_synchronous_and_never_writes_pid(
     tmp_path: Path,
 ) -> None:
     _write_fixture_cli(tmp_path)
     run_dir = tmp_path / "run"
-    control = TrainingProcessControl()
+    control = _control()
 
     result = await control.initialize(
         run_dir=run_dir,
@@ -48,7 +63,7 @@ async def test_initialize_does_not_validate_or_replace_live_pid(
     _ = pid_file_path(run_dir).write_text(
         f"{os.getpid()}\n", encoding="ascii"
     )
-    control = TrainingProcessControl()
+    control = _control()
 
     result = await control.initialize(
         run_dir=run_dir,
@@ -69,7 +84,7 @@ async def test_resume_writes_pid_and_survives_controller_restart(
     _write_fixture_cli(tmp_path)
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    control = TrainingProcessControl()
+    control = _control()
 
     started = await control.resume(
         run_dir=run_dir,
@@ -83,7 +98,7 @@ async def test_resume_writes_pid_and_survives_controller_restart(
     pid = pid_result.value
     assert pid is not None
     await control.close()
-    restarted = TrainingProcessControl()
+    restarted = _control()
     inspected = await restarted.inspect(run_dir)
     assert isinstance(inspected, Ok)
     process = inspected.value.process
@@ -104,7 +119,7 @@ async def test_watch_observes_pid_file_lifecycle(
     _write_fixture_cli(tmp_path)
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    control = TrainingProcessControl()
+    control = _control()
     snapshots = control.watch(run_dir)
 
     initial = await anext(snapshots)
@@ -136,7 +151,7 @@ async def test_concurrent_resume_starts_exactly_one_process(
     _write_fixture_cli(tmp_path)
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    control = TrainingProcessControl()
+    control = _control()
     command = _command(run_dir, "resume", "latest.json")
 
     first, second = await asyncio.gather(
@@ -174,7 +189,7 @@ async def test_live_unrelated_pid_rejects_resume(
     _ = pid_file_path(run_dir).write_text(
         f"{os.getpid()}\n", encoding="ascii"
     )
-    control = TrainingProcessControl()
+    control = _control()
 
     result = await control.resume(
         run_dir=run_dir,
@@ -194,7 +209,7 @@ async def test_malformed_pid_is_overwritten_by_resume(
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     _ = pid_file_path(run_dir).write_text("invalid\n", encoding="ascii")
-    control = TrainingProcessControl()
+    control = _control()
 
     started = await control.resume(
         run_dir=run_dir,
@@ -218,7 +233,7 @@ async def test_natural_exit_removes_matching_pid_file(
     _write_fixture_cli(tmp_path)
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    control = TrainingProcessControl()
+    control = _control()
 
     started = await control.resume(
         run_dir=run_dir,
@@ -247,7 +262,7 @@ async def test_stop_forces_process_that_ignores_sigterm(
     _write_fixture_cli(tmp_path)
     run_dir = tmp_path / "run"
     run_dir.mkdir()
-    control = TrainingProcessControl()
+    control = _control()
     started = await control.resume(
         run_dir=run_dir,
         command=(
@@ -274,7 +289,7 @@ async def test_stop_removes_stale_pid_file(tmp_path: Path) -> None:
     _ = pid_file_path(run_dir).write_text(
         "2147483647\n", encoding="ascii"
     )
-    control = TrainingProcessControl()
+    control = _control()
 
     stopped = await control.stop(run_dir=run_dir, timeout_seconds=1.0)
 

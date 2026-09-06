@@ -145,8 +145,9 @@ def test_action_decoder_parameters_receive_finite_gradients() -> None:
 
 
 def _encoding(
-    *, device: torch.device = torch.device("cpu")
+    *, device: torch.device | None = None
 ) -> EncodedObservation:
+    resolved_device = device or torch.device("cpu")
     observation = build_observation(
         viewer=Seat.A,
         snapshot=make_snapshot(
@@ -162,11 +163,11 @@ def _encoding(
         ),
     )
     backbone = ObservationBackbone(d_model=8, layers=1, heads=1)
-    _ = backbone.to(device)
+    _ = backbone.to(resolved_device)
     return backbone.forward(
         tensorize_observation(
             observation=observation,
-            device=device,
+            device=resolved_device,
         )
     )
 

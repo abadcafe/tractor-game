@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from pathlib import Path
 from uuid import uuid4
@@ -36,6 +37,7 @@ from server.training_events import (
 )
 
 _CHECKPOINTS_DIR_NAME = "checkpoints"
+_LOGGER = logging.getLogger(__name__)
 
 
 def run_training_coordinator(
@@ -84,6 +86,12 @@ async def _run_training_coordinator_async(
         execution_config=execution_config
     )
     if isinstance(setup_result, Rejected):
+        _LOGGER.error(
+            "training.coordinator.failed run_id=%s run_dir=%s error=%s",
+            runtime_id,
+            run_dir,
+            setup_result.reason,
+        )
         return setup_result
     event_sink = StructuredEventSink(
         run_dir=run_dir,
@@ -96,6 +104,14 @@ async def _run_training_coordinator_async(
         execution_config=execution_config,
     )
     if isinstance(state_result, Rejected):
+        _LOGGER.error(
+            "training.coordinator.failed run_id=%s run_dir=%s "
+            + "checkpoint=%s error=%s",
+            runtime_id,
+            run_dir,
+            resume,
+            state_result.reason,
+        )
         event_sink.emit(
             "training",
             error=state_result.reason,
@@ -111,6 +127,14 @@ async def _run_training_coordinator_async(
         execution_config=execution_config,
     )
     if isinstance(runtime_result, Rejected):
+        _LOGGER.error(
+            "training.coordinator.failed run_id=%s run_dir=%s "
+            + "checkpoint=%s error=%s",
+            runtime_id,
+            run_dir,
+            resume,
+            runtime_result.reason,
+        )
         event_sink.emit(
             "training",
             error=runtime_result.reason,
@@ -118,6 +142,14 @@ async def _run_training_coordinator_async(
         event_sink.close()
         return runtime_result
     runtime = runtime_result.value
+    _LOGGER.info(
+        "training.coordinator.ready run_id=%s run_dir=%s "
+        + "checkpoint=%s workers=%d",
+        runtime_id,
+        run_dir,
+        resume,
+        execution_config.worker_process_count(),
+    )
     try:
         training_result = await _run_synchronized_training(
             run_dir=run_dir,
@@ -135,6 +167,15 @@ async def _run_training_coordinator_async(
     finally:
         await runtime.close()
     if isinstance(training_result, Rejected):
+        _LOGGER.error(
+            "training.coordinator.failed run_id=%s run_dir=%s "
+            + "rounds=%d updates=%d error=%s",
+            runtime_id,
+            run_dir,
+            state_result.value.total_rounds,
+            state_result.value.total_updates,
+            training_result.reason,
+        )
         event_sink.emit(
             "training",
             fields={
@@ -157,6 +198,17 @@ async def _run_training_coordinator_async(
             ),
             "total_updates": training_result.value.total_updates,
         },
+    )
+    _LOGGER.info(
+        "training.coordinator.completed run_id=%s run_dir=%s "
+        + "checkpoint=%s rounds=%d trainable_decisions=%d "
+        + "updates=%d",
+        runtime_id,
+        run_dir,
+        training_result.value.checkpoint_path,
+        training_result.value.total_rounds,
+        training_result.value.total_trainable_decisions,
+        training_result.value.total_updates,
     )
     event_sink.close()
     return training_result

@@ -40,6 +40,7 @@ class LoadedPolicyCheckpoint:
     model: PolicyModel
     model_config: ModelConfig
     metadata: CheckpointMetadata
+    checkpoint_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +83,7 @@ def load_policy_checkpoint(
             model=model_result.value,
             model_config=manifest.metadata.model_config,
             metadata=manifest.metadata,
+            checkpoint_id=manifest.checkpoint_id,
         )
     )
 

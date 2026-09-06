@@ -5,7 +5,10 @@ from ._contracts import (
     ConnectionCloseReason,
     HumanTransport,
     Player,
+    PlayerFailure,
+    PlayerInbox,
     PlayerPort,
+    PlayerRuntimeStatus,
     PlayerView,
 )
 from ._human import HumanPlayer
@@ -26,7 +29,10 @@ __all__ = (
     "HumanPlayerDescription",
     "HumanTransport",
     "Player",
+    "PlayerFailure",
+    "PlayerInbox",
     "PlayerPort",
+    "PlayerRuntimeStatus",
     "PlayerDescription",
     "PlayerView",
     "UserId",

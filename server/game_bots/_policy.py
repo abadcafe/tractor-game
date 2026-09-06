@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
-from server.foundation.result import Ok, Rejected
+from server.foundation.result import Ok
 from server.game import commands
 from server.game_runtime.player import PlayerView
 
@@ -18,6 +18,16 @@ type DecisionCommand = (
     | commands.Bury
     | commands.Play
 )
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionUnavailable:
+    """External policy service cannot complete this decision."""
+
+    error: str
+
+    def __post_init__(self) -> None:
+        assert self.error
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,15 +44,15 @@ class DecisionRequest:
 class DecisionPolicy(Protocol):
     """Observe every state and decide only strategic actions."""
 
-    def observe(self, view: PlayerView) -> Ok[None] | Rejected:
+    def observe(self, view: PlayerView) -> None:
         """Consume one contiguous player-visible state."""
         ...
 
     async def decide(
         self,
         request: DecisionRequest,
-    ) -> Ok[DecisionCommand] | Rejected:
-        """Return one command for the requested strategic action."""
+    ) -> Ok[DecisionCommand] | DecisionUnavailable:
+        """Return a command or an external availability failure."""
         ...
 
 
@@ -50,5 +60,6 @@ __all__ = (
     "DecisionCommand",
     "DecisionPolicy",
     "DecisionRequest",
+    "DecisionUnavailable",
     "StrategicAction",
 )

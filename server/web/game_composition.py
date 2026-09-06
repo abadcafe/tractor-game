@@ -7,17 +7,24 @@ import secrets
 from server.game import GameConfig, GameSeed
 from server.game_ai import AIService
 from server.game_bots import DefaultBotPlayerFactory
-from server.game_runtime import BotPolicyName, GameRoom
+from server.game_runtime import BotPolicyName, GameId, GameRoom
+from server.web.tasks import ApplicationTasks
 
 type GameInstance = GameRoom
 
 
-def create_game_instance(ai_service: AIService) -> GameInstance:
+def create_game_instance(
+    game_id: GameId,
+    ai_service: AIService,
+    tasks: ApplicationTasks,
+) -> GameInstance:
     """Create one independently seeded game instance."""
     return GameRoom(
-        GameConfig(),
-        GameSeed(secrets.randbits(64)),
-        DefaultBotPlayerFactory(ai_service),
+        game_id=game_id,
+        config=GameConfig(),
+        seed=GameSeed(secrets.randbits(64)),
+        bot_factory=DefaultBotPlayerFactory(ai_service),
+        task_owner=tasks,
     )
 
 

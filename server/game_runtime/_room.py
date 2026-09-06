@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import final
 
@@ -13,7 +14,7 @@ from ._roster import (
     RoomAlreadyStarted,
     SeatRoster,
 )
-from ._session import Session
+from ._session import Session, SessionTaskOwner
 from .player import (
     BotPolicyName,
     CommandDecoder,
@@ -21,12 +22,15 @@ from .player import (
     PlayerDescription,
     UserId,
 )
+from .registry import GameId
 
 __all__ = (
     "GameRoom",
     "RoomClosed",
     "SeatStatus",
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class RoomClosed(Rejected):
@@ -69,14 +73,29 @@ class GameRoom:
 
     def __init__(
         self,
+        *,
+        game_id: GameId,
         config: GameConfig,
         seed: GameSeed,
         bot_factory: BotPlayerFactory,
+        task_owner: SessionTaskOwner,
     ) -> None:
+        self._game_id = game_id
         self._config = config
         self._seed = seed
         self._roster = SeatRoster(bot_factory)
+        self._task_owner = task_owner
         self._lifecycle: _Lifecycle = _Lobby()
+        _LOGGER.info(
+            "game.created game_id=%s seed=%d",
+            game_id.value,
+            seed.value,
+        )
+
+    @property
+    def game_id(self) -> GameId:
+        """Return the immutable identity used by runtime boundaries."""
+        return self._game_id
 
     def started(self) -> bool:
         """Return whether this room currently owns a session."""
@@ -94,7 +113,19 @@ class GameRoom:
             return unavailable
         result = self._roster.occupy(seat=seat, user_id=user_id)
         if isinstance(result, Rejected):
+            _LOGGER.info(
+                "game.roster game_id=%s seat=%s "
+                + "operation=occupy error=%s",
+                self._game_id.value,
+                seat.value,
+                result.reason,
+            )
             return result
+        _LOGGER.info(
+            "game.roster game_id=%s seat=%s operation=occupy",
+            self._game_id.value,
+            seat.value,
+        )
         return Ok(seat)
 
     def vacate_seat(
@@ -107,7 +138,22 @@ class GameRoom:
         unavailable = self._lobby_rejection()
         if unavailable is not None:
             return unavailable
-        return self._roster.vacate(seat=seat, user_id=user_id)
+        result = self._roster.vacate(seat=seat, user_id=user_id)
+        if isinstance(result, Rejected):
+            _LOGGER.info(
+                "game.roster game_id=%s seat=%s "
+                + "operation=vacate error=%s",
+                self._game_id.value,
+                seat.value,
+                result.reason,
+            )
+            return result
+        _LOGGER.info(
+            "game.roster game_id=%s seat=%s operation=vacate",
+            self._game_id.value,
+            seat.value,
+        )
+        return result
 
     def fill_bots(
         self,
@@ -119,10 +165,25 @@ class GameRoom:
         unavailable = self._lobby_rejection()
         if unavailable is not None:
             return unavailable
-        return self._roster.fill_bots(
+        result = self._roster.fill_bots(
             policy=policy,
             user_id=user_id,
         )
+        if isinstance(result, Rejected):
+            _LOGGER.info(
+                "game.roster game_id=%s operation=fill_bots "
+                + "policy=%s error=%s",
+                self._game_id.value,
+                policy,
+                result.reason,
+            )
+            return result
+        _LOGGER.info(
+            "game.roster game_id=%s operation=fill_bots policy=%s",
+            self._game_id.value,
+            policy,
+        )
+        return result
 
     async def connect_seat(
         self,
@@ -147,11 +208,12 @@ class GameRoom:
             if isinstance(players_result, Rejected):
                 return players_result
             session = Session(
-                self._config,
-                self._seed,
-                players_result.value,
+                game_id=self._game_id,
+                config=self._config,
+                seed=self._seed,
+                players=players_result.value,
             )
-            await session.start()
+            await session.start(self._task_owner)
             self._lifecycle = _Active(session)
             await human.connect(transport)
             return Ok(seat)
@@ -221,7 +283,11 @@ class GameRoom:
             return
         self._lifecycle = _Closed()
         if isinstance(lifecycle, _Lobby):
-            await self._roster.close_unstarted()
+            self._roster.close_unstarted()
+            _LOGGER.info(
+                "game.closed game_id=%s seq=not_started",
+                self._game_id.value,
+            )
             return
         await lifecycle.session.close()
 

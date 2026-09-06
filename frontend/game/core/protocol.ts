@@ -2,13 +2,22 @@ import type { StateSnapshot } from "./types.ts";
 
 /** Server -> Client WebSocket message.
  *  Matches the actual server protocol: type is always "state",
- *  with an optional "error" field for action rejection feedback. */
-export type ServerMessage = {
-  type: "state";
-  seq: number;
-  state: StateSnapshot;
-  error?: string;
-};
+ *  with a transient command error or a persistent failed status. */
+export type ServerMessage =
+  | {
+    type: "state";
+    seq: number;
+    status: "running";
+    state: StateSnapshot;
+    error: string | null;
+  }
+  | {
+    type: "state";
+    seq: number;
+    status: "failed";
+    state: StateSnapshot;
+    error: string;
+  };
 
 /** Client -> Server WebSocket action or state request. */
 export type ClientAction =

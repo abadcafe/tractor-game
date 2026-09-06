@@ -8,6 +8,7 @@ from ._policy import (
     DecisionCommand,
     DecisionPolicy,
     DecisionRequest,
+    DecisionUnavailable,
     StrategicAction,
 )
 
@@ -20,5 +21,6 @@ __all__ = (
     "DecisionCommand",
     "DecisionPolicy",
     "DecisionRequest",
+    "DecisionUnavailable",
     "StrategicAction",
 )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 
@@ -18,14 +19,13 @@ def test_set_process_title_replaces_python_command_line() -> None:
         "print('ready', flush=True); "
         "time.sleep(30)"
     )
-    process = subprocess.Popen(
+    process: subprocess.Popen[bytes] = subprocess.Popen(
         (sys.executable, "-c", source),
         stdout=subprocess.PIPE,
-        text=True,
     )
     try:
         assert process.stdout is not None
-        assert process.stdout.readline().strip() == "ready"
+        assert os.read(process.stdout.fileno(), 6).strip() == b"ready"
         command_line = psutil.Process(process.pid).cmdline()
         assert command_line[0] == title
         assert all(not argument for argument in command_line[1:])

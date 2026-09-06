@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
@@ -13,6 +14,7 @@ from server.web.training_events.lifecycle import EventStreamLifecycle
 
 _CLEANUP_INTERVAL_SECONDS = 300
 _GAME_MAX_AGE_SECONDS = 3600
+_LOGGER = logging.getLogger(__name__)
 
 
 def lifespan_for(
@@ -23,17 +25,21 @@ def lifespan_for(
     async def lifespan(
         _app: FastAPI,
     ) -> AsyncGenerator[None, None]:
-        task = asyncio.create_task(_cleanup_loop(state))
-        try:
-            yield
-        finally:
-            event_stream_lifecycle.close()
-            _ = task.cancel()
-            await state.close()
+        async with asyncio.TaskGroup() as tasks:
+            state.tasks.bind(tasks)
+            cleanup = tasks.create_task(
+                _cleanup_loop(state),
+                name="server:game-cleanup",
+            )
+            _LOGGER.info("server.ready")
             try:
-                await task
-            except asyncio.CancelledError:
-                pass
+                yield
+            finally:
+                event_stream_lifecycle.close()
+                _ = cleanup.cancel()
+                await state.close()
+                state.tasks.unbind()
+                _LOGGER.info("server.stopped")
 
     return lifespan
 

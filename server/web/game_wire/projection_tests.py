@@ -29,12 +29,14 @@ def test_encode_state_preserves_complete_browser_contract() -> None:
     message = encode_state(
         viewer=Seat.A,
         seq=7,
+        status="running",
         snapshot=current,
         error="rejected",
     )
 
     assert message.type == "state"
     assert message.seq == 7
+    assert message.status == "running"
     assert message.error == "rejected"
     assert tuple(item.id for item in message.state.hand) == tuple(
         item.id for item in hand
@@ -71,6 +73,7 @@ def test_encode_state_generates_complete_bid_hints_in_web_layer() -> (
     message = encode_state(
         viewer=Seat.A,
         seq=1,
+        status="running",
         snapshot=current,
         error=None,
     )
@@ -97,6 +100,7 @@ def test_encode_state_filters_stir_hints_to_pairs() -> None:
     message = encode_state(
         viewer=Seat.A,
         seq=2,
+        status="running",
         snapshot=current,
         error=None,
     )
@@ -130,6 +134,7 @@ def test_encode_state_generates_follow_hints_from_current_trick() -> (
     message = encode_state(
         viewer=Seat.B,
         seq=3,
+        status="running",
         snapshot=current,
         error=None,
     )
@@ -163,6 +168,7 @@ def test_encode_state_respects_current_bid_winner() -> None:
     message = encode_state(
         viewer=Seat.A,
         seq=4,
+        status="running",
         snapshot=current,
         error=None,
     )
@@ -201,12 +207,14 @@ def test_encode_state_hides_overcall_hint_from_current_bid_winner() -> (
     own_view = encode_state(
         viewer=Seat.A,
         seq=5,
+        status="running",
         snapshot=current,
         error=None,
     )
     opponent_view = encode_state(
         viewer=Seat.B,
         seq=5,
+        status="running",
         snapshot=current,
         error=None,
     )

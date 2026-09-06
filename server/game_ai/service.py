@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import random
 import secrets
 from typing import TYPE_CHECKING, final
@@ -13,18 +14,28 @@ from server.game import Seat
 
 from .config import AIConfig, LocalAIConfig, RemoteAIConfig
 from .controller import AIController, AIControllerPort
-from .remote import RemoteAIController
+from .remote import RemoteAIController, RemoteRetryPolicy
 
 if TYPE_CHECKING:
-    from server.policy_model.inference.runtime import InferenceRuntime
+    from server.policy_model.inference.runtime import (
+        InferenceRuntime,
+        InferenceTaskOwner,
+    )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @final
 class AIService:
     """Own exactly one configured AI deployment."""
 
-    def __init__(self, config: AIConfig) -> None:
+    def __init__(
+        self,
+        config: AIConfig,
+        task_owner: InferenceTaskOwner,
+    ) -> None:
         self._config = config
+        self._task_owner = task_owner
         self._runtime: InferenceRuntime | None = None
         self._load_rejection: Rejected | None = None
         self._remote_client: httpx.AsyncClient | None = None
@@ -39,6 +50,20 @@ class AIService:
                 RemoteAIController(
                     seat=seat,
                     client=self._remote_http_client(),
+                    retry=RemoteRetryPolicy(
+                        deadline_seconds=(
+                            self._config.decision_deadline_seconds
+                        ),
+                        attempt_timeout_seconds=(
+                            self._config.attempt_timeout_seconds
+                        ),
+                        initial_delay_seconds=(
+                            self._config.retry_initial_seconds
+                        ),
+                        maximum_delay_seconds=(
+                            self._config.retry_maximum_seconds
+                        ),
+                    ),
                 )
             )
         return self.local_controller(seat)
@@ -81,11 +106,24 @@ class AIService:
         loaded = InferenceRuntime.load(
             checkpoint_path=config.checkpoint_path,
             device_name=config.device,
+            task_owner=self._task_owner,
         )
         if isinstance(loaded, Rejected):
             self._load_rejection = loaded
+            _LOGGER.error(
+                "ai.load checkpoint_path=%s device=%s error=%s",
+                config.checkpoint_path,
+                config.device,
+                loaded.reason,
+            )
             return loaded
         self._runtime = loaded.value
+        _LOGGER.info(
+            "ai.load checkpoint_path=%s checkpoint_id=%s device=%s",
+            config.checkpoint_path,
+            loaded.value.model_id,
+            loaded.value.device_type,
+        )
         return Ok(loaded.value)
 
     def _remote_http_client(self) -> httpx.AsyncClient:
@@ -94,7 +132,7 @@ class AIService:
         if self._remote_client is None:
             self._remote_client = httpx.AsyncClient(
                 base_url=str(config.endpoint).rstrip("/"),
-                timeout=config.request_timeout_seconds,
+                timeout=None,
             )
         return self._remote_client
 

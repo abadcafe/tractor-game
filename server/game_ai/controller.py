@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import logging
 import random
-import time
+from dataclasses import dataclass
 from typing import Protocol, final
 
 from server.foundation.result import Ok, Rejected
@@ -25,7 +24,15 @@ from server.policy_model.observation import (
     build_observation,
 )
 
-_LOGGER = logging.getLogger(__name__)
+
+@dataclass(frozen=True, slots=True)
+class AIUnavailable:
+    """An external AI deployment cannot complete a decision."""
+
+    error: str
+
+    def __post_init__(self) -> None:
+        assert self.error
 
 
 class AIControllerPort(Protocol):
@@ -37,7 +44,7 @@ class AIControllerPort(Protocol):
         seq: int,
         snapshot: PlayerSnapshot,
         error: str | None,
-    ) -> Ok[None] | Rejected:
+    ) -> None:
         """Record one complete player observation."""
         ...
 
@@ -46,8 +53,8 @@ class AIControllerPort(Protocol):
         *,
         seq: int,
         snapshot: PlayerSnapshot,
-    ) -> Ok[commands.Command] | Rejected:
-        """Return one strategic command for the current view."""
+    ) -> Ok[commands.Command] | AIUnavailable:
+        """Return one strategic command or external unavailability."""
         ...
 
 
@@ -85,34 +92,28 @@ class AIController:
         seq: int,
         snapshot: PlayerSnapshot,
         error: str | None,
-    ) -> Ok[None] | Rejected:
+    ) -> None:
         """Consume one contiguous real player view."""
         remembered = self._memory.observe(
             seq=seq,
             snapshot=snapshot,
             error=error,
         )
-        if isinstance(remembered, Rejected):
-            return remembered
-        return Ok(None)
+        assert isinstance(remembered, Ok), remembered.reason
 
     async def decide(
         self,
         *,
         seq: int,
         snapshot: PlayerSnapshot,
-    ) -> Ok[commands.Command] | Rejected:
+    ) -> Ok[commands.Command] | AIUnavailable:
         """Sample one action directly from the learned policy."""
-        if snapshot.awaiting_action not in (
+        assert snapshot.awaiting_action in (
             "bid",
             "stir",
             "discard",
             "play",
-        ):
-            return Rejected(
-                reason="AI has no strategic action to decide"
-            )
-        started = time.perf_counter()
+        )
         decided = await self._model.decide(
             request=PolicyDecisionRequest(
                 query=self._root_query(snapshot),
@@ -122,19 +123,12 @@ class AIController:
                 ),
             )
         )
-        if isinstance(decided, Rejected):
-            return decided
+        assert isinstance(decided, Ok), decided.reason
         command = physical_command(
             action=decided.value,
             hand=snapshot.hand,
         )
-        if isinstance(command, Rejected):
-            return command
-        _LOGGER.debug(
-            "ai.decision kind=%s elapsed_ms=%.3f",
-            snapshot.awaiting_action,
-            (time.perf_counter() - started) * 1000.0,
-        )
+        assert isinstance(command, Ok), command.reason
         return command
 
     def _root_query(self, snapshot: PlayerSnapshot) -> PolicyQuery:
@@ -156,5 +150,6 @@ class AIController:
 __all__ = (
     "AIController",
     "AIControllerPort",
+    "AIUnavailable",
     "ControllerInference",
 )

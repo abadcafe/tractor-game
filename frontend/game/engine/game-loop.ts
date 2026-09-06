@@ -60,8 +60,12 @@ export class GameLoop {
         this.onError?.(msg.error);
       }
 
-      const interactionMode = this.computeInteractionMode(msg.state);
+      const interactionMode = this.computeInteractionMode(
+        msg.state,
+        msg.status,
+      );
       this.renderFn(msg.state, this.container, interactionMode);
+      this.renderSessionFailure(msg.status, msg.error);
     }
   }
 
@@ -87,9 +91,10 @@ export class GameLoop {
    */
   private computeInteractionMode(
     state: StateSnapshot,
+    status: ServerMessage["status"],
   ): InteractionMode {
     // Disable all interaction while reconnecting
-    if (this.isReconnecting()) {
+    if (this.isReconnecting() || status === "failed") {
       return null;
     }
 
@@ -111,5 +116,18 @@ export class GameLoop {
     }
 
     return null;
+  }
+
+  private renderSessionFailure(
+    status: ServerMessage["status"],
+    error: string | null,
+  ): void {
+    this.container.querySelector(".session-failure")?.remove();
+    if (status !== "failed") return;
+    const banner = this.container.ownerDocument.createElement("div");
+    banner.className = "session-failure";
+    banner.setAttribute("role", "alert");
+    banner.textContent = error ?? "游戏运行失败";
+    this.container.appendChild(banner);
   }
 }

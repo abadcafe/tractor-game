@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import logging
+import time
+from collections.abc import Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import final
+from typing import Protocol, final
 
 import torch
 
@@ -20,6 +23,21 @@ from ._executor import TorchBatchExecutor
 from .contracts import PolicyDecisionRequest
 
 type DecisionResult = Ok[GeneratedAction] | Rejected
+
+_LOGGER = logging.getLogger(__name__)
+
+
+class InferenceTaskOwner(Protocol):
+    """Process capability that supervises the inference dispatcher."""
+
+    def create_task(
+        self,
+        coroutine: Coroutine[object, object, None],
+        *,
+        name: str,
+    ) -> asyncio.Task[None]:
+        """Start one named task under process ownership."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,8 +58,13 @@ type _InferenceCall = _DecisionCall | _StopCall
 class InferenceRuntime:
     """Batch concurrent decisions around one model-owning worker."""
 
-    def __init__(self, executor: TorchBatchExecutor) -> None:
+    def __init__(
+        self,
+        executor: TorchBatchExecutor,
+        task_owner: InferenceTaskOwner,
+    ) -> None:
         self._executor = executor
+        self._task_owner = task_owner
         self._queue: asyncio.Queue[_InferenceCall] = asyncio.Queue()
         self._dispatcher: asyncio.Task[None] | None = None
         self._active_calls: tuple[_InferenceCall, ...] = ()
@@ -54,12 +77,23 @@ class InferenceRuntime:
         )
         self._closed = False
 
+    @property
+    def model_id(self) -> str:
+        """Return the loaded checkpoint or in-memory model identity."""
+        return self._executor.model_id
+
+    @property
+    def device_type(self) -> str:
+        """Return the concrete inference device type."""
+        return self._executor.device_type
+
     @classmethod
     def load(
         cls,
         *,
         checkpoint_path: Path,
         device_name: str,
+        task_owner: InferenceTaskOwner,
     ) -> Ok[InferenceRuntime] | Rejected:
         """Load the exact current checkpoint into a new runtime."""
         executor = TorchBatchExecutor.load(
@@ -68,7 +102,7 @@ class InferenceRuntime:
         )
         if isinstance(executor, Rejected):
             return executor
-        return Ok(cls(executor.value))
+        return Ok(cls(executor.value, task_owner))
 
     @classmethod
     def create(
@@ -76,9 +110,17 @@ class InferenceRuntime:
         *,
         model: PolicyModel,
         device: torch.device,
+        task_owner: InferenceTaskOwner,
     ) -> InferenceRuntime:
         """Create a runtime from an already constructed model."""
-        return cls(TorchBatchExecutor(model=model, device=device))
+        return cls(
+            TorchBatchExecutor(
+                model=model,
+                device=device,
+                model_id="in-memory",
+            ),
+            task_owner,
+        )
 
     async def decide(
         self,
@@ -116,7 +158,10 @@ class InferenceRuntime:
 
     def _start_dispatcher(self) -> None:
         if self._dispatcher is None:
-            self._dispatcher = asyncio.create_task(self._dispatch())
+            self._dispatcher = self._task_owner.create_task(
+                self._dispatch(),
+                name=f"inference:{self._executor.model_id}:dispatcher",
+            )
             self._dispatcher.add_done_callback(
                 self._dispatcher_finished
             )
@@ -128,6 +173,19 @@ class InferenceRuntime:
         if failure is None:
             return
         self._failure = failure
+        _LOGGER.critical(
+            "runtime.task task=inference-dispatcher model_id=%s "
+            + "device=%s error=%s: %s",
+            self._executor.model_id,
+            self._executor.device_type,
+            type(failure).__name__,
+            failure,
+            exc_info=(
+                type(failure),
+                failure,
+                failure.__traceback__,
+            ),
+        )
         for call in self._active_calls:
             _fail_call(call, failure)
         self._active_calls = ()
@@ -166,12 +224,21 @@ class InferenceRuntime:
         calls: tuple[_DecisionCall, ...],
     ) -> None:
         requests = tuple(call.request for call in calls)
+        started = time.perf_counter()
         loop = asyncio.get_running_loop()
         operation = functools.partial(
             self._executor.decide,
             requests=requests,
         )
         result = await loop.run_in_executor(self._pool, operation)
+        _LOGGER.debug(
+            "inference.batch model_id=%s device=%s "
+            + "batch_size=%d elapsed_ms=%.3f",
+            self._executor.model_id,
+            self._executor.device_type,
+            len(calls),
+            (time.perf_counter() - started) * 1000.0,
+        )
         if isinstance(result, Rejected):
             for call in calls:
                 if not call.future.cancelled():
@@ -191,4 +258,4 @@ def _fail_call(
         call.future.set_exception(failure)
 
 
-__all__ = ("InferenceRuntime",)
+__all__ = ("InferenceRuntime", "InferenceTaskOwner")

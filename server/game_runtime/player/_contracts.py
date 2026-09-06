@@ -1,15 +1,18 @@
-"""Runtime contract shared by every player."""
+"""Runtime contract shared by every player implementation."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Protocol
+from typing import Literal, Protocol
 
 from server.foundation.result import Ok
 from server.game import CommandRejected, Seat, commands, snapshots
 
+from ..registry import GameId
 from ._views import PlayerDescription, UserId
+
+type PlayerRuntimeStatus = Literal["running", "failed"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,7 +22,18 @@ class PlayerView:
     viewer: Seat
     seq: int
     snapshot: snapshots.PlayerSnapshot
+    status: PlayerRuntimeStatus
     error: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class PlayerFailure:
+    """External operational failure that prevents further commands."""
+
+    error: str
+
+    def __post_init__(self) -> None:
+        assert self.error
 
 
 class ConnectionCloseReason(str, Enum):
@@ -39,11 +53,32 @@ class CommandDecoder(Protocol):
         ...
 
 
+class PlayerInbox(Protocol):
+    """Lossless stream of complete views owned by one Session."""
+
+    async def receive(self) -> PlayerView | None:
+        """Return the next view or ``None`` when the Session closes."""
+        ...
+
+
 class PlayerPort(Protocol):
     """Seat-bound game capability available to one player."""
 
+    @property
+    def game_id(self) -> GameId:
+        """Return the immutable identity of the owning game."""
+        ...
+
+    async def player_ready(self) -> None:
+        """Join the barrier after the player's inbox can receive."""
+        ...
+
+    async def player_initialized(self) -> None:
+        """Publish that initial automatic work has settled."""
+        ...
+
     async def request_view(self) -> None:
-        """Request the current complete player view."""
+        """Enqueue a request for the current complete player view."""
         ...
 
     async def submit(
@@ -51,12 +86,16 @@ class PlayerPort(Protocol):
         seq: int,
         decoder: CommandDecoder,
     ) -> None:
-        """Submit a command guarded by the observed sequence."""
+        """Enqueue a command guarded by the observed sequence."""
+        ...
+
+    async def report_failure(self, failure: PlayerFailure) -> None:
+        """Enqueue a persistent external player failure."""
         ...
 
 
 class Player(Protocol):
-    """Controller assigned to one seat by a running session."""
+    """Controller assigned to one seat by a running Session."""
 
     def lobby_status(
         self,
@@ -65,16 +104,12 @@ class Player(Protocol):
         """Return the requester-specific lobby status."""
         ...
 
-    async def start(self, port: PlayerPort) -> None:
-        """Bind and fully initialize the player exactly once."""
-        ...
-
-    async def update(self, view: PlayerView) -> None:
-        """Consume one complete latest-state view."""
-        ...
-
-    async def stop(self) -> None:
-        """Stop the player and release all runtime resources."""
+    async def run(
+        self,
+        port: PlayerPort,
+        inbox: PlayerInbox,
+    ) -> None:
+        """Serve views until the Session closes the inbox."""
         ...
 
 
@@ -95,6 +130,9 @@ __all__ = (
     "ConnectionCloseReason",
     "HumanTransport",
     "Player",
+    "PlayerFailure",
+    "PlayerInbox",
     "PlayerPort",
+    "PlayerRuntimeStatus",
     "PlayerView",
 )

@@ -126,7 +126,9 @@ Deno.test("test_integration_ws_to_render", () => {
   const msg: ServerMessage = {
     type: "state",
     seq: 1,
+    status: "running",
     state: makeSnapshot({ phase: "PLAYING", awaiting_action: "play" }),
+    error: null,
   };
   gameLoop.handleMessage(msg);
 
@@ -343,7 +345,9 @@ Deno.test("test_integration_error_message", () => {
   const stateMsg: ServerMessage = {
     type: "state",
     seq: 1,
+    status: "running",
     state: makeSnapshot(),
+    error: null,
   };
   gameLoop.handleMessage(stateMsg);
   const stateBefore = stateManager.get();
@@ -353,6 +357,7 @@ Deno.test("test_integration_error_message", () => {
   const errMsg: ServerMessage = {
     type: "state",
     seq: 1,
+    status: "running",
     state: makeSnapshot(),
     error: "无效的出牌",
   };
@@ -381,6 +386,7 @@ Deno.test("test_integration_stir_not_human_ignored", () => {
   const msg: ServerMessage = {
     type: "state",
     seq: 1,
+    status: "running",
     state: makeSnapshot({
       phase: "STIRRING",
       awaiting_action: null,
@@ -393,6 +399,7 @@ Deno.test("test_integration_stir_not_human_ignored", () => {
         exchange_count: null,
       },
     }),
+    error: null,
   };
   gameLoop.handleMessage(msg);
 

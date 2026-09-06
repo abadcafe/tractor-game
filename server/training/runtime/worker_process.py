@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 
@@ -11,6 +12,7 @@ import torch
 from server.foundation import result as _result
 from server.foundation.process_title import set_process_title
 from server.foundation.result import Ok, Rejected
+from server.foundation.runtime_logging import configure_stderr_logging
 from server.policy_model.network import ModelConfig
 from server.training.config import TrainConfig
 from server.training.ppo.distributed import (
@@ -76,6 +78,8 @@ from server.training.runtime.threads import (
 )
 from server.training_events import EventContext, StructuredEventSink
 
+_LOGGER = logging.getLogger(__name__)
+
 
 @dataclass(slots=True)
 class _WorkerRuntime:
@@ -140,6 +144,7 @@ def run_training_worker_process(
 ) -> None:
     """Worker process main loop."""
     assert worker_index >= 0
+    configure_stderr_logging()
     set_process_title(f"tractor-worker{worker_index}")
     ignore_terminal_interrupt_in_child_process()
     asyncio.run(
@@ -181,6 +186,12 @@ async def _run_training_worker_process_async(
         worker_cpus=worker_cpus,
     )
     if isinstance(setup_result, Rejected):
+        _LOGGER.error(
+            "training.worker.failed run_id=%s worker=%d error=%s",
+            run_id,
+            worker_index,
+            setup_result.reason,
+        )
         event_sink.emit(
             "process.start",
             error=setup_result.reason,
@@ -197,6 +208,12 @@ async def _run_training_worker_process_async(
         return
     sync_result = initialize_distributed_rank(distributed_rank_config)
     if isinstance(sync_result, Rejected):
+        _LOGGER.error(
+            "training.worker.failed run_id=%s worker=%d error=%s",
+            run_id,
+            worker_index,
+            sync_result.reason,
+        )
         event_sink.emit(
             "process.start",
             error=sync_result.reason,
@@ -223,6 +240,12 @@ async def _run_training_worker_process_async(
         event_sink=event_sink,
     )
     if isinstance(runtime_result, Rejected):
+        _LOGGER.error(
+            "training.worker.failed run_id=%s worker=%d error=%s",
+            run_id,
+            worker_index,
+            runtime_result.reason,
+        )
         event_sink.emit(
             "process.start",
             error=runtime_result.reason,
@@ -242,6 +265,12 @@ async def _run_training_worker_process_async(
     event_sink.emit(
         "process.start",
         fields={"worker_index": worker_index},
+    )
+    _LOGGER.info(
+        "training.worker.ready run_id=%s worker=%d device=%s",
+        run_id,
+        worker_index,
+        setup_result.value,
     )
     try:
         while True:
@@ -279,6 +308,11 @@ async def _run_training_worker_process_async(
         destroy_distributed_rank()
         event_sink.emit("process.stop")
         event_sink.close()
+        _LOGGER.info(
+            "training.worker.stopped run_id=%s worker=%d",
+            run_id,
+            worker_index,
+        )
 
 
 async def _receive_worker_command_or_failure(

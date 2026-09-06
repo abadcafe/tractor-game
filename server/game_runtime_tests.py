@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Coroutine
 from dataclasses import dataclass, field
 
 from server.foundation.result import Ok, Rejected
@@ -12,13 +14,19 @@ from server.game import (
     Seat,
     commands,
 )
-from server.game_runtime import BotPolicyName, GameRoom, UserId
+from server.game_runtime import (
+    BotPolicyName,
+    GameId,
+    GameRoom,
+    UserId,
+)
 from server.game_runtime.player import (
     BotPlayerDescription,
     ConnectionCloseReason,
     HumanPlayerDescription,
     Player,
     PlayerDescription,
+    PlayerInbox,
     PlayerPort,
     PlayerView,
 )
@@ -30,6 +38,18 @@ def _views() -> list[PlayerView]:
 
 def _close_reasons() -> list[ConnectionCloseReason]:
     return []
+
+
+async def _wait_for_views(
+    transport: _Transport,
+    *,
+    count: int,
+) -> None:
+    for _index in range(100):
+        if len(transport.views) == count:
+            return
+        await asyncio.sleep(0)
+    assert len(transport.views) == count
 
 
 @dataclass(slots=True)
@@ -75,15 +95,34 @@ class _Bot:
             policy=self.policy_name,
         )
 
-    async def start(self, port: PlayerPort) -> None:
+    async def run(
+        self,
+        port: PlayerPort,
+        inbox: PlayerInbox,
+    ) -> None:
         assert self.port is None
         self.port = port
+        await port.player_ready()
+        await port.player_initialized()
+        try:
+            while True:
+                view = await inbox.receive()
+                if view is None:
+                    return
+                self.views.append(view)
+        finally:
+            self.stop_count += 1
 
-    async def update(self, view: PlayerView) -> None:
-        self.views.append(view)
 
-    async def stop(self) -> None:
-        self.stop_count += 1
+@dataclass(slots=True)
+class _TaskOwner:
+    def create_task(
+        self,
+        coroutine: Coroutine[object, object, None],
+        *,
+        name: str,
+    ) -> asyncio.Task[None]:
+        return asyncio.create_task(coroutine, name=name)
 
 
 def _bots() -> list[_Bot]:
@@ -123,9 +162,11 @@ class _RejectingFactory:
 
 def _room(factory: _Factory | None = None) -> GameRoom:
     return GameRoom(
-        GameConfig(),
-        GameSeed(19),
-        factory if factory is not None else _Factory(),
+        game_id=GameId("2" * 32),
+        config=GameConfig(),
+        seed=GameSeed(19),
+        bot_factory=(factory if factory is not None else _Factory()),
+        task_owner=_TaskOwner(),
     )
 
 
@@ -291,7 +332,13 @@ def test_fill_bots_requires_human_and_preserves_human() -> None:
 
 def test_fill_bots_is_atomic_when_ai_creation_is_rejected() -> None:
     factory = _RejectingFactory()
-    room = GameRoom(GameConfig(), GameSeed(19), factory)
+    room = GameRoom(
+        game_id=GameId("3" * 32),
+        config=GameConfig(),
+        seed=GameSeed(19),
+        bot_factory=factory,
+        task_owner=_TaskOwner(),
+    )
     owner = _user()
     assert isinstance(
         room.occupy_seat(seat=Seat.C, user_id=owner),
@@ -364,6 +411,7 @@ async def test_connect_freezes_roster_and_starts_every_player() -> None:
         room.fill_bots(policy="auto", user_id=owner),
         Rejected,
     )
+    await room.close()
 
 
 async def test_connect_replaces_transport_but_not_human_player() -> (
@@ -385,6 +433,7 @@ async def test_connect_replaces_transport_but_not_human_player() -> (
     assert first.closes == [ConnectionCloseReason.REPLACED]
     assert second.closes == []
     assert _human_at(room, Seat.A, owner)["connected"]
+    await room.close()
 
 
 async def test_receive_accepts_only_current_transport() -> None:
@@ -415,11 +464,13 @@ async def test_receive_accepts_only_current_transport() -> None:
         seq=0,
         decoder=decoder,
     )
+    await _wait_for_views(current, count=1)
 
     assert decoder.decode_count == 0
     assert stale.views == []
     assert len(current.views) == 1
     assert current.views[0].seq == 1
+    await room.close()
 
 
 async def test_disconnect_ignores_stale_transport() -> None:
@@ -442,6 +493,7 @@ async def test_disconnect_ignores_stale_transport() -> None:
     )
 
     assert _human_at(room, Seat.A, owner)["connected"]
+    await room.close()
 
 
 async def test_close_is_idempotent_for_active_and_lobby_rooms() -> None:
@@ -470,7 +522,7 @@ async def test_close_is_idempotent_for_active_and_lobby_rooms() -> None:
 
     assert transport.closes == [ConnectionCloseReason.SESSION_CLOSED]
     assert all(bot.stop_count == 1 for bot in factory.bots)
-    assert all(bot.stop_count == 1 for bot in lobby_factory.bots)
+    assert all(bot.stop_count == 0 for bot in lobby_factory.bots)
     assert not active.started()
     assert isinstance(
         active.occupy_seat(

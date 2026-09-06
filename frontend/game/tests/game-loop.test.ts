@@ -49,13 +49,23 @@ function makeStateMsg(
   return {
     type: "state",
     seq: 1,
+    status: "running",
     state: makeSnapshot(overrides),
+    error: null,
   };
 }
 
 // Mock renderer that records what was rendered
 let lastRenderedSnapshot: StateSnapshot | null = null;
 let lastInteractionMode: InteractionMode = null;
+let lastSessionFailure: string | null = null;
+
+type MockBanner = {
+  className: string;
+  textContent: string;
+  remove: () => void;
+  setAttribute: (name: string, value: string) => void;
+};
 
 function mockRender(
   snapshot: StateSnapshot,
@@ -69,7 +79,11 @@ function mockRender(
 // Mock container
 const mockContainer = {
   innerHTML: "",
-  appendChild: () => {},
+  appendChild: (child: MockBanner) => {
+    if (child.className === "session-failure") {
+      lastSessionFailure = child.textContent;
+    }
+  },
   querySelector: () => null,
   querySelectorAll: () => [],
   ownerDocument: {
@@ -77,6 +91,7 @@ const mockContainer = {
       className: "",
       textContent: "",
       remove: () => {},
+      setAttribute: (_name: string, _value: string) => {},
     }),
   },
 } as unknown as Element;
@@ -255,6 +270,7 @@ Deno.test("test_handleMessage_error_shows_error_and_updates_state", () => {
   const msg: ServerMessage = {
     type: "state",
     seq: 1,
+    status: "running",
     state: makeSnapshot({ phase: "PLAYING" }),
     error: "something went wrong",
   };
@@ -274,7 +290,9 @@ Deno.test("test_handleMessage_updates_state_manager", () => {
   const msg: ServerMessage = {
     type: "state",
     seq: 1,
+    status: "running",
     state: snap,
+    error: null,
   };
   loop.handleMessage(msg);
   assertEquals(stateManager.get()!.phase, "PLAYING");
@@ -289,6 +307,7 @@ Deno.test("test_handleMessage_error_stores_error_message", () => {
   const msg: ServerMessage = {
     type: "state",
     seq: 1,
+    status: "running",
     state: makeSnapshot({ phase: "PLAYING" }),
     error: "something went wrong",
   };
@@ -304,10 +323,12 @@ Deno.test("test_handleMessage_unknown_awaiting_returns_null", () => {
   const malformedMsg: MalformedServerMessage = {
     type: "state",
     seq: 1,
+    status: "running",
     state: {
       ...makeSnapshot({ phase: "PLAYING" }),
       awaiting_action: "unknown_action",
     },
+    error: null,
   };
   loop.handleMessage(malformedMsg as unknown as ServerMessage);
   assertEquals(lastInteractionMode, null);
@@ -351,8 +372,29 @@ Deno.test("test_handleMessage_seq_stored_in_state_manager", () => {
   const msg: ServerMessage = {
     type: "state",
     seq: 42,
+    status: "running",
     state: makeSnapshot({ phase: "PLAYING" }),
+    error: null,
   };
   loop.handleMessage(msg);
   assertEquals(stateManager.seq, 42);
+});
+
+Deno.test("test_failed_session_is_persistent_and_noninteractive", () => {
+  lastInteractionMode = "play";
+  lastSessionFailure = null;
+  const stateManager = new StateManager();
+  const loop = new GameLoop(stateManager, mockRender, mockContainer);
+  const msg: ServerMessage = {
+    type: "state",
+    seq: 9,
+    status: "failed",
+    state: makeSnapshot({ awaiting_action: "play" }),
+    error: "AI model is unavailable",
+  };
+
+  loop.handleMessage(msg);
+
+  assertEquals(lastInteractionMode, null);
+  assertEquals(lastSessionFailure, "AI model is unavailable");
 });

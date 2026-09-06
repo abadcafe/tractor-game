@@ -6,7 +6,7 @@ from .config import (
     RemoteAIConfig,
     ai_config_from_env,
 )
-from .controller import AIControllerPort
+from .controller import AIControllerPort, AIUnavailable
 from .remote import (
     RemoteDecisionRequest,
     RemoteDecisionResponse,
@@ -17,6 +17,7 @@ from .service import AIService
 __all__ = (
     "AIConfig",
     "AIControllerPort",
+    "AIUnavailable",
     "AIService",
     "LocalAIConfig",
     "RemoteAIConfig",

@@ -193,6 +193,7 @@ class StateMessage(_WireModel):
 
     type: Literal["state"] = "state"
     seq: int
+    status: Literal["running", "failed"]
     state: StateWire
     error: str | None
 
@@ -200,12 +201,14 @@ class StateMessage(_WireModel):
 def encode_state(
     viewer: Seat,
     seq: int,
+    status: Literal["running", "failed"],
     snapshot: snapshots.PlayerSnapshot,
     error: str | None,
 ) -> StateMessage:
     """Encode one player view without serializing domain models."""
     return StateMessage(
         seq=seq,
+        status=status,
         state=StateWire(
             phase=snapshot.phase,
             round_number=snapshot.round_number,

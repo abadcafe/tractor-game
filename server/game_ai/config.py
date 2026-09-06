@@ -32,7 +32,10 @@ class RemoteAIConfig(BaseModel):
 
     mode: Literal["remote"] = "remote"
     endpoint: HttpUrl
-    request_timeout_seconds: float = Field(default=120.0, gt=0.0)
+    decision_deadline_seconds: float = Field(default=120.0, gt=0.0)
+    attempt_timeout_seconds: float = Field(default=30.0, gt=0.0)
+    retry_initial_seconds: float = Field(default=0.25, ge=0.0)
+    retry_maximum_seconds: float = Field(default=4.0, ge=0.0)
 
 
 type AIConfig = Annotated[
@@ -52,9 +55,21 @@ def ai_config_from_env() -> AIConfig:
             )
         return RemoteAIConfig(
             endpoint=HttpUrl(endpoint),
-            request_timeout_seconds=_positive_float_env(
-                "TRACTOR_AI_REQUEST_TIMEOUT",
+            decision_deadline_seconds=_positive_float_env(
+                "TRACTOR_AI_DECISION_DEADLINE",
                 120.0,
+            ),
+            attempt_timeout_seconds=_positive_float_env(
+                "TRACTOR_AI_ATTEMPT_TIMEOUT",
+                30.0,
+            ),
+            retry_initial_seconds=_nonnegative_float_env(
+                "TRACTOR_AI_RETRY_INITIAL",
+                0.25,
+            ),
+            retry_maximum_seconds=_nonnegative_float_env(
+                "TRACTOR_AI_RETRY_MAXIMUM",
+                4.0,
             ),
         )
     if mode != "local":
@@ -88,6 +103,13 @@ def _positive_float_env(name: str, default: float) -> float:
     value = float(os.environ.get(name, str(default)))
     if value <= 0.0:
         raise ValueError(f"{name} must be positive")
+    return value
+
+
+def _nonnegative_float_env(name: str, default: float) -> float:
+    value = float(os.environ.get(name, str(default)))
+    if value < 0.0:
+        raise ValueError(f"{name} must be nonnegative")
     return value
 
 

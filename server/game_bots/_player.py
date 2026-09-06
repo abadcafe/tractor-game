@@ -1,48 +1,35 @@
-"""Player lifecycle and submission loop for bots."""
+"""Session-owned player loop for automatic policies."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from typing import final, override
 
-from server.foundation.result import Ok, Rejected
+from server.foundation.result import Ok
 from server.game import CommandRejected, commands
 from server.game_runtime.player import (
     BotPlayerDescription,
     BotPolicyName,
     CommandDecoder,
     PlayerDescription,
+    PlayerFailure,
+    PlayerInbox,
     PlayerPort,
     PlayerView,
     UserId,
 )
 
-from ._policy import DecisionPolicy, DecisionRequest
+from ._policy import (
+    DecisionPolicy,
+    DecisionRequest,
+    DecisionUnavailable,
+)
 
-logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True, slots=True)
-class _New:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class _Running:
-    port: PlayerPort
-    queue: asyncio.Queue[PlayerView]
-    task: asyncio.Task[None]
-    ready: asyncio.Event
-
-
-@dataclass(frozen=True, slots=True)
-class _Stopped:
-    pass
-
-
-type _Lifecycle = _New | _Running | _Stopped
+_LOGGER = logging.getLogger(__name__)
+_SLOW_DECISION_SECONDS = 5.0
 
 
 @final
@@ -57,9 +44,17 @@ class _TypedCommandDecoder(CommandDecoder):
         return Ok(self._command)
 
 
+@dataclass(frozen=True, slots=True)
+class _DecisionContext:
+    game_id: str
+    view: PlayerView
+    action: str
+    started: float
+
+
 @final
 class BotPlayer:
-    """Run one DecisionPolicy behind a stable runtime player."""
+    """Serve one DecisionPolicy without owning background work."""
 
     def __init__(
         self,
@@ -69,7 +64,6 @@ class BotPlayer:
     ) -> None:
         self._policy_name: BotPolicyName = policy_name
         self._policy = policy
-        self._lifecycle: _Lifecycle = _New()
 
     def lobby_status(
         self,
@@ -82,102 +76,105 @@ class BotPlayer:
             policy=self._policy_name,
         )
 
-    async def start(self, port: PlayerPort) -> None:
-        """Start and initialize one background decision loop."""
-        assert isinstance(self._lifecycle, _New)
-        queue: asyncio.Queue[PlayerView] = asyncio.Queue()
-        ready = asyncio.Event()
-        task = asyncio.create_task(self._run(port, queue, ready))
-        self._lifecycle = _Running(
-            port=port,
-            queue=queue,
-            task=task,
-            ready=ready,
-        )
-        ready_task = asyncio.create_task(ready.wait())
-        done, _pending = await asyncio.wait(
-            {ready_task, task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if task in done:
-            if not ready_task.done():
-                _ = ready_task.cancel()
-                try:
-                    await ready_task
-                except asyncio.CancelledError:
-                    pass
-            task.result()
-            raise AssertionError("bot task stopped before ready")
-        assert ready_task in done
-
-    async def update(self, view: PlayerView) -> None:
-        """Queue every complete view without losing policy history."""
-        lifecycle = self._lifecycle
-        assert isinstance(lifecycle, _Running)
-        lifecycle.queue.put_nowait(view)
-
-    async def stop(self) -> None:
-        """Cancel pending decisions and prevent later submissions."""
-        lifecycle = self._lifecycle
-        if isinstance(lifecycle, _Stopped):
-            return
-        self._lifecycle = _Stopped()
-        if isinstance(lifecycle, _New):
-            return
-        _ = lifecycle.task.cancel()
-        if lifecycle.task is asyncio.current_task():
-            return
-        try:
-            await lifecycle.task
-        except asyncio.CancelledError:
-            pass
-
-    async def _run(
+    async def run(
         self,
         port: PlayerPort,
-        queue: asyncio.Queue[PlayerView],
-        ready: asyncio.Event,
+        inbox: PlayerInbox,
     ) -> None:
+        """Observe lossless views and submit one chosen command."""
+        await port.player_ready()
         await port.request_view()
+        initialized = False
         while True:
-            view = await queue.get()
-            observed = self._policy.observe(view)
-            if isinstance(observed, Rejected):
-                logger.error(
-                    "bot policy observation rejected: %s",
-                    observed.reason,
-                )
-                ready.set()
+            view = await inbox.receive()
+            if view is None:
+                return
+            if view.status == "failed":
+                if not initialized:
+                    await port.player_initialized()
+                    initialized = True
                 continue
+            self._policy.observe(view)
             action = view.snapshot.awaiting_action
+            if not initialized and action != "next_round":
+                await port.player_initialized()
+                initialized = True
             if action is None:
-                ready.set()
                 continue
             if action == "next_round":
                 await port.submit(
                     view.seq,
                     _TypedCommandDecoder(commands.ConfirmRound()),
                 )
-                ready.set()
                 continue
-            decision = await self._policy.decide(
-                DecisionRequest(
-                    view=view,
-                    action=action,
-                )
+            request = DecisionRequest(view=view, action=action)
+            context = _DecisionContext(
+                game_id=port.game_id.value,
+                view=view,
+                action=action,
+                started=time.perf_counter(),
             )
-            if isinstance(decision, Rejected):
-                logger.error(
-                    "bot policy decision rejected: %s",
-                    decision.reason,
+            warning = asyncio.get_running_loop().call_later(
+                _SLOW_DECISION_SECONDS,
+                _log_slow_decision,
+                self._policy_name,
+                context,
+            )
+            try:
+                decision = await self._policy.decide(request)
+            finally:
+                warning.cancel()
+            elapsed_ms = (
+                time.perf_counter() - context.started
+            ) * 1000.0
+            if isinstance(decision, DecisionUnavailable):
+                _LOGGER.error(
+                    "bot.decision game_id=%s seat=%s seq=%d "
+                    + "action=%s policy=%s elapsed_ms=%.3f error=%s",
+                    port.game_id.value,
+                    view.viewer.value,
+                    view.seq,
+                    action,
+                    self._policy_name,
+                    elapsed_ms,
+                    decision.error,
                 )
-                ready.set()
+                await port.report_failure(
+                    PlayerFailure(error=decision.error)
+                )
                 continue
+            _LOGGER.info(
+                "bot.decision game_id=%s seat=%s seq=%d "
+                + "action=%s policy=%s elapsed_ms=%.3f",
+                port.game_id.value,
+                view.viewer.value,
+                view.seq,
+                action,
+                self._policy_name,
+                elapsed_ms,
+            )
             await port.submit(
                 view.seq,
                 _TypedCommandDecoder(decision.value),
             )
-            ready.set()
+
+
+def _log_slow_decision(
+    policy_name: BotPolicyName,
+    context: _DecisionContext,
+) -> None:
+    elapsed_ms = (time.perf_counter() - context.started) * 1000.0
+    _LOGGER.warning(
+        "bot.decision game_id=%s seat=%s seq=%d action=%s "
+        + "policy=%s elapsed_ms=%.3f "
+        + "error=decision exceeded slow threshold",
+        context.game_id,
+        context.view.viewer.value,
+        context.view.seq,
+        context.action,
+        policy_name,
+        elapsed_ms,
+    )
 
 
 __all__ = ("BotPlayer",)

@@ -8,10 +8,10 @@ import os
 import signal
 import subprocess
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Coroutine
 from contextlib import suppress
 from pathlib import Path
-from typing import ClassVar, final
+from typing import ClassVar, Protocol, final
 
 from pydantic import BaseModel, ConfigDict
 
@@ -29,6 +29,19 @@ _PROCESS_POLL_SECONDS = 1.0
 _PROCESS_EXIT_POLL_SECONDS = 0.1
 _FORCED_EXIT_TIMEOUT_SECONDS = 5.0
 _PROCESS_LOG_NAME = "training-cli.log"
+
+
+class ProcessTaskOwner(Protocol):
+    """Application capability supervising child-process reapers."""
+
+    def create_task(
+        self,
+        coroutine: Coroutine[object, object, None],
+        *,
+        name: str,
+    ) -> asyncio.Task[None]:
+        """Start one named task under process ownership."""
+        ...
 
 
 class StopResult(BaseModel):
@@ -56,7 +69,8 @@ class TrainingInitialization(BaseModel):
 class TrainingProcessControl:
     """Control initialization and resumed training with a PID file."""
 
-    def __init__(self) -> None:
+    def __init__(self, task_owner: ProcessTaskOwner) -> None:
+        self._task_owner = task_owner
         self._inspector = ProcessInspector()
         self._locks: dict[Path, asyncio.Lock] = {}
         self._reapers: set[asyncio.Task[None]] = set()
@@ -100,12 +114,16 @@ class TrainingProcessControl:
                 return _result.Rejected(
                     reason=error or "training initialization failed"
                 )
+        checkpoint_path = canonical / "checkpoints" / "latest.json"
+        _LOGGER.info(
+            "training.initialize run_dir=%s checkpoint_path=%s",
+            canonical,
+            checkpoint_path,
+        )
         return _result.Ok(
             value=TrainingInitialization(
                 run_dir=canonical,
-                checkpoint_path=canonical
-                / "checkpoints"
-                / "latest.json",
+                checkpoint_path=checkpoint_path,
             )
         )
 
@@ -136,7 +154,7 @@ class TrainingProcessControl:
                 return directory_result
             log_path = canonical / _PROCESS_LOG_NAME
             try:
-                output = log_path.open("wb", buffering=0)
+                output = log_path.open("ab", buffering=0)
             except OSError:
                 return _result.Rejected(
                     reason=f"training log is unwritable: {log_path}"
@@ -165,6 +183,12 @@ class TrainingProcessControl:
                 await _kill_spawned_process_group(process)
                 return written
             self._start_reaper(process, canonical)
+        _LOGGER.info(
+            "training.resume run_dir=%s pid=%d log_path=%s",
+            canonical,
+            process.pid,
+            log_path,
+        )
         return _result.Ok(value=None)
 
     async def stop(
@@ -231,6 +255,12 @@ class TrainingProcessControl:
             removed = remove_training_pid_if_matches(canonical, pid)
             if isinstance(removed, _result.Rejected):
                 return removed
+            _LOGGER.info(
+                "training.stop run_dir=%s pid=%d forced=%s",
+                canonical,
+                pid,
+                str(forced).lower(),
+            )
             return _result.Ok(value=StopResult(forced=forced))
 
     async def watch(
@@ -268,9 +298,30 @@ class TrainingProcessControl:
     def _start_reaper(
         self, process: asyncio.subprocess.Process, run_dir: Path
     ) -> None:
-        task = asyncio.create_task(self._reap(process, run_dir))
+        task = self._task_owner.create_task(
+            self._reap(process, run_dir),
+            name=f"training:reaper:{process.pid}",
+        )
         self._reapers.add(task)
-        task.add_done_callback(self._reapers.discard)
+        task.add_done_callback(self._reaper_finished)
+
+    def _reaper_finished(self, task: asyncio.Task[None]) -> None:
+        self._reapers.discard(task)
+        if task.cancelled():
+            return
+        failure = task.exception()
+        if failure is None:
+            return
+        _LOGGER.critical(
+            "runtime.task task=training-reaper error=%s: %s",
+            type(failure).__name__,
+            failure,
+            exc_info=(
+                type(failure),
+                failure,
+                failure.__traceback__,
+            ),
+        )
 
     async def _reap(
         self, process: asyncio.subprocess.Process, run_dir: Path

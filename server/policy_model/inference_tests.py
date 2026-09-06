@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Coroutine
 from typing import override
 
 import torch
@@ -37,6 +38,16 @@ from server.policy_model.observation.tensor_batch import (
 )
 from tests.support import card, seat_values
 from tests.support import snapshot as make_snapshot
+
+
+class _TaskOwner:
+    def create_task(
+        self,
+        coroutine: Coroutine[object, object, None],
+        *,
+        name: str,
+    ) -> asyncio.Task[None]:
+        return asyncio.create_task(coroutine, name=name)
 
 
 class _CountingModel(PolicyModel):
@@ -92,6 +103,7 @@ async def test_decide_returns_one_legal_policy_action() -> None:
     runtime = InferenceRuntime.create(
         model=model,
         device=torch.device("cpu"),
+        task_owner=_TaskOwner(),
     )
     query = _bid_query(reveal_is_legal=True)
 
@@ -111,6 +123,7 @@ async def test_decide_same_seed_produces_same_action() -> None:
     runtime = InferenceRuntime.create(
         model=_CountingModel(),
         device=torch.device("cpu"),
+        task_owner=_TaskOwner(),
     )
     request = _request(query=_play_query(), seed=73)
 
@@ -128,6 +141,7 @@ async def test_decide_forced_action_skips_model() -> None:
     runtime = InferenceRuntime.create(
         model=model,
         device=torch.device("cpu"),
+        task_owner=_TaskOwner(),
     )
 
     result = await runtime.decide(
@@ -150,6 +164,7 @@ async def test_decide_concurrent_calls_share_observation_encoding() -> (
     runtime = InferenceRuntime.create(
         model=model,
         device=torch.device("cpu"),
+        task_owner=_TaskOwner(),
     )
     query = _bid_query(reveal_is_legal=True)
 
@@ -174,7 +189,9 @@ async def test_decide_is_independent_of_concurrent_request_order() -> (
     second_model = _CountingModel()
     _ = second_model.load_state_dict(first_model.state_dict())
     runtime = InferenceRuntime.create(
-        model=first_model, device=torch.device("cpu")
+        model=first_model,
+        device=torch.device("cpu"),
+        task_owner=_TaskOwner(),
     )
     first_order = await asyncio.gather(
         runtime.decide(request=first_request),
@@ -182,7 +199,9 @@ async def test_decide_is_independent_of_concurrent_request_order() -> (
     )
     await runtime.close()
     reversed_runtime = InferenceRuntime.create(
-        model=second_model, device=torch.device("cpu")
+        model=second_model,
+        device=torch.device("cpu"),
+        task_owner=_TaskOwner(),
     )
     second_order = await asyncio.gather(
         reversed_runtime.decide(request=second_request),
@@ -204,6 +223,7 @@ async def test_decide_programming_failure_reaches_every_waiter() -> (
     runtime = InferenceRuntime.create(
         model=_BrokenModel(),
         device=torch.device("cpu"),
+        task_owner=_TaskOwner(),
     )
     query = _bid_query(reveal_is_legal=True)
 
@@ -227,6 +247,7 @@ async def test_decide_cancelled_caller_does_not_break_runtime() -> None:
     runtime = InferenceRuntime.create(
         model=_SlowModel(),
         device=torch.device("cpu"),
+        task_owner=_TaskOwner(),
     )
     query = _bid_query(reveal_is_legal=True)
     pending = asyncio.create_task(
